@@ -19,3 +19,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Third-party software
+--------------------
+
+21kb-Engine may include third-party dependencies under their own licenses.
+Those licenses remain in effect for the corresponding third-party code.
+
+Current third-party dependencies are documented in:
+
+- third_party/THIRD_PARTY_LICENSES.md
+- third_party/bgfx/LICENSE
+- third_party/flecs/LICENSE
+- third_party/miniaudio/LICENSE
+- third_party/jolt/LICENSE
+- third_party/box2d/LICENSE
