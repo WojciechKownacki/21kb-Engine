@@ -2,6 +2,7 @@
 # Business-private notes (MUST NEVER LEAVE LOCAL/VPS)
 # =========================
 /Secret/
+/others/
 
 # =========================
 # Build directories
@@ -85,3 +86,7 @@ Thumbs.db
 # Logs
 # =========================
 *.log
+
+# Keep vendored dependencies complete even if they contain files that look like
+# build artifacts for this repository.
+!/third_party/**
