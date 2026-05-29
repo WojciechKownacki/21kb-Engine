@@ -1,9 +1,11 @@
 #pragma once
 
 #include "EditorDockModel.hpp"
+#include "EditorGdiRenderer.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <Windows.h>
 #endif
 
@@ -29,14 +31,15 @@ private:
 
     LRESULT HandleWindowMessage(UINT message, WPARAM wparam, LPARAM lparam);
     void Paint();
-    void DrawPanel(HDC dc, const RECT& rect, const char* title, COLORREF fill) const;
-    void DrawTextLine(HDC dc, const RECT& rect, const char* text, COLORREF color) const;
 
     HINSTANCE instance_ = nullptr;
     HWND window_ = nullptr;
 #endif
 
     EditorDockModel dockModel_;
+    EditorTheme theme_ = MakeVerthDarkTheme();
+    EditorMetrics metrics_;
+    EditorGdiRenderer renderer_;
     bool running_ = false;
 };
 
