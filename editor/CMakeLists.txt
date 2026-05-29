@@ -3,6 +3,9 @@ add_executable(kb_editor
     src/EditorApplication.hpp
     src/EditorDockModel.cpp
     src/EditorDockModel.hpp
+    src/EditorGdiRenderer.cpp
+    src/EditorGdiRenderer.hpp
+    src/EditorTheme.hpp
     src/main.cpp
 )
 
