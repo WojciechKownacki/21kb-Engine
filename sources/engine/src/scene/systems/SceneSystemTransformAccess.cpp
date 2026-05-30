@@ -3,27 +3,9 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneIterationService.hpp"
 #include "scene/SceneTransformService.hpp"
+#include "scene/systems/SceneSystemMutableTransformIteration.hpp"
 
 namespace kb::scene {
-namespace {
-
-struct MutableTransformCallbackContext {
-    SceneSystemTransformAccess* access = nullptr;
-    MutableTransformVisitor visitor = nullptr;
-    void* userContext = nullptr;
-};
-
-void MutableTransformCallback(SceneEntity entity, TransformComponent& transform, void* context) {
-    auto* callbackContext = static_cast<MutableTransformCallbackContext*>(context);
-    if (callbackContext == nullptr || callbackContext->visitor == nullptr || callbackContext->access == nullptr) {
-        return;
-    }
-
-    callbackContext->visitor(entity, transform, callbackContext->userContext);
-    callbackContext->access->MarkModified(entity);
-}
-
-} // namespace
 
 SceneSystemTransformAccess::SceneSystemTransformAccess(Scene& scene) noexcept
     : scene_(scene) {}
@@ -57,12 +39,7 @@ void SceneSystemTransformAccess::ForEach(ConstTransformVisitor visitor, void* co
 }
 
 void SceneSystemTransformAccess::ForEachMutable(MutableTransformVisitor visitor, void* context) {
-    MutableTransformCallbackContext callbackContext{
-        .access = this,
-        .visitor = visitor,
-        .userContext = context,
-    };
-    SceneIterationService::ForEachMutableTransform(scene_, &MutableTransformCallback, &callbackContext);
+    SceneSystemMutableTransformIteration::ForEach(scene_, *this, visitor, context);
 }
 
 } // namespace kb::scene
