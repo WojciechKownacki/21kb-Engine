@@ -1,6 +1,8 @@
 add_library(kb_engine STATIC
     include/engine/ecs/ChunkSizeProfile.hpp
+    include/engine/ecs/ComponentEvent.hpp
     include/engine/ecs/ComponentId.hpp
+    include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
@@ -9,16 +11,31 @@ add_library(kb_engine STATIC
     include/engine/ecs/Query.inl
     include/engine/ecs/QueryIteration.inl
     include/engine/ecs/QueryLifecycle.inl
+    include/engine/ecs/QuerySystem.hpp
     include/engine/ecs/System.hpp
     include/engine/ecs/SystemScheduler.hpp
+    include/engine/ecs/TypeIds.hpp
     include/engine/ecs/World.hpp
     include/engine/ecs/WorldComponentAccess.inl
     include/engine/ecs/WorldComponentIteration.inl
     include/engine/ecs/WorldComponentTypes.inl
     include/engine/ecs/WorldConfig.hpp
     include/engine/ecs/WorldConfigPresets.hpp
+    include/engine/ecs/WorldEvents.inl
+    include/engine/ecs/WorldInspection.hpp
     include/engine/ecs/World.inl
     include/engine/ecs/WorldQuery.inl
+    include/engine/ecs/WorldRelations.inl
+    include/engine/ecs/WorldSnapshot.hpp
+    include/engine/ecs/WorldTags.inl
+    include/engine/ecs/world/WorldComponentApi.inl
+    include/engine/ecs/world/WorldEntityApi.inl
+    include/engine/ecs/world/WorldEventApi.inl
+    include/engine/ecs/world/WorldPrivateApi.inl
+    include/engine/ecs/world/WorldQueryApi.inl
+    include/engine/ecs/world/WorldRelationApi.inl
+    include/engine/ecs/world/WorldRuntimeApi.inl
+    include/engine/ecs/world/WorldSerializationApi.inl
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
@@ -53,10 +70,21 @@ add_library(kb_engine STATIC
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
     src/ecs/ComponentRegistry.cpp
+    src/ecs/ComponentEventMapper.cpp
+    src/ecs/ComponentObserverContext.cpp
+    src/ecs/ComponentSnapshotCapture.cpp
     src/ecs/ComponentStorageIteration.cpp
     src/ecs/ComponentStorageMutation.cpp
     src/ecs/ComponentStoragePairIteration.cpp
     src/ecs/ComponentStorageQuery.cpp
+    src/ecs/ComponentObserverStorage.cpp
+    src/ecs/ComponentTypeCache.cpp
+    src/ecs/ComponentTypeCatalog.cpp
+    src/ecs/ComponentTypeFactory.cpp
+    src/ecs/EntityComponentInspectionCollector.cpp
+    src/ecs/EntityInspector.cpp
+    src/ecs/EntityNameReader.cpp
+    src/ecs/HierarchyRelationService.cpp
     src/ecs/query/FlecsQueryHandle.cpp
     src/ecs/QueryState.cpp
     src/ecs/QueryStateFactory.cpp
@@ -65,13 +93,25 @@ add_library(kb_engine STATIC
     src/ecs/query/QueryFieldReader.cpp
     src/ecs/query/QueryRowDispatcher.cpp
     src/ecs/query/QueryTableBatchDispatcher.cpp
+    src/ecs/RelationStorage.cpp
+    src/ecs/RelationTypeRegistry.cpp
+    src/ecs/SnapshotEntityIndex.cpp
     src/ecs/System.cpp
     src/ecs/SystemScheduler.cpp
+    src/ecs/TagStorage.cpp
+    src/ecs/TagTypeRegistry.cpp
+    src/ecs/TypeEntityCache.cpp
     src/ecs/WorldComponents.cpp
     src/ecs/WorldEntities.cpp
+    src/ecs/WorldEvents.cpp
+    src/ecs/WorldInspection.cpp
     src/ecs/WorldLifecycle.cpp
     src/ecs/WorldQueries.cpp
+    src/ecs/WorldRelations.cpp
     src/ecs/WorldRuntime.cpp
+    src/ecs/WorldSnapshotBuilder.cpp
+    src/ecs/WorldSnapshots.cpp
+    src/ecs/WorldTags.cpp
     src/scene/Scene.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneHierarchy.cpp
@@ -248,6 +288,16 @@ add_library(kb_engine STATIC
     src/private/ecs/component/ComponentStorageMutation.hpp
     src/private/ecs/component/ComponentStoragePairIteration.hpp
     src/private/ecs/component/ComponentStorageQuery.hpp
+    src/private/ecs/component/ComponentTypeCache.hpp
+    src/private/ecs/component/ComponentTypeCatalog.hpp
+    src/private/ecs/component/ComponentTypeFactory.hpp
+    src/private/ecs/events/ComponentEventMapper.hpp
+    src/private/ecs/events/ComponentObserverContext.hpp
+    src/private/ecs/events/ComponentObserverStorage.hpp
+    src/private/ecs/events/ComponentObserverTypes.hpp
+    src/private/ecs/inspection/EntityComponentInspectionCollector.hpp
+    src/private/ecs/inspection/EntityInspector.hpp
+    src/private/ecs/inspection/EntityNameReader.hpp
     src/private/ecs/QueryStateFactory.hpp
     src/private/ecs/QueryState.hpp
     src/private/ecs/query/FlecsQueryHandle.hpp
@@ -257,6 +307,15 @@ add_library(kb_engine STATIC
     src/private/ecs/query/QueryLimits.hpp
     src/private/ecs/query/QueryRowDispatcher.hpp
     src/private/ecs/query/QueryTableBatchDispatcher.hpp
+    src/private/ecs/relation/RelationStorage.hpp
+    src/private/ecs/relation/TagStorage.hpp
+    src/private/ecs/relation/HierarchyRelationService.hpp
+    src/private/ecs/snapshot/ComponentSnapshotCapture.hpp
+    src/private/ecs/snapshot/SnapshotEntityIndex.hpp
+    src/private/ecs/snapshot/WorldSnapshotBuilder.hpp
+    src/private/ecs/type/RelationTypeRegistry.hpp
+    src/private/ecs/type/TagTypeRegistry.hpp
+    src/private/ecs/type/TypeEntityCache.hpp
 )
 
 target_include_directories(kb_engine
@@ -281,8 +340,13 @@ if(BUILD_TESTING)
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
         tests/EcsConfigTests.cpp
+        tests/EcsEventTests.cpp
+        tests/EcsInspectionTests.cpp
         tests/EcsQueryTests.cpp
+        tests/EcsQuerySystemTests.cpp
+        tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
+        tests/EcsSnapshotTests.cpp
         tests/EcsTestSuites.hpp
         tests/EcsTestTypes.hpp
         tests/SceneHierarchyTests.cpp

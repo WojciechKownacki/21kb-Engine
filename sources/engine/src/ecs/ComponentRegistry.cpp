@@ -1,46 +1,46 @@
 #include "ecs/ComponentRegistry.hpp"
 
-#include <flecs.h>
+#include "ecs/component/ComponentTypeFactory.hpp"
 
 #include <string>
 
 namespace kb::ecs {
 
 ComponentId ComponentRegistry::Register(ecs_world_t* world, std::type_index type, std::string_view name, std::size_t size, std::size_t alignment) {
-    if (world == nullptr || size == 0 || alignment == 0) {
+    if (const ComponentId cachedComponent = cache_.Find(type); cachedComponent != 0) {
+        return cachedComponent;
+    }
+
+    const ComponentId componentId = ComponentTypeFactory::Create(world, name, size, alignment);
+    if (componentId == 0) {
         return 0;
     }
 
-    if (const auto it = componentIds_.find(type); it != componentIds_.end()) {
-        return it->second;
-    }
-
-    ecs_component_desc_t desc{};
-    desc.type.size = static_cast<ecs_size_t>(size);
-    desc.type.alignment = static_cast<ecs_size_t>(alignment);
-
-    const ecs_entity_t component = ecs_component_init(world, &desc);
-    if (component == 0) {
-        return 0;
-    }
-
-    if (!name.empty()) {
-        const std::string ownedName{ name };
-        ecs_set_name(world, component, ownedName.c_str());
-    }
-
-    const ComponentId componentId = static_cast<ComponentId>(component);
-    componentIds_.emplace(type, componentId);
+    cache_.Store(type, componentId);
+    catalog_.Add(ComponentTypeInfo{
+        .id = componentId,
+        .name = std::string{ name },
+        .size = size,
+        .alignment = alignment,
+    });
     return componentId;
 }
 
 ComponentId ComponentRegistry::Find(std::type_index type) const noexcept {
-    const auto it = componentIds_.find(type);
-    return it == componentIds_.end() ? 0 : it->second;
+    return cache_.Find(type);
+}
+
+const ComponentTypeInfo* ComponentRegistry::FindInfo(ComponentId componentId) const noexcept {
+    return catalog_.Find(componentId);
+}
+
+std::span<const ComponentTypeInfo> ComponentRegistry::Types() const noexcept {
+    return catalog_.Types();
 }
 
 void ComponentRegistry::Clear() noexcept {
-    componentIds_.clear();
+    cache_.Clear();
+    catalog_.Clear();
 }
 
 } // namespace kb::ecs
