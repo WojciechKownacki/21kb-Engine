@@ -3,15 +3,16 @@
 #include "ecs/relation/HierarchyRelationService.hpp"
 #include "ecs/relation/RelationStorage.hpp"
 #include "ecs/type/RelationTypeRegistry.hpp"
+#include "ecs/world/WorldRegistrySet.hpp"
 
 namespace kb::ecs {
 
 RelationId World::RegisterRelation(std::type_index type, std::string_view name) {
-    return relations_ == nullptr ? 0 : relations_->Register(world_, type, name);
+    return registries_ == nullptr ? 0 : registries_->Relations().Register(world_, type, name);
 }
 
 RelationId World::FindRelation(std::type_index type) const noexcept {
-    return relations_ == nullptr ? 0 : relations_->Find(type);
+    return registries_ == nullptr ? 0 : registries_->Relations().Find(type);
 }
 
 void World::AddRelation(Entity entity, RelationId relation, Entity target) noexcept {
@@ -40,6 +41,10 @@ void World::ClearParent(Entity child) noexcept {
 
 Entity World::Parent(Entity child) const noexcept {
     return HierarchyRelationService::Parent(world_, child);
+}
+
+std::vector<Entity> World::Children(Entity parent) const {
+    return HierarchyRelationService::Children(world_, parent);
 }
 
 } // namespace kb::ecs

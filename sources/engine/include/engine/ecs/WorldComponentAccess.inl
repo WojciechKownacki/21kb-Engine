@@ -21,6 +21,20 @@ ComponentId World::Component() const noexcept {
 }
 
 template <typename T>
+const ComponentReflection* World::RegisterComponentReflection(std::string_view name, std::initializer_list<ComponentFieldDesc> fields) {
+    ValidateComponentType<T>();
+    const std::string_view componentName = name.empty() ? DefaultComponentName<T>() : name;
+    const ComponentId componentId = RegisterComponent<T>(componentName);
+    return RegisterComponentReflection(componentId, componentName, sizeof(T), fields);
+}
+
+template <typename T>
+const ComponentReflection* World::Reflection() const noexcept {
+    ValidateComponentType<T>();
+    return Reflection(Component<T>());
+}
+
+template <typename T>
 void World::Set(Entity entity, const T& component) {
     const ComponentId componentId = RegisterComponent<T>();
     SetComponent(entity, componentId, sizeof(T), &component);

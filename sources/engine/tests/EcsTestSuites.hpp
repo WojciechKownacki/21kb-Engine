@@ -8,6 +8,7 @@ void RunEcsQuerySystemTests();
 void RunEcsConfigTests();
 void RunEcsEventTests();
 void RunEcsInspectionTests();
+void RunEcsReflectionTests();
 void RunEcsRelationTests();
 void RunEcsSnapshotTests();
 
