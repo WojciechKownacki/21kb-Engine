@@ -2,11 +2,11 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace kb::render::postfx {
@@ -47,6 +47,14 @@ public:
         ExecuteFn execute;
     };
 
+    PostProcessPipeline();
+    ~PostProcessPipeline();
+
+    PostProcessPipeline(const PostProcessPipeline& other);
+    PostProcessPipeline& operator=(const PostProcessPipeline& other);
+    PostProcessPipeline(PostProcessPipeline&&) noexcept;
+    PostProcessPipeline& operator=(PostProcessPipeline&&) noexcept;
+
     ResourceHandle RegisterResource(ResourceDesc desc);
     void AddPass(PassDesc desc);
     void Compile();
@@ -55,24 +63,9 @@ public:
     [[nodiscard]] const std::vector<std::uint32_t>& GetExecutionOrder() const noexcept;
 
 private:
-    struct CompiledPass {
-        std::string name;
-        std::vector<ResourceHandle> reads;
-        std::vector<ResourceHandle> writes;
-        ExecuteFn execute;
-    };
+    struct Impl;
 
-    void ValidatePass(const PassDesc& desc) const;
-    void BuildGraph();
-
-    std::uint32_t nextResourceId_ = 1;
-    std::unordered_map<std::uint32_t, ResourceDesc> resources_;
-    std::vector<PassDesc> passes_;
-
-    std::vector<CompiledPass> compiledPasses_;
-    std::vector<std::vector<std::uint32_t>> edges_;
-    std::vector<std::uint32_t> executionOrder_;
-    bool compiled_ = false;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace kb::render::postfx

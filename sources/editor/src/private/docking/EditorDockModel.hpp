@@ -1,5 +1,6 @@
 #pragma once
 
+#include "docking/DockPanelCollection.hpp"
 #include "docking/DockNode.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
 
@@ -38,23 +39,10 @@ public:
     void ResizeFloatingPanel(std::uint32_t panelId, int width, int height);
 
 private:
-    [[nodiscard]] DockNode* FindNode(std::uint32_t nodeId) noexcept;
-    [[nodiscard]] const DockNode* FindNode(std::uint32_t nodeId) const noexcept;
-    [[nodiscard]] DockNode* FindLeafContaining(std::uint32_t panelId) noexcept;
-    [[nodiscard]] const DockNode* FindLeafContaining(std::uint32_t panelId) const noexcept;
-    [[nodiscard]] DockNode* FindLeaf(std::uint32_t leafId) noexcept;
-    [[nodiscard]] const DockNode* FindLeaf(std::uint32_t leafId) const noexcept;
-    [[nodiscard]] std::unique_ptr<DockNode>* FindNodeSlot(std::uint32_t nodeId) noexcept;
-    [[nodiscard]] std::unique_ptr<DockNode>* FindNodeSlotRecursive(std::unique_ptr<DockNode>& node, std::uint32_t nodeId) noexcept;
     [[nodiscard]] std::uint32_t NextNodeId() noexcept;
+    [[nodiscard]] static std::uint32_t NextNodeIdCallback(void* context) noexcept;
 
-    void RemovePanelFromDockTree(std::uint32_t panelId);
-    void PruneEmptyNodes();
-    [[nodiscard]] bool PruneEmptyNodesRecursive(std::unique_ptr<DockNode>& node);
-    void SetPanelArea(std::uint32_t panelId, DockArea area);
-    [[nodiscard]] DockArea AreaForZone(DockDropZone zone) const noexcept;
-
-    std::vector<DockPanel> panels_;
+    DockPanelCollection panels_;
     std::unique_ptr<DockNode> root_;
     std::uint32_t nextNodeId_ = 1;
 };
