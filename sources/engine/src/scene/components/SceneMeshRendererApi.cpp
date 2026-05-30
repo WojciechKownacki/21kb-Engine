@@ -1,36 +1,38 @@
-#include "engine/scene/Scene.hpp"
-
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneComponentMutationService.hpp"
+#include "scene/SceneComponentQueryService.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
 
 namespace kb::scene {
 
-bool Scene::HasMeshRenderer(SceneEntity entity) const noexcept {
-    return IsAlive(entity) && componentStorage_->HasMeshRenderer(entity);
+bool SceneComponentQueryService::HasMeshRenderer(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.MeshRenderers().Has(entity);
 }
 
-const MeshRendererComponent* Scene::TryGetMeshRenderer(SceneEntity entity) const noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetMeshRenderer(entity) : nullptr;
+const MeshRendererComponent* SceneComponentQueryService::TryGetMeshRenderer(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.MeshRenderers().TryGet(entity) : nullptr;
 }
 
-MeshRendererComponent* Scene::TryGetMeshRenderer(SceneEntity entity) noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetMeshRenderer(entity) : nullptr;
+MeshRendererComponent* SceneComponentMutationService::TryGetMeshRenderer(Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.MeshRenderers().TryGet(entity) : nullptr;
 }
 
-void Scene::SetMeshRenderer(SceneEntity entity, const MeshRendererComponent& renderer) {
-    if (IsAlive(entity)) {
-        componentStorage_->SetMeshRenderer(entity, renderer);
+void SceneComponentMutationService::SetMeshRenderer(Scene& scene, SceneEntity entity, const MeshRendererComponent& renderer) {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.MeshRenderers().Set(entity, renderer);
     }
 }
 
-void Scene::RemoveMeshRenderer(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->RemoveMeshRenderer(entity);
+void SceneComponentMutationService::RemoveMeshRenderer(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.MeshRenderers().Remove(entity);
     }
 }
 
-void Scene::MarkMeshRendererModified(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->MarkMeshRendererModified(entity);
+void SceneComponentMutationService::MarkMeshRendererModified(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.MeshRenderers().MarkModified(entity);
     }
 }
 

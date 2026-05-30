@@ -2,11 +2,8 @@
 
 #if defined(_WIN32)
 #include "docking/DockDragOperationHandler.hpp"
-#include "docking/DockPointerDragFactory.hpp"
-#include "windowing/FloatingWindowControlInteractor.hpp"
-#include "windowing/FloatingWindowControlLayout.hpp"
-
-#include <algorithm>
+#include "docking/DockHoverCursorUpdater.hpp"
+#include "docking/EditorDockPointerDownHandler.hpp"
 
 namespace kb::editor {
 
@@ -28,28 +25,7 @@ void EditorDockController::HandlePointerDown(HWND window, int x, int y) {
 
     SetFocus(window);
     SetCapture(window);
-
-    if (IsMainWindow(window)) {
-        const DockLayout layout = BuildMainLayout();
-        const DockHit hit = dockModel_->HitTest(layout, x, y);
-        if (hit.kind != DockHitKind::None) {
-            dockModel_->ActivatePanel(hit.panelId);
-            drag_ = DockPointerDragFactory::FromDockHit(window, layout, hit);
-            InvalidateMain();
-        }
-        return;
-    }
-
-    const std::uint32_t panelId = floatingWindows_->PanelId(window);
-    RECT client{};
-    GetClientRect(window, &client);
-    if (panelId != 0 && FloatingWindowControlInteractor{}.HandlePointerDown(window, *metrics_, x, y)) {
-        return;
-    }
-
-    if (panelId != 0 && y <= metrics_->tabStripHeight + 2 && x < client.right - FloatingWindowControlLayout::TotalWidth(*metrics_)) {
-        drag_ = DockPointerDragFactory::FromFloatingWindow(window, panelId, x, y, *metrics_);
-    }
+    EditorDockPointerDownHandler::Handle(window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, drag_);
 }
 
 void EditorDockController::HandlePointerMove(HWND window, int x, int y) {
@@ -78,48 +54,16 @@ void EditorDockController::HandlePointerUp(HWND window) {
 }
 
 void EditorDockController::UpdateHoverCursor(HWND window, int x, int y) const {
-    if (!Ready() || !IsMainWindow(window)) {
+    if (!Ready()) {
         SetCursor(LoadCursor(nullptr, IDC_ARROW));
         return;
     }
 
-    const DockLayout layout = BuildMainLayout();
-    const DockHit hit = dockModel_->HitTest(layout, x, y);
-    if (hit.kind == DockHitKind::Splitter) {
-        const auto it = std::find_if(layout.splitters.begin(), layout.splitters.end(), [hit](const DockSplitterLayout& splitter) {
-            return splitter.nodeId == hit.splitterNodeId;
-        });
-        SetCursor(LoadCursor(nullptr, it != layout.splitters.end() && it->axis == DockSplitAxis::Vertical ? IDC_SIZENS : IDC_SIZEWE));
-    } else {
-        SetCursor(LoadCursor(nullptr, IDC_ARROW));
-    }
+    DockHoverCursorUpdater::Update(window, x, y, mainWindow_, *dockModel_, *metrics_);
 }
 
 bool EditorDockController::Ready() const noexcept {
     return mainWindow_ != nullptr && dockModel_ != nullptr && floatingWindows_ != nullptr && metrics_ != nullptr;
-}
-
-bool EditorDockController::IsMainWindow(HWND window) const noexcept {
-    return window == mainWindow_;
-}
-
-DockLayout EditorDockController::BuildMainLayout() const {
-    RECT client{};
-    GetClientRect(mainWindow_, &client);
-    return dockModel_->BuildLayout(
-        client.right - client.left,
-        client.bottom - client.top,
-        metrics_->menuHeight,
-        metrics_->toolbarHeight,
-        metrics_->tabStripHeight,
-        metrics_->tabMinWidth,
-        metrics_->tabWidth,
-        metrics_->splitterSize,
-        metrics_->panelPadding);
-}
-
-void EditorDockController::InvalidateMain() const {
-    InvalidateRect(mainWindow_, nullptr, FALSE);
 }
 
 } // namespace kb::editor
