@@ -20,7 +20,11 @@ bool EditorHierarchySelectionController::HandlePointerDown(
         return false;
     }
 
-    return EditorHierarchyRowPicker::SelectAtContentPoint(*content, x, y, sceneContext);
+    const bool handled = EditorHierarchyRowPicker::SelectAtContentPoint(*content, x, y, sceneContext);
+    if (handled) {
+        SetFocus(sourceWindow);
+    }
+    return handled;
 }
 
 } // namespace kb::editor

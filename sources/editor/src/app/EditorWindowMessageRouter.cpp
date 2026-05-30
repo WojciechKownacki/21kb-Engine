@@ -1,6 +1,7 @@
 #include "app/EditorWindowMessageRouter.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
 #include "app/EditorPaintDispatcher.hpp"
@@ -30,6 +31,16 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     case WM_SIZE:
         return EditorWindowResizeHandler::Handle(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows);
+    case WM_CHAR:
+        if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
+            return 0;
+        }
+        break;
+    case WM_KEYDOWN:
+        if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            return 0;
+        }
+        break;
     case WM_NCHITTEST:
     case WM_LBUTTONDOWN:
     case WM_MOUSEMOVE:
@@ -44,8 +55,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_DESTROY:
         return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows }.HandleDestroy(messageWindow);
     default:
-        return DefWindowProcW(messageWindow, message, wparam, lparam);
+        break;
     }
+
+    return DefWindowProcW(messageWindow, message, wparam, lparam);
 }
 
 } // namespace kb::editor

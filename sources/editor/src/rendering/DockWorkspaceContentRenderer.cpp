@@ -3,12 +3,13 @@
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/PanelContentRenderer.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
 
 namespace kb::editor {
 
 void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext) const {
     ScopedFont bodyFont(14, FW_NORMAL);
-    HFONT oldFont = static_cast<HFONT>(SelectObject(dc, bodyFont.handle));
+    const ScopedGdiObject selectedFont(dc, bodyFont.handle);
 
     PanelContentRenderer contentRenderer;
     for (const DockPanelLayout& panelLayout : layout.panels) {
@@ -20,8 +21,6 @@ void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
         contentRenderer.Paint(dc, content, content, *panel, theme, metrics, sceneContext, false);
     }
-
-    SelectObject(dc, oldFont);
 }
 
 } // namespace kb::editor

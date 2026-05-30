@@ -1,9 +1,14 @@
 #include "scene/EditorSceneContext.hpp"
 
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneVisibilityComponents.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
+#include "scene/EditorHierarchyObjectFactory.hpp"
+#include "scene/EditorHierarchyRowBuilder.hpp"
+
+#include <utility>
 
 namespace kb::editor {
 
@@ -28,7 +33,7 @@ void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
 }
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
-    const std::vector<HierarchyRow> rows = HierarchyRows();
+    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
     if (rowIndex >= rows.size()) {
         selectedEntity_ = {};
         return false;
@@ -38,23 +43,64 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
     return selectedEntity_.IsValid();
 }
 
-std::vector<EditorSceneContext::HierarchyRow> EditorSceneContext::HierarchyRows() const {
-    std::vector<HierarchyRow> rows;
-    for (const kb::scene::SceneEntity root : scene_.Hierarchy().RootEntities()) {
-        AppendHierarchyRows(root, 0, rows);
-    }
-    return rows;
+std::vector<EditorHierarchyRow> EditorSceneContext::HierarchyRows() const {
+    return EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
 }
 
-void EditorSceneContext::AppendHierarchyRows(kb::scene::SceneEntity entity, std::uint32_t depth, std::vector<HierarchyRow>& rows) const {
-    rows.push_back(HierarchyRow{
-        .entity = entity,
-        .depth = depth,
-    });
+std::string_view EditorSceneContext::HierarchySearchQuery() const noexcept {
+    return hierarchySearch_.Query();
+}
 
-    for (const kb::scene::SceneEntity child : scene_.Hierarchy().ChildEntities(entity)) {
-        AppendHierarchyRows(child, depth + 1U, rows);
+bool EditorSceneContext::IsHierarchySearchFocused() const noexcept {
+    return hierarchySearch_.IsFocused();
+}
+
+void EditorSceneContext::FocusHierarchySearch(bool focused) noexcept {
+    hierarchySearch_.Focus(focused);
+}
+
+void EditorSceneContext::SetHierarchySearchQuery(std::string query) {
+    hierarchySearch_.SetQuery(std::move(query));
+}
+
+void EditorSceneContext::AppendHierarchySearchText(wchar_t character) {
+    hierarchySearch_.AppendAscii(character);
+}
+
+void EditorSceneContext::BackspaceHierarchySearch() {
+    hierarchySearch_.Backspace();
+}
+
+void EditorSceneContext::ClearHierarchySearch() {
+    hierarchySearch_.Clear();
+}
+
+bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
+    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    if (rowIndex >= rows.size() || !rows[rowIndex].hasChildren) {
+        return false;
     }
+
+    hierarchyExpansion_.SetExpanded(rows[rowIndex].entity, !rows[rowIndex].expanded);
+    return true;
+}
+
+bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
+    if (!scene_.Entities().IsAlive(entity)) {
+        return false;
+    }
+
+    kb::scene::VisibilityComponent visibility = scene_.Components().Visibility().Get(entity);
+    visibility.visible = !visibility.visible;
+    scene_.Components().Visibility().Set(entity, visibility);
+    SelectEntity(entity);
+    return true;
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
+    const kb::scene::SceneEntity entity = EditorHierarchyObjectFactory::CreateObject(scene_);
+    SelectEntity(entity);
+    return entity;
 }
 
 } // namespace kb::editor

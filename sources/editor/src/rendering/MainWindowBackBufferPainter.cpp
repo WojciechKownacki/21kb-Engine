@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/DockWorkspaceRenderer.hpp"
+#include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 
@@ -18,7 +19,7 @@ struct MainWindowPaintContext {
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
-    GdiDrawing::FillRectColor(paint.dc, paint.client, GdiDrawing::ToColorRef(paintContext->theme->background));
+    EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
     DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, paintContext->preview);
 }
