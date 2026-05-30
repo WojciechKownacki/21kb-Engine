@@ -11,6 +11,7 @@
 namespace kb::scene {
 
 class Scene;
+class SceneAccess;
 
 class SceneObject {
 public:
@@ -33,7 +34,7 @@ public:
     void Destroy() const noexcept;
 
 private:
-    friend class Scene;
+    friend class SceneAccess;
 
     SceneObject(Scene& scene, SceneEntity entity) noexcept;
 

@@ -1,6 +1,8 @@
 #include "rendering/HierarchyPanelRenderer.hpp"
 
 #if defined(_WIN32)
+#include "engine/scene/SceneEntities.hpp"
+
 #include "rendering/GdiDrawing.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
@@ -24,7 +26,7 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
         }
 
         std::string label(static_cast<std::size_t>(row.depth) * 2U, ' ');
-        label += sceneContext.Scene().Name(row.entity);
+        label += sceneContext.Scene().Entities().Name(row.entity);
         RECT textRect{ rowRect.left + 8, rowRect.top + 3, rowRect.right - 8, rowRect.bottom };
         GdiDrawing::DrawTextBlock(dc, textRect, label.c_str(), GdiDrawing::ToColorRef(row.entity == selected ? theme.textPrimary : theme.textSecondary));
         y += kHierarchyRowHeight;

@@ -1,33 +1,36 @@
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/components/SceneMeshRendererComponentStore.hpp"
 
 #include "scene/components/SceneComponentAccess.hpp"
-#include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
 
 namespace kb::scene {
 
-bool SceneComponentStorage::HasMeshRenderer(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, components_.MeshRendererComponentId());
+SceneMeshRendererComponentStore::SceneMeshRendererComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
+    : world_(world)
+    , componentId_(componentId) {}
+
+bool SceneMeshRendererComponentStore::Has(SceneEntity entity) const noexcept {
+    return SceneComponentAccess::Has(world_, entity, componentId_);
 }
 
-const MeshRendererComponent* SceneComponentStorage::TryGetMeshRenderer(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<MeshRendererComponent>(world_, entity, components_.MeshRendererComponentId());
+const MeshRendererComponent* SceneMeshRendererComponentStore::TryGet(SceneEntity entity) const noexcept {
+    return SceneComponentStorageAccess::TryGet<MeshRendererComponent>(world_, entity, componentId_);
 }
 
-MeshRendererComponent* SceneComponentStorage::TryGetMeshRenderer(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<MeshRendererComponent>(world_, entity, components_.MeshRendererComponentId());
+MeshRendererComponent* SceneMeshRendererComponentStore::TryGet(SceneEntity entity) noexcept {
+    return SceneComponentStorageAccess::TryGetMutable<MeshRendererComponent>(world_, entity, componentId_);
 }
 
-void SceneComponentStorage::SetMeshRenderer(SceneEntity entity, const MeshRendererComponent& renderer) {
-    SceneComponentStorageAccess::Set(world_, entity, components_.MeshRendererComponentId(), renderer);
+void SceneMeshRendererComponentStore::Set(SceneEntity entity, const MeshRendererComponent& renderer) {
+    SceneComponentStorageAccess::Set(world_, entity, componentId_, renderer);
 }
 
-void SceneComponentStorage::RemoveMeshRenderer(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, components_.MeshRendererComponentId());
+void SceneMeshRendererComponentStore::Remove(SceneEntity entity) noexcept {
+    SceneComponentAccess::Remove(world_, entity, componentId_);
 }
 
-void SceneComponentStorage::MarkMeshRendererModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, components_.MeshRendererComponentId());
+void SceneMeshRendererComponentStore::MarkModified(SceneEntity entity) noexcept {
+    SceneComponentAccess::MarkModified(world_, entity, componentId_);
 }
 
 } // namespace kb::scene

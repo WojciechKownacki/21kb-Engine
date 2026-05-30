@@ -1,0 +1,39 @@
+#pragma once
+
+#include "docking/DockPointerDrag.hpp"
+#include "docking/EditorDockModel.hpp"
+#include "docking/EditorFloatingWindowManager.hpp"
+#include "kb/editor/theme/EditorTheme.hpp"
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
+#include <optional>
+
+namespace kb::editor {
+
+class DockDragCompletionHandler {
+public:
+    DockDragCompletionHandler() = delete;
+
+#if defined(_WIN32)
+    static void Complete(
+        const DockPointerDrag& drag,
+        HWND releaseWindow,
+        HWND mainWindow,
+        EditorDockModel& dockModel,
+        EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        std::optional<DockDropPreview>& dropPreview);
+#endif
+
+private:
+#if defined(_WIN32)
+    [[nodiscard]] static bool IsMainWindow(HWND candidate, HWND mainWindow) noexcept;
+#endif
+};
+
+} // namespace kb::editor

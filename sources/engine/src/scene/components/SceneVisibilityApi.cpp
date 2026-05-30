@@ -1,31 +1,33 @@
-#include "engine/scene/Scene.hpp"
-
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneComponentMutationService.hpp"
+#include "scene/SceneComponentQueryService.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
 
 namespace kb::scene {
 
-VisibilityComponent Scene::Visibility(SceneEntity entity) const {
-    const VisibilityComponent* visibility = TryGetVisibility(entity);
+VisibilityComponent SceneComponentQueryService::Visibility(const Scene& scene, SceneEntity entity) {
+    const VisibilityComponent* visibility = TryGetVisibility(scene, entity);
     return visibility == nullptr ? VisibilityComponent{} : *visibility;
 }
 
-const VisibilityComponent* Scene::TryGetVisibility(SceneEntity entity) const noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetVisibility(entity) : nullptr;
+const VisibilityComponent* SceneComponentQueryService::TryGetVisibility(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Visibility().TryGet(entity) : nullptr;
 }
 
-VisibilityComponent* Scene::TryGetVisibility(SceneEntity entity) noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetVisibility(entity) : nullptr;
+VisibilityComponent* SceneComponentMutationService::TryGetVisibility(Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Visibility().TryGet(entity) : nullptr;
 }
 
-void Scene::SetVisibility(SceneEntity entity, const VisibilityComponent& visibility) {
-    if (IsAlive(entity)) {
-        componentStorage_->SetVisibility(entity, visibility);
+void SceneComponentMutationService::SetVisibility(Scene& scene, SceneEntity entity, const VisibilityComponent& visibility) {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Visibility().Set(entity, visibility);
     }
 }
 
-void Scene::MarkVisibilityModified(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->MarkVisibilityModified(entity);
+void SceneComponentMutationService::MarkVisibilityModified(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Visibility().MarkModified(entity);
     }
 }
 

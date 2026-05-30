@@ -13,7 +13,7 @@ void DockDropPreviewState::Update(
     POINT mainPoint{ screen.x, screen.y };
     ScreenToClient(mainWindow, &mainPoint);
     const DockLayout layout = BuildMainLayout(mainWindow, dockModel, metrics);
-    const std::optional<DockDropPreview> nextPreview = dockModel.ResolveDropPreview(layout, mainPoint.x, mainPoint.y);
+    const std::optional<DockDropPreview> nextPreview = dockModel.Queries().ResolveDropPreview(layout, mainPoint.x, mainPoint.y);
     if (!SamePreview(dropPreview, nextPreview)) {
         dropPreview = nextPreview;
         InvalidateRect(mainWindow, nullptr, FALSE);
@@ -23,7 +23,7 @@ void DockDropPreviewState::Update(
 DockLayout DockDropPreviewState::BuildMainLayout(HWND mainWindow, const EditorDockModel& dockModel, const EditorMetrics& metrics) {
     RECT client{};
     GetClientRect(mainWindow, &client);
-    return dockModel.BuildLayout(
+    return dockModel.Queries().BuildLayout(
         client.right - client.left,
         client.bottom - client.top,
         metrics.menuHeight,

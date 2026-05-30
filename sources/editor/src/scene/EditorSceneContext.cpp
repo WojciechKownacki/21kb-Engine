@@ -1,5 +1,8 @@
 #include "scene/EditorSceneContext.hpp"
 
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
+
 #include "scene/EditorDefaultSceneFactory.hpp"
 
 namespace kb::editor {
@@ -21,7 +24,7 @@ kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
-    selectedEntity_ = scene_.IsAlive(entity) ? entity : kb::scene::SceneEntity{};
+    selectedEntity_ = scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
 }
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
@@ -37,7 +40,7 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
 
 std::vector<EditorSceneContext::HierarchyRow> EditorSceneContext::HierarchyRows() const {
     std::vector<HierarchyRow> rows;
-    for (const kb::scene::SceneEntity root : scene_.RootEntities()) {
+    for (const kb::scene::SceneEntity root : scene_.Hierarchy().RootEntities()) {
         AppendHierarchyRows(root, 0, rows);
     }
     return rows;
@@ -49,7 +52,7 @@ void EditorSceneContext::AppendHierarchyRows(kb::scene::SceneEntity entity, std:
         .depth = depth,
     });
 
-    for (const kb::scene::SceneEntity child : scene_.ChildEntities(entity)) {
+    for (const kb::scene::SceneEntity child : scene_.Hierarchy().ChildEntities(entity)) {
         AppendHierarchyRows(child, depth + 1U, rows);
     }
 }

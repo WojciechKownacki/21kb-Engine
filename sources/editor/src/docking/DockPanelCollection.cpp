@@ -32,7 +32,12 @@ const DockPanel* DockPanelCollection::Find(std::uint32_t panelId) const noexcept
 }
 
 DockPanel* DockPanelCollection::Find(std::uint32_t panelId) noexcept {
-    return const_cast<DockPanel*>(static_cast<const DockPanelCollection&>(*this).Find(panelId));
+    for (DockPanel& panel : panels_) {
+        if (panel.id == panelId) {
+            return &panel;
+        }
+    }
+    return nullptr;
 }
 
 void DockPanelCollection::MoveFloatingPanel(std::uint32_t panelId, int x, int y) noexcept {

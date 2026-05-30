@@ -18,9 +18,7 @@ class GdiDrawing {
 public:
     GdiDrawing() = delete;
 
-    [[nodiscard]] static constexpr COLORREF ToColorRef(EditorColor color) {
-        return RGB(color.r, color.g, color.b);
-    }
+    [[nodiscard]] static COLORREF ToColorRef(EditorColor color);
 
     [[nodiscard]] static RECT Inset(RECT rect, int amount);
     [[nodiscard]] static RECT ToRect(const DockRect& rect);

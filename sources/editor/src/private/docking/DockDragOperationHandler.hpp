@@ -43,11 +43,7 @@ public:
 
 private:
 #if defined(_WIN32)
-    [[nodiscard]] static DockLayout BuildMainLayout(HWND mainWindow, const EditorDockModel& dockModel, const EditorMetrics& metrics);
     [[nodiscard]] static bool IsMainWindow(HWND candidate, HWND mainWindow) noexcept;
-
-    static void MoveSplitter(DockPointerDrag& drag, int x, int y, HWND mainWindow, EditorDockModel& dockModel, const EditorMetrics& metrics);
-    [[nodiscard]] static bool ReorderDockedTab(DockPointerDrag& drag, int x, int y, HWND mainWindow, EditorDockModel& dockModel, const EditorMetrics& metrics);
 #endif
 };
 

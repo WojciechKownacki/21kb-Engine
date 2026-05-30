@@ -1,6 +1,8 @@
 #include "engine/scene/SceneObject.hpp"
 
-#include "engine/scene/Scene.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneHierarchyService.hpp"
+#include "scene/SceneTransformService.hpp"
 
 namespace kb::scene {
 
@@ -9,7 +11,7 @@ SceneObject::SceneObject(Scene& scene, SceneEntity entity) noexcept
     , entity_(entity) {}
 
 bool SceneObject::IsValid() const noexcept {
-    return scene_ != nullptr && scene_->IsAlive(*this);
+    return scene_ != nullptr && SceneEntityService::IsAlive(*scene_, *this);
 }
 
 kb::ecs::Entity SceneObject::EntityHandle() const noexcept {
@@ -21,40 +23,40 @@ SceneEntity SceneObject::Entity() const noexcept {
 }
 
 std::string SceneObject::Name() const {
-    return scene_ == nullptr ? std::string{} : scene_->Name(entity_);
+    return scene_ == nullptr ? std::string{} : SceneEntityService::Name(*scene_, entity_);
 }
 
 void SceneObject::SetName(std::string_view name) const {
     if (scene_ != nullptr) {
-        scene_->SetName(entity_, name);
+        SceneEntityService::SetName(*scene_, entity_, name);
     }
 }
 
 TransformComponent SceneObject::Transform() const {
-    return scene_ == nullptr ? TransformComponent{} : scene_->Transform(entity_);
+    return scene_ == nullptr ? TransformComponent{} : SceneTransformService::Get(*scene_, entity_);
 }
 
 void SceneObject::SetTransform(const TransformComponent& transform) const {
     if (scene_ != nullptr) {
-        scene_->SetTransform(entity_, transform);
+        SceneTransformService::Set(*scene_, entity_, transform);
     }
 }
 
 SceneObject SceneObject::Parent() const {
-    return scene_ == nullptr ? SceneObject{} : scene_->Parent(*this);
+    return scene_ == nullptr ? SceneObject{} : SceneHierarchyService::Parent(*scene_, *this);
 }
 
 std::vector<SceneObject> SceneObject::Children() const {
-    return scene_ == nullptr ? std::vector<SceneObject>{} : scene_->Children(*this);
+    return scene_ == nullptr ? std::vector<SceneObject>{} : SceneHierarchyService::Children(*scene_, *this);
 }
 
 bool SceneObject::SetParent(SceneObject parent) const noexcept {
-    return scene_ != nullptr && scene_->SetParent(entity_, parent.Entity());
+    return scene_ != nullptr && SceneHierarchyService::SetParent(*scene_, entity_, parent.Entity());
 }
 
 void SceneObject::Destroy() const noexcept {
     if (scene_ != nullptr) {
-        scene_->DestroyEntity(entity_);
+        SceneEntityService::DestroyEntity(*scene_, entity_);
     }
 }
 

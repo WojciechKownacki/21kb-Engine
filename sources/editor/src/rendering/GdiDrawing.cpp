@@ -1,70 +1,50 @@
 #include "rendering/GdiDrawing.hpp"
 
+#include "rendering/gdi/GdiAlphaBlender.hpp"
+#include "rendering/gdi/GdiColor.hpp"
+#include "rendering/gdi/GdiFramePainter.hpp"
+#include "rendering/gdi/GdiRect.hpp"
+#include "rendering/gdi/GdiRectPainter.hpp"
+#include "rendering/gdi/GdiTextPainter.hpp"
+
 #if defined(_WIN32)
 
 namespace kb::editor {
 
+COLORREF GdiDrawing::ToColorRef(EditorColor color) {
+    return GdiColor::ToColorRef(color);
+}
+
 RECT GdiDrawing::Inset(RECT rect, int amount) {
-    rect.left += amount;
-    rect.top += amount;
-    rect.right -= amount;
-    rect.bottom -= amount;
-    return rect;
+    return GdiRect::Inset(rect, amount);
 }
 
 RECT GdiDrawing::ToRect(const DockRect& rect) {
-    return RECT{ rect.x, rect.y, rect.x + rect.width, rect.y + rect.height };
+    return GdiRect::FromDockRect(rect);
 }
 
 void GdiDrawing::FillRectColor(HDC dc, const RECT& rect, COLORREF color) {
-    ScopedBrush brush(color);
-    FillRect(dc, &rect, brush.handle);
+    GdiRectPainter::Fill(dc, rect, color);
 }
 
 void GdiDrawing::FillRectAlpha(HDC target, const RECT& rect, COLORREF color, BYTE alpha) {
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
-    ScopedCompatibleDc overlayDc(target);
-    ScopedBitmap overlayBitmap(target, width, height);
-    HBITMAP oldBitmap = static_cast<HBITMAP>(SelectObject(overlayDc.handle, overlayBitmap.handle));
-    RECT overlayRect{ 0, 0, width, height };
-    FillRectColor(overlayDc.handle, overlayRect, color);
-
-    BLENDFUNCTION blend{};
-    blend.BlendOp = AC_SRC_OVER;
-    blend.SourceConstantAlpha = alpha;
-    AlphaBlend(target, rect.left, rect.top, width, height, overlayDc.handle, 0, 0, width, height, blend);
-    SelectObject(overlayDc.handle, oldBitmap);
+    GdiAlphaBlender::Fill(target, rect, color, alpha);
 }
 
 void GdiDrawing::DrawTextBlock(HDC dc, RECT rect, const char* text, COLORREF color) {
-    SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
+    GdiTextPainter::DrawBlock(dc, rect, text, color);
 }
 
 void GdiDrawing::DrawTabText(HDC dc, RECT rect, const char* text, COLORREF color) {
-    SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    GdiTextPainter::DrawTab(dc, rect, text, color);
 }
 
 void GdiDrawing::DrawCenteredText(HDC dc, RECT rect, const char* text, COLORREF color) {
-    SetTextColor(dc, color);
-    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    GdiTextPainter::DrawCentered(dc, rect, text, color);
 }
 
 void GdiDrawing::DrawSharpFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
-    FillRectColor(dc, rect, fill);
-
-    ScopedPen borderPen(1, border);
-    HPEN oldPen = static_cast<HPEN>(SelectObject(dc, borderPen.handle));
-    HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(dc, GetStockObject(NULL_BRUSH)));
-    Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
+    GdiFramePainter::DrawSharp(dc, rect, fill, border);
 }
 
 } // namespace kb::editor

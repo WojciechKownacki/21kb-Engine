@@ -5,6 +5,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneVisitors.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
@@ -14,12 +15,6 @@ namespace kb::scene {
 
 class SceneComponentIteration {
 public:
-    using ConstTransformVisitor = void (*)(SceneEntity entity, const TransformComponent& transform, void* context);
-    using MutableTransformVisitor = void (*)(SceneEntity entity, TransformComponent& transform, void* context);
-    using CameraVisitor = void (*)(SceneEntity entity, const TransformComponent& transform, const CameraComponent& camera, void* context);
-    using MeshRendererVisitor = void (*)(SceneEntity entity, const TransformComponent& transform, const MeshRendererComponent& renderer, void* context);
-    using LightVisitor = void (*)(SceneEntity entity, const TransformComponent& transform, const LightComponent& light, void* context);
-
     SceneComponentIteration() = delete;
 
     static void ForEachTransform(const kb::ecs::World& world, std::uint64_t transformComponentId, ConstTransformVisitor visitor, void* context);

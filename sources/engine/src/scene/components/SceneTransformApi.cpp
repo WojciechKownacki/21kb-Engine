@@ -1,41 +1,42 @@
-#include "engine/scene/Scene.hpp"
-
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/SceneTransformService.hpp"
 
 namespace kb::scene {
 
-TransformComponent Scene::Transform(SceneObject object) const {
-    return IsAlive(object) ? Transform(object.Entity()) : TransformComponent{};
+TransformComponent SceneTransformService::Get(const Scene& scene, SceneObject object) {
+    return SceneEntityService::IsAlive(scene, object) ? Get(scene, object.Entity()) : TransformComponent{};
 }
 
-TransformComponent Scene::Transform(SceneEntity entity) const {
-    const TransformComponent* transform = TryGetTransform(entity);
+TransformComponent SceneTransformService::Get(const Scene& scene, SceneEntity entity) {
+    const TransformComponent* transform = TryGet(scene, entity);
     return transform == nullptr ? TransformComponent{} : *transform;
 }
 
-const TransformComponent* Scene::TryGetTransform(SceneEntity entity) const noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetTransform(entity) : nullptr;
+const TransformComponent* SceneTransformService::TryGet(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity) : nullptr;
 }
 
-TransformComponent* Scene::TryGetTransform(SceneEntity entity) noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetTransform(entity) : nullptr;
+TransformComponent* SceneTransformService::TryGet(Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Transforms().TryGet(entity) : nullptr;
 }
 
-void Scene::SetTransform(SceneObject object, const TransformComponent& transform) {
-    if (IsAlive(object)) {
-        SetTransform(object.Entity(), transform);
+void SceneTransformService::Set(Scene& scene, SceneObject object, const TransformComponent& transform) {
+    if (SceneEntityService::IsAlive(scene, object)) {
+        Set(scene, object.Entity(), transform);
     }
 }
 
-void Scene::SetTransform(SceneEntity entity, const TransformComponent& transform) {
-    if (IsAlive(entity)) {
-        componentStorage_->SetTransform(entity, transform);
+void SceneTransformService::Set(Scene& scene, SceneEntity entity, const TransformComponent& transform) {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Transforms().Set(entity, transform);
     }
 }
 
-void Scene::MarkTransformModified(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->MarkTransformModified(entity);
+void SceneTransformService::MarkModified(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Transforms().MarkModified(entity);
     }
 }
 
