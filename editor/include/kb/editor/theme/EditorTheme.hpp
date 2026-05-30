@@ -33,7 +33,11 @@ struct EditorTheme {
 struct EditorMetrics {
     int menuHeight = 40;
     int toolbarHeight = 48;
+    int floatingChromeHeight = 24;
+    int floatingControlWidth = 34;
+    int floatingResizeBorder = 6;
     int tabStripHeight = 28;
+    int tabMinWidth = 92;
     int tabWidth = 156;
     int splitterSize = 6;
     int panelPadding = 18;
@@ -47,7 +51,7 @@ struct EditorMetrics {
     };
 }
 
-[[nodiscard]] constexpr EditorTheme MakeVerthDarkTheme() {
+[[nodiscard]] constexpr EditorTheme MakeEditorDarkTheme() {
     return EditorTheme{
         .background = Color(0.050F, 0.058F, 0.072F),
         .chrome = Color(0.085F, 0.095F, 0.110F),
