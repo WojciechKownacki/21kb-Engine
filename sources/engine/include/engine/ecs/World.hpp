@@ -2,26 +2,30 @@
 
 #include "engine/ecs/ComponentId.hpp"
 #include "engine/ecs/ComponentEvent.hpp"
+#include "engine/ecs/ComponentReflection.hpp"
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/TypeIds.hpp"
 #include "engine/ecs/WorldConfig.hpp"
+#include "engine/ecs/WorldEditorInspection.hpp"
 #include "engine/ecs/WorldInspection.hpp"
+#include "engine/ecs/WorldSerialization.hpp"
 #include "engine/ecs/WorldSnapshot.hpp"
 
 #include <cstddef>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <typeindex>
+#include <vector>
 
 struct ecs_world_t;
 
 namespace kb::ecs {
 
-class ComponentRegistry;
-class RelationTypeRegistry;
 class QueryState;
-class TagTypeRegistry;
+class WorldInternalAccess;
+class WorldRegistrySet;
 template <typename... Components>
 class Query;
 
@@ -45,13 +49,17 @@ public:
 #include "engine/ecs/world/WorldRuntimeApi.inl"
 
 private:
-#include "engine/ecs/world/WorldPrivateApi.inl"
+    friend class WorldInternalAccess;
+
+#include "engine/ecs/world/WorldPrivateComponentApi.inl"
+#include "engine/ecs/world/WorldPrivateQueryApi.inl"
+#include "engine/ecs/world/WorldPrivateEventApi.inl"
+#include "engine/ecs/world/WorldPrivateTypeApi.inl"
+#include "engine/ecs/world/WorldPrivateLifecycleApi.inl"
 
     ecs_world_t* world_ = nullptr;
     WorldConfig config_{};
-    std::unique_ptr<ComponentRegistry> components_;
-    std::unique_ptr<TagTypeRegistry> tags_;
-    std::unique_ptr<RelationTypeRegistry> relations_;
+    std::unique_ptr<WorldRegistrySet> registries_;
 };
 
 } // namespace kb::ecs
