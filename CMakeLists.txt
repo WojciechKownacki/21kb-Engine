@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(CTest)
+
 set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)

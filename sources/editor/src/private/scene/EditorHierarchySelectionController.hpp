@@ -26,12 +26,6 @@ public:
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext) const;
 #endif
-
-private:
-#if defined(_WIN32)
-    [[nodiscard]] static bool SelectAtContentPoint(const RECT& content, int x, int y, EditorSceneContext& sceneContext);
-    [[nodiscard]] static DockLayout BuildMainLayout(HWND mainWindow, const EditorDockModel& dockModel, const EditorMetrics& metrics);
-#endif
 };
 
 } // namespace kb::editor

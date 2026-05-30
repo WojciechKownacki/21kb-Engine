@@ -1,22 +1,46 @@
 add_library(kb_engine STATIC
     include/engine/ecs/Entity.hpp
+    include/engine/ecs/System.hpp
+    include/engine/ecs/SystemScheduler.hpp
     include/engine/ecs/World.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/SceneCameraComponents.hpp
+    include/engine/scene/SceneComponentQueries.hpp
+    include/engine/scene/SceneComponentVisitors.hpp
+    include/engine/scene/SceneComponents.hpp
+    include/engine/scene/SceneEntities.hpp
     include/engine/scene/SceneEntity.hpp
+    include/engine/scene/SceneHierarchyAccess.hpp
+    include/engine/scene/SceneLightComponents.hpp
+    include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
+    include/engine/scene/SceneRuntime.hpp
+    include/engine/scene/SceneSystem.hpp
+    include/engine/scene/SceneSystemContext.hpp
+    include/engine/scene/SceneSystemQueryAccess.hpp
+    include/engine/scene/SceneSystemTransformAccess.hpp
+    include/engine/scene/SceneTransforms.hpp
+    include/engine/scene/SceneVisitorTypes.hpp
+    include/engine/scene/SceneVisitors.hpp
     include/engine/scene/TransformComponent.hpp
+    include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
+    src/ecs/System.cpp
+    src/ecs/SystemScheduler.cpp
     src/ecs/World.cpp
     src/scene/Scene.cpp
     src/scene/SceneHierarchy.cpp
     src/scene/SceneIteration.cpp
     src/scene/SceneLifecycle.cpp
+    src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
+    src/scene/SceneRuntime.cpp
+    src/scene/SceneState.cpp
     src/scene/components/SceneCameraApi.cpp
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneComponentAccess.cpp
@@ -35,28 +59,105 @@ add_library(kb_engine STATIC
     src/scene/components/SceneVisibilityApi.cpp
     src/scene/components/SceneVisibilityStorage.cpp
     src/scene/entities/SceneEntityCounter.cpp
+    src/scene/entities/SceneEntityCreationService.cpp
+    src/scene/entities/SceneEntityDestructionService.cpp
+    src/scene/entities/SceneEntityNameService.cpp
     src/scene/entities/SceneEntityNaming.cpp
+    src/scene/entities/SceneEntityStatsService.cpp
     src/scene/hierarchy/SceneHierarchyOperations.cpp
+    src/scene/hierarchy/SceneHierarchyChildrenService.cpp
+    src/scene/hierarchy/SceneHierarchyParentAssignmentService.cpp
+    src/scene/hierarchy/SceneHierarchyParenting.cpp
+    src/scene/hierarchy/SceneHierarchyParentService.cpp
+    src/scene/hierarchy/SceneHierarchyReader.cpp
+    src/scene/hierarchy/SceneHierarchyRootsService.cpp
+    src/scene/hierarchy/SceneHierarchyRootCollector.cpp
+    src/scene/modules/components/SceneCameraModule.cpp
+    src/scene/modules/components/SceneComponentIterationModule.cpp
+    src/scene/modules/components/SceneComponentModule.cpp
+    src/scene/modules/components/SceneLightModule.cpp
+    src/scene/modules/components/SceneMeshRendererModule.cpp
+    src/scene/modules/components/SceneVisibilityModule.cpp
+    src/scene/modules/SceneEntities.cpp
+    src/scene/modules/SceneHierarchyAccess.cpp
+    src/scene/modules/SceneRuntime.cpp
+    src/scene/modules/SceneTransforms.cpp
+    src/scene/systems/SceneSystem.cpp
+    src/scene/systems/SceneSystemContext.cpp
+    src/scene/systems/SceneSystemQueryAccess.cpp
+    src/scene/systems/SceneSystemScheduler.cpp
+    src/scene/systems/SceneSystemTransformAccess.cpp
+    src/scene/transform/SceneTransformBranchUpdater.cpp
+    src/scene/transform/SceneTransformHierarchySystem.cpp
+    src/scene/transform/SceneTransformRootCollector.cpp
+    src/scene/transform/QuatMath.cpp
+    src/scene/transform/TransformMath.cpp
+    src/scene/transform/Vec3Math.cpp
     src/private/scene/components/SceneComponentAccess.hpp
+    src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
     src/private/scene/components/SceneComponentRegistry.hpp
     src/private/scene/components/SceneComponentStorage.hpp
     src/private/scene/components/SceneComponentStorageAccess.hpp
+    src/private/scene/components/SceneLightComponentStore.hpp
+    src/private/scene/components/SceneMeshRendererComponentStore.hpp
+    src/private/scene/components/SceneTransformComponentStore.hpp
+    src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp
+    src/private/scene/entities/SceneEntityCreationService.hpp
+    src/private/scene/entities/SceneEntityDestructionService.hpp
+    src/private/scene/entities/SceneEntityNameService.hpp
     src/private/scene/entities/SceneEntityNaming.hpp
+    src/private/scene/entities/SceneEntityStatsService.hpp
     src/private/scene/hierarchy/SceneHierarchyOperations.hpp
+    src/private/scene/hierarchy/SceneHierarchyChildrenService.hpp
+    src/private/scene/hierarchy/SceneHierarchyParentAssignmentService.hpp
+    src/private/scene/hierarchy/SceneHierarchyParenting.hpp
+    src/private/scene/hierarchy/SceneHierarchyParentService.hpp
+    src/private/scene/hierarchy/SceneHierarchyReader.hpp
+    src/private/scene/hierarchy/SceneHierarchyRootsService.hpp
+    src/private/scene/hierarchy/SceneHierarchyRootCollector.hpp
+    src/private/scene/SceneAccess.hpp
+    src/private/scene/SceneComponentMutationService.hpp
+    src/private/scene/SceneComponentQueryService.hpp
+    src/private/scene/SceneEntityService.hpp
+    src/private/scene/SceneHierarchyService.hpp
+    src/private/scene/SceneIterationService.hpp
+    src/private/scene/SceneRuntimeService.hpp
+    src/private/scene/SceneState.hpp
+    src/private/scene/SceneTransformService.hpp
+    src/private/scene/systems/SceneSystemScheduler.hpp
+    src/private/scene/transform/QuatMath.hpp
+    src/private/scene/transform/SceneTransformBranchUpdater.hpp
+    src/private/scene/transform/SceneTransformHierarchySystem.hpp
+    src/private/scene/transform/SceneTransformRootCollector.hpp
+    src/private/scene/transform/TransformMath.hpp
+    src/private/scene/transform/Vec3Math.hpp
     src/private/render/postfx/PostProcessCompiledPass.hpp
     src/private/render/postfx/PostProcessDependencyGraph.hpp
+    src/private/render/postfx/PostProcessEdgeNormalizer.hpp
     src/private/render/postfx/PostProcessGraphBuilder.hpp
     src/private/render/postfx/PostProcessPassCompiler.hpp
     src/private/render/postfx/PostProcessPassValidator.hpp
+    src/private/render/postfx/PostProcessPipelineCompiler.hpp
+    src/private/render/postfx/PostProcessPipelineExecutor.hpp
+    src/private/render/postfx/PostProcessPipelineState.hpp
     src/private/render/postfx/PostProcessResourceRegistry.hpp
+    src/private/render/postfx/PostProcessResourceDependencyIndexer.hpp
+    src/private/render/postfx/PostProcessResourceEdgeBuilder.hpp
+    src/private/render/postfx/PostProcessTopologicalSorter.hpp
+    src/render/postfx/PostProcessEdgeNormalizer.cpp
     src/render/postfx/PostProcessGraphBuilder.cpp
     src/render/postfx/PostProcessPassCompiler.cpp
     src/render/postfx/PostProcessPassValidator.cpp
     src/render/postfx/PostProcessPipeline.cpp
+    src/render/postfx/PostProcessPipelineCompiler.cpp
+    src/render/postfx/PostProcessPipelineExecutor.cpp
+    src/render/postfx/PostProcessResourceDependencyIndexer.cpp
+    src/render/postfx/PostProcessResourceEdgeBuilder.cpp
     src/render/postfx/PostProcessResourceRegistry.cpp
+    src/render/postfx/PostProcessTopologicalSorter.cpp
 )
 
 target_include_directories(kb_engine
@@ -75,4 +176,23 @@ if(MSVC)
     target_compile_options(kb_engine PRIVATE /W4 /WX)
 else()
     target_compile_options(kb_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(kb_engine_tests
+        tests/SceneRuntimeTests.cpp
+    )
+
+    target_link_libraries(kb_engine_tests
+        PRIVATE
+            kb_engine
+    )
+
+    add_test(NAME kb_engine_tests COMMAND kb_engine_tests)
+
+    if(MSVC)
+        target_compile_options(kb_engine_tests PRIVATE /W4 /WX)
+    else()
+        target_compile_options(kb_engine_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
 endif()
