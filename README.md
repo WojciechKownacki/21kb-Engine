@@ -31,6 +31,8 @@ Implemented foundations:
 
 - CMake-based C++20 project structure,
 - `kb_engine` static library target,
+- `sources/` root for engine and editor source code,
+- first ECS world wrapper backed by Flecs,
 - first post-process pipeline module,
 - native `kb_editor` executable,
 - native editor shell with viewport, hierarchy, inspector, assets and console
