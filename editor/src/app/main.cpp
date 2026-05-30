@@ -1,4 +1,4 @@
-#include "EditorApplication.hpp"
+#include "kb/editor/EditorApplication.hpp"
 
 int main() {
     kb::editor::EditorApplication app;

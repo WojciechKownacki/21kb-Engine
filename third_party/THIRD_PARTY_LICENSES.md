@@ -59,6 +59,17 @@ substantial portions of the software.
 Box2D copyright and permission notices must be included in all copies or
 substantial portions of the software.
 
+## Heroicons
+
+- Repository: https://github.com/tailwindlabs/heroicons
+- Local path: `third_party/heroicons`
+- Revision: `616b7a4dbbf3d011760af8066262cd5c6b3868f3`
+- License: MIT
+- License file: `third_party/heroicons/LICENSE`
+
+Heroicons copyright and permission notices must be included in all copies or
+substantial portions of the software.
+
 ## Notes
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies
