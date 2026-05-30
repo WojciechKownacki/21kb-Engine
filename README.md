@@ -33,6 +33,8 @@ Implemented foundations:
 - `kb_engine` static library target,
 - `sources/` root for engine and editor source code,
 - first ECS world wrapper backed by Flecs,
+- first entity-first scene layer with transforms and parent-child hierarchy,
+- core scene ECS components for visibility, cameras, mesh renderers and lights,
 - first post-process pipeline module,
 - native `kb_editor` executable,
 - native editor shell with viewport, hierarchy, inspector, assets and console

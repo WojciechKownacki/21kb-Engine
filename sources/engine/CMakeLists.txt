@@ -1,13 +1,69 @@
 add_library(kb_engine STATIC
     include/engine/ecs/Entity.hpp
     include/engine/ecs/World.hpp
+    include/engine/scene/CameraComponent.hpp
+    include/engine/scene/LightComponent.hpp
+    include/engine/scene/MeshRendererComponent.hpp
+    include/engine/scene/Scene.hpp
+    include/engine/scene/SceneEntity.hpp
+    include/engine/scene/SceneObject.hpp
+    include/engine/scene/SceneObjectDesc.hpp
+    include/engine/scene/TransformComponent.hpp
+    include/engine/scene/VisibilityComponent.hpp
+    include/engine/render/postfx/PostProcessPipeline.hpp
     src/ecs/World.cpp
+    src/scene/Scene.cpp
+    src/scene/SceneHierarchy.cpp
+    src/scene/SceneIteration.cpp
+    src/scene/SceneLifecycle.cpp
+    src/scene/SceneObject.cpp
+    src/scene/components/SceneCameraApi.cpp
+    src/scene/components/SceneCameraStorage.cpp
+    src/scene/components/SceneComponentAccess.cpp
+    src/scene/components/SceneComponentRegistry.cpp
+    src/scene/components/SceneComponentStorage.cpp
+    src/scene/components/SceneCameraIteration.cpp
+    src/scene/components/SceneLightApi.cpp
+    src/scene/components/SceneLightStorage.cpp
+    src/scene/components/SceneLightIteration.cpp
+    src/scene/components/SceneMeshRendererApi.cpp
+    src/scene/components/SceneMeshRendererStorage.cpp
+    src/scene/components/SceneMeshRendererIteration.cpp
+    src/scene/components/SceneTransformApi.cpp
+    src/scene/components/SceneTransformStorage.cpp
+    src/scene/components/SceneTransformIteration.cpp
+    src/scene/components/SceneVisibilityApi.cpp
+    src/scene/components/SceneVisibilityStorage.cpp
+    src/scene/entities/SceneEntityCounter.cpp
+    src/scene/entities/SceneEntityNaming.cpp
+    src/scene/hierarchy/SceneHierarchyOperations.cpp
+    src/private/scene/components/SceneComponentAccess.hpp
+    src/private/scene/components/SceneComponentIteration.hpp
+    src/private/scene/components/SceneComponentIterationAccess.hpp
+    src/private/scene/components/SceneComponentRegistry.hpp
+    src/private/scene/components/SceneComponentStorage.hpp
+    src/private/scene/components/SceneComponentStorageAccess.hpp
+    src/private/scene/entities/SceneEntityCounter.hpp
+    src/private/scene/entities/SceneEntityNaming.hpp
+    src/private/scene/hierarchy/SceneHierarchyOperations.hpp
+    src/private/render/postfx/PostProcessCompiledPass.hpp
+    src/private/render/postfx/PostProcessDependencyGraph.hpp
+    src/private/render/postfx/PostProcessGraphBuilder.hpp
+    src/private/render/postfx/PostProcessPassCompiler.hpp
+    src/private/render/postfx/PostProcessPassValidator.hpp
+    src/private/render/postfx/PostProcessResourceRegistry.hpp
+    src/render/postfx/PostProcessGraphBuilder.cpp
+    src/render/postfx/PostProcessPassCompiler.cpp
+    src/render/postfx/PostProcessPassValidator.cpp
     src/render/postfx/PostProcessPipeline.cpp
+    src/render/postfx/PostProcessResourceRegistry.cpp
 )
 
 target_include_directories(kb_engine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/private
 )
 
 target_link_libraries(kb_engine

@@ -3,45 +3,119 @@ add_executable(kb_editor
     include/kb/editor/docking/DockTypes.hpp
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
+    src/app/EditorPaintDispatcher.cpp
+    src/app/EditorWindowMessageRouter.cpp
     src/app/main.cpp
     src/docking/DefaultDockWorkspace.cpp
+    src/docking/DockDropPreviewFactory.cpp
     src/docking/DockDropPreviewResolver.cpp
+    src/docking/DockDropPreviewState.cpp
+    src/docking/DockDropZoneClassifier.cpp
+    src/docking/DockDragOperationHandler.cpp
+    src/docking/DockFloatingDragOperation.cpp
     src/docking/DockGeometry.cpp
     src/docking/DockHitTester.cpp
     src/docking/DockLayoutBuilder.cpp
+    src/docking/DockLeafLayoutBuilder.cpp
+    src/docking/DockLeafPanelOrder.cpp
+    src/docking/DockModelQueries.cpp
     src/docking/DockNodeFactory.cpp
+    src/docking/DockNodeLayoutBuilder.cpp
+    src/docking/DockNodeQuery.cpp
+    src/docking/DockPanelCollection.cpp
+    src/docking/DockPanelDocking.cpp
+    src/docking/DockPointerDragFactory.cpp
+    src/docking/DockSplitterResizer.cpp
+    src/docking/DockSplitLayoutBuilder.cpp
     src/docking/DockTabIndexResolver.cpp
+    src/docking/DockTreeMutation.cpp
+    src/docking/DockTreePruner.cpp
     src/docking/DockTypes.cpp
     src/docking/EditorDockController.cpp
     src/docking/EditorDockModel.cpp
     src/docking/EditorFloatingWindowManager.cpp
     src/private/docking/DefaultDockWorkspace.hpp
+    src/private/docking/DockDropPreviewFactory.hpp
+    src/private/docking/DockDropPreviewMetrics.hpp
     src/private/docking/DockDropPreviewResolver.hpp
+    src/private/docking/DockDropPreviewState.hpp
+    src/private/docking/DockDropZoneClassifier.hpp
+    src/private/docking/DockDragOperationHandler.hpp
+    src/private/docking/DockFloatingDragOperation.hpp
     src/private/docking/DockGeometry.hpp
     src/private/docking/DockHitTester.hpp
     src/private/docking/DockLayoutBuilder.hpp
+    src/private/docking/DockLayoutBuildSettings.hpp
+    src/private/docking/DockLeafLayoutBuilder.hpp
+    src/private/docking/DockLeafPanelOrder.hpp
+    src/private/docking/DockModelQueries.hpp
     src/private/docking/DockNode.hpp
     src/private/docking/DockNodeFactory.hpp
+    src/private/docking/DockNodeLayoutBuilder.hpp
+    src/private/docking/DockNodeQuery.hpp
+    src/private/docking/DockPanelCollection.hpp
+    src/private/docking/DockPanelDocking.hpp
+    src/private/docking/DockPointerDrag.hpp
+    src/private/docking/DockPointerDragFactory.hpp
+    src/private/docking/DockSplitterResizer.hpp
+    src/private/docking/DockSplitLayoutBuilder.hpp
     src/private/docking/DockTabIndexResolver.hpp
+    src/private/docking/DockTreeMutation.hpp
+    src/private/docking/DockTreePruner.hpp
     src/private/docking/EditorDockController.hpp
     src/private/docking/EditorDockModel.hpp
     src/private/docking/EditorFloatingWindowManager.hpp
+    src/private/app/EditorPaintDispatcher.hpp
+    src/private/app/EditorWindowMessageRouter.hpp
+    src/private/platform/win32/EditorMainWindow.hpp
+    src/private/platform/win32/EditorWindowClassRegistry.hpp
+    src/private/platform/win32/Win32ErrorReporter.hpp
+    src/private/rendering/DockDropPreviewRenderer.hpp
+    src/private/rendering/DockPanelChromeRenderer.hpp
+    src/private/rendering/DockWorkspaceRenderer.hpp
+    src/private/rendering/EditorToolbarRenderer.hpp
+    src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
     src/private/rendering/EditorGdiRenderer.hpp
     src/private/rendering/GdiDrawing.hpp
+    src/private/rendering/GdiResources.hpp
+    src/private/rendering/HierarchyPanelRenderer.hpp
     src/private/rendering/HeroIconCatalog.hpp
     src/private/rendering/HeroIconKind.hpp
     src/private/rendering/HeroIconPainter.hpp
+    src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
+    src/private/scene/EditorDefaultSceneFactory.hpp
+    src/private/scene/EditorHierarchyMetrics.hpp
+    src/private/scene/EditorHierarchySelectionController.hpp
+    src/private/scene/EditorSceneContext.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
     src/private/windowing/FloatingWindowControlKind.hpp
     src/private/windowing/FloatingWindowControlLayout.hpp
+    src/private/windowing/FloatingWindowFactory.hpp
+    src/private/windowing/FloatingWindowHitTestResolver.hpp
+    src/platform/win32/EditorMainWindow.cpp
+    src/platform/win32/EditorWindowClassRegistry.cpp
+    src/platform/win32/Win32ErrorReporter.cpp
+    src/rendering/DockDropPreviewRenderer.cpp
+    src/rendering/DockPanelChromeRenderer.cpp
+    src/rendering/DockWorkspaceRenderer.cpp
     src/rendering/EditorGdiRenderer.cpp
+    src/rendering/EditorToolbarRenderer.cpp
+    src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowControlRenderer.cpp
+    src/rendering/GdiDrawing.cpp
+    src/rendering/HierarchyPanelRenderer.cpp
+    src/rendering/InspectorPanelRenderer.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/scene/EditorDefaultSceneFactory.cpp
+    src/scene/EditorHierarchySelectionController.cpp
+    src/scene/EditorSceneContext.cpp
     src/windowing/FloatingWindowControlActions.cpp
+    src/windowing/FloatingWindowFactory.cpp
+    src/windowing/FloatingWindowHitTestResolver.cpp
     src/windowing/FloatingWindowControlInteractor.cpp
     ../../third_party/heroicons/LICENSE
     ../../third_party/heroicons/README.third_party.md
