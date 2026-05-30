@@ -4,6 +4,13 @@
 #include "docking/DockDropZoneClassifier.hpp"
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool IsLeafDockZone(DockDropZone zone) noexcept {
+    return zone == DockDropZone::Left || zone == DockDropZone::Right || zone == DockDropZone::Top || zone == DockDropZone::Bottom;
+}
+
+} // namespace
 
 std::optional<DockDropPreview> DockDropPreviewResolver::Resolve(const DockLayout& layout, int x, int y) const {
     if (!layout.workspace.Contains(x, y)) {
@@ -27,7 +34,7 @@ std::optional<DockDropPreview> DockDropPreviewResolver::Resolve(const DockLayout
             }
 
             const DockDropZone leafZone = classifier.ClassifyLeafZone(it->content, x, y);
-            return leafZone == DockDropZone::Center ? std::nullopt : std::optional<DockDropPreview>{ previewFactory.ForLeafEdge(*it, leafZone) };
+            return IsLeafDockZone(leafZone) ? std::optional<DockDropPreview>{ previewFactory.ForLeafEdge(*it, leafZone) } : std::nullopt;
         }
         return std::nullopt;
     }
