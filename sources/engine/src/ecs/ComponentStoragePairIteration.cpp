@@ -1,12 +1,15 @@
-#include "ecs/ComponentStorage.hpp"
+#include "ecs/component/ComponentStoragePairIteration.hpp"
+
+#include "ecs/query/QueryDescriptorBuilder.hpp"
 
 #include <flecs.h>
 
+#include <array>
 #include <cstdint>
 
 namespace kb::ecs {
 
-void ComponentStorage::ForEachPair(
+void ComponentStoragePairIteration::ForEachPair(
     ecs_world_t* world,
     ComponentId firstComponentId,
     std::size_t firstComponentSize,
@@ -18,16 +21,14 @@ void ComponentStorage::ForEachPair(
         return;
     }
 
-    ecs_query_desc_t desc{};
-    desc.terms[0].id = firstComponentId;
-    desc.terms[1].id = secondComponentId;
-
-    ecs_query_t* query = ecs_query_init(world, &desc);
-    if (query == nullptr) {
+    const std::array<ComponentId, 2> componentIds{ firstComponentId, secondComponentId };
+    const std::array<std::size_t, 2> componentSizes{ firstComponentSize, secondComponentSize };
+    FlecsQueryHandle query = QueryDescriptorBuilder::Build(world, componentIds, componentSizes);
+    if (!query) {
         return;
     }
 
-    ecs_iter_t it = ecs_query_iter(world, query);
+    ecs_iter_t it = ecs_query_iter(world, query.Get());
     while (ecs_query_next(&it)) {
         const void* firstComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(firstComponentSize), 0);
         const void* secondComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(secondComponentSize), 1);
@@ -45,8 +46,6 @@ void ComponentStorage::ForEachPair(
                 context);
         }
     }
-
-    ecs_query_fini(query);
 }
 
 } // namespace kb::ecs

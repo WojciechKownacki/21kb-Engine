@@ -1,4 +1,4 @@
-#include "ecs/ComponentStorage.hpp"
+#include "ecs/component/ComponentStorageIteration.hpp"
 
 #include <flecs.h>
 
@@ -6,7 +6,7 @@
 
 namespace kb::ecs {
 
-void ComponentStorage::ForEach(ecs_world_t* world, ComponentId componentId, std::size_t componentSize, RawConstComponentVisitor visitor, void* context) {
+void ComponentStorageIteration::ForEach(ecs_world_t* world, ComponentId componentId, std::size_t componentSize, RawConstComponentVisitor visitor, void* context) {
     if (world == nullptr || componentId == 0 || componentSize == 0 || visitor == nullptr) {
         return;
     }
@@ -25,7 +25,7 @@ void ComponentStorage::ForEach(ecs_world_t* world, ComponentId componentId, std:
     }
 }
 
-void ComponentStorage::ForEachMutable(ecs_world_t* world, ComponentId componentId, std::size_t componentSize, RawMutableComponentVisitor visitor, void* context) {
+void ComponentStorageIteration::ForEachMutable(ecs_world_t* world, ComponentId componentId, std::size_t componentSize, RawMutableComponentVisitor visitor, void* context) {
     if (world == nullptr || componentId == 0 || componentSize == 0 || visitor == nullptr) {
         return;
     }
