@@ -10,8 +10,9 @@
 
 namespace kb::ecs {
 
-World::World()
+World::World(WorldConfig config)
     : world_(ecs_init())
+    , config_(config)
     , components_(std::make_unique<ComponentRegistry>()) {
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
@@ -24,12 +25,14 @@ World::~World() {
 
 World::World(World&& other) noexcept
     : world_(std::exchange(other.world_, nullptr))
+    , config_(other.config_)
     , components_(std::move(other.components_)) {}
 
 World& World::operator=(World&& other) noexcept {
     if (this != &other) {
         Reset();
         world_ = std::exchange(other.world_, nullptr);
+        config_ = other.config_;
         components_ = std::move(other.components_);
     }
     return *this;
@@ -43,6 +46,10 @@ void World::Reset() noexcept {
     if (components_ != nullptr) {
         components_->Clear();
     }
+}
+
+const WorldConfig& World::Config() const noexcept {
+    return config_;
 }
 
 } // namespace kb::ecs

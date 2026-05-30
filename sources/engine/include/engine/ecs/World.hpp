@@ -2,20 +2,22 @@
 
 #include "engine/ecs/ComponentId.hpp"
 #include "engine/ecs/Entity.hpp"
+#include "engine/ecs/WorldConfig.hpp"
 
 #include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <typeindex>
-#include <typeinfo>
 
 struct ecs_world_t;
 
 namespace kb::ecs {
 
 class ComponentRegistry;
+class QueryState;
+template <typename... Components>
+class Query;
 
 class World {
 public:
@@ -28,7 +30,7 @@ public:
     template <typename TFirst, typename TSecond>
     using ConstComponentsVisitor = void (*)(Entity entity, const TFirst& first, const TSecond& second, void* context);
 
-    World();
+    explicit World(WorldConfig config = WorldConfig{});
     ~World();
 
     World(const World&) = delete;
@@ -78,12 +80,16 @@ public:
     template <typename TFirst, typename TSecond>
     void ForEach(ConstComponentsVisitor<TFirst, TSecond> visitor, void* context) const;
 
+    template <typename... Components>
+    [[nodiscard]] Query<Components...> CreateQuery();
+
     [[nodiscard]] bool Progress(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;
 
     [[nodiscard]] ecs_world_t* NativeHandle() noexcept;
     [[nodiscard]] const ecs_world_t* NativeHandle() const noexcept;
+    [[nodiscard]] const WorldConfig& Config() const noexcept;
 
 private:
     using RawConstComponentVisitor = void (*)(Entity entity, const void* component, void* context);
@@ -112,9 +118,11 @@ private:
         std::size_t secondComponentSize,
         void (*visitor)(Entity entity, const void* first, const void* second, void* context),
         void* context) const;
+    [[nodiscard]] QueryState* CreateQueryState(const ComponentId* componentIds, const std::size_t* componentSizes, std::size_t componentCount) const;
     void Reset() noexcept;
 
     ecs_world_t* world_ = nullptr;
+    WorldConfig config_{};
     std::unique_ptr<ComponentRegistry> components_;
 };
 
