@@ -20,7 +20,9 @@ add_executable(kb_editor
     src/docking/DockDropPlacementPolicy.cpp
     src/docking/DockDropPreviewResolver.cpp
     src/docking/DockDropPreviewState.cpp
+    src/docking/DockDropEdgeBandClassifier.cpp
     src/docking/DockDropZoneClassifier.cpp
+    src/docking/DockDropZoneDepthSelector.cpp
     src/docking/DockDragOperationHandler.cpp
     src/docking/DockDragCompletionHandler.cpp
     src/docking/DockFloatingDragOperation.cpp
@@ -73,7 +75,9 @@ add_executable(kb_editor
     src/private/docking/DockDropPlacementPolicy.hpp
     src/private/docking/DockDropPreviewResolver.hpp
     src/private/docking/DockDropPreviewState.hpp
+    src/private/docking/DockDropEdgeBandClassifier.hpp
     src/private/docking/DockDropZoneClassifier.hpp
+    src/private/docking/DockDropZoneDepths.hpp
     src/private/docking/DockDragOperationHandler.hpp
     src/private/docking/DockDragCompletionHandler.hpp
     src/private/docking/DockDockedTabDragHandler.hpp
@@ -150,10 +154,13 @@ add_executable(kb_editor
     src/private/rendering/DockWorkspaceTabStripRenderer.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
+    src/private/rendering/FloatingWindowBackBufferPainter.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
+    src/private/rendering/GdiBackBufferRenderer.hpp
     src/private/rendering/EditorGdiRenderer.hpp
     src/private/rendering/GdiDrawing.hpp
     src/private/rendering/GdiResources.hpp
+    src/private/rendering/MainWindowBackBufferPainter.hpp
     src/private/rendering/gdi/GdiAlphaBlender.hpp
     src/private/rendering/gdi/GdiColor.hpp
     src/private/rendering/gdi/GdiFramePainter.hpp
@@ -199,7 +206,9 @@ add_executable(kb_editor
     src/rendering/EditorGdiRenderer.cpp
     src/rendering/EditorToolbarRenderer.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
+    src/rendering/FloatingWindowBackBufferPainter.cpp
     src/rendering/FloatingWindowControlRenderer.cpp
+    src/rendering/GdiBackBufferRenderer.cpp
     src/rendering/GdiDrawing.cpp
     src/rendering/gdi/GdiAlphaBlender.cpp
     src/rendering/gdi/GdiFramePainter.cpp
@@ -208,6 +217,7 @@ add_executable(kb_editor
     src/rendering/gdi/GdiTextPainter.cpp
     src/rendering/HierarchyPanelRenderer.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
     src/rendering/SceneGridRenderer.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
