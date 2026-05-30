@@ -18,6 +18,12 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
+    include/engine/scene/ScenePrefab.hpp
+    include/engine/scene/ScenePrefabCaptureSettings.hpp
+    include/engine/scene/ScenePrefabInstance.hpp
+    include/engine/scene/ScenePrefabInstantiationSettings.hpp
+    include/engine/scene/ScenePrefabNode.hpp
+    include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneSystem.hpp
     include/engine/scene/SceneSystemContext.hpp
@@ -34,13 +40,15 @@ add_library(kb_engine STATIC
     src/ecs/SystemScheduler.cpp
     src/ecs/World.cpp
     src/scene/Scene.cpp
+    src/scene/SceneCameraIterationService.cpp
     src/scene/SceneHierarchy.cpp
-    src/scene/SceneIteration.cpp
-    src/scene/SceneLifecycle.cpp
+    src/scene/SceneLightIterationService.cpp
+    src/scene/SceneMeshRendererIterationService.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
+    src/scene/SceneTransformIterationService.cpp
     src/scene/components/SceneCameraApi.cpp
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneComponentAccess.cpp
@@ -51,6 +59,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneLightStorage.cpp
     src/scene/components/SceneLightIteration.cpp
     src/scene/components/SceneMeshRendererApi.cpp
+    src/scene/components/SceneMeshRendererIterationDispatcher.cpp
     src/scene/components/SceneMeshRendererStorage.cpp
     src/scene/components/SceneMeshRendererIteration.cpp
     src/scene/components/SceneTransformApi.cpp
@@ -62,6 +71,11 @@ add_library(kb_engine STATIC
     src/scene/entities/SceneEntityCreationService.cpp
     src/scene/entities/SceneEntityDestructionService.cpp
     src/scene/entities/SceneEntityNameService.cpp
+    src/scene/entities/SceneEntityServiceCreation.cpp
+    src/scene/entities/SceneEntityServiceLifetime.cpp
+    src/scene/entities/SceneEntityServiceNames.cpp
+    src/scene/entities/SceneEntityServiceStats.cpp
+    src/scene/entities/SceneEntityServiceStatus.cpp
     src/scene/entities/SceneEntityNaming.cpp
     src/scene/entities/SceneEntityStatsService.cpp
     src/scene/hierarchy/SceneHierarchyOperations.cpp
@@ -79,14 +93,37 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/SceneEntities.cpp
+    src/scene/modules/SceneEntityCreation.cpp
+    src/scene/modules/SceneEntityLifetime.cpp
+    src/scene/modules/SceneEntityNames.cpp
+    src/scene/modules/SceneEntityQueries.cpp
     src/scene/modules/SceneHierarchyAccess.cpp
+    src/scene/modules/ScenePrefabs.cpp
     src/scene/modules/SceneRuntime.cpp
     src/scene/modules/SceneTransforms.cpp
+    src/scene/modules/SceneTransformIterationModule.cpp
+    src/scene/modules/SceneTransformMutation.cpp
+    src/scene/modules/SceneTransformQueries.cpp
     src/scene/systems/SceneSystem.cpp
     src/scene/systems/SceneSystemContext.cpp
     src/scene/systems/SceneSystemQueryAccess.cpp
+    src/scene/systems/SceneSystemMutableTransformIteration.cpp
     src/scene/systems/SceneSystemScheduler.cpp
     src/scene/systems/SceneSystemTransformAccess.cpp
+    src/scene/prefab/ScenePrefab.cpp
+    src/scene/prefab/ScenePrefabCaptureNodeBuilder.cpp
+    src/scene/prefab/ScenePrefabCaptureService.cpp
+    src/scene/prefab/ScenePrefabCaptureTraversal.cpp
+    src/scene/prefab/ScenePrefabCaptureValidator.cpp
+    src/scene/prefab/ScenePrefabChildrenReader.cpp
+    src/scene/prefab/ScenePrefabComponentSnapshot.cpp
+    src/scene/prefab/ScenePrefabHierarchyCounter.cpp
+    src/scene/prefab/ScenePrefabComponentApplier.cpp
+    src/scene/prefab/ScenePrefabInstantiationService.cpp
+    src/scene/prefab/ScenePrefabNameResolver.cpp
+    src/scene/prefab/ScenePrefabNodeFactory.cpp
+    src/scene/prefab/ScenePrefabParentResolver.cpp
+    src/scene/prefab/ScenePrefabValidator.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
@@ -100,6 +137,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneComponentRegistry.hpp
     src/private/scene/components/SceneComponentStorage.hpp
     src/private/scene/components/SceneComponentStorageAccess.hpp
+    src/private/scene/components/SceneMeshRendererIterationDispatcher.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
@@ -127,7 +165,21 @@ add_library(kb_engine STATIC
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTransformService.hpp
+    src/private/scene/prefab/ScenePrefabCaptureNodeBuilder.hpp
+    src/private/scene/prefab/ScenePrefabCaptureService.hpp
+    src/private/scene/prefab/ScenePrefabCaptureTraversal.hpp
+    src/private/scene/prefab/ScenePrefabCaptureValidator.hpp
+    src/private/scene/prefab/ScenePrefabChildrenReader.hpp
+    src/private/scene/prefab/ScenePrefabComponentSnapshot.hpp
+    src/private/scene/prefab/ScenePrefabHierarchyCounter.hpp
+    src/private/scene/prefab/ScenePrefabComponentApplier.hpp
+    src/private/scene/prefab/ScenePrefabInstantiationService.hpp
+    src/private/scene/prefab/ScenePrefabNameResolver.hpp
+    src/private/scene/prefab/ScenePrefabNodeFactory.hpp
+    src/private/scene/prefab/ScenePrefabParentResolver.hpp
+    src/private/scene/prefab/ScenePrefabValidator.hpp
     src/private/scene/systems/SceneSystemScheduler.hpp
+    src/private/scene/systems/SceneSystemMutableTransformIteration.hpp
     src/private/scene/transform/QuatMath.hpp
     src/private/scene/transform/SceneTransformBranchUpdater.hpp
     src/private/scene/transform/SceneTransformHierarchySystem.hpp
