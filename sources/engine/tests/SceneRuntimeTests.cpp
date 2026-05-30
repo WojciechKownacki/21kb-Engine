@@ -1,4 +1,5 @@
 #include "engine/ecs/System.hpp"
+#include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -29,6 +30,21 @@ struct SceneSystemCounters {
     int created = 0;
     int updated = 0;
     int destroyed = 0;
+};
+
+struct EcsPosition {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+struct EcsVelocity {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+struct EcsIterationCounters {
+    int visited = 0;
+    float sumX = 0.0F;
 };
 
 class CountingSystem final : public kb::ecs::System {
@@ -95,6 +111,68 @@ void Require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void CountPositions(kb::ecs::Entity entity, const EcsPosition& position, void* context) {
+    static_cast<void>(entity);
+    auto* counters = static_cast<EcsIterationCounters*>(context);
+    ++counters->visited;
+    counters->sumX += position.x;
+}
+
+void ApplyVelocity(kb::ecs::Entity entity, EcsPosition& position, void* context) {
+    auto* world = static_cast<kb::ecs::World*>(context);
+    const EcsVelocity* velocity = world->TryGet<EcsVelocity>(entity);
+    if (velocity != nullptr) {
+        position.x += velocity->x;
+        position.y += velocity->y;
+    }
+}
+
+void CountMovingPositions(kb::ecs::Entity entity, const EcsPosition& position, const EcsVelocity& velocity, void* context) {
+    static_cast<void>(entity);
+    auto* counters = static_cast<EcsIterationCounters*>(context);
+    ++counters->visited;
+    counters->sumX += position.x + velocity.x;
+}
+
+void RunTypedEcsComponentApiTest() {
+    kb::ecs::World world;
+    const kb::ecs::ComponentId positionComponent = world.RegisterComponent<EcsPosition>("test.EcsPosition");
+    const kb::ecs::ComponentId samePositionComponent = world.RegisterComponent<EcsPosition>("test.EcsPosition");
+    Require(positionComponent != 0, "Typed ECS component registration failed");
+    Require(positionComponent == samePositionComponent, "Typed ECS component registration was not cached per type");
+
+    const kb::ecs::Entity entity = world.CreateEntity("Mover");
+    world.Set(entity, EcsPosition{ .x = 2.0F, .y = 3.0F });
+    world.Set(entity, EcsVelocity{ .x = 4.0F, .y = -1.0F });
+
+    Require(world.Has<EcsPosition>(entity), "Typed ECS component was not assigned");
+    Require(world.Has<EcsVelocity>(entity), "Second typed ECS component was not assigned");
+    const EcsPosition* position = world.TryGet<EcsPosition>(entity);
+    Require(position != nullptr && NearlyEqual(position->x, 2.0F) && NearlyEqual(position->y, 3.0F), "Typed ECS component read failed");
+
+    EcsPosition* mutablePosition = world.TryGetMutable<EcsPosition>(entity);
+    Require(mutablePosition != nullptr, "Typed ECS mutable component read failed");
+    mutablePosition->x = 5.0F;
+    world.MarkModified<EcsPosition>(entity);
+
+    EcsIterationCounters counters;
+    world.ForEach<EcsPosition>(&CountPositions, &counters);
+    Require(counters.visited == 1, "Typed ECS const iteration did not visit the component");
+    Require(NearlyEqual(counters.sumX, 5.0F), "Typed ECS const iteration saw invalid component data");
+
+    world.ForEachMutable<EcsPosition>(&ApplyVelocity, &world);
+    position = world.TryGet<EcsPosition>(entity);
+    Require(position != nullptr && NearlyEqual(position->x, 9.0F) && NearlyEqual(position->y, 2.0F), "Typed ECS mutable iteration did not update component data");
+
+    EcsIterationCounters queryCounters;
+    world.ForEach<EcsPosition, EcsVelocity>(&CountMovingPositions, &queryCounters);
+    Require(queryCounters.visited == 1, "Typed ECS two-component query did not visit matching entity");
+    Require(NearlyEqual(queryCounters.sumX, 13.0F), "Typed ECS two-component query saw invalid component data");
+
+    world.Remove<EcsVelocity>(entity);
+    Require(!world.Has<EcsVelocity>(entity), "Typed ECS component remove failed");
 }
 
 void RunSystemLifecycleTest() {
@@ -360,6 +438,7 @@ void RunPrefabCaptureTest() {
 } // namespace
 
 int main() {
+    RunTypedEcsComponentApiTest();
     RunSystemLifecycleTest();
     RunTransformHierarchyTest();
     RunSceneSystemTransformSyncTest();
