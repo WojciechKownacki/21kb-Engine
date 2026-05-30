@@ -17,4 +17,14 @@ std::string_view World::DefaultComponentName() noexcept {
     return typeid(T).name();
 }
 
+template <typename T>
+constexpr void World::ValidateTagType() noexcept {
+    static_assert(std::is_empty_v<T>, "ECS tag/relation marker types must be empty types");
+}
+
+template <typename T>
+std::string_view World::DefaultTagName() noexcept {
+    return typeid(T).name();
+}
+
 } // namespace kb::ecs
