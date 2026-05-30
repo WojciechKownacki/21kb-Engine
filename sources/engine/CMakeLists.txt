@@ -1,7 +1,11 @@
 add_library(kb_engine STATIC
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/ComponentEvent.hpp
+    include/engine/ecs/ComponentFieldAccess.hpp
     include/engine/ecs/ComponentId.hpp
+    include/engine/ecs/ComponentReflection.hpp
+    include/engine/ecs/ComponentReflectionMacros.hpp
+    include/engine/ecs/ComponentSerialization.hpp
     include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
     include/engine/ecs/QueryAdapters.inl
@@ -21,17 +25,25 @@ add_library(kb_engine STATIC
     include/engine/ecs/WorldComponentTypes.inl
     include/engine/ecs/WorldConfig.hpp
     include/engine/ecs/WorldConfigPresets.hpp
+    include/engine/ecs/WorldEditorInspection.hpp
     include/engine/ecs/WorldEvents.inl
     include/engine/ecs/WorldInspection.hpp
     include/engine/ecs/World.inl
     include/engine/ecs/WorldQuery.inl
     include/engine/ecs/WorldRelations.inl
+    include/engine/ecs/WorldSerialization.hpp
     include/engine/ecs/WorldSnapshot.hpp
     include/engine/ecs/WorldTags.inl
     include/engine/ecs/world/WorldComponentApi.inl
     include/engine/ecs/world/WorldEntityApi.inl
     include/engine/ecs/world/WorldEventApi.inl
     include/engine/ecs/world/WorldPrivateApi.inl
+    include/engine/ecs/world/WorldComponentIterationAdapters.inl
+    include/engine/ecs/world/WorldPrivateComponentApi.inl
+    include/engine/ecs/world/WorldPrivateEventApi.inl
+    include/engine/ecs/world/WorldPrivateLifecycleApi.inl
+    include/engine/ecs/world/WorldPrivateQueryApi.inl
+    include/engine/ecs/world/WorldPrivateTypeApi.inl
     include/engine/ecs/world/WorldQueryApi.inl
     include/engine/ecs/world/WorldRelationApi.inl
     include/engine/ecs/world/WorldRuntimeApi.inl
@@ -71,8 +83,15 @@ add_library(kb_engine STATIC
     include/engine/render/postfx/PostProcessPipeline.hpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/ComponentEventMapper.cpp
+    src/ecs/ComponentFieldAccess.cpp
+    src/ecs/ComponentFieldBounds.cpp
     src/ecs/ComponentObserverContext.cpp
     src/ecs/ComponentSnapshotCapture.cpp
+    src/ecs/ComponentReflection.cpp
+    src/ecs/ComponentReflectionFactory.cpp
+    src/ecs/ComponentReflectionRegistry.cpp
+    src/ecs/ComponentReflectionValidator.cpp
+    src/ecs/ComponentSerializer.cpp
     src/ecs/ComponentStorageIteration.cpp
     src/ecs/ComponentStorageMutation.cpp
     src/ecs/ComponentStoragePairIteration.cpp
@@ -82,9 +101,12 @@ add_library(kb_engine STATIC
     src/ecs/ComponentTypeCatalog.cpp
     src/ecs/ComponentTypeFactory.cpp
     src/ecs/EntityComponentInspectionCollector.cpp
+    src/ecs/EditorEntityInspectionBuilder.cpp
+    src/ecs/EditorWorldInspector.cpp
     src/ecs/EntityInspector.cpp
     src/ecs/EntityNameReader.cpp
     src/ecs/HierarchyRelationService.cpp
+    src/ecs/HierarchyChildrenCollector.cpp
     src/ecs/query/FlecsQueryHandle.cpp
     src/ecs/QueryState.cpp
     src/ecs/QueryStateFactory.cpp
@@ -102,16 +124,40 @@ add_library(kb_engine STATIC
     src/ecs/TagTypeRegistry.cpp
     src/ecs/TypeEntityCache.cpp
     src/ecs/WorldComponents.cpp
+    src/ecs/WorldComponentIterator.cpp
+    src/ecs/WorldComponentMutator.cpp
+    src/ecs/WorldComponentReader.cpp
+    src/ecs/WorldComponentRegistrar.cpp
     src/ecs/WorldEntities.cpp
+    src/ecs/WorldEntityCatalog.cpp
+    src/ecs/WorldInternalAccess.cpp
     src/ecs/WorldEvents.cpp
     src/ecs/WorldInspection.cpp
     src/ecs/WorldLifecycle.cpp
     src/ecs/WorldQueries.cpp
+    src/ecs/WorldReflection.cpp
+    src/ecs/WorldRegistrySet.cpp
     src/ecs/WorldRelations.cpp
     src/ecs/WorldRuntime.cpp
+    src/ecs/WorldSerialized.cpp
     src/ecs/WorldSnapshotBuilder.cpp
     src/ecs/WorldSnapshots.cpp
     src/ecs/WorldTags.cpp
+    src/ecs/ComponentFieldValueReader.cpp
+    src/ecs/ComponentFieldValueWriter.cpp
+    src/ecs/SerializedComponentBuilder.cpp
+    src/ecs/SerializedComponentFieldFinder.cpp
+    src/ecs/SerializedComponentFromSnapshot.cpp
+    src/ecs/SerializedComponentReflectionResolver.cpp
+    src/ecs/SerializedEntityComponentApplier.cpp
+    src/ecs/SerializedEntityComponentReader.cpp
+    src/ecs/SerializedWorldEntityIndex.cpp
+    src/ecs/SerializedWorldEntityFactory.cpp
+    src/ecs/SerializedWorldComponentRestorer.cpp
+    src/ecs/SerializedWorldParentRestorer.cpp
+    src/ecs/SerializedWorldRestorer.cpp
+    src/ecs/SerializedWorldRestoreMap.cpp
+    src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneHierarchy.cpp
@@ -296,6 +342,8 @@ add_library(kb_engine STATIC
     src/private/ecs/events/ComponentObserverStorage.hpp
     src/private/ecs/events/ComponentObserverTypes.hpp
     src/private/ecs/inspection/EntityComponentInspectionCollector.hpp
+    src/private/ecs/inspection/EditorEntityInspectionBuilder.hpp
+    src/private/ecs/inspection/EditorWorldInspector.hpp
     src/private/ecs/inspection/EntityInspector.hpp
     src/private/ecs/inspection/EntityNameReader.hpp
     src/private/ecs/QueryStateFactory.hpp
@@ -307,8 +355,31 @@ add_library(kb_engine STATIC
     src/private/ecs/query/QueryLimits.hpp
     src/private/ecs/query/QueryRowDispatcher.hpp
     src/private/ecs/query/QueryTableBatchDispatcher.hpp
+    src/private/ecs/reflection/ComponentFieldBounds.hpp
+    src/private/ecs/reflection/ComponentReflectionFactory.hpp
+    src/private/ecs/reflection/ComponentReflectionRegistry.hpp
+    src/private/ecs/reflection/ComponentReflectionValidator.hpp
+    src/private/ecs/serialization/ComponentFieldValueReader.hpp
+    src/private/ecs/serialization/ComponentFieldValueWriter.hpp
+    src/private/ecs/serialization/ComponentBytesFieldValueCodec.hpp
+    src/private/ecs/serialization/ComponentFloatArrayFieldValueCodec.hpp
+    src/private/ecs/serialization/ComponentScalarFieldValueCodec.hpp
+    src/private/ecs/serialization/SerializedComponentBuilder.hpp
+    src/private/ecs/serialization/SerializedComponentFieldFinder.hpp
+    src/private/ecs/serialization/SerializedComponentFromSnapshot.hpp
+    src/private/ecs/serialization/SerializedComponentReflectionResolver.hpp
+    src/private/ecs/serialization/SerializedEntityComponentApplier.hpp
+    src/private/ecs/serialization/SerializedEntityComponentReader.hpp
+    src/private/ecs/serialization/SerializedWorldEntityIndex.hpp
+    src/private/ecs/serialization/SerializedWorldEntityFactory.hpp
+    src/private/ecs/serialization/SerializedWorldComponentRestorer.hpp
+    src/private/ecs/serialization/SerializedWorldParentRestorer.hpp
+    src/private/ecs/serialization/SerializedWorldRestorer.hpp
+    src/private/ecs/serialization/SerializedWorldRestoreMap.hpp
+    src/private/ecs/serialization/SerializedWorldWriter.hpp
     src/private/ecs/relation/RelationStorage.hpp
     src/private/ecs/relation/TagStorage.hpp
+    src/private/ecs/relation/HierarchyChildrenCollector.hpp
     src/private/ecs/relation/HierarchyRelationService.hpp
     src/private/ecs/snapshot/ComponentSnapshotCapture.hpp
     src/private/ecs/snapshot/SnapshotEntityIndex.hpp
@@ -316,6 +387,13 @@ add_library(kb_engine STATIC
     src/private/ecs/type/RelationTypeRegistry.hpp
     src/private/ecs/type/TagTypeRegistry.hpp
     src/private/ecs/type/TypeEntityCache.hpp
+    src/private/ecs/world/WorldRegistrySet.hpp
+    src/private/ecs/world/WorldEntityCatalog.hpp
+    src/private/ecs/world/WorldInternalAccess.hpp
+    src/private/ecs/world/WorldComponentIterator.hpp
+    src/private/ecs/world/WorldComponentMutator.hpp
+    src/private/ecs/world/WorldComponentReader.hpp
+    src/private/ecs/world/WorldComponentRegistrar.hpp
 )
 
 target_include_directories(kb_engine
@@ -344,6 +422,7 @@ if(BUILD_TESTING)
         tests/EcsInspectionTests.cpp
         tests/EcsQueryTests.cpp
         tests/EcsQuerySystemTests.cpp
+        tests/EcsReflectionTests.cpp
         tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
         tests/EcsSnapshotTests.cpp

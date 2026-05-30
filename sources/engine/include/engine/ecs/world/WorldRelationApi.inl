@@ -43,3 +43,4 @@ void RemoveRelation(Entity entity, RelationId relation, Entity target) noexcept;
 void SetParent(Entity child, Entity parent) noexcept;
 void ClearParent(Entity child) noexcept;
 [[nodiscard]] Entity Parent(Entity child) const noexcept;
+[[nodiscard]] std::vector<Entity> Children(Entity parent) const;

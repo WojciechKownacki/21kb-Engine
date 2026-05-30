@@ -1,8 +1,6 @@
 #include "engine/ecs/World.hpp"
 
-#include "ecs/ComponentRegistry.hpp"
-#include "ecs/type/RelationTypeRegistry.hpp"
-#include "ecs/type/TagTypeRegistry.hpp"
+#include "ecs/world/WorldRegistrySet.hpp"
 
 #include <flecs.h>
 
@@ -15,9 +13,7 @@ namespace kb::ecs {
 World::World(WorldConfig config)
     : world_(ecs_init())
     , config_(config)
-    , components_(std::make_unique<ComponentRegistry>())
-    , tags_(std::make_unique<TagTypeRegistry>())
-    , relations_(std::make_unique<RelationTypeRegistry>()) {
+    , registries_(std::make_unique<WorldRegistrySet>()) {
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
     }
@@ -30,18 +26,14 @@ World::~World() {
 World::World(World&& other) noexcept
     : world_(std::exchange(other.world_, nullptr))
     , config_(other.config_)
-    , components_(std::move(other.components_))
-    , tags_(std::move(other.tags_))
-    , relations_(std::move(other.relations_)) {}
+    , registries_(std::move(other.registries_)) {}
 
 World& World::operator=(World&& other) noexcept {
     if (this != &other) {
         Reset();
         world_ = std::exchange(other.world_, nullptr);
         config_ = other.config_;
-        components_ = std::move(other.components_);
-        tags_ = std::move(other.tags_);
-        relations_ = std::move(other.relations_);
+        registries_ = std::move(other.registries_);
     }
     return *this;
 }
@@ -51,14 +43,8 @@ void World::Reset() noexcept {
         ecs_fini(world_);
         world_ = nullptr;
     }
-    if (components_ != nullptr) {
-        components_->Clear();
-    }
-    if (tags_ != nullptr) {
-        tags_->Clear();
-    }
-    if (relations_ != nullptr) {
-        relations_->Clear();
+    if (registries_ != nullptr) {
+        registries_->Clear();
     }
 }
 

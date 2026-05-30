@@ -14,6 +14,15 @@ template <typename T>
 [[nodiscard]] ComponentId Component() const noexcept;
 
 template <typename T>
+[[nodiscard]] const ComponentReflection* RegisterComponentReflection(std::string_view name, std::initializer_list<ComponentFieldDesc> fields);
+
+template <typename T>
+[[nodiscard]] const ComponentReflection* Reflection() const noexcept;
+
+[[nodiscard]] const ComponentReflection* Reflection(ComponentId componentId) const noexcept;
+[[nodiscard]] const ComponentReflection* Reflection(std::string_view componentName) const noexcept;
+
+template <typename T>
 void Set(Entity entity, const T& component);
 
 template <typename T>

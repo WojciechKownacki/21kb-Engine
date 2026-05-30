@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/ecs/world/WorldComponentIterationAdapters.inl"
+
 namespace kb::ecs {
 
 template <typename T>
@@ -8,24 +10,17 @@ void World::ForEach(ConstComponentVisitor<T> visitor, void* context) const {
         return;
     }
 
-    struct AdapterContext {
-        ConstComponentVisitor<T> visitor = nullptr;
-        void* context = nullptr;
-    } adapterContext{ visitor, context };
-
     const ComponentId componentId = Component<T>();
     if (componentId == 0) {
         return;
     }
 
+    ConstComponentIterationAdapter<T> adapter{ visitor, context };
     ForEachComponent(
         componentId,
         sizeof(T),
-        [](Entity entity, const void* component, void* adapter) {
-            auto* typedContext = static_cast<AdapterContext*>(adapter);
-            typedContext->visitor(entity, *static_cast<const T*>(component), typedContext->context);
-        },
-        &adapterContext);
+        &ConstComponentIterationAdapter<T>::Dispatch,
+        &adapter);
 }
 
 template <typename T>
@@ -34,24 +29,17 @@ void World::ForEachMutable(MutableComponentVisitor<T> visitor, void* context) {
         return;
     }
 
-    struct AdapterContext {
-        MutableComponentVisitor<T> visitor = nullptr;
-        void* context = nullptr;
-    } adapterContext{ visitor, context };
-
     const ComponentId componentId = Component<T>();
     if (componentId == 0) {
         return;
     }
 
+    MutableComponentIterationAdapter<T> adapter{ visitor, context };
     ForEachMutableComponent(
         componentId,
         sizeof(T),
-        [](Entity entity, void* component, void* adapter) {
-            auto* typedContext = static_cast<AdapterContext*>(adapter);
-            typedContext->visitor(entity, *static_cast<T*>(component), typedContext->context);
-        },
-        &adapterContext);
+        &MutableComponentIterationAdapter<T>::Dispatch,
+        &adapter);
 }
 
 template <typename TFirst, typename TSecond>
@@ -63,27 +51,20 @@ void World::ForEach(ConstComponentsVisitor<TFirst, TSecond> visitor, void* conte
         return;
     }
 
-    struct AdapterContext {
-        ConstComponentsVisitor<TFirst, TSecond> visitor = nullptr;
-        void* context = nullptr;
-    } adapterContext{ visitor, context };
-
     const ComponentId firstComponentId = Component<TFirst>();
     const ComponentId secondComponentId = Component<TSecond>();
     if (firstComponentId == 0 || secondComponentId == 0) {
         return;
     }
 
+    ConstComponentPairIterationAdapter<TFirst, TSecond> adapter{ visitor, context };
     ForEachComponents(
         firstComponentId,
         sizeof(TFirst),
         secondComponentId,
         sizeof(TSecond),
-        [](Entity entity, const void* first, const void* second, void* adapter) {
-            auto* typedContext = static_cast<AdapterContext*>(adapter);
-            typedContext->visitor(entity, *static_cast<const TFirst*>(first), *static_cast<const TSecond*>(second), typedContext->context);
-        },
-        &adapterContext);
+        &ConstComponentPairIterationAdapter<TFirst, TSecond>::Dispatch,
+        &adapter);
 }
 
 } // namespace kb::ecs

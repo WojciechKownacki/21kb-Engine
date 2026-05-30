@@ -10,6 +10,7 @@ void RunEcsRuntimeTests() {
     RunEcsConfigTests();
     RunEcsEventTests();
     RunEcsInspectionTests();
+    RunEcsReflectionTests();
     RunEcsRelationTests();
     RunEcsSnapshotTests();
 }

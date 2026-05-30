@@ -1,5 +1,6 @@
 #include "ecs/relation/HierarchyRelationService.hpp"
 
+#include "ecs/relation/HierarchyChildrenCollector.hpp"
 #include "ecs/relation/RelationStorage.hpp"
 
 #include <flecs.h>
@@ -32,6 +33,10 @@ void HierarchyRelationService::ClearParent(ecs_world_t* world, Entity child) noe
 
 Entity HierarchyRelationService::Parent(const ecs_world_t* world, Entity child) noexcept {
     return RelationStorage::Target(world, child, EcsChildOf);
+}
+
+std::vector<Entity> HierarchyRelationService::Children(ecs_world_t* world, Entity parent) {
+    return HierarchyChildrenCollector::Collect(world, parent);
 }
 
 bool HierarchyRelationService::WouldCreateCycle(const ecs_world_t* world, Entity child, Entity parent) noexcept {
