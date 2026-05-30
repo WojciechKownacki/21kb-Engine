@@ -1,8 +1,10 @@
 add_library(kb_engine STATIC
+    include/engine/ecs/ComponentId.hpp
     include/engine/ecs/Entity.hpp
     include/engine/ecs/System.hpp
     include/engine/ecs/SystemScheduler.hpp
     include/engine/ecs/World.hpp
+    include/engine/ecs/World.inl
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
@@ -36,9 +38,17 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
+    src/ecs/ComponentRegistry.cpp
+    src/ecs/ComponentStorageIteration.cpp
+    src/ecs/ComponentStorageMutation.cpp
+    src/ecs/ComponentStoragePairIteration.cpp
+    src/ecs/ComponentStorageQuery.cpp
     src/ecs/System.cpp
     src/ecs/SystemScheduler.cpp
-    src/ecs/World.cpp
+    src/ecs/WorldComponents.cpp
+    src/ecs/WorldEntities.cpp
+    src/ecs/WorldLifecycle.cpp
+    src/ecs/WorldRuntime.cpp
     src/scene/Scene.cpp
     src/scene/SceneCameraIterationService.cpp
     src/scene/SceneHierarchy.cpp
@@ -210,6 +220,8 @@ add_library(kb_engine STATIC
     src/render/postfx/PostProcessResourceEdgeBuilder.cpp
     src/render/postfx/PostProcessResourceRegistry.cpp
     src/render/postfx/PostProcessTopologicalSorter.cpp
+    src/private/ecs/ComponentRegistry.hpp
+    src/private/ecs/ComponentStorage.hpp
 )
 
 target_include_directories(kb_engine
