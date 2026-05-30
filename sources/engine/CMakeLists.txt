@@ -1,10 +1,24 @@
 add_library(kb_engine STATIC
+    include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/ComponentId.hpp
     include/engine/ecs/Entity.hpp
+    include/engine/ecs/QueryAdapters.inl
+    include/engine/ecs/QueryBatch.hpp
+    include/engine/ecs/QueryExecutionSettings.hpp
+    include/engine/ecs/Query.hpp
+    include/engine/ecs/Query.inl
+    include/engine/ecs/QueryIteration.inl
+    include/engine/ecs/QueryLifecycle.inl
     include/engine/ecs/System.hpp
     include/engine/ecs/SystemScheduler.hpp
     include/engine/ecs/World.hpp
+    include/engine/ecs/WorldComponentAccess.inl
+    include/engine/ecs/WorldComponentIteration.inl
+    include/engine/ecs/WorldComponentTypes.inl
+    include/engine/ecs/WorldConfig.hpp
+    include/engine/ecs/WorldConfigPresets.hpp
     include/engine/ecs/World.inl
+    include/engine/ecs/WorldQuery.inl
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
@@ -43,11 +57,20 @@ add_library(kb_engine STATIC
     src/ecs/ComponentStorageMutation.cpp
     src/ecs/ComponentStoragePairIteration.cpp
     src/ecs/ComponentStorageQuery.cpp
+    src/ecs/query/FlecsQueryHandle.cpp
+    src/ecs/QueryState.cpp
+    src/ecs/QueryStateFactory.cpp
+    src/ecs/query/QueryBatchDispatcher.cpp
+    src/ecs/query/QueryDescriptorBuilder.cpp
+    src/ecs/query/QueryFieldReader.cpp
+    src/ecs/query/QueryRowDispatcher.cpp
+    src/ecs/query/QueryTableBatchDispatcher.cpp
     src/ecs/System.cpp
     src/ecs/SystemScheduler.cpp
     src/ecs/WorldComponents.cpp
     src/ecs/WorldEntities.cpp
     src/ecs/WorldLifecycle.cpp
+    src/ecs/WorldQueries.cpp
     src/ecs/WorldRuntime.cpp
     src/scene/Scene.cpp
     src/scene/SceneCameraIterationService.cpp
@@ -221,7 +244,19 @@ add_library(kb_engine STATIC
     src/render/postfx/PostProcessResourceRegistry.cpp
     src/render/postfx/PostProcessTopologicalSorter.cpp
     src/private/ecs/ComponentRegistry.hpp
-    src/private/ecs/ComponentStorage.hpp
+    src/private/ecs/component/ComponentStorageIteration.hpp
+    src/private/ecs/component/ComponentStorageMutation.hpp
+    src/private/ecs/component/ComponentStoragePairIteration.hpp
+    src/private/ecs/component/ComponentStorageQuery.hpp
+    src/private/ecs/QueryStateFactory.hpp
+    src/private/ecs/QueryState.hpp
+    src/private/ecs/query/FlecsQueryHandle.hpp
+    src/private/ecs/query/QueryBatchDispatcher.hpp
+    src/private/ecs/query/QueryDescriptorBuilder.hpp
+    src/private/ecs/query/QueryFieldReader.hpp
+    src/private/ecs/query/QueryLimits.hpp
+    src/private/ecs/query/QueryRowDispatcher.hpp
+    src/private/ecs/query/QueryTableBatchDispatcher.hpp
 )
 
 target_include_directories(kb_engine
@@ -244,7 +279,24 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(kb_engine_tests
+        tests/EcsComponentApiTests.cpp
+        tests/EcsConfigTests.cpp
+        tests/EcsQueryTests.cpp
+        tests/EcsRuntimeTests.cpp
+        tests/EcsTestSuites.hpp
+        tests/EcsTestTypes.hpp
+        tests/SceneHierarchyTests.cpp
+        tests/ScenePrefabCaptureTests.cpp
+        tests/ScenePrefabInstantiationTests.cpp
+        tests/ScenePrefabTestSuites.hpp
+        tests/ScenePrefabTests.cpp
         tests/SceneRuntimeTests.cpp
+        tests/SceneSystemTestSuites.hpp
+        tests/SceneSystemTests.cpp
+        tests/SceneSystemTransformSyncTests.cpp
+        tests/SystemLifecycleTests.cpp
+        tests/TestSuites.hpp
+        tests/TestSupport.hpp
     )
 
     target_link_libraries(kb_engine_tests

@@ -1,7 +1,10 @@
 #include "engine/ecs/World.hpp"
 
 #include "ecs/ComponentRegistry.hpp"
-#include "ecs/ComponentStorage.hpp"
+#include "ecs/component/ComponentStorageIteration.hpp"
+#include "ecs/component/ComponentStorageMutation.hpp"
+#include "ecs/component/ComponentStoragePairIteration.hpp"
+#include "ecs/component/ComponentStorageQuery.hpp"
 
 namespace kb::ecs {
 
@@ -14,35 +17,35 @@ ComponentId World::FindComponent(std::type_index type) const noexcept {
 }
 
 void World::SetComponent(Entity entity, ComponentId componentId, std::size_t size, const void* component) {
-    ComponentStorage::Set(world_, entity, componentId, size, component);
+    ComponentStorageMutation::Set(world_, entity, componentId, size, component);
 }
 
 bool World::HasComponent(Entity entity, ComponentId componentId) const noexcept {
-    return ComponentStorage::Has(world_, entity, componentId);
+    return ComponentStorageQuery::Has(world_, entity, componentId);
 }
 
 const void* World::TryGetComponent(Entity entity, ComponentId componentId) const noexcept {
-    return ComponentStorage::TryGet(world_, entity, componentId);
+    return ComponentStorageQuery::TryGet(world_, entity, componentId);
 }
 
 void* World::TryGetMutableComponent(Entity entity, ComponentId componentId) noexcept {
-    return ComponentStorage::TryGetMutable(world_, entity, componentId);
+    return ComponentStorageQuery::TryGetMutable(world_, entity, componentId);
 }
 
 void World::RemoveComponent(Entity entity, ComponentId componentId) noexcept {
-    ComponentStorage::Remove(world_, entity, componentId);
+    ComponentStorageMutation::Remove(world_, entity, componentId);
 }
 
 void World::MarkComponentModified(Entity entity, ComponentId componentId) noexcept {
-    ComponentStorage::MarkModified(world_, entity, componentId);
+    ComponentStorageMutation::MarkModified(world_, entity, componentId);
 }
 
 void World::ForEachComponent(ComponentId componentId, std::size_t componentSize, RawConstComponentVisitor visitor, void* context) const {
-    ComponentStorage::ForEach(world_, componentId, componentSize, visitor, context);
+    ComponentStorageIteration::ForEach(world_, componentId, componentSize, visitor, context);
 }
 
 void World::ForEachMutableComponent(ComponentId componentId, std::size_t componentSize, RawMutableComponentVisitor visitor, void* context) {
-    ComponentStorage::ForEachMutable(world_, componentId, componentSize, visitor, context);
+    ComponentStorageIteration::ForEachMutable(world_, componentId, componentSize, visitor, context);
 }
 
 void World::ForEachComponents(
@@ -52,7 +55,7 @@ void World::ForEachComponents(
     std::size_t secondComponentSize,
     void (*visitor)(Entity entity, const void* first, const void* second, void* context),
     void* context) const {
-    ComponentStorage::ForEachPair(world_, firstComponentId, firstComponentSize, secondComponentId, secondComponentSize, visitor, context);
+    ComponentStoragePairIteration::ForEachPair(world_, firstComponentId, firstComponentSize, secondComponentId, secondComponentSize, visitor, context);
 }
 
 } // namespace kb::ecs
