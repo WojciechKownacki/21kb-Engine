@@ -43,11 +43,11 @@ add_executable(kb_editor
     src/rendering/PanelContentRenderer.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowControlInteractor.cpp
-    ../third_party/heroicons/LICENSE
-    ../third_party/heroicons/README.third_party.md
-    ../third_party/heroicons/optimized/24/outline/minus.svg
-    ../third_party/heroicons/optimized/24/outline/stop.svg
-    ../third_party/heroicons/optimized/24/outline/x-mark.svg
+    ../../third_party/heroicons/LICENSE
+    ../../third_party/heroicons/README.third_party.md
+    ../../third_party/heroicons/optimized/24/outline/minus.svg
+    ../../third_party/heroicons/optimized/24/outline/stop.svg
+    ../../third_party/heroicons/optimized/24/outline/x-mark.svg
 )
 
 target_include_directories(kb_editor
