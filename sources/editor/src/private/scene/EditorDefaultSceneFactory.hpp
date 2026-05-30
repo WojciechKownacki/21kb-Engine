@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntity.hpp"
 
 namespace kb::editor {
 

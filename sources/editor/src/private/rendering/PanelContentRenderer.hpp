@@ -16,9 +16,6 @@ class PanelContentRenderer {
 public:
 #if defined(_WIN32)
     void Paint(HDC dc, const RECT& content, const RECT& panelFrame, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating) const;
-
-private:
-    void PaintSceneGrid(HDC dc, RECT scene, const EditorTheme& theme, const EditorMetrics& metrics) const;
 #endif
 };
 

@@ -14,7 +14,7 @@ void DockFloatingDragOperation::EnsureDetached(DockPointerDrag& drag, POINT scre
     drag.offsetX = EditorFloatingWindowManager::DragWidth / 2;
     drag.offsetY = EditorFloatingWindowManager::StripCursorY;
 
-    const DockPanel* panel = dockModel.FindPanel(drag.panelId);
+    const DockPanel* panel = dockModel.Queries().FindPanel(drag.panelId);
     if (panel == nullptr || !panel->detachable) {
         return;
     }
@@ -26,15 +26,15 @@ void DockFloatingDragOperation::EnsureDetached(DockPointerDrag& drag, POINT scre
     floatingRect.height = EditorFloatingWindowManager::DragHeight;
     const std::string title = panel->title;
 
-    dockModel.UndockPanel(drag.panelId, floatingRect);
-    drag.detached = floatingWindows.Create(drag.panelId, title, floatingRect);
+    dockModel.Commands().UndockPanel(drag.panelId, floatingRect);
+    drag.detached = floatingWindows.Commands().Create(drag.panelId, title, floatingRect);
     if (!drag.detached) {
-        dockModel.DockPanelTo(drag.panelId, DefaultFloatingReturnTarget());
+        dockModel.Commands().DockPanelTo(drag.panelId, DefaultFloatingReturnTarget());
     }
 }
 
 void DockFloatingDragOperation::MoveWindow(DockPointerDrag& drag, POINT screen, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows) {
-    HWND floating = floatingWindows.WindowForPanel(drag.panelId);
+    HWND floating = floatingWindows.Queries().WindowForPanel(drag.panelId);
     if (floating == nullptr) {
         return;
     }
@@ -44,7 +44,7 @@ void DockFloatingDragOperation::MoveWindow(DockPointerDrag& drag, POINT screen, 
     const int x = screen.x - drag.offsetX;
     const int y = screen.y - drag.offsetY;
     SetWindowPos(floating, HWND_TOP, x, y, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE);
-    dockModel.MoveFloatingPanel(drag.panelId, x, y);
+    dockModel.Commands().MoveFloatingPanel(drag.panelId, x, y);
 }
 
 DockDropPreview DockFloatingDragOperation::DefaultFloatingReturnTarget() noexcept {

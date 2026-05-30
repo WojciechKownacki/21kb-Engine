@@ -31,10 +31,6 @@ public:
 private:
 #if defined(_WIN32)
     [[nodiscard]] bool Ready() const noexcept;
-    [[nodiscard]] bool IsMainWindow(HWND window) const noexcept;
-    [[nodiscard]] DockLayout BuildMainLayout() const;
-
-    void InvalidateMain() const;
 
     HWND mainWindow_ = nullptr;
     EditorDockModel* dockModel_ = nullptr;

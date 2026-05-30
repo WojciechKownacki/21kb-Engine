@@ -1,33 +1,36 @@
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/components/SceneCameraComponentStore.hpp"
 
 #include "scene/components/SceneComponentAccess.hpp"
-#include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
 
 namespace kb::scene {
 
-bool SceneComponentStorage::HasCamera(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, components_.CameraComponentId());
+SceneCameraComponentStore::SceneCameraComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
+    : world_(world)
+    , componentId_(componentId) {}
+
+bool SceneCameraComponentStore::Has(SceneEntity entity) const noexcept {
+    return SceneComponentAccess::Has(world_, entity, componentId_);
 }
 
-const CameraComponent* SceneComponentStorage::TryGetCamera(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<CameraComponent>(world_, entity, components_.CameraComponentId());
+const CameraComponent* SceneCameraComponentStore::TryGet(SceneEntity entity) const noexcept {
+    return SceneComponentStorageAccess::TryGet<CameraComponent>(world_, entity, componentId_);
 }
 
-CameraComponent* SceneComponentStorage::TryGetCamera(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<CameraComponent>(world_, entity, components_.CameraComponentId());
+CameraComponent* SceneCameraComponentStore::TryGet(SceneEntity entity) noexcept {
+    return SceneComponentStorageAccess::TryGetMutable<CameraComponent>(world_, entity, componentId_);
 }
 
-void SceneComponentStorage::SetCamera(SceneEntity entity, const CameraComponent& camera) {
-    SceneComponentStorageAccess::Set(world_, entity, components_.CameraComponentId(), camera);
+void SceneCameraComponentStore::Set(SceneEntity entity, const CameraComponent& camera) {
+    SceneComponentStorageAccess::Set(world_, entity, componentId_, camera);
 }
 
-void SceneComponentStorage::RemoveCamera(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, components_.CameraComponentId());
+void SceneCameraComponentStore::Remove(SceneEntity entity) noexcept {
+    SceneComponentAccess::Remove(world_, entity, componentId_);
 }
 
-void SceneComponentStorage::MarkCameraModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, components_.CameraComponentId());
+void SceneCameraComponentStore::MarkModified(SceneEntity entity) noexcept {
+    SceneComponentAccess::MarkModified(world_, entity, componentId_);
 }
 
 } // namespace kb::scene

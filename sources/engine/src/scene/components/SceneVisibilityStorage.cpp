@@ -1,25 +1,28 @@
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/components/SceneVisibilityComponentStore.hpp"
 
 #include "scene/components/SceneComponentAccess.hpp"
-#include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorageAccess.hpp"
 
 namespace kb::scene {
 
-const VisibilityComponent* SceneComponentStorage::TryGetVisibility(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<VisibilityComponent>(world_, entity, components_.VisibilityComponentId());
+SceneVisibilityComponentStore::SceneVisibilityComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
+    : world_(world)
+    , componentId_(componentId) {}
+
+const VisibilityComponent* SceneVisibilityComponentStore::TryGet(SceneEntity entity) const noexcept {
+    return SceneComponentStorageAccess::TryGet<VisibilityComponent>(world_, entity, componentId_);
 }
 
-VisibilityComponent* SceneComponentStorage::TryGetVisibility(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<VisibilityComponent>(world_, entity, components_.VisibilityComponentId());
+VisibilityComponent* SceneVisibilityComponentStore::TryGet(SceneEntity entity) noexcept {
+    return SceneComponentStorageAccess::TryGetMutable<VisibilityComponent>(world_, entity, componentId_);
 }
 
-void SceneComponentStorage::SetVisibility(SceneEntity entity, const VisibilityComponent& visibility) {
-    SceneComponentStorageAccess::Set(world_, entity, components_.VisibilityComponentId(), visibility);
+void SceneVisibilityComponentStore::Set(SceneEntity entity, const VisibilityComponent& visibility) {
+    SceneComponentStorageAccess::Set(world_, entity, componentId_, visibility);
 }
 
-void SceneComponentStorage::MarkVisibilityModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, components_.VisibilityComponentId());
+void SceneVisibilityComponentStore::MarkModified(SceneEntity entity) noexcept {
+    SceneComponentAccess::MarkModified(world_, entity, componentId_);
 }
 
 } // namespace kb::scene

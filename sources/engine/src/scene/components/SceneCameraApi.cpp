@@ -1,36 +1,38 @@
-#include "engine/scene/Scene.hpp"
-
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneComponentMutationService.hpp"
+#include "scene/SceneComponentQueryService.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
 
 namespace kb::scene {
 
-bool Scene::HasCamera(SceneEntity entity) const noexcept {
-    return IsAlive(entity) && componentStorage_->HasCamera(entity);
+bool SceneComponentQueryService::HasCamera(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) && SceneAccess::State(scene).componentStorage.Cameras().Has(entity);
 }
 
-const CameraComponent* Scene::TryGetCamera(SceneEntity entity) const noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetCamera(entity) : nullptr;
+const CameraComponent* SceneComponentQueryService::TryGetCamera(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Cameras().TryGet(entity) : nullptr;
 }
 
-CameraComponent* Scene::TryGetCamera(SceneEntity entity) noexcept {
-    return IsAlive(entity) ? componentStorage_->TryGetCamera(entity) : nullptr;
+CameraComponent* SceneComponentMutationService::TryGetCamera(Scene& scene, SceneEntity entity) noexcept {
+    return SceneEntityService::IsAlive(scene, entity) ? SceneAccess::State(scene).componentStorage.Cameras().TryGet(entity) : nullptr;
 }
 
-void Scene::SetCamera(SceneEntity entity, const CameraComponent& camera) {
-    if (IsAlive(entity)) {
-        componentStorage_->SetCamera(entity, camera);
+void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, const CameraComponent& camera) {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Cameras().Set(entity, camera);
     }
 }
 
-void Scene::RemoveCamera(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->RemoveCamera(entity);
+void SceneComponentMutationService::RemoveCamera(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Cameras().Remove(entity);
     }
 }
 
-void Scene::MarkCameraModified(SceneEntity entity) noexcept {
-    if (IsAlive(entity)) {
-        componentStorage_->MarkCameraModified(entity);
+void SceneComponentMutationService::MarkCameraModified(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Cameras().MarkModified(entity);
     }
 }
 

@@ -19,6 +19,10 @@ struct TransformComponent {
     Vec3 localPosition{};
     Quat localRotation{};
     Vec3 localScale{ 1.0F, 1.0F, 1.0F };
+    Vec3 worldPosition{};
+    Quat worldRotation{};
+    Vec3 worldScale{ 1.0F, 1.0F, 1.0F };
+    bool worldDirty = true;
 };
 
 } // namespace kb::scene

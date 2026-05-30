@@ -1,77 +1,65 @@
-#include "engine/scene/Scene.hpp"
-
-#include "scene/components/SceneComponentStorage.hpp"
-#include "scene/components/SceneComponentRegistry.hpp"
-#include "scene/entities/SceneEntityCounter.hpp"
-#include "scene/entities/SceneEntityNaming.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneEntityService.hpp"
+#include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityCreationService.hpp"
+#include "scene/entities/SceneEntityDestructionService.hpp"
+#include "scene/entities/SceneEntityNameService.hpp"
+#include "scene/entities/SceneEntityStatsService.hpp"
 
 #include <utility>
 
 namespace kb::scene {
 
-SceneObject Scene::CreateObject() {
-    return MakeObject(CreateEntity());
+SceneObject SceneEntityService::CreateObject(Scene& scene) {
+    return SceneEntityCreationService::CreateObject(scene);
 }
 
-SceneObject Scene::CreateObject(SceneObjectDesc desc) {
-    return MakeObject(CreateEntity(std::move(desc)));
+SceneObject SceneEntityService::CreateObject(Scene& scene, SceneObjectDesc desc) {
+    return SceneEntityCreationService::CreateObject(scene, std::move(desc));
 }
 
-SceneEntity Scene::CreateEntity() {
-    return CreateEntity(SceneObjectDesc{});
+SceneEntity SceneEntityService::CreateEntity(Scene& scene) {
+    return SceneEntityCreationService::CreateEntity(scene);
 }
 
-SceneEntity Scene::CreateEntity(SceneObjectDesc desc) {
-    kb::ecs::Entity entity = desc.name.empty() ? world_.CreateEntity() : world_.CreateEntity(desc.name);
-    componentStorage_->SetDefaults(entity, desc.transform, desc.visibility);
-
-    if (desc.parent.EntityHandle().IsValid()) {
-        [[maybe_unused]] const bool parentAssigned = SetParent(entity, desc.parent.Entity());
-    }
-
-    return entity;
+SceneEntity SceneEntityService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
+    return SceneEntityCreationService::CreateEntity(scene, std::move(desc));
 }
 
-void Scene::DestroyObject(SceneObject object) noexcept {
-    if (IsAlive(object)) {
-        DestroyEntity(object.Entity());
-    }
+void SceneEntityService::DestroyObject(Scene& scene, SceneObject object) noexcept {
+    SceneEntityDestructionService::DestroyObject(scene, object);
 }
 
-void Scene::DestroyEntity(SceneEntity entity) noexcept {
-    if (!IsAlive(entity)) {
-        return;
-    }
-
-    for (const SceneEntity child : ChildEntities(entity)) {
-        DestroyEntity(child);
-    }
-
-    world_.DestroyEntity(entity);
+void SceneEntityService::DestroyEntity(Scene& scene, SceneEntity entity) noexcept {
+    SceneEntityDestructionService::DestroyEntity(scene, entity);
 }
 
-std::string Scene::Name(SceneObject object) const {
-    return IsAlive(object) ? Name(object.Entity()) : std::string{};
+bool SceneEntityService::IsAlive(const Scene& scene, SceneObject object) noexcept {
+    return SceneAccess::BelongsTo(scene, object) && IsAlive(scene, object.Entity());
 }
 
-std::string Scene::Name(SceneEntity entity) const {
-    return IsAlive(entity) ? SceneEntityNaming::Name(world_, entity) : std::string{};
+bool SceneEntityService::IsAlive(const Scene& scene, SceneEntity entity) noexcept {
+    return SceneAccess::State(scene).world.IsAlive(entity);
 }
 
-void Scene::SetName(SceneObject object, std::string_view name) {
-    if (IsAlive(object)) {
-        SetName(object.Entity(), name);
-    }
+std::string SceneEntityService::Name(const Scene& scene, SceneObject object) {
+    return SceneEntityNameService::Name(scene, object);
 }
 
-void Scene::SetName(SceneEntity entity, std::string_view name) {
-    if (IsAlive(entity)) {
-        SceneEntityNaming::SetName(world_, entity, name);
-    }
+std::string SceneEntityService::Name(const Scene& scene, SceneEntity entity) {
+    return SceneEntityNameService::Name(scene, entity);
 }
 
-std::size_t Scene::ObjectCount() const {
-    return SceneEntityCounter::CountWithComponent(world_, components_->TransformComponentId());
+void SceneEntityService::SetName(Scene& scene, SceneObject object, std::string_view name) {
+    SceneEntityNameService::SetName(scene, object, name);
+}
+
+void SceneEntityService::SetName(Scene& scene, SceneEntity entity, std::string_view name) {
+    SceneEntityNameService::SetName(scene, entity, name);
+}
+
+std::size_t SceneEntityService::Count(const Scene& scene) {
+    return SceneEntityStatsService::Count(scene);
 }
 
 } // namespace kb::scene

@@ -1,40 +1,38 @@
 #include "engine/scene/Scene.hpp"
 
-#include "scene/components/SceneComponentRegistry.hpp"
-#include "scene/components/SceneComponentStorage.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 
 #include <memory>
 
 namespace kb::scene {
 
 Scene::Scene()
-    : components_(std::make_unique<SceneComponentRegistry>(*world_.NativeHandle()))
-    , componentStorage_(std::make_unique<SceneComponentStorage>(world_.NativeHandle(), *components_)) {}
+    : state_(std::make_unique<SceneState>()) {}
 
-Scene::~Scene() = default;
-
-bool Scene::IsAlive(SceneObject object) const noexcept {
-    return BelongsToThisScene(object) && IsAlive(object.Entity());
+Scene::~Scene() {
+    state_->sceneSystemScheduler.Shutdown(*this);
+    state_->systemScheduler.Shutdown(state_->world);
 }
 
-bool Scene::IsAlive(SceneEntity entity) const noexcept {
-    return world_.IsAlive(entity);
+SceneState& SceneAccess::State(Scene& scene) noexcept {
+    return *scene.state_;
 }
 
-kb::ecs::World& Scene::EcsWorld() noexcept {
-    return world_;
+const SceneState& SceneAccess::State(const Scene& scene) noexcept {
+    return *scene.state_;
 }
 
-const kb::ecs::World& Scene::EcsWorld() const noexcept {
-    return world_;
+SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {
+    return SceneObject{ scene, entity };
 }
 
-SceneObject Scene::MakeObject(SceneEntity entity) noexcept {
-    return SceneObject{ *this, entity };
+bool SceneAccess::BelongsTo(Scene& scene, SceneObject object) noexcept {
+    return BelongsTo(static_cast<const Scene&>(scene), object);
 }
 
-bool Scene::BelongsToThisScene(SceneObject object) const noexcept {
-    return object.scene_ == this && object.EntityHandle().IsValid();
+bool SceneAccess::BelongsTo(const Scene& scene, SceneObject object) noexcept {
+    return object.scene_ == &scene && object.EntityHandle().IsValid();
 }
 
 } // namespace kb::scene
