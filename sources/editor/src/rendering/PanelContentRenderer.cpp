@@ -2,16 +2,18 @@
 
 #if defined(_WIN32)
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HierarchyPanelRenderer.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 
 namespace kb::editor {
 
-void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, bool floating) const {
+void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating) const {
     switch (panel.kind) {
     case DockPanelKind::Hierarchy:
-        GdiDrawing::DrawTextBlock(dc, content, "Camera\nDirectional Light\nPlayer\nCanvas Root", GdiDrawing::ToColorRef(theme.textSecondary));
+        HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Inspector:
-        GdiDrawing::DrawTextBlock(dc, content, "Entity: Camera\nTransform\nCamera\nRender Layer", GdiDrawing::ToColorRef(theme.textSecondary));
+        InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Assets:
         GdiDrawing::DrawTextBlock(dc, content, "Scenes\nMaterials\nMeshes\nTextures", GdiDrawing::ToColorRef(theme.textSecondary));
