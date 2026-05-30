@@ -1,34 +1,12 @@
 #include "docking/EditorFloatingWindowManager.hpp"
 
 #if defined(_WIN32)
-#include "windowing/FloatingWindowControlHitTester.hpp"
-#include "windowing/FloatingWindowControlLayout.hpp"
+#include "windowing/FloatingWindowFactory.hpp"
+#include "windowing/FloatingWindowHitTestResolver.hpp"
 
-#include <dwmapi.h>
-#include <windowsx.h>
-
-#include <cstdio>
 #include <vector>
 
 namespace kb::editor {
-namespace {
-
-void PrintLastWin32Error(const char* action) {
-    const DWORD error = GetLastError();
-    char message[512]{};
-    FormatMessageA(
-        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr,
-        error,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        message,
-        static_cast<DWORD>(sizeof(message)),
-        nullptr);
-
-    std::fprintf(stderr, "%s failed. Win32 error %lu: %s\n", action, error, message);
-}
-
-} // namespace
 
 void EditorFloatingWindowManager::Configure(HINSTANCE instance, HWND owner, const EditorMetrics& metrics) noexcept {
     instance_ = instance;
@@ -72,60 +50,7 @@ LRESULT EditorFloatingWindowManager::HitTest(HWND window, LPARAM lparam) const {
         return HTCLIENT;
     }
 
-    POINT screenPoint{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
-    RECT frame{};
-    GetWindowRect(window, &frame);
-
-    const int x = screenPoint.x - frame.left;
-    const int y = screenPoint.y - frame.top;
-    const int width = frame.right - frame.left;
-    const int height = frame.bottom - frame.top;
-    const int border = metrics_->floatingResizeBorder;
-
-    const bool left = x >= 0 && x < border;
-    const bool right = x >= width - border && x < width;
-    const bool top = y >= 0 && y < border;
-    const bool bottom = y >= height - border && y < height;
-
-    if (top && left) {
-        return HTTOPLEFT;
-    }
-    if (top && right) {
-        return HTTOPRIGHT;
-    }
-    if (bottom && left) {
-        return HTBOTTOMLEFT;
-    }
-    if (bottom && right) {
-        return HTBOTTOMRIGHT;
-    }
-    if (left) {
-        return HTLEFT;
-    }
-    if (right) {
-        return HTRIGHT;
-    }
-    if (top) {
-        return HTTOP;
-    }
-    if (bottom) {
-        return HTBOTTOM;
-    }
-
-    POINT clientPoint = screenPoint;
-    ScreenToClient(window, &clientPoint);
-    RECT client{};
-    GetClientRect(window, &client);
-
-    const int controlsLeft = client.right - FloatingWindowControlLayout::TotalWidth(*metrics_);
-    if (FloatingWindowControlHitTester{}.HitTest(*metrics_, client.right, clientPoint.x, clientPoint.y) != FloatingWindowControlKind::None) {
-        return HTCLIENT;
-    }
-    if (clientPoint.y >= 0 && clientPoint.y < metrics_->tabStripHeight && clientPoint.x >= metrics_->tabWidth && clientPoint.x < controlsLeft) {
-        return HTCAPTION;
-    }
-
-    return HTCLIENT;
+    return FloatingWindowHitTestResolver::Resolve(window, lparam, *metrics_);
 }
 
 void EditorFloatingWindowManager::OnDestroyed(HWND window) {
@@ -151,32 +76,10 @@ bool EditorFloatingWindowManager::Create(std::uint32_t panelId, const std::strin
         return false;
     }
 
-    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU;
-    const std::wstring title(titleText.begin(), titleText.end());
-    const LONG_PTR ownerApplication = GetWindowLongPtrW(owner_, GWLP_USERDATA);
-    HWND floating = CreateWindowExW(
-        WS_EX_TOOLWINDOW,
-        EditorFloatingWindowManager::WindowClassName,
-        title.c_str(),
-        floatingStyle,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        owner_,
-        nullptr,
-        instance_,
-        reinterpret_cast<void*>(ownerApplication));
-
+    HWND floating = FloatingWindowFactory::Create(instance_, owner_, EditorFloatingWindowManager::WindowClassName, titleText, rect);
     if (floating == nullptr) {
-        PrintLastWin32Error("CreateWindowExW floating");
         return false;
     }
-
-    SetWindowLongPtrW(floating, GWLP_USERDATA, ownerApplication);
-
-    const BOOL darkMode = TRUE;
-    DwmSetWindowAttribute(floating, 20, &darkMode, sizeof(darkMode));
 
     panelToWindow_[panelId] = floating;
     windowToPanel_[floating] = panelId;
