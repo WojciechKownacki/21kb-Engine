@@ -7,6 +7,7 @@ add_executable(kb_editor
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorWindowLifecycleHandler.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
@@ -129,6 +130,7 @@ add_executable(kb_editor
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorPaintDispatcher.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
@@ -153,6 +155,9 @@ add_executable(kb_editor
     src/private/rendering/DockWorkspaceRenderer.hpp
     src/private/rendering/DockWorkspaceTabStripRenderer.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
+    src/private/rendering/EditorSurfaceKind.hpp
+    src/private/rendering/EditorSurfacePainter.hpp
+    src/private/rendering/EditorTabIndicatorPainter.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
@@ -160,6 +165,7 @@ add_executable(kb_editor
     src/private/rendering/EditorGdiRenderer.hpp
     src/private/rendering/GdiDrawing.hpp
     src/private/rendering/GdiResources.hpp
+    src/private/rendering/EditorSurfaceStyle.hpp
     src/private/rendering/MainWindowBackBufferPainter.hpp
     src/private/rendering/gdi/GdiAlphaBlender.hpp
     src/private/rendering/gdi/GdiColor.hpp
@@ -171,19 +177,47 @@ add_executable(kb_editor
     src/private/rendering/gdi/ScopedBrush.hpp
     src/private/rendering/gdi/ScopedCompatibleDc.hpp
     src/private/rendering/gdi/ScopedFont.hpp
+    src/private/rendering/gdi/ScopedGdiObject.hpp
+    src/private/rendering/gdi/ScopedPaint.hpp
     src/private/rendering/gdi/ScopedPen.hpp
     src/private/rendering/HierarchyPanelRenderer.hpp
+    src/private/rendering/HierarchyPanelStyle.hpp
+    src/private/rendering/HierarchyPanelToolbarRenderer.hpp
+    src/private/rendering/HierarchyRowRenderer.hpp
     src/private/rendering/HeroIconCatalog.hpp
+    src/private/rendering/HeroIconAssets.hpp
+    src/private/rendering/HeroIconDrawFrame.hpp
+    src/private/rendering/HeroIconGdiplusRuntime.hpp
     src/private/rendering/HeroIconKind.hpp
+    src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/SceneGridRenderer.hpp
+    src/private/rendering/HierarchyRowLayout.hpp
+    src/private/rendering/HierarchyToolbarLayout.hpp
+    src/private/rendering/SvgGraphicsPathBuilder.hpp
+    src/private/rendering/SvgPathArcConverter.hpp
+    src/private/rendering/SvgPathArcCenter.hpp
+    src/private/rendering/SvgPathArcEndpoint.hpp
+    src/private/rendering/SvgPathArcMath.hpp
+    src/private/rendering/SvgPathArcSegment.hpp
+    src/private/rendering/SvgPathCursor.hpp
+    src/private/rendering/SvgPathFigureBuilder.hpp
+    src/private/rendering/SvgPathGdiplusPoint.hpp
+    src/private/rendering/SvgPathPoint.hpp
     src/private/scene/EditorDefaultSceneFactory.hpp
     src/private/scene/EditorHierarchyContentResolver.hpp
     src/private/scene/EditorHierarchyFloatingContentResolver.hpp
     src/private/scene/EditorHierarchyMainContentResolver.hpp
     src/private/scene/EditorHierarchyMetrics.hpp
+    src/private/scene/EditorHierarchyExpansionState.hpp
+    src/private/scene/EditorHierarchyObjectFactory.hpp
+    src/private/scene/EditorHierarchyRow.hpp
+    src/private/scene/EditorHierarchyRowBuilder.hpp
+    src/private/scene/EditorHierarchyRowFactory.hpp
+    src/private/scene/EditorHierarchySearchState.hpp
+    src/private/scene/EditorHierarchySearchMatcher.hpp
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
     src/private/scene/EditorSceneContext.hpp
@@ -204,6 +238,9 @@ add_executable(kb_editor
     src/rendering/DockWorkspaceRenderer.cpp
     src/rendering/DockWorkspaceTabStripRenderer.cpp
     src/rendering/EditorGdiRenderer.cpp
+    src/rendering/EditorSurfacePainter.cpp
+    src/rendering/EditorSurfaceStyle.cpp
+    src/rendering/EditorTabIndicatorPainter.cpp
     src/rendering/EditorToolbarRenderer.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowBackBufferPainter.cpp
@@ -216,10 +253,27 @@ add_executable(kb_editor
     src/rendering/gdi/GdiRectPainter.cpp
     src/rendering/gdi/GdiTextPainter.cpp
     src/rendering/HierarchyPanelRenderer.cpp
+    src/rendering/HierarchyPanelStyle.cpp
+    src/rendering/HierarchyPanelToolbarRenderer.cpp
+    src/rendering/HierarchyRowRenderer.cpp
+    src/rendering/HierarchyRowLayout.cpp
+    src/rendering/HierarchyToolbarLayout.cpp
+    src/rendering/HeroIconAssets.cpp
+    src/rendering/HeroIconCatalog.cpp
+    src/rendering/HeroIconDrawFrame.cpp
+    src/rendering/HeroIconGdiplusRuntime.cpp
+    src/rendering/HeroIconPathPainter.cpp
+    src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
     src/rendering/SceneGridRenderer.cpp
+    src/rendering/SvgGraphicsPathBuilder.cpp
+    src/rendering/SvgPathArcConverter.cpp
+    src/rendering/SvgPathArcMath.cpp
+    src/rendering/SvgPathArcSegment.cpp
+    src/rendering/SvgPathCursor.cpp
+    src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
@@ -230,6 +284,12 @@ add_executable(kb_editor
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
     src/scene/EditorHierarchyMainContentResolver.cpp
+    src/scene/EditorHierarchyExpansionState.cpp
+    src/scene/EditorHierarchyObjectFactory.cpp
+    src/scene/EditorHierarchyRowBuilder.cpp
+    src/scene/EditorHierarchyRowFactory.cpp
+    src/scene/EditorHierarchySearchState.cpp
+    src/scene/EditorHierarchySearchMatcher.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
     src/scene/EditorSceneContext.cpp
@@ -242,6 +302,15 @@ add_executable(kb_editor
     ../../third_party/heroicons/optimized/24/outline/minus.svg
     ../../third_party/heroicons/optimized/24/outline/stop.svg
     ../../third_party/heroicons/optimized/24/outline/x-mark.svg
+    ../../third_party/heroicons/optimized/24/outline/chevron-down.svg
+    ../../third_party/heroicons/optimized/24/outline/chevron-right.svg
+    ../../third_party/heroicons/optimized/24/outline/cube.svg
+    ../../third_party/heroicons/optimized/24/outline/ellipsis-horizontal.svg
+    ../../third_party/heroicons/optimized/24/outline/eye.svg
+    ../../third_party/heroicons/optimized/24/outline/magnifying-glass.svg
+    ../../third_party/heroicons/optimized/24/outline/plus.svg
+    ../../third_party/heroicons/optimized/16/solid/eye.svg
+    ../../third_party/heroicons/optimized/24/solid/cube.svg
 )
 
 target_include_directories(kb_editor
@@ -256,7 +325,7 @@ target_link_libraries(kb_editor
 )
 
 if(WIN32)
-    target_link_libraries(kb_editor PRIVATE user32 gdi32 dwmapi msimg32)
+    target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
 else()
     message(FATAL_ERROR "kb_editor currently has a Win32 platform backend only. Add a platform backend for this OS before building the editor.")
 endif()

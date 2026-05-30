@@ -14,7 +14,7 @@ namespace kb::editor {
 class DockPanelChromeRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, const RECT& rect, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, COLORREF fill, bool active) const;
+    void Paint(HDC dc, const RECT& rect, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, bool active) const;
 #endif
 };
 
