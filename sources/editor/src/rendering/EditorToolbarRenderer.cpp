@@ -1,18 +1,19 @@
 #include "rendering/EditorToolbarRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiDrawing.hpp"
 
 namespace kb::editor {
 
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme) const {
-    GdiDrawing::FillRectColor(dc, rect, GdiDrawing::ToColorRef(theme.menuBar));
+    EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
     GdiDrawing::DrawTextBlock(dc, { 20, 10, 220, 34 }, "21kb Engine", GdiDrawing::ToColorRef(theme.textPrimary));
     GdiDrawing::DrawTextBlock(dc, { 140, 10, 420, 34 }, "Docking workspace", GdiDrawing::ToColorRef(theme.textSecondary));
 }
 
 void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme) const {
-    GdiDrawing::FillRectColor(dc, rect, GdiDrawing::ToColorRef(theme.toolbar));
+    EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::AppBackground);
     PaintButton(dc, { 16, rect.top + 9, 92, rect.bottom - 9 }, "Select", theme, true);
     PaintButton(dc, { 100, rect.top + 9, 176, rect.bottom - 9 }, "Move", theme, false);
     PaintButton(dc, { 184, rect.top + 9, 268, rect.bottom - 9 }, "Rotate", theme, false);
@@ -20,10 +21,11 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
 }
 
 void EditorToolbarRenderer::PaintButton(HDC dc, const RECT& rect, const char* label, const EditorTheme& theme, bool active) const {
-    GdiDrawing::DrawSharpFrame(
+    EditorSurfacePainter::Frame(
         dc,
         rect,
-        active ? GdiDrawing::ToColorRef(theme.tabActive) : GdiDrawing::ToColorRef(theme.toolbarButton),
+        theme,
+        active ? EditorSurfaceKind::ActiveTab : EditorSurfaceKind::ToolbarButton,
         active ? GdiDrawing::ToColorRef(theme.accent) : GdiDrawing::ToColorRef(theme.borderChrome));
     GdiDrawing::DrawTextBlock(
         dc,

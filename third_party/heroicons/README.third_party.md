@@ -5,9 +5,21 @@
 - License: MIT
 - License file: `third_party/heroicons/LICENSE`
 
-This vendored subset contains only the editor window-control icons currently
-used by the Win32 editor:
+Vendored subset used by the Win32 editor:
 
 - `optimized/24/outline/minus.svg`
 - `optimized/24/outline/stop.svg`
 - `optimized/24/outline/x-mark.svg`
+- `optimized/24/outline/chevron-down.svg`
+- `optimized/24/outline/chevron-right.svg`
+- `optimized/24/outline/cube.svg`
+- `optimized/24/outline/ellipsis-horizontal.svg`
+- `optimized/24/outline/eye.svg`
+- `optimized/24/outline/magnifying-glass.svg`
+- `optimized/24/outline/plus.svg`
+- `optimized/16/solid/eye.svg`
+- `optimized/24/solid/cube.svg`
+
+The editor embeds the selected SVG path data in read-only code data and renders
+it as vector paths at runtime. The SVG files stay in `third_party` as the
+license/audit source for every embedded path.

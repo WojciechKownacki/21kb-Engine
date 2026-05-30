@@ -1,34 +1,30 @@
 #include "rendering/HierarchyPanelRenderer.hpp"
 
 #if defined(_WIN32)
-#include "engine/scene/SceneEntities.hpp"
-
+#include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HierarchyPanelStyle.hpp"
+#include "rendering/HierarchyPanelToolbarRenderer.hpp"
+#include "rendering/HierarchyRowRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
-
-#include <string>
 
 namespace kb::editor {
 
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
-    const std::vector<EditorSceneContext::HierarchyRow> rows = sceneContext.HierarchyRows();
+    const std::vector<EditorHierarchyRow> rows = sceneContext.HierarchyRows();
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
 
-    int y = content.top;
-    for (const EditorSceneContext::HierarchyRow& row : rows) {
-        RECT rowRect{ content.left, y, content.right, y + kHierarchyRowHeight };
-        if (rowRect.top >= content.bottom) {
+    GdiDrawing::FillRectColor(dc, content, HierarchyPanelStyle::PanelBackground());
+    const RECT listContent = HierarchyPanelToolbarRenderer{}.Paint(dc, content, theme, sceneContext);
+
+    int y = listContent.top;
+    for (const EditorHierarchyRow& row : rows) {
+        RECT rowRect{ listContent.left, y, listContent.right, y + kHierarchyRowHeight };
+        if (rowRect.top >= listContent.bottom) {
             break;
         }
 
-        if (row.entity == selected) {
-            GdiDrawing::FillRectColor(dc, rowRect, GdiDrawing::ToColorRef(theme.tabActive));
-        }
-
-        std::string label(static_cast<std::size_t>(row.depth) * 2U, ' ');
-        label += sceneContext.Scene().Entities().Name(row.entity);
-        RECT textRect{ rowRect.left + 8, rowRect.top + 3, rowRect.right - 8, rowRect.bottom };
-        GdiDrawing::DrawTextBlock(dc, textRect, label.c_str(), GdiDrawing::ToColorRef(row.entity == selected ? theme.textPrimary : theme.textSecondary));
+        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, row.entity == selected);
         y += kHierarchyRowHeight;
     }
 }

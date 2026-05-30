@@ -1,6 +1,7 @@
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 
 #if defined(_WIN32)
+#include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -17,7 +18,7 @@ struct FloatingWindowPaintContext {
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<FloatingWindowPaintContext*>(context);
-    GdiDrawing::FillRectColor(paint.dc, paint.client, GdiDrawing::ToColorRef(paintContext->theme->background));
+    EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
     FloatingEditorWindowRenderer{}.Paint(paint.dc, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext);
 }

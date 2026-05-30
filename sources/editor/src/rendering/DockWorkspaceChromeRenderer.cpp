@@ -1,6 +1,7 @@
 #include "rendering/DockWorkspaceChromeRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiDrawing.hpp"
 
 namespace kb::editor {
@@ -23,9 +24,10 @@ void DockWorkspaceChromeRenderer::PaintLeaves(HDC dc, const DockLayout& layout, 
             continue;
         }
 
-        const bool scene = activePanel->kind == DockPanelKind::Scene;
-        GdiDrawing::DrawSharpFrame(dc, GdiDrawing::ToRect(leaf.frame), scene ? GdiDrawing::ToColorRef(theme.chrome) : GdiDrawing::ToColorRef(theme.panel), GdiDrawing::ToColorRef(theme.borderPanel));
-        GdiDrawing::FillRectColor(dc, GdiDrawing::ToRect(leaf.tabStrip), GdiDrawing::ToColorRef(theme.strip));
+        const EditorSurfaceKind panelSurface = activePanel->kind == DockPanelKind::Scene ? EditorSurfaceKind::ScenePanel : EditorSurfaceKind::DockPanel;
+        EditorSurfacePainter::Frame(dc, GdiDrawing::ToRect(leaf.frame), theme, panelSurface, GdiDrawing::ToColorRef(theme.borderPanel));
+
+        EditorSurfacePainter::Fill(dc, GdiDrawing::ToRect(leaf.tabStrip), theme, EditorSurfaceKind::HeaderStrip);
     }
 }
 
