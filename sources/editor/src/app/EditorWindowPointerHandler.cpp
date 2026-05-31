@@ -3,11 +3,31 @@
 #if defined(_WIN32)
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
+#include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+#include "scene/EditorHierarchyContentResolver.hpp"
 
 #include <windowsx.h>
 
+#include <optional>
+
 namespace kb::editor {
+namespace {
+
+bool CommitPendingNewAssetFolder(EditorSceneContext& sceneContext) {
+    if (sceneContext.AssetBrowser().TextEditMode() != EditorAssetTextEditMode::NewFolder) {
+        return false;
+    }
+    static_cast<void>(sceneContext.CommitAssetTextEdit());
+    return true;
+}
+
+bool PointInRect(const RECT& rect, int x, int y) noexcept {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+} // namespace
 
 EditorWindowPointerHandler::EditorWindowPointerHandler(
     HWND mainWindow,
@@ -30,20 +50,75 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    const bool committedNewFolder = CommitPendingNewAssetFolder(sceneContext_);
+    if (committedNewFolder) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+    const std::optional<RECT> assetContent = EditorPanelContentResolver::Resolve(DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    const bool inAssetPanel = assetContent.has_value() && PointInRect(*assetContent, x, y);
+    const bool inHierarchyPanel = hierarchyContent.has_value() && PointInRect(*hierarchyContent, x, y);
 
     EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
     EditorPointerDragInteraction::CaptureIfActive(messageWindow, pointerDrag_);
 
     if (hierarchySelection_.HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        sceneContext_.AssetBrowser().FocusSelection(false);
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
 
+    if (EditorAssetBrowserPointerHandler::HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        sceneContext_.ClearHierarchySelection();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
+    if (!inAssetPanel) {
+        sceneContext_.AssetBrowser().FocusSelection(false);
+    }
+    if (!inHierarchyPanel) {
+        sceneContext_.ClearHierarchySelection();
+    }
     dockController_.HandlePointerDown(messageWindow, x, y);
     return 0;
 }
 
+LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LPARAM lparam) {
+    const int x = GET_X_LPARAM(lparam);
+    const int y = GET_Y_LPARAM(lparam);
+    const bool committedNewFolder = CommitPendingNewAssetFolder(sceneContext_);
+    if (committedNewFolder) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+
+    pointerDrag_.Clear();
+    if (EditorAssetBrowserPointerHandler::HandleRightButtonDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
+    return 0;
+}
+
+LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWindow, LPARAM lparam) {
+    const int x = GET_X_LPARAM(lparam);
+    const int y = GET_Y_LPARAM(lparam);
+
+    if (EditorAssetBrowserPointerHandler::HandleDoubleClick(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        sceneContext_.ClearHierarchySelection();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
+    return HandleLeftButtonDown(messageWindow, lparam);
+}
+
 LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, LPARAM lparam) {
+    if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
     if (EditorPointerDragInteraction::Move(messageWindow, mainWindow_, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), pointerDrag_)) {
         return 0;
     }
@@ -54,6 +129,11 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, LPARAM l
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+
+    if (EditorAssetBrowserPointerHandler::HandlePointerUp(sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
 
     const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
     if (handledDrop) {

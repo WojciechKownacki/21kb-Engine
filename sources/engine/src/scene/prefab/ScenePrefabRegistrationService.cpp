@@ -15,8 +15,14 @@ ScenePrefabHandle ScenePrefabRegistrationService::Register(ScenePrefabRecordStor
 }
 
 ScenePrefabHandle ScenePrefabRegistrationService::RegisterLoaded(ScenePrefabRecordStore& records, std::string guid, std::string name, ScenePrefab prefab) {
-    if (records.FindByGuid(guid).IsValid()) {
-        return {};
+    if (const ScenePrefabHandle existing = records.FindByGuid(guid); existing.IsValid()) {
+        const ScenePrefabRecord* record = records.Find(existing);
+        if (record != nullptr && record->contentHash == ScenePrefabHasher::Hash(prefab)) {
+            return existing;
+        }
+
+        std::optional<ScenePrefabRecord> uniqueRecord = ScenePrefabRecordFactory::CreateTemplate(std::move(name), std::move(prefab), records.NextId());
+        return uniqueRecord.has_value() ? records.Insert(std::move(*uniqueRecord)) : ScenePrefabHandle{};
     }
 
     std::optional<ScenePrefabRecord> record = ScenePrefabRecordFactory::CreateLoadedTemplate(std::move(guid), std::move(name), std::move(prefab));

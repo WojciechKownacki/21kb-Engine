@@ -50,6 +50,7 @@ CMakeUserPresets.json
 # =========================
 # Generated dependency / temp files
 # =========================
+/Project/
 *.d
 *.gcno
 *.gcda
@@ -61,6 +62,7 @@ CMakeUserPresets.json
 # =========================
 # IDE / editor
 # =========================
+AGENTS.md
 .vscode/
 .idea/
 *.suo
