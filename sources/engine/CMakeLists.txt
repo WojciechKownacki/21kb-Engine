@@ -65,9 +65,12 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneObjectDesc.hpp
     include/engine/scene/ScenePrefab.hpp
     include/engine/scene/ScenePrefabCaptureSettings.hpp
+    include/engine/scene/ScenePrefabHandle.hpp
     include/engine/scene/ScenePrefabInstance.hpp
+    include/engine/scene/ScenePrefabInstanceHandle.hpp
     include/engine/scene/ScenePrefabInstantiationSettings.hpp
     include/engine/scene/ScenePrefabNode.hpp
+    include/engine/scene/ScenePrefabOverrides.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneSystem.hpp
@@ -237,11 +240,33 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabChildrenReader.cpp
     src/scene/prefab/ScenePrefabComponentSnapshot.cpp
     src/scene/prefab/ScenePrefabHierarchyCounter.cpp
+    src/scene/prefab/ScenePrefabComponentHasher.cpp
+    src/scene/prefab/ScenePrefabHashBuilder.cpp
+    src/scene/prefab/ScenePrefabHasher.cpp
+    src/scene/prefab/ScenePrefabInstanceRegistry.cpp
+    src/scene/prefab/ScenePrefabInstanceTopology.cpp
+    src/scene/prefab/ScenePrefabRegisteredInstantiationService.cpp
+    src/scene/prefab/io/ScenePrefabAssetService.cpp
+    src/scene/prefab/io/ScenePrefabAssetComponentParser.cpp
+    src/scene/prefab/io/ScenePrefabAssetComponentWriter.cpp
+    src/scene/prefab/io/ScenePrefabAssetEscaper.cpp
+    src/scene/prefab/io/ScenePrefabAssetFieldParser.cpp
+    src/scene/prefab/io/ScenePrefabAssetFieldWriter.cpp
+    src/scene/prefab/io/ScenePrefabAssetReader.cpp
+    src/scene/prefab/io/ScenePrefabAssetWriter.cpp
     src/scene/prefab/ScenePrefabComponentApplier.cpp
+    src/scene/prefab/ScenePrefabComponentComparator.cpp
     src/scene/prefab/ScenePrefabInstantiationService.cpp
     src/scene/prefab/ScenePrefabNameResolver.cpp
+    src/scene/prefab/ScenePrefabNodeComparator.cpp
     src/scene/prefab/ScenePrefabNodeFactory.cpp
+    src/scene/prefab/ScenePrefabNodeStateWriter.cpp
+    src/scene/prefab/ScenePrefabOverrideApplier.cpp
+    src/scene/prefab/ScenePrefabOverrideDetector.cpp
+    src/scene/prefab/ScenePrefabOverrideReverter.cpp
+    src/scene/prefab/ScenePrefabOverrideService.cpp
     src/scene/prefab/ScenePrefabParentResolver.cpp
+    src/scene/prefab/ScenePrefabRegistry.cpp
     src/scene/prefab/ScenePrefabValidator.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
@@ -291,11 +316,34 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabChildrenReader.hpp
     src/private/scene/prefab/ScenePrefabComponentSnapshot.hpp
     src/private/scene/prefab/ScenePrefabHierarchyCounter.hpp
+    src/private/scene/prefab/ScenePrefabComponentHasher.hpp
+    src/private/scene/prefab/ScenePrefabHashBuilder.hpp
+    src/private/scene/prefab/ScenePrefabHasher.hpp
+    src/private/scene/prefab/ScenePrefabInstanceRegistry.hpp
+    src/private/scene/prefab/ScenePrefabInstanceTopology.hpp
+    src/private/scene/prefab/ScenePrefabRegisteredInstantiationService.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetService.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetComponentParser.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetComponentWriter.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetEscaper.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetFormat.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetFieldParser.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetFieldWriter.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetReader.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetWriter.hpp
     src/private/scene/prefab/ScenePrefabComponentApplier.hpp
+    src/private/scene/prefab/ScenePrefabComponentComparator.hpp
     src/private/scene/prefab/ScenePrefabInstantiationService.hpp
     src/private/scene/prefab/ScenePrefabNameResolver.hpp
+    src/private/scene/prefab/ScenePrefabNodeComparator.hpp
     src/private/scene/prefab/ScenePrefabNodeFactory.hpp
+    src/private/scene/prefab/ScenePrefabNodeStateWriter.hpp
+    src/private/scene/prefab/ScenePrefabOverrideApplier.hpp
+    src/private/scene/prefab/ScenePrefabOverrideDetector.hpp
+    src/private/scene/prefab/ScenePrefabOverrideReverter.hpp
+    src/private/scene/prefab/ScenePrefabOverrideService.hpp
     src/private/scene/prefab/ScenePrefabParentResolver.hpp
+    src/private/scene/prefab/ScenePrefabRegistry.hpp
     src/private/scene/prefab/ScenePrefabValidator.hpp
     src/private/scene/systems/SceneSystemScheduler.hpp
     src/private/scene/systems/SceneSystemMutableTransformIteration.hpp

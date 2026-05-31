@@ -4,8 +4,11 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+
+#include <vector>
 
 namespace {
 
@@ -52,12 +55,44 @@ void RunTransformHierarchyTest() {
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.z, 4.0F), "Detached child world Z should match local Z");
 }
 
+void RunParentChildrenOwnershipTest() {
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "New scene should not start with registered prefabs");
+
+    const kb::scene::SceneObject firstParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First Parent" });
+    const kb::scene::SceneObject secondParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second Parent" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = firstParent });
+    const kb::scene::SceneObject grandchild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Grandchild", .parent = child });
+
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Plain parent-child scene objects should not register prefabs");
+
+    std::vector<kb::scene::SceneEntity> firstChildren = scene.Hierarchy().ChildEntities(firstParent.Entity());
+    kb::tests::Require(firstChildren.size() == 1 && firstChildren[0] == child.Entity(), "Parent did not expose its child after creation");
+    std::vector<kb::scene::SceneEntity> childChildren = scene.Hierarchy().ChildEntities(child.Entity());
+    kb::tests::Require(childChildren.size() == 1 && childChildren[0] == grandchild.Entity(), "Plain child did not expose its own child");
+
+    kb::tests::Require(scene.Hierarchy().SetParent(child, secondParent), "Child could not be reparented");
+    firstChildren = scene.Hierarchy().ChildEntities(firstParent.Entity());
+    const std::vector<kb::scene::SceneEntity> secondChildren = scene.Hierarchy().ChildEntities(secondParent.Entity());
+    kb::tests::Require(firstChildren.empty(), "Old parent still exposes a reparented child");
+    kb::tests::Require(secondChildren.size() == 1 && secondChildren[0] == child.Entity(), "New parent does not expose a reparented child");
+    childChildren = scene.Hierarchy().ChildEntities(child.Entity());
+    kb::tests::Require(childChildren.size() == 1 && childChildren[0] == grandchild.Entity(), "Reparented child lost its own child");
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Reparenting plain scene objects should not register prefabs");
+
+    scene.Entities().Destroy(child);
+    kb::tests::Require(scene.Hierarchy().ChildEntities(secondParent.Entity()).empty(), "Parent still exposes a destroyed child");
+    kb::tests::Require(!scene.Entities().IsAlive(grandchild), "Destroying a child did not destroy its descendant");
+    kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Destroying plain hierarchy should not register prefabs");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunSceneHierarchyTests() {
     RunTransformHierarchyTest();
+    RunParentChildrenOwnershipTest();
 }
 
 } // namespace kb::tests

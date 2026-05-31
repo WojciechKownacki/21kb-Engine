@@ -31,8 +31,16 @@ void ScenePrefab::Clear() noexcept {
 ScenePrefabInstance::ScenePrefabInstance(std::vector<SceneObject> objects) noexcept
     : objects_(std::move(objects)) {}
 
+ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::vector<SceneObject> objects) noexcept
+    : handle_(handle)
+    , objects_(std::move(objects)) {}
+
 bool ScenePrefabInstance::Empty() const noexcept {
     return objects_.empty();
+}
+
+ScenePrefabInstanceHandle ScenePrefabInstance::Handle() const noexcept {
+    return handle_;
 }
 
 std::size_t ScenePrefabInstance::ObjectCount() const noexcept {
