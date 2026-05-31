@@ -24,6 +24,8 @@ void AppendNode(Scene& scene, SceneObject object, std::uint32_t parentNode, Scen
 
     const std::uint32_t nodeIndex = output.AddNode(ScenePrefabNodeDesc{
         .name = scene.Entities().Name(object),
+        .nestedPrefabGuid = {},
+        .nestedPrefabOverrides = {},
         .parentNode = parentNode,
         .transform = scene.Transforms().Get(object),
         .visibility = scene.Components().Visibility().Get(object.Entity()),

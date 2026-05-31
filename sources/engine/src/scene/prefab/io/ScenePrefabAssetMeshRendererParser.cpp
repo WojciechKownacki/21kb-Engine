@@ -2,6 +2,9 @@
 
 #include "engine/scene/SceneComponents.hpp"
 
+#include <cstddef>
+#include <cstdint>
+
 namespace kb::scene {
 namespace {
 
@@ -9,6 +12,15 @@ template <typename T>
 [[nodiscard]] bool ParseField(const ScenePrefabAssetFieldMap& fields, std::string_view key, T& output) {
     const auto iterator = fields.find(std::string{ key });
     return iterator != fields.end() && ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
+}
+
+[[nodiscard]] bool ParseAssetId(const ScenePrefabAssetFieldMap& fields, std::string_view key, std::uint64_t& output) {
+    std::size_t value = 0;
+    if (!ParseField(fields, key, value)) {
+        return false;
+    }
+    output = static_cast<std::uint64_t>(value);
+    return true;
 }
 
 } // namespace
@@ -25,8 +37,8 @@ bool ScenePrefabAssetMeshRendererParser::Parse(const ScenePrefabAssetFieldMap& f
     MeshRendererComponent meshRenderer;
     bool castsShadow = false;
     bool receivesShadow = false;
-    if (!ParseField(fields, "meshRenderer.meshAssetId", meshRenderer.meshAssetId)
-        || !ParseField(fields, "meshRenderer.materialAssetId", meshRenderer.materialAssetId)
+    if (!ParseAssetId(fields, "meshRenderer.meshAssetId", meshRenderer.meshAssetId)
+        || !ParseAssetId(fields, "meshRenderer.materialAssetId", meshRenderer.materialAssetId)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.castsShadow", castsShadow)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.receivesShadow", receivesShadow)) {
         return false;
