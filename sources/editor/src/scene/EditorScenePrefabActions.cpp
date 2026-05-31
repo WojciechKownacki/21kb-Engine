@@ -1,6 +1,7 @@
 #include "scene/EditorScenePrefabActions.hpp"
 
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 
 namespace kb::editor {
@@ -16,6 +17,20 @@ bool EditorScenePrefabActions::CreateAsset(kb::scene::Scene& scene, kb::scene::S
 }
 
 std::optional<kb::scene::SceneEntity> EditorScenePrefabActions::InstantiateAsset(kb::scene::Scene& scene, const std::filesystem::path& path, kb::scene::SceneEntity parent) {
+    static_cast<void>(scene.Assets().Discover());
+    if (const std::optional<std::filesystem::path> virtualPath = scene.Assets().Manager().Mounts().ToVirtual(path)) {
+        const kb::assets::AssetHandle<kb::scene::ScenePrefab> prefab = scene.Assets().LoadPrefab(*virtualPath);
+        if (prefab.IsLoaded()) {
+            kb::scene::SceneObject parentObject = scene.Entities().Object(parent);
+            const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(
+                *prefab,
+                kb::scene::ScenePrefabInstantiationSettings{ .parent = parentObject });
+            if (!instance.Empty()) {
+                return instance.RootObject().Entity();
+            }
+        }
+    }
+
     const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Load(path);
     if (!handle.IsValid()) {
         return std::nullopt;

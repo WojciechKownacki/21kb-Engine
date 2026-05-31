@@ -19,6 +19,9 @@ static constexpr std::array<HeroIconPath, 3> kCube{
     HeroIconPath{ "M21.75 7.93078L12.75 13.1808V22.1808L21.3779 17.1478C21.6083 17.0134 21.75 16.7668 21.75 16.5V7.93078Z", true },
     HeroIconPath{ "M11.25 22.1808V13.1808L2.25 7.93078V16.5C2.25 16.7668 2.39168 17.0134 2.6221 17.1478L11.25 22.1808Z", true },
 };
+static constexpr std::array<HeroIconPath, 1> kFolder{
+    HeroIconPath{ "M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-15a3 3 0 0 0-3 3V18a3 3 0 0 0 3 3h15ZM1.5 10.146V6a3 3 0 0 1 3-3h5.379a2.25 2.25 0 0 1 1.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 0 1 3 3v1.146A4.483 4.483 0 0 0 19.5 9h-15a4.483 4.483 0 0 0-3 1.146Z", true },
+};
 static constexpr std::array<HeroIconPath, 2> kEye{
     HeroIconPath{ "M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z", true },
     HeroIconPath{ "M1.38 8.28a.87.87 0 0 1 0-.566 7.003 7.003 0 0 1 13.244.005.87.87 0 0 1 0 .566A7.003 7.003 0 0 1 1.379 8.28ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z", true },
@@ -57,6 +60,10 @@ HeroIconGlyph HeroIconAssets::XMark() noexcept {
 
 HeroIconGlyph HeroIconAssets::Cube() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCube } };
+}
+
+HeroIconGlyph HeroIconAssets::Folder() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kFolder }, .strokeWidth = 0.0F };
 }
 
 HeroIconGlyph HeroIconAssets::Eye() noexcept {

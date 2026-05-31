@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorHierarchySearchInputHandler.hpp"
+#include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
 #include "app/EditorWindowLifecycleHandler.hpp"
 #include "app/EditorPaintDispatcher.hpp"
@@ -33,24 +34,35 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_SIZE:
         return EditorWindowResizeHandler::Handle(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows);
     case WM_CHAR:
+        if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
+            return 0;
+        }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
             return 0;
         }
         break;
     case WM_KEYDOWN:
+        if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            return 0;
+        }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             return 0;
         }
         break;
     case WM_NCHITTEST:
     case WM_LBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
     case WM_MOUSEMOVE:
     case WM_LBUTTONUP:
+    case WM_RBUTTONUP:
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
             return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows);
         }
         return EditorWindowPointerMessageDispatcher{ context_ }.Dispatch(messageWindow, message, wparam, lparam);
+    case WM_CONTEXTMENU:
+        return 0;
     case WM_CLOSE:
         return EditorWindowLifecycleHandler{ context_.mainWindow, context_.running, context_.dockModel, context_.floatingWindows }.HandleClose(messageWindow);
     case WM_DESTROY:

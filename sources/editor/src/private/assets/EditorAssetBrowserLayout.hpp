@@ -1,0 +1,64 @@
+#pragma once
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <Windows.h>
+#endif
+
+namespace kb::editor {
+
+#if defined(_WIN32)
+
+struct EditorAssetBrowserLayoutRects {
+    RECT frame{};
+    RECT toolbar{};
+    RECT path{};
+    RECT search{};
+    RECT refreshButton{};
+    RECT newFolderButton{};
+    RECT filtersButton{};
+    RECT renameButton{};
+    RECT deleteButton{};
+    RECT tree{};
+    RECT assetView{};
+    RECT bottomBar{};
+    RECT sortButton{};
+    RECT sortMenu{};
+    RECT sortNameItem{};
+    RECT sortTypeItem{};
+    RECT sortPathItem{};
+    RECT listButton{};
+    RECT tileButton{};
+    RECT recursiveButton{};
+    RECT sliderTrack{};
+    RECT sliderThumb{};
+};
+
+class EditorAssetBrowserLayout {
+public:
+    EditorAssetBrowserLayout() = delete;
+
+    [[nodiscard]] static EditorAssetBrowserLayoutRects Build(const RECT& content) noexcept;
+    [[nodiscard]] static RECT FolderRowRect(const EditorAssetBrowserLayoutRects& layout, int row) noexcept;
+    [[nodiscard]] static RECT AssetListRowRect(const EditorAssetBrowserLayoutRects& layout, int row) noexcept;
+    [[nodiscard]] static RECT AssetTileRect(const EditorAssetBrowserLayoutRects& layout, int index, float scale) noexcept;
+    [[nodiscard]] static int AssetTileColumnCount(const EditorAssetBrowserLayoutRects& layout, float scale) noexcept;
+    [[nodiscard]] static RECT ContextMenuRect(const RECT& content, int x, int y, int itemCount) noexcept;
+    [[nodiscard]] static RECT ContextMenuItemRect(const RECT& menu, int index) noexcept;
+    [[nodiscard]] static int TileWidth(float scale) noexcept;
+    [[nodiscard]] static int TileHeight(float scale) noexcept;
+
+    static constexpr int RowHeight = 24;
+    static constexpr int AssetHeaderHeight = 28;
+    static constexpr int BaseTileWidth = 86;
+    static constexpr int BaseTileHeight = 112;
+    static constexpr int ContextMenuWidth = 168;
+    static constexpr int ContextMenuRowHeight = 26;
+    static constexpr int ContextMenuPadding = 4;
+    static constexpr int ContextMenuSeparatorHeight = 7;
+};
+
+#endif
+
+} // namespace kb::editor

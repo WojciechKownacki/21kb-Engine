@@ -27,7 +27,7 @@ void FloatingEditorWindowRenderer::Paint(HDC dc, const RECT& client, const DockP
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
     RECT content = GdiDrawing::Inset(panelRect, metrics.panelPadding);
     content.top += metrics.tabStripHeight;
-    PanelContentRenderer{}.Paint(dc, content, panelRect, panel, theme, metrics, sceneContext, true);
+    PanelContentRenderer{}.Paint(dc, content, panelRect, client, panel, theme, metrics, sceneContext, true);
 }
 
 } // namespace kb::editor

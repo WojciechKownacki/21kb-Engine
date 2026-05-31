@@ -27,10 +27,12 @@ bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, 
         return true;
     }
     if (Contains(toolbar.searchBox, x, y)) {
+        sceneContext.ClearHierarchySelection();
         sceneContext.FocusHierarchySearch(true);
         return true;
     }
     if (y < toolbar.listContent.top) {
+        sceneContext.ClearHierarchySelection();
         sceneContext.FocusHierarchySearch(false);
         return true;
     }
@@ -41,6 +43,7 @@ bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, 
     const std::size_t rowIndex = static_cast<std::size_t>(relativeY / kHierarchyRowHeight);
     const std::vector<EditorHierarchyRow> rows = sceneContext.HierarchyRows();
     if (rowIndex >= rows.size()) {
+        sceneContext.ClearHierarchySelection();
         return true;
     }
 

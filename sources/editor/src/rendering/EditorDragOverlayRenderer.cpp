@@ -18,7 +18,9 @@ namespace {
     case EditorPointerDragKind::HierarchyEntity:
         return sceneContext.Scene().Entities().IsAlive(drag.entity) ? sceneContext.Scene().Entities().Name(drag.entity) : std::string{};
     case EditorPointerDragKind::PrefabAsset:
-        return drag.assetPath.filename().string();
+        return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetPath.filename().string();
+    case EditorPointerDragKind::AssetFolder:
+        return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetFolderPath.filename().string();
     case EditorPointerDragKind::None:
     default:
         return {};
@@ -51,7 +53,7 @@ void EditorDragOverlayRenderer::Paint(HDC dc, const EditorPointerDragState& drag
         row.left + 21,
         row.top + 20,
     };
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::Cube, HierarchyPanelStyle::CubeStroke(), 2);
+    HeroIconPainter::Draw(dc, icon, drag.kind == EditorPointerDragKind::AssetFolder ? HeroIconKind::Folder : HeroIconKind::Cube, HierarchyPanelStyle::CubeStroke(), 2);
 
     ScopedFont font{ 12, FW_NORMAL };
     const ScopedGdiObject selectedFont(dc, font.handle);

@@ -23,6 +23,7 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene) {
 SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
     SceneState& state = SceneAccess::State(scene);
     kb::ecs::Entity entity = desc.name.empty() ? state.world.CreateEntity() : state.world.CreateEntity(desc.name);
+    state.hierarchyOrder[entity.Id()] = state.nextHierarchyOrder++;
     state.componentStorage.SetDefaults(entity, desc.transform, desc.visibility);
 
     if (desc.parent.EntityHandle().IsValid()) {

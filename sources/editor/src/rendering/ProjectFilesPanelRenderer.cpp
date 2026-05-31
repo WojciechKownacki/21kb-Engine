@@ -1,66 +1,37 @@
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 
 #if defined(_WIN32)
-#include "project/EditorProjectAssetIndex.hpp"
-#include "project/EditorProjectPaths.hpp"
-#include "rendering/GdiDrawing.hpp"
+#include "assets/EditorAssetBrowserLayout.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "rendering/ProjectFilesAssetViewRenderer.hpp"
+#include "rendering/ProjectFilesBottomBarRenderer.hpp"
+#include "rendering/ProjectFilesOverlayRenderer.hpp"
+#include "rendering/ProjectFilesToolbarRenderer.hpp"
+#include "rendering/ProjectFilesTreeRenderer.hpp"
+#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
 
-#include <filesystem>
-#include <string>
 #include <vector>
 
 namespace kb::editor {
-namespace {
 
-[[nodiscard]] RECT Row(RECT rect, int index, int height = 24) noexcept {
-    rect.top += index * height;
-    rect.bottom = rect.top + height;
-    return rect;
-}
+void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content);
 
-void DrawLabel(HDC dc, RECT rect, const char* text, COLORREF color) {
-    GdiDrawing::DrawTabText(dc, rect, text, color);
-}
+    ScopedFont bodyFont{ 13, FW_NORMAL };
+    const ScopedGdiObject selectedFont(dc, bodyFont.handle);
 
-void DrawDynamicTree(HDC dc, RECT treeInner, const EditorTheme& theme) {
-    DrawLabel(dc, Row(treeInner, 0), "Project", GdiDrawing::ToColorRef(theme.textPrimary));
-    DrawLabel(dc, Row(treeInner, 2), "> Assets", GdiDrawing::ToColorRef(theme.textSecondary));
+    const std::vector<EditorAssetFolderRow> treeFolders = state.FolderRows(manager);
+    const std::vector<EditorAssetFolderRow> childFolders = state.ChildFolderRows(manager);
+    const std::vector<EditorAssetItemRow> assets = state.AssetRows(manager);
 
-    const std::filesystem::path assetsRoot = EditorProjectPaths::AssetsRoot();
-    std::filesystem::create_directories(EditorProjectPaths::PrefabsRoot());
-    int row = 3;
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(assetsRoot)) {
-        if (!entry.is_directory()) {
-            continue;
-        }
-        const std::string label = "  " + entry.path().filename().string();
-        DrawLabel(dc, Row(treeInner, row++), label.c_str(), entry.path().filename() == "Prefabs" ? GdiDrawing::ToColorRef(theme.accent) : GdiDrawing::ToColorRef(theme.textSecondary));
-    }
-}
-
-} // namespace
-
-void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme) const {
-    RECT frame = GdiDrawing::Inset(content, 8);
-    const int treeWidth = (frame.right - frame.left) / 3;
-    RECT tree = frame;
-    tree.right = tree.left + treeWidth;
-    RECT files = frame;
-    files.left = tree.right + 8;
-
-    GdiDrawing::DrawSharpFrame(dc, tree, GdiDrawing::ToColorRef(theme.strip), GdiDrawing::ToColorRef(theme.borderPanel));
-    GdiDrawing::DrawSharpFrame(dc, files, GdiDrawing::ToColorRef(theme.panel), GdiDrawing::ToColorRef(theme.borderPanel));
-
-    RECT treeInner = GdiDrawing::Inset(tree, 10);
-    RECT filesInner = GdiDrawing::Inset(files, 10);
-    DrawDynamicTree(dc, treeInner, theme);
-
-    DrawLabel(dc, Row(filesInner, 0), "Assets / Prefabs", GdiDrawing::ToColorRef(theme.textPrimary));
-    const std::vector<std::filesystem::path> prefabs = EditorProjectAssetIndex::PrefabAssets();
-    for (std::size_t index = 0; index < prefabs.size(); ++index) {
-        const std::string label = "[Prefab] " + prefabs[index].filename().string();
-        DrawLabel(dc, Row(filesInner, static_cast<int>(index) + 2), label.c_str(), GdiDrawing::ToColorRef(theme.accent));
-    }
+    ProjectFilesToolbarRenderer::Paint(dc, layout, theme, state);
+    ProjectFilesTreeRenderer::Paint(dc, layout, theme, state, treeFolders);
+    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, childFolders, assets);
+    ProjectFilesBottomBarRenderer::Paint(dc, layout, theme, state);
+    ProjectFilesOverlayRenderer::Paint(dc, content, overlayBounds, theme, state, manager);
 }
 
 } // namespace kb::editor

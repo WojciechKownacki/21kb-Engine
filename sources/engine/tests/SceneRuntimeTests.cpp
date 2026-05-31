@@ -3,6 +3,7 @@
 #include <cstdlib>
 
 int main() {
+    kb::tests::RunAssetRuntimeTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneSystemTests();

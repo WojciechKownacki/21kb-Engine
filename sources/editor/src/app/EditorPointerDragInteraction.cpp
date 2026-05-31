@@ -14,18 +14,27 @@ void ApplyDragCursor() noexcept {
 } // namespace
 
 void EditorPointerDragInteraction::CaptureIfActive(HWND messageWindow, const EditorPointerDragState& drag) noexcept {
-    if (drag.Active()) {
+    if (drag.Potential()) {
         SetCapture(messageWindow);
     }
 }
 
 bool EditorPointerDragInteraction::Move(HWND sourceWindow, HWND mainWindow, int x, int y, EditorPointerDragState& drag) noexcept {
-    if (!drag.Active()) {
+    if (!drag.Potential()) {
         return false;
     }
 
     drag.x = x;
     drag.y = y;
+    if (!drag.dragging) {
+        const int dx = x - drag.startX;
+        const int dy = y - drag.startY;
+        if ((dx * dx + dy * dy) < 36) {
+            return false;
+        }
+        drag.dragging = true;
+    }
+
     ApplyDragCursor();
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
     return true;

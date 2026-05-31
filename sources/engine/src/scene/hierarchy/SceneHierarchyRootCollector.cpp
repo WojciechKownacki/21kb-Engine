@@ -19,6 +19,9 @@ std::vector<SceneEntity> SceneHierarchyRootCollector::Roots(const kb::ecs::World
         }
     }
 
+    std::ranges::sort(roots, [](SceneEntity left, SceneEntity right) {
+        return left.Id() < right.Id();
+    });
     return roots;
 }
 

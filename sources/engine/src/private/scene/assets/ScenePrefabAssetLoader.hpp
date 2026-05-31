@@ -1,0 +1,22 @@
+#pragma once
+
+#include "engine/assets/IAssetLoader.hpp"
+
+namespace kb::scene {
+
+class Scene;
+
+class ScenePrefabAssetLoader final : public kb::assets::IAssetLoader {
+public:
+    explicit ScenePrefabAssetLoader(Scene& scene) noexcept;
+
+    [[nodiscard]] std::string_view Type() const noexcept override;
+    [[nodiscard]] std::type_index PayloadType() const noexcept override;
+    [[nodiscard]] std::vector<std::string> Extensions() const override;
+    [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+
+private:
+    Scene& scene_;
+};
+
+} // namespace kb::scene

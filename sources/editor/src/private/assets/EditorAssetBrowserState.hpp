@@ -1,0 +1,112 @@
+#pragma once
+
+#include "assets/EditorAssetBrowserContextMenuState.hpp"
+#include "assets/EditorAssetBrowserDeleteConfirmState.hpp"
+#include "assets/EditorAssetBrowserSelectionState.hpp"
+#include "assets/EditorAssetBrowserTextEditState.hpp"
+#include "assets/EditorAssetBrowserViewState.hpp"
+#include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
+
+#include <filesystem>
+#include <string_view>
+#include <vector>
+
+namespace kb::editor {
+
+class EditorAssetBrowserState {
+public:
+    [[nodiscard]] const std::filesystem::path& SelectedFolder() const noexcept;
+    [[nodiscard]] const std::filesystem::path& SelectedContentFolder() const noexcept;
+    [[nodiscard]] kb::assets::AssetId SelectedAsset() const noexcept;
+    [[nodiscard]] EditorAssetBrowserSelectionKind SelectionKind() const noexcept;
+    [[nodiscard]] std::string_view SearchQuery() const noexcept;
+    [[nodiscard]] bool IsSearchFocused() const noexcept;
+    [[nodiscard]] bool IsSelectionFocused() const noexcept;
+    [[nodiscard]] bool Recursive() const noexcept;
+    [[nodiscard]] EditorAssetViewMode ViewMode() const noexcept;
+    [[nodiscard]] EditorAssetSortMode SortMode() const noexcept;
+    [[nodiscard]] std::string_view TypeFilter() const noexcept;
+    [[nodiscard]] bool IsSortMenuOpen() const noexcept;
+    [[nodiscard]] float ThumbnailScale() const noexcept;
+    [[nodiscard]] bool IsThumbnailScaleDragging() const noexcept;
+    [[nodiscard]] EditorAssetTextEditMode TextEditMode() const noexcept;
+    [[nodiscard]] kb::assets::AssetId TextEditTargetAsset() const noexcept;
+    [[nodiscard]] const std::filesystem::path& TextEditTargetFolder() const noexcept;
+    [[nodiscard]] std::string_view TextEditValue() const noexcept;
+    [[nodiscard]] bool IsTextEditing() const noexcept;
+    [[nodiscard]] bool IsContextMenuOpen() const noexcept;
+    [[nodiscard]] bool IsDeleteConfirmOpen() const noexcept;
+    [[nodiscard]] bool IsDeleteConfirmDragging() const noexcept;
+    [[nodiscard]] int DeleteConfirmOffsetX() const noexcept;
+    [[nodiscard]] int DeleteConfirmOffsetY() const noexcept;
+    [[nodiscard]] int ContextMenuX() const noexcept;
+    [[nodiscard]] int ContextMenuY() const noexcept;
+    [[nodiscard]] EditorAssetContextTargetKind ContextMenuTargetKind() const noexcept;
+    [[nodiscard]] kb::assets::AssetId ContextMenuTargetAsset() const noexcept;
+    [[nodiscard]] const std::filesystem::path& ContextMenuTargetFolder() const noexcept;
+    [[nodiscard]] EditorAssetContextCommand ContextMenuHoveredCommand() const noexcept;
+    [[nodiscard]] std::vector<EditorAssetContextMenuItem> ContextMenuItems(const kb::assets::AssetManager& manager) const;
+
+    void FocusSearch(bool focused) noexcept;
+    void FocusSelection(bool focused) noexcept;
+    void SetSearchQuery(std::string query);
+    void AppendSearchText(wchar_t character);
+    void BackspaceSearch();
+    void ClearSearch();
+    void SetRecursive(bool recursive) noexcept;
+    void ToggleRecursive() noexcept;
+    void SetViewMode(EditorAssetViewMode mode) noexcept;
+    void SetSortMode(EditorAssetSortMode mode) noexcept;
+    void CycleSortMode() noexcept;
+    void CycleTypeFilter(const kb::assets::AssetManager& manager);
+    void ToggleSortMenu() noexcept;
+    void CloseSortMenu() noexcept;
+    void SetThumbnailScale(float scale) noexcept;
+    void BeginThumbnailScaleDrag() noexcept;
+    void EndThumbnailScaleDrag() noexcept;
+
+    void BeginNewFolder();
+    [[nodiscard]] bool BeginRenameSelection(const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool BeginRenameAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool BeginRenameFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    void SetTextEditValue(std::string value);
+    void AppendTextEdit(wchar_t character);
+    void BackspaceTextEdit();
+    void CancelTextEdit() noexcept;
+    void OpenContextMenuForBackground(int x, int y);
+    [[nodiscard]] bool OpenContextMenuForAsset(int x, int y, kb::assets::AssetId id, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool OpenContextMenuForFolder(int x, int y, const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    void CloseContextMenu() noexcept;
+    [[nodiscard]] bool OpenDeleteConfirm() noexcept;
+    void CloseDeleteConfirm() noexcept;
+    void BeginDeleteConfirmDrag(int x, int y) noexcept;
+    void DragDeleteConfirm(int x, int y) noexcept;
+    void EndDeleteConfirmDrag() noexcept;
+    [[nodiscard]] bool SetContextMenuHoveredCommand(EditorAssetContextCommand command) noexcept;
+
+    [[nodiscard]] bool SelectFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool SelectContentFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool SelectAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool ToggleFolderExpanded(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    void ClearSelection() noexcept;
+
+    [[nodiscard]] std::vector<EditorAssetFolderRow> FolderRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<EditorAssetFolderRow> ChildFolderRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<EditorAssetItemRow> AssetRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<std::string> AssetTypes(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] const kb::assets::AssetMetadata* SelectedMetadata(const kb::assets::AssetManager& manager) const noexcept;
+
+private:
+    [[nodiscard]] bool ContextMenuTargetFolderCanMutate(const kb::assets::AssetManager& manager) const;
+
+    EditorAssetBrowserSelectionState selection_;
+    EditorAssetBrowserViewState view_;
+    EditorAssetBrowserTextEditState textEdit_;
+    EditorAssetBrowserContextMenuState contextMenu_;
+    EditorAssetBrowserDeleteConfirmState deleteConfirm_;
+};
+
+} // namespace kb::editor

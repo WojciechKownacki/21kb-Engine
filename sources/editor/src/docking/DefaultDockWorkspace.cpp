@@ -11,7 +11,7 @@ std::vector<DockPanel> DefaultDockWorkspace::CreatePanels() const {
         DockPanel{ .id = 1, .kind = DockPanelKind::Hierarchy, .title = "Hierarchy", .area = DockArea::Left, .floatingRect = DockRect{ 96, 96, 360, 520 } },
         DockPanel{ .id = 2, .kind = DockPanelKind::Scene, .title = "Scene", .area = DockArea::Center, .floatingRect = DockRect{ 128, 128, 720, 520 } },
         DockPanel{ .id = 3, .kind = DockPanelKind::Inspector, .title = "Inspector", .area = DockArea::Right, .floatingRect = DockRect{ 112, 112, 380, 560 } },
-        DockPanel{ .id = 4, .kind = DockPanelKind::Assets, .title = "Assets", .area = DockArea::Bottom, .floatingRect = DockRect{ 128, 128, 620, 360 } },
+        DockPanel{ .id = 4, .kind = DockPanelKind::Assets, .title = "Project Files", .area = DockArea::Bottom, .floatingRect = DockRect{ 128, 128, 620, 360 } },
         DockPanel{ .id = 5, .kind = DockPanelKind::Console, .title = "Console", .area = DockArea::Bottom, .floatingRect = DockRect{ 144, 144, 680, 340 } },
     };
 }

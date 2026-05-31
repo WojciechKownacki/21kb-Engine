@@ -1,4 +1,13 @@
 add_library(kb_engine STATIC
+    include/engine/assets/AssetHandle.hpp
+    include/engine/assets/AssetId.hpp
+    include/engine/assets/AssetManager.hpp
+    include/engine/assets/AssetManifest.hpp
+    include/engine/assets/AssetMetadata.hpp
+    include/engine/assets/AssetMountTable.hpp
+    include/engine/assets/AssetReference.hpp
+    include/engine/assets/AssetRegistry.hpp
+    include/engine/assets/IAssetLoader.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/ComponentEvent.hpp
     include/engine/ecs/ComponentFieldAccess.hpp
@@ -52,6 +61,7 @@ add_library(kb_engine STATIC
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneCameraComponents.hpp
     include/engine/scene/SceneComponentQueries.hpp
     include/engine/scene/SceneComponentVisitors.hpp
@@ -85,6 +95,19 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
+    src/assets/AssetId.cpp
+    src/assets/AssetDiscoveryService.cpp
+    src/assets/AssetFileOperations.cpp
+    src/assets/AssetFileSystem.cpp
+    src/assets/AssetFolderOperations.cpp
+    src/assets/AssetLoaderRegistry.cpp
+    src/assets/AssetManager.cpp
+    src/assets/AssetManifest.cpp
+    src/assets/AssetMetadata.cpp
+    src/assets/AssetMountTable.cpp
+    src/assets/AssetPathUtilities.cpp
+    src/assets/AssetRegistry.cpp
+    src/assets/AssetRuntimeLoadService.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/ComponentEventMapper.cpp
     src/ecs/ComponentFieldAccess.cpp
@@ -220,6 +243,8 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
+    src/scene/modules/SceneAssets.cpp
+    src/scene/modules/SceneAssetsAccess.cpp
     src/scene/modules/ScenePrefabCaptureModule.cpp
     src/scene/modules/SceneEntities.cpp
     src/scene/modules/SceneEntityCreation.cpp
@@ -331,6 +356,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabVariantMaterializer.cpp
     src/scene/prefab/ScenePrefabVariantRefreshService.cpp
     src/scene/prefab/ScenePrefabValidator.cpp
+    src/scene/assets/ScenePrefabAssetLoader.cpp
     src/scene/transform/SceneTransformBranchUpdater.cpp
     src/scene/transform/SceneTransformHierarchySystem.cpp
     src/scene/transform/SceneTransformRootCollector.cpp
@@ -338,6 +364,13 @@ add_library(kb_engine STATIC
     src/scene/transform/TransformMath.cpp
     src/scene/transform/Vec3Math.cpp
     src/private/scene/components/SceneComponentAccess.hpp
+    src/private/assets/AssetDiscoveryService.hpp
+    src/private/assets/AssetFileOperations.hpp
+    src/private/assets/AssetFileSystem.hpp
+    src/private/assets/AssetFolderOperations.hpp
+    src/private/assets/AssetLoaderRegistry.hpp
+    src/private/assets/AssetPathUtilities.hpp
+    src/private/assets/AssetRuntimeLoadService.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
@@ -376,6 +409,7 @@ add_library(kb_engine STATIC
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTransformService.hpp
+    src/private/scene/assets/ScenePrefabAssetLoader.hpp
     src/private/scene/prefab/ScenePrefabAppliedPropertyBuilder.hpp
     src/private/scene/prefab/ScenePrefabAssetFacade.hpp
     src/private/scene/prefab/ScenePrefabCameraOverrideReporter.hpp
@@ -582,6 +616,7 @@ kb_apply_quality_gates(kb_engine)
 if(BUILD_TESTING)
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
+        tests/AssetRuntimeTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp
