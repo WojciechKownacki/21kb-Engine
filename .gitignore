@@ -1,10 +1,4 @@
 # =========================
-# Business-private notes (MUST NEVER LEAVE LOCAL/VPS)
-# =========================
-/Secret/
-/others/
-
-# =========================
 # Build directories
 # =========================
 /build/

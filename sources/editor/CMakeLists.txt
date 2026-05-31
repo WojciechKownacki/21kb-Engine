@@ -357,17 +357,9 @@ target_link_libraries(kb_editor
         kb_engine
 )
 
-if(WIN32)
-    target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
-else()
-    message(FATAL_ERROR "kb_editor currently has a Win32 platform backend only. Add a platform backend for this OS before building the editor.")
-endif()
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
 
-if(MSVC)
-    target_compile_options(kb_editor PRIVATE /W4 /WX)
-else()
-    target_compile_options(kb_editor PRIVATE -Wall -Wextra -Wpedantic -Werror)
-endif()
+kb_apply_quality_gates(kb_editor)
 
 if(BUILD_TESTING)
     add_executable(kb_editor_tests
@@ -399,9 +391,5 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_editor_tests COMMAND kb_editor_tests)
 
-    if(MSVC)
-        target_compile_options(kb_editor_tests PRIVATE /W4 /WX)
-    else()
-        target_compile_options(kb_editor_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
+    kb_apply_quality_gates(kb_editor_tests)
 endif()
