@@ -11,6 +11,10 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <filesystem>
+#include <system_error>
+#include <utility>
+
 namespace {
 
 void RunPrefabCaptureTest() {
@@ -58,6 +62,7 @@ void RunPrefabCaptureTest() {
 
     const kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
     kb::tests::Require(prefab.NodeCount() == 3, "Captured prefab did not include the full hierarchy");
+    kb::tests::Require(source.Prefabs().RegisteredCount() == 0, "Capturing a prefab value should not register it in engine storage");
 
     kb::scene::Scene target;
     const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(prefab);
@@ -89,6 +94,84 @@ void RunPrefabCaptureTest() {
     kb::scene::Scene unrelatedScene;
     const kb::scene::ScenePrefab crossScenePrefab = unrelatedScene.Prefabs().Capture(root);
     kb::tests::Require(crossScenePrefab.Empty(), "Capture should reject objects from a different scene");
+
+    const kb::scene::ScenePrefabHandle registered = source.Prefabs().CaptureRegistered(root, "CapturedRoot");
+    kb::tests::Require(registered.IsValid(), "Captured prefab was not registered by the engine");
+    kb::tests::Require(source.Prefabs().Contains(registered), "Captured prefab handle was not retained by the engine");
+    kb::tests::Require(source.Prefabs().RegisteredCount() == 1, "CaptureRegistered should add exactly one prefab to engine storage");
+    const kb::scene::ScenePrefabInstance registeredInstance = source.Prefabs().Instantiate(registered);
+    kb::tests::Require(registeredInstance.ObjectCount() == 3, "Registered captured prefab did not instantiate from engine storage");
+    kb::tests::Require(source.Hierarchy().ChildEntities(registeredInstance.ObjectAt(0).Entity()).size() == 1, "Registered captured prefab root did not expose its child");
+}
+
+void RunPrefabAssetRoundTripTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_roundtrip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Asset Root",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F },
+        },
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 101,
+                .materialAssetId = 202,
+                .castsShadow = false,
+                .receivesShadow = true,
+            },
+        },
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Asset Child\\Escaped",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 4.0F, 0.0F },
+        },
+        .visibility = kb::scene::VisibilityComponent{
+            .visible = false,
+        },
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .light = kb::scene::LightComponent{
+                .kind = kb::scene::LightKind::Spot,
+                .intensity = 6.0F,
+                .range = 12.0F,
+            },
+        },
+    });
+
+    const kb::scene::ScenePrefabHandle savedHandle = source.Prefabs().Register("RoundTrip\\Prefab", std::move(prefab));
+    kb::tests::Require(savedHandle.IsValid(), "Prefab asset round-trip setup failed to register prefab");
+    kb::tests::Require(source.Prefabs().Save(savedHandle, prefabPath), "Prefab asset save failed");
+    kb::tests::Require(std::filesystem::exists(prefabPath), "Prefab asset save did not create a file");
+    kb::tests::Require(!source.Prefabs().Save(kb::scene::ScenePrefabHandle{}, prefabPath), "Prefab asset save accepted an invalid handle");
+
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabHandle loadedHandle = target.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Prefab asset load did not return a valid handle");
+    kb::tests::Require(target.Prefabs().RegisteredCount() == 1, "Prefab asset load did not register exactly one prefab");
+
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedHandle);
+    kb::tests::Require(instance.ObjectCount() == 2, "Loaded prefab did not instantiate all nodes");
+    kb::tests::Require(target.Entities().Name(instance.ObjectAt(rootNode)) == "Asset Root", "Loaded prefab root name was not preserved");
+    kb::tests::Require(target.Entities().Name(instance.ObjectAt(childNode)) == "Asset Child\\Escaped", "Loaded prefab escaped child name was not preserved");
+    kb::tests::Require(target.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Loaded prefab hierarchy was not preserved");
+    kb::tests::Require(!target.Components().Visibility().Get(instance.ObjectAt(childNode).Entity()).visible, "Loaded prefab visibility was not preserved");
+
+    const kb::scene::MeshRendererComponent* meshRenderer = target.Components().MeshRenderers().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::LightComponent* light = target.Components().Lights().TryGet(instance.ObjectAt(childNode).Entity());
+    kb::tests::Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 101 && !meshRenderer->castsShadow, "Loaded prefab mesh renderer was not preserved");
+    kb::tests::Require(light != nullptr && light->kind == kb::scene::LightKind::Spot && kb::tests::NearlyEqual(light->intensity, 6.0F), "Loaded prefab light was not preserved");
+
+    [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);
+    const kb::scene::TransformComponent childTransform = target.Transforms().Get(instance.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 3.0F), "Loaded prefab world X was not rebuilt");
+    kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 4.0F), "Loaded prefab world Y was not rebuilt");
+
+    std::filesystem::remove(prefabPath, removeError);
 }
 
 } // namespace
@@ -97,6 +180,7 @@ namespace kb::tests {
 
 void RunScenePrefabCaptureTests() {
     RunPrefabCaptureTest();
+    RunPrefabAssetRoundTripTest();
 }
 
 } // namespace kb::tests
