@@ -3,9 +3,9 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "scene/components/SceneComponentAccess.hpp"
 
-#include <cstdint>
+#include <flecs.h>
 
-struct ecs_iter_t;
+#include <cstdint>
 
 namespace kb::scene {
 
