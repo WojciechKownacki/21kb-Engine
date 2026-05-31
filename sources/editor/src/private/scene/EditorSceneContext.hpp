@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
@@ -19,9 +20,12 @@ public:
 
     [[nodiscard]] kb::scene::Scene& Scene() noexcept;
     [[nodiscard]] const kb::scene::Scene& Scene() const noexcept;
+    [[nodiscard]] EditorAssetBrowserState& AssetBrowser() noexcept;
+    [[nodiscard]] const EditorAssetBrowserState& AssetBrowser() const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     void SelectEntity(kb::scene::SceneEntity entity) noexcept;
+    void ClearHierarchySelection() noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex) noexcept;
 
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
@@ -33,6 +37,18 @@ public:
     void AppendHierarchySearchText(wchar_t character);
     void BackspaceHierarchySearch();
     void ClearHierarchySearch();
+    [[nodiscard]] bool BeginAssetFolderCreation();
+    [[nodiscard]] bool BeginAssetRename();
+    [[nodiscard]] bool BeginAssetRename(kb::assets::AssetId id);
+    [[nodiscard]] bool BeginAssetFolderRename(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CommitAssetTextEdit();
+    void CancelAssetTextEdit() noexcept;
+    [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
+    [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
+    [[nodiscard]] bool DeleteAssetBrowserItem(kb::assets::AssetId id);
+    [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] bool MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
@@ -43,6 +59,7 @@ public:
 
 private:
     kb::scene::Scene scene_;
+    EditorAssetBrowserState assetBrowser_;
     kb::scene::SceneEntity selectedEntity_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;

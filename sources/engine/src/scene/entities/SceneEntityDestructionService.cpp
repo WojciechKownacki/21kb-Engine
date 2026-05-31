@@ -22,7 +22,9 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         DestroyEntity(scene, child);
     }
 
-    SceneAccess::State(scene).world.DestroyEntity(entity);
+    SceneState& state = SceneAccess::State(scene);
+    state.hierarchyOrder.erase(entity.Id());
+    state.world.DestroyEntity(entity);
 }
 
 } // namespace kb::scene

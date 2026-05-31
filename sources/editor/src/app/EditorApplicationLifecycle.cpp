@@ -31,7 +31,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 
-    ShowWindow(state.window, SW_SHOW);
+    ShowWindow(state.window, SW_SHOWMAXIMIZED);
     UpdateWindow(state.window);
 
     state.running = true;

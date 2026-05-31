@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorDropPanelResolver.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
 
 #include <optional>

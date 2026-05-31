@@ -29,6 +29,9 @@ std::vector<SceneEntity> SceneHierarchyReader::Children(const kb::ecs::World& wo
         }
     }
 
+    std::ranges::sort(children, [](SceneEntity left, SceneEntity right) {
+        return left.Id() < right.Id();
+    });
     return children;
 }
 

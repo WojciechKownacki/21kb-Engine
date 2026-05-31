@@ -1,0 +1,32 @@
+#pragma once
+
+#include "assets/EditorAssetBrowserHitTester.hpp"
+
+#include <optional>
+
+namespace kb::editor {
+
+#if defined(_WIN32)
+
+class EditorAssetBrowserOverlayHitTester {
+public:
+    EditorAssetBrowserOverlayHitTester() = delete;
+
+    [[nodiscard]] static std::optional<EditorAssetBrowserHit> HitTestDeleteConfirm(
+        const RECT& content,
+        int x,
+        int y,
+        const EditorAssetBrowserState& state,
+        const RECT* overlayBounds);
+
+    [[nodiscard]] static std::optional<EditorAssetBrowserHit> HitTestContextMenu(
+        const RECT& content,
+        int x,
+        int y,
+        const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager);
+};
+
+#endif
+
+} // namespace kb::editor
