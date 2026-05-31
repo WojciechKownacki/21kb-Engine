@@ -19,6 +19,9 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateTemplate(std::s
         .guid = ScenePrefabGuid::Create(name, prefab, localId),
         .name = std::move(name),
         .prefab = std::move(prefab),
+        .basePrefab = {},
+        .basePrefabGuid = {},
+        .variantOverrides = {},
         .contentHash = contentHash,
     };
 }
@@ -33,6 +36,9 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateLoadedTemplate(
         .guid = std::move(guid),
         .name = std::move(name),
         .prefab = std::move(prefab),
+        .basePrefab = {},
+        .basePrefabGuid = {},
+        .variantOverrides = {},
         .contentHash = ScenePrefabHasher::Hash(prefab),
     };
 }
@@ -42,9 +48,11 @@ ScenePrefabRecord ScenePrefabRecordFactory::CreateVariant(std::string name, Scen
         .kind = ScenePrefabRecordKind::Variant,
         .guid = ScenePrefabGuid::Create(name, baseRecord.prefab, localId),
         .name = std::move(name),
+        .prefab = {},
         .basePrefab = basePrefab,
         .basePrefabGuid = baseRecord.guid,
         .variantOverrides = std::move(overrides),
+        .contentHash = 0,
     };
 }
 
@@ -53,9 +61,11 @@ ScenePrefabRecord ScenePrefabRecordFactory::CreateLoadedVariant(std::string guid
         .kind = ScenePrefabRecordKind::Variant,
         .guid = std::move(guid),
         .name = std::move(name),
+        .prefab = {},
         .basePrefab = basePrefab,
         .basePrefabGuid = std::move(basePrefabGuid),
         .variantOverrides = std::move(overrides),
+        .contentHash = 0,
     };
 }
 
