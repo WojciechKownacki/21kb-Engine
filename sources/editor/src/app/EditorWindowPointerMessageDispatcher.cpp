@@ -16,6 +16,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
         context_.dockController,
         context_.hierarchySelection,
         context_.sceneContext,
+        context_.pointerDrag,
         context_.metrics,
     };
 
@@ -25,7 +26,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
     case WM_MOUSEMOVE:
         return pointerHandler.HandleMouseMove(messageWindow, lparam);
     case WM_LBUTTONUP:
-        return pointerHandler.HandleLeftButtonUp(messageWindow);
+        return pointerHandler.HandleLeftButtonUp(messageWindow, lparam);
     case WM_SETCURSOR:
         return pointerHandler.HandleSetCursor(messageWindow, wparam, lparam);
     default:

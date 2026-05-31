@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -113,6 +114,7 @@ void RunPrefabAssetRoundTripTest() {
     kb::scene::ScenePrefab prefab;
     const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
         .name = "Asset Root",
+        .nestedPrefabGuid = "nested-template-guid",
         .transform = kb::scene::TransformComponent{
             .localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F },
         },
@@ -153,6 +155,9 @@ void RunPrefabAssetRoundTripTest() {
     const kb::scene::ScenePrefabHandle loadedHandle = target.Prefabs().Load(prefabPath);
     kb::tests::Require(loadedHandle.IsValid(), "Prefab asset load did not return a valid handle");
     kb::tests::Require(target.Prefabs().RegisteredCount() == 1, "Prefab asset load did not register exactly one prefab");
+    const kb::scene::ScenePrefab loadedPrefab = target.Prefabs().Get(loadedHandle);
+    kb::tests::Require(!loadedPrefab.Empty(), "Prefab asset get did not return loaded data");
+    kb::tests::Require(loadedPrefab.Nodes()[rootNode].nestedPrefabGuid == "nested-template-guid", "Prefab asset did not preserve nested template guid");
 
     const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedHandle);
     kb::tests::Require(instance.ObjectCount() == 2, "Loaded prefab did not instantiate all nodes");
@@ -174,6 +179,96 @@ void RunPrefabAssetRoundTripTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+void RunPrefabVariantAssetRoundTripTest() {
+    const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_base.kbprefab";
+    const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_roundtrip.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab basePrefab;
+    const std::uint32_t rootNode = basePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Variant Asset Base",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+        .visibility = kb::scene::VisibilityComponent{ .visible = true },
+    });
+    const kb::scene::ScenePrefabHandle baseHandle = source.Prefabs().Register("VariantAssetBase", std::move(basePrefab));
+    kb::tests::Require(baseHandle.IsValid(), "Variant asset base registration failed");
+
+    std::vector<kb::scene::ScenePrefabPropertyOverride> overrides{
+        kb::scene::ScenePrefabPropertyOverride{
+            .nodeIndex = rootNode,
+            .propertyPath = "name",
+            .value = "Variant Asset Root",
+            .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+        },
+        kb::scene::ScenePrefabPropertyOverride{
+            .nodeIndex = rootNode,
+            .propertyPath = "transform.localPosition",
+            .value = "9 0 0",
+            .flag = kb::scene::ScenePrefabOverrideFlag::Transform,
+        },
+    };
+    const kb::scene::ScenePrefabHandle variantHandle = source.Prefabs().RegisterVariant("VariantAsset", baseHandle, std::move(overrides));
+    kb::tests::Require(variantHandle.IsValid(), "Variant asset registration failed");
+    kb::tests::Require(source.Prefabs().Save(baseHandle, basePath), "Variant base asset save failed");
+    kb::tests::Require(source.Prefabs().Save(variantHandle, variantPath), "Variant asset save failed");
+
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabHandle loadedBase = target.Prefabs().Load(basePath);
+    const kb::scene::ScenePrefabHandle loadedVariant = target.Prefabs().Load(variantPath);
+    kb::tests::Require(loadedBase.IsValid(), "Variant base asset load failed");
+    kb::tests::Require(loadedVariant.IsValid(), "Variant asset load failed");
+
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedVariant);
+    kb::tests::Require(instance.ObjectCount() == 1, "Loaded variant asset did not instantiate");
+    kb::tests::Require(target.Entities().Name(instance.ObjectAt(rootNode)) == "Variant Asset Root", "Loaded variant asset did not preserve name override");
+    const kb::scene::TransformComponent transform = target.Transforms().Get(instance.ObjectAt(rootNode));
+    kb::tests::Require(kb::tests::NearlyEqual(transform.localPosition.x, 9.0F), "Loaded variant asset did not preserve transform override");
+
+    std::filesystem::remove(basePath, removeError);
+    std::filesystem::remove(variantPath, removeError);
+}
+
+void RunNestedPrefabAssetRoundTripTest() {
+    const std::filesystem::path innerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_inner.kbprefab";
+    const std::filesystem::path outerPath = std::filesystem::temp_directory_path() / "21kb_engine_nested_outer.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(innerPath, removeError);
+    std::filesystem::remove(outerPath, removeError);
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab innerPrefab;
+    const std::uint32_t innerRoot = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Nested Asset Inner" });
+    const std::uint32_t innerChild = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Nested Asset Child",
+        .parentNode = innerRoot,
+    });
+    const kb::scene::ScenePrefabHandle innerHandle = source.Prefabs().Register("NestedAssetInner", std::move(innerPrefab));
+    kb::tests::Require(source.Prefabs().Save(innerHandle, innerPath), "Nested inner prefab save failed");
+
+    kb::scene::SceneObject outerRoot = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Nested Asset Outer" });
+    const kb::scene::ScenePrefabInstance nestedInstance = source.Prefabs().Instantiate(
+        innerHandle,
+        kb::scene::ScenePrefabInstantiationSettings{ .parent = outerRoot });
+    source.Entities().SetName(nestedInstance.ObjectAt(innerChild), "Nested Asset Child Override");
+    const kb::scene::ScenePrefabHandle outerHandle = source.Prefabs().CreateAsset(outerRoot, "NestedAssetOuter", outerPath);
+    kb::tests::Require(outerHandle.IsValid(), "Nested outer prefab create asset failed");
+
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabHandle loadedInner = target.Prefabs().Load(innerPath);
+    const kb::scene::ScenePrefabHandle loadedOuter = target.Prefabs().Load(outerPath);
+    kb::tests::Require(loadedInner.IsValid(), "Nested inner prefab load failed");
+    kb::tests::Require(loadedOuter.IsValid(), "Nested outer prefab load failed");
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(loadedOuter);
+    kb::tests::Require(instance.ObjectCount() == 3, "Loaded nested outer prefab did not compose inner hierarchy");
+    kb::tests::Require(target.Entities().Name(instance.ObjectAt(2)) == "Nested Asset Child Override", "Loaded nested outer prefab did not preserve nested override");
+
+    std::filesystem::remove(innerPath, removeError);
+    std::filesystem::remove(outerPath, removeError);
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -181,6 +276,8 @@ namespace kb::tests {
 void RunScenePrefabCaptureTests() {
     RunPrefabCaptureTest();
     RunPrefabAssetRoundTripTest();
+    RunPrefabVariantAssetRoundTripTest();
+    RunNestedPrefabAssetRoundTripTest();
 }
 
 } // namespace kb::tests

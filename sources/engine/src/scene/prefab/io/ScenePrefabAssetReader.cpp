@@ -1,13 +1,48 @@
 #include "scene/prefab/io/ScenePrefabAssetReader.hpp"
 
-#include "scene/prefab/ScenePrefabValidator.hpp"
-#include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFieldParser.hpp"
+#include "scene/prefab/io/ScenePrefabAssetKeyValueReader.hpp"
+#include "scene/prefab/io/ScenePrefabAssetTemplateReader.hpp"
+#include "scene/prefab/io/ScenePrefabAssetVariantReader.hpp"
 
 #include <fstream>
+#include <utility>
 
 namespace kb::scene {
+namespace {
+
+[[nodiscard]] bool ReadV2Header(std::istream& input, ScenePrefabAssetReadResult& result) {
+    std::string value;
+    if (!ScenePrefabAssetKeyValueReader::Read(input, ScenePrefabAssetFormat::KindKey, value)) {
+        return false;
+    }
+    if (value == ScenePrefabAssetFormat::TemplateKind) {
+        result.kind = ScenePrefabAssetKind::Template;
+    } else if (value == ScenePrefabAssetFormat::VariantKind) {
+        result.kind = ScenePrefabAssetKind::Variant;
+    } else {
+        return false;
+    }
+
+    if (!ScenePrefabAssetKeyValueReader::Read(input, ScenePrefabAssetFormat::GuidKey, value) || !ScenePrefabAssetKeyValueReader::ReadEscaped(value, result.guid)) {
+        return false;
+    }
+    if (!ScenePrefabAssetKeyValueReader::Read(input, ScenePrefabAssetFormat::NameKey, value) || !ScenePrefabAssetKeyValueReader::ReadEscaped(value, result.name)) {
+        return false;
+    }
+
+    return true;
+}
+
+[[nodiscard]] bool ReadV2(std::istream& input, ScenePrefabAssetReadResult& result) {
+    return ReadV2Header(input, result)
+        && (result.kind == ScenePrefabAssetKind::Variant
+                ? ScenePrefabAssetVariantReader::ReadV2(input, result)
+                : ScenePrefabAssetTemplateReader::ReadV2(input, result));
+}
+
+} // namespace
 
 bool ScenePrefabAssetReader::Read(const std::filesystem::path& path, ScenePrefabAssetReadResult& output) {
     std::ifstream input{ path, std::ios::binary };
@@ -17,47 +52,16 @@ bool ScenePrefabAssetReader::Read(const std::filesystem::path& path, ScenePrefab
 
     ScenePrefabAssetReadResult result;
     std::string line;
-    if (!ScenePrefabAssetFieldParser::ReadLine(input, line) || line != ScenePrefabAssetFormat::Header) {
+    if (!ScenePrefabAssetFieldParser::ReadLine(input, line)) {
         return false;
     }
 
-    std::string key;
-    std::string value;
-    if (!ScenePrefabAssetFieldParser::ReadLine(input, line) || !ScenePrefabAssetFieldParser::SplitKeyValue(line, key, value) || key != ScenePrefabAssetFormat::NameKey) {
+    const bool read = line == ScenePrefabAssetFormat::Header ? ScenePrefabAssetTemplateReader::ReadLegacy(input, result) : (line == ScenePrefabAssetFormat::HeaderV2 && ReadV2(input, result));
+    if (!read) {
         return false;
-    }
-    std::optional<std::string> name = ScenePrefabAssetEscaper::Unescape(value);
-    if (!name.has_value()) {
-        return false;
-    }
-    result.name = std::move(*name);
-
-    std::size_t nodeCount = 0;
-    if (!ScenePrefabAssetFieldParser::ReadLine(input, line)
-        || !ScenePrefabAssetFieldParser::SplitKeyValue(line, key, value)
-        || key != ScenePrefabAssetFormat::NodesKey
-        || !ScenePrefabAssetFieldParser::ParseNumber(value, nodeCount)) {
-        return false;
-    }
-    result.prefab.Reserve(nodeCount);
-
-    ScenePrefabAssetFieldMap fields;
-    for (std::size_t index = 0; index < nodeCount; ++index) {
-        if (!ScenePrefabAssetFieldParser::ReadLine(input, line) || line != ScenePrefabAssetFormat::NodeMarker || !ScenePrefabAssetFieldParser::ReadNodeFields(input, fields)) {
-            return false;
-        }
-
-        ScenePrefabNodeDesc node;
-        if (!ScenePrefabAssetFieldParser::ParseNode(fields, node)) {
-            return false;
-        }
-        static_cast<void>(result.prefab.AddNode(std::move(node)));
     }
 
     if (ScenePrefabAssetFieldParser::ReadLine(input, line)) {
-        return false;
-    }
-    if (!ScenePrefabValidator::IsValid(result.prefab)) {
         return false;
     }
 

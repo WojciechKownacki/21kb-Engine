@@ -1,13 +1,13 @@
 #include "scene/EditorSceneContext.hpp"
 
-#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneVisibilityComponents.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
-#include "scene/EditorHierarchyObjectFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
+#include "scene/EditorSceneHierarchyActions.hpp"
+#include "scene/EditorScenePrefabActions.hpp"
 
+#include <optional>
 #include <utility>
 
 namespace kb::editor {
@@ -86,21 +86,38 @@ bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
 }
 
 bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
-    if (!scene_.Entities().IsAlive(entity)) {
+    if (!EditorSceneHierarchyActions::ToggleVisibility(scene_, entity)) {
         return false;
     }
-
-    kb::scene::VisibilityComponent visibility = scene_.Components().Visibility().Get(entity);
-    visibility.visible = !visibility.visible;
-    scene_.Components().Visibility().Set(entity, visibility);
     SelectEntity(entity);
     return true;
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
-    const kb::scene::SceneEntity entity = EditorHierarchyObjectFactory::CreateObject(scene_);
+    const kb::scene::SceneEntity entity = EditorSceneHierarchyActions::CreateObject(scene_);
     SelectEntity(entity);
     return entity;
+}
+
+bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent) {
+    const bool moved = EditorSceneHierarchyActions::Reparent(scene_, child, parent);
+    if (moved) {
+        SelectEntity(child);
+    }
+    return moved;
+}
+
+bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path) {
+    return EditorScenePrefabActions::CreateAsset(scene_, entity, path);
+}
+
+bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent) {
+    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(scene_, path, parent);
+    if (!root.has_value()) {
+        return false;
+    }
+    SelectEntity(*root);
+    return true;
 }
 
 } // namespace kb::editor
