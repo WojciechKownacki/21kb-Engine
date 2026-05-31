@@ -35,8 +35,8 @@ void CountComponentEvents(kb::ecs::Entity entity, kb::ecs::ComponentEventKind ev
 }
 
 void RunComponentObserverTest() {
-    kb::ecs::World world;
     ComponentEventCounters counters;
+    kb::ecs::World world;
 
     const kb::ecs::ObserverId addedObserver = world.ObserveComponent<EcsPosition>(kb::ecs::ComponentEventKind::Added, &CountComponentEvents, &counters);
     const kb::ecs::ObserverId modifiedObserver = world.ObserveComponent<EcsPosition>(kb::ecs::ComponentEventKind::Modified, &CountComponentEvents, &counters);
