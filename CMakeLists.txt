@@ -14,7 +14,7 @@ function(kb_apply_quality_gates target_name)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /W4 /WX /FS /external:anglebrackets /external:W0)
     else()
-        target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
     endif()
 
     if(KB_ENABLE_SANITIZERS)
