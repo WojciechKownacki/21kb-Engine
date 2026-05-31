@@ -4,6 +4,8 @@
 #include "engine/ecs/World.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
+#include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
+#include "scene/prefab/ScenePrefabRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
 
 namespace kb::scene {
@@ -21,6 +23,8 @@ public:
     kb::ecs::World world;
     SceneComponentRegistry components;
     SceneComponentStorage componentStorage;
+    ScenePrefabRegistry prefabs;
+    ScenePrefabInstanceRegistry prefabInstances;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
 };
