@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -14,7 +15,7 @@ namespace kb::editor {
 
 class ProjectFilesPanelRenderer {
 public:
-    void Paint(HDC dc, const RECT& content, const EditorTheme& theme) const;
+    void Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
 };
 
 #endif

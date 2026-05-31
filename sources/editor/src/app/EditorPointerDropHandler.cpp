@@ -1,9 +1,11 @@
 #include "app/EditorPointerDropHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
+#include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
 
 namespace kb::editor {
 
@@ -22,7 +24,10 @@ bool EditorPointerDropHandler::Drop(
         return EditorHierarchyEntityAssetDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entity)
             || EditorHierarchyEntityHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entity);
     case EditorPointerDragKind::PrefabAsset:
-        return EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath);
+        return EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId)
+            || (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath));
+    case EditorPointerDragKind::AssetFolder:
+        return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);
     case EditorPointerDragKind::None:
     default:
         return false;

@@ -29,6 +29,8 @@ public:
         const EditorMetrics& metrics) noexcept;
 
     LRESULT HandleLeftButtonDown(HWND messageWindow, LPARAM lparam);
+    LRESULT HandleLeftButtonDoubleClick(HWND messageWindow, LPARAM lparam);
+    LRESULT HandleRightButtonDown(HWND messageWindow, LPARAM lparam);
     LRESULT HandleMouseMove(HWND messageWindow, LPARAM lparam);
     LRESULT HandleLeftButtonUp(HWND messageWindow, LPARAM lparam);
     LRESULT HandleSetCursor(HWND messageWindow, WPARAM wparam, LPARAM lparam);

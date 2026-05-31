@@ -97,6 +97,21 @@ void RunRowBuilderFilteredTreeTest() {
     kb::editor::tests::Require(!rows[2].expanded, "Filtered hierarchy leaf should not be expanded");
 }
 
+void RunRowBuilderCreationOrderTest() {
+    kb::scene::Scene scene;
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" }));
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second" }));
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Third" }));
+
+    const std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    const std::vector<std::string> names = RowNames(rows);
+
+    kb::editor::tests::Require(names.size() == 3, "Hierarchy row builder should expose every root object");
+    kb::editor::tests::Require(names[0] == "First", "Hierarchy row builder should keep the first created root at the top");
+    kb::editor::tests::Require(names[1] == "Second", "Hierarchy row builder should keep middle roots in creation order");
+    kb::editor::tests::Require(names[2] == "Third", "Hierarchy row builder should put the newest root at the bottom");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -107,6 +122,7 @@ void RunEditorHierarchyTests() {
     RunExpansionStateTest();
     RunRowBuilderCollapsedTreeTest();
     RunRowBuilderFilteredTreeTest();
+    RunRowBuilderCreationOrderTest();
 }
 
 } // namespace kb::editor::tests

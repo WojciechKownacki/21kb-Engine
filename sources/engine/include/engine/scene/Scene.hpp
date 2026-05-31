@@ -4,6 +4,7 @@
 
 namespace kb::scene {
 
+class SceneAssets;
 class SceneComponentQueries;
 class SceneComponents;
 class SceneEntities;
@@ -38,6 +39,8 @@ public:
     [[nodiscard]] SceneHierarchyAccess Hierarchy() noexcept;
     [[nodiscard]] SceneHierarchyQueries Hierarchy() const noexcept;
     [[nodiscard]] SceneHistory History() noexcept;
+    [[nodiscard]] SceneAssets Assets() noexcept;
+    [[nodiscard]] SceneAssets Assets() const noexcept;
     [[nodiscard]] ScenePrefabs Prefabs() noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
