@@ -8,6 +8,7 @@
 
 #include <string>
 #include <string_view>
+#include <filesystem>
 #include <vector>
 
 namespace kb::editor {
@@ -36,6 +37,9 @@ public:
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
+    [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
+    [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
+    [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);
 
 private:
     kb::scene::Scene scene_;

@@ -3,6 +3,7 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPointerDragState.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -27,6 +28,7 @@ struct EditorWindowMessageContext {
     EditorFloatingWindowManager& floatingWindows;
     EditorDockController& dockController;
     EditorHierarchySelectionController& hierarchySelection;
+    EditorPointerDragState& pointerDrag;
 #endif
 };
 

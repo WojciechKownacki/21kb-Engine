@@ -1,50 +1,15 @@
 #include "scene/prefab/io/ScenePrefabAssetFieldParser.hpp"
 
-#include "scene/prefab/io/ScenePrefabAssetComponentParser.hpp"
-#include "scene/prefab/io/ScenePrefabAssetEscaper.hpp"
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
+#include "scene/prefab/io/ScenePrefabAssetNodeParser.hpp"
 
 #include <charconv>
+#include <cstdint>
 #include <istream>
-#include <optional>
 #include <sstream>
+#include <string>
 
 namespace kb::scene {
-namespace {
-
-template <typename T>
-[[nodiscard]] bool ParseField(const ScenePrefabAssetFieldMap& fields, std::string_view key, T& output) {
-    const auto iterator = fields.find(std::string{ key });
-    return iterator != fields.end() && ScenePrefabAssetFieldParser::ParseNumber(iterator->second, output);
-}
-
-[[nodiscard]] bool ParseQuat(const ScenePrefabAssetFieldMap& fields, std::string_view key, Quat& output) {
-    const auto iterator = fields.find(std::string{ key });
-    if (iterator == fields.end()) {
-        return false;
-    }
-
-    std::istringstream stream{ iterator->second };
-    std::string extra;
-    return static_cast<bool>(stream >> output.x >> output.y >> output.z >> output.w) && !(stream >> extra);
-}
-
-[[nodiscard]] bool ParseEscapedString(const ScenePrefabAssetFieldMap& fields, std::string_view key, std::string& output) {
-    const auto iterator = fields.find(std::string{ key });
-    if (iterator == fields.end()) {
-        return false;
-    }
-
-    std::optional<std::string> unescaped = ScenePrefabAssetEscaper::Unescape(iterator->second);
-    if (!unescaped.has_value()) {
-        return false;
-    }
-
-    output = std::move(*unescaped);
-    return true;
-}
-
-} // namespace
 
 bool ScenePrefabAssetFieldParser::ReadLine(std::istream& input, std::string& line) {
     if (!std::getline(input, line)) {
@@ -110,21 +75,7 @@ bool ScenePrefabAssetFieldParser::ParseVec3(const ScenePrefabAssetFieldMap& fiel
 }
 
 bool ScenePrefabAssetFieldParser::ParseNode(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeDesc& node) {
-    int parent = 0;
-    bool visible = false;
-    if (!ParseEscapedString(fields, ScenePrefabAssetFormat::NameKey, node.name)
-        || !ParseField(fields, ScenePrefabAssetFormat::ParentKey, parent)
-        || !ParseVec3(fields, ScenePrefabAssetFormat::LocalPositionKey, node.transform.localPosition)
-        || !ParseQuat(fields, ScenePrefabAssetFormat::LocalRotationKey, node.transform.localRotation)
-        || !ParseVec3(fields, ScenePrefabAssetFormat::LocalScaleKey, node.transform.localScale)
-        || !ParseBool(fields, ScenePrefabAssetFormat::VisibleKey, visible)
-        || !ScenePrefabAssetComponentParser::Parse(fields, node.components)) {
-        return false;
-    }
-
-    node.parentNode = parent < 0 ? ScenePrefabNodeDesc::NoParent : static_cast<std::uint32_t>(parent);
-    node.visibility.visible = visible;
-    return true;
+    return ScenePrefabAssetNodeParser::Parse(fields, node);
 }
 
 template <typename T>

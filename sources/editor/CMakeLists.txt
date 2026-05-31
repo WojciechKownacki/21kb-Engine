@@ -7,15 +7,26 @@ add_executable(kb_editor
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorDropPanelResolver.cpp
+    src/app/EditorHierarchyEntityAssetDropHandler.cpp
+    src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorWindowLifecycleHandler.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
+    src/app/EditorPointerDragInteraction.cpp
+    src/app/EditorPointerDragSourceResolver.cpp
+    src/app/EditorPointerDropHandler.cpp
+    src/app/EditorPrefabAssetHierarchyDropHandler.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
+    src/app/EditorWindowInvalidator.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
     src/app/main.cpp
+    src/project/EditorProjectAssetIndex.cpp
+    src/project/EditorProjectPanelHitTester.cpp
+    src/project/EditorProjectPaths.cpp
     src/docking/DefaultDockWorkspace.cpp
     src/docking/DockDropPreviewFactory.cpp
     src/docking/DockDropPlacementPolicy.cpp
@@ -130,14 +141,23 @@ add_executable(kb_editor
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorDropPanelResolver.hpp
+    src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
+    src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorPaintDispatcher.hpp
+    src/private/app/EditorPointerDragInteraction.hpp
+    src/private/app/EditorPointerDragState.hpp
+    src/private/app/EditorPointerDragSourceResolver.hpp
+    src/private/app/EditorPointerDropHandler.hpp
+    src/private/app/EditorPrefabAssetHierarchyDropHandler.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
     src/private/app/EditorWindowMessageContext.hpp
     src/private/app/EditorWindowMessageRouter.hpp
     src/private/app/EditorWindowPointerMessageDispatcher.hpp
     src/private/app/EditorWindowPointerHandler.hpp
+    src/private/app/EditorWindowInvalidator.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
     src/private/inspection/InspectorComponentLabelFormatter.hpp
@@ -148,13 +168,18 @@ add_executable(kb_editor
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
+    src/private/project/EditorProjectAssetIndex.hpp
+    src/private/project/EditorProjectPanelHitTester.hpp
+    src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockPanelChromeRenderer.hpp
     src/private/rendering/DockWorkspaceChromeRenderer.hpp
     src/private/rendering/DockWorkspaceContentRenderer.hpp
     src/private/rendering/DockWorkspaceRenderer.hpp
     src/private/rendering/DockWorkspaceTabStripRenderer.hpp
+    src/private/rendering/EditorDragOverlayRenderer.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
+    src/private/rendering/EditorPanelContentResolver.hpp
     src/private/rendering/EditorSurfaceKind.hpp
     src/private/rendering/EditorSurfacePainter.hpp
     src/private/rendering/EditorTabIndicatorPainter.hpp
@@ -193,6 +218,7 @@ add_executable(kb_editor
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
+    src/private/rendering/ProjectFilesPanelRenderer.hpp
     src/private/rendering/SceneGridRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
@@ -221,6 +247,8 @@ add_executable(kb_editor
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
     src/private/scene/EditorSceneContext.hpp
+    src/private/scene/EditorSceneHierarchyActions.hpp
+    src/private/scene/EditorScenePrefabActions.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -237,7 +265,9 @@ add_executable(kb_editor
     src/rendering/DockWorkspaceContentRenderer.cpp
     src/rendering/DockWorkspaceRenderer.cpp
     src/rendering/DockWorkspaceTabStripRenderer.cpp
+    src/rendering/EditorDragOverlayRenderer.cpp
     src/rendering/EditorGdiRenderer.cpp
+    src/rendering/EditorPanelContentResolver.cpp
     src/rendering/EditorSurfacePainter.cpp
     src/rendering/EditorSurfaceStyle.cpp
     src/rendering/EditorTabIndicatorPainter.cpp
@@ -267,6 +297,7 @@ add_executable(kb_editor
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/rendering/ProjectFilesPanelRenderer.cpp
     src/rendering/SceneGridRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
@@ -293,6 +324,8 @@ add_executable(kb_editor
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
     src/scene/EditorSceneContext.cpp
+    src/scene/EditorSceneHierarchyActions.cpp
+    src/scene/EditorScenePrefabActions.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp

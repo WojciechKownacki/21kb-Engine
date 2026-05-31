@@ -2,12 +2,15 @@
 #include "TestSuites.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <array>
 #include <vector>
 
 namespace {
@@ -86,6 +89,59 @@ void RunParentChildrenOwnershipTest() {
     kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Destroying plain hierarchy should not register prefabs");
 }
 
+void RunSceneBatchDuplicateTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
+    kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Root",
+        .parent = parent,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F } },
+    });
+    kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = root });
+    scene.Components().MeshRenderers().Set(root.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 7, .materialAssetId = 11 });
+    scene.Components().Lights().Set(child.Entity(), kb::scene::LightComponent{ .intensity = 4.0F });
+
+    kb::scene::SceneObject duplicate = scene.Entities().Duplicate(root);
+    kb::tests::Require(duplicate.IsValid(), "Duplicate did not create an object");
+    kb::tests::Require(scene.Hierarchy().Parent(duplicate.Entity()) == parent.Entity(), "Duplicate did not preserve parent");
+    kb::tests::Require(scene.Entities().Name(duplicate) == "Root", "Duplicate did not preserve name");
+    kb::tests::Require(scene.Components().MeshRenderers().Has(duplicate.Entity()), "Duplicate did not copy mesh renderer");
+    const std::vector<kb::scene::SceneEntity> duplicateChildren = scene.Hierarchy().ChildEntities(duplicate.Entity());
+    kb::tests::Require(duplicateChildren.size() == 1, "Duplicate did not copy child hierarchy");
+    kb::tests::Require(scene.Components().Lights().Has(duplicateChildren[0]), "Duplicate did not copy child light component");
+
+    kb::scene::SceneObject batchParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Batch Parent" });
+    const std::array<kb::scene::SceneObject, 2> selection{ root, duplicate };
+    kb::tests::Require(scene.Entities().SetParent(selection, batchParent), "Batch reparent failed");
+    kb::tests::Require(scene.Hierarchy().Parent(root.Entity()) == batchParent.Entity(), "Batch reparent did not move first object");
+    kb::tests::Require(scene.Hierarchy().Parent(duplicate.Entity()) == batchParent.Entity(), "Batch reparent did not move duplicate");
+    scene.Entities().Destroy(selection);
+    kb::tests::Require(!scene.Entities().IsAlive(root), "Batch destroy did not destroy first object");
+    kb::tests::Require(!scene.Entities().IsAlive(duplicate), "Batch destroy did not destroy duplicate");
+    kb::tests::Require(!scene.Entities().IsAlive(child), "Batch destroy did not destroy child hierarchy");
+}
+
+void RunSceneHistoryUndoRedoTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Initial" });
+    kb::tests::Require(scene.History().Record("before rename"), "Scene history did not record initial snapshot");
+    scene.Entities().SetName(object, "Changed");
+    kb::tests::Require(scene.History().CanUndo(), "Scene history should be able to undo after record");
+    kb::tests::Require(scene.History().Undo(), "Scene history undo failed");
+    object = scene.Hierarchy().RootObjects().front();
+    kb::tests::Require(scene.Entities().Name(object) == "Initial", "Scene history undo did not restore entity name");
+    kb::tests::Require(scene.History().CanRedo(), "Scene history should be able to redo after undo");
+    kb::tests::Require(scene.History().Redo(), "Scene history redo failed");
+    object = scene.Hierarchy().RootObjects().front();
+    kb::tests::Require(scene.Entities().Name(object) == "Changed", "Scene history redo did not restore entity name");
+
+    kb::tests::Require(scene.History().Undo(), "Scene history second undo failed");
+    object = scene.Hierarchy().RootObjects().front();
+    scene.Entities().SetName(object, "Branch");
+    kb::tests::Require(scene.History().Record("branch"), "Scene history branch record failed");
+    kb::tests::Require(!scene.History().CanRedo(), "Scene history did not clear redo stack after branch record");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -93,6 +149,8 @@ namespace kb::tests {
 void RunSceneHierarchyTests() {
     RunTransformHierarchyTest();
     RunParentChildrenOwnershipTest();
+    RunSceneBatchDuplicateTest();
+    RunSceneHistoryUndoRedoTest();
 }
 
 } // namespace kb::tests

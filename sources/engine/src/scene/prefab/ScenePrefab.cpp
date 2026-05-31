@@ -14,6 +14,14 @@ std::span<const ScenePrefabNodeDesc> ScenePrefab::Nodes() const noexcept {
     return nodes_;
 }
 
+const ScenePrefabNodeDesc* ScenePrefab::TryGetNode(std::uint32_t nodeIndex) const noexcept {
+    return nodeIndex < nodes_.size() ? &nodes_[nodeIndex] : nullptr;
+}
+
+ScenePrefabNodeDesc* ScenePrefab::TryGetMutableNode(std::uint32_t nodeIndex) noexcept {
+    return nodeIndex < nodes_.size() ? &nodes_[nodeIndex] : nullptr;
+}
+
 std::uint32_t ScenePrefab::AddNode(ScenePrefabNodeDesc desc) {
     const std::uint32_t nodeIndex = static_cast<std::uint32_t>(nodes_.size());
     nodes_.push_back(std::move(desc));

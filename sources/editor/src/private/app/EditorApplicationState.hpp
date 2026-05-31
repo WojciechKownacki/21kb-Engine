@@ -3,6 +3,7 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPointerDragState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
@@ -31,6 +32,7 @@ struct EditorApplicationState {
     EditorFloatingWindowManager floatingWindows;
     EditorDockController dockController;
     EditorHierarchySelectionController hierarchySelection;
+    EditorPointerDragState pointerDrag;
     bool running = false;
 #endif
 };

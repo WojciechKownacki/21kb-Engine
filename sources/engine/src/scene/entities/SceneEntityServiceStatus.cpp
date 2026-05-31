@@ -13,4 +13,8 @@ bool SceneEntityService::IsAlive(const Scene& scene, SceneEntity entity) noexcep
     return SceneAccess::State(scene).world.IsAlive(entity);
 }
 
+SceneObject SceneEntityService::Object(Scene& scene, SceneEntity entity) noexcept {
+    return IsAlive(scene, entity) ? SceneAccess::MakeObject(scene, entity) : SceneObject{};
+}
+
 } // namespace kb::scene

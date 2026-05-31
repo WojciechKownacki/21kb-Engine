@@ -1,53 +1,41 @@
 #include "scene/prefab/ScenePrefabOverrideService.hpp"
 
-#include "scene/SceneAccess.hpp"
-#include "scene/SceneState.hpp"
-#include "scene/prefab/ScenePrefabOverrideApplier.hpp"
-#include "scene/prefab/ScenePrefabOverrideDetector.hpp"
-#include "scene/prefab/ScenePrefabOverrideReverter.hpp"
+#include "scene/prefab/ScenePrefabOverrideMutationService.hpp"
+#include "scene/prefab/ScenePrefabOverrideQueryService.hpp"
+#include "scene/prefab/io/ScenePrefabAssetService.hpp"
 
 namespace kb::scene {
 
 bool ScenePrefabOverrideService::IsInstance(Scene& scene, ScenePrefabInstanceHandle handle) noexcept {
-    return SceneAccess::State(scene).prefabInstances.Contains(handle);
+    return ScenePrefabOverrideQueryService::IsInstance(scene, handle);
 }
 
 ScenePrefabOverrideReport ScenePrefabOverrideService::Overrides(Scene& scene, ScenePrefabInstanceHandle handle) {
-    const SceneState& state = SceneAccess::State(scene);
-    const ScenePrefabInstanceRecord* instance = state.prefabInstances.Find(handle);
-    if (instance == nullptr) {
-        return {};
-    }
-
-    const ScenePrefab* prefab = state.prefabs.Find(instance->prefab);
-    return prefab == nullptr ? ScenePrefabOverrideReport{} : ScenePrefabOverrideDetector::Detect(scene, *prefab, *instance);
+    return ScenePrefabOverrideQueryService::Overrides(scene, handle);
 }
 
 bool ScenePrefabOverrideService::Revert(Scene& scene, ScenePrefabInstanceHandle handle) {
-    SceneState& state = SceneAccess::State(scene);
-    ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
-    if (instance == nullptr) {
-        return false;
-    }
-
-    const ScenePrefab* prefab = state.prefabs.Find(instance->prefab);
-    return prefab != nullptr && ScenePrefabOverrideReverter::Revert(scene, *prefab, *instance);
+    return ScenePrefabOverrideMutationService::Revert(scene, handle);
 }
 
 bool ScenePrefabOverrideService::Apply(Scene& scene, ScenePrefabInstanceHandle handle) {
-    SceneState& state = SceneAccess::State(scene);
-    ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
-    if (instance == nullptr) {
-        return false;
-    }
+    return ScenePrefabOverrideMutationService::Apply(scene, handle);
+}
 
-    ScenePrefab* prefab = state.prefabs.FindMutable(instance->prefab);
-    if (prefab == nullptr || !ScenePrefabOverrideApplier::Apply(scene, *prefab, *instance)) {
-        return false;
-    }
+bool ScenePrefabOverrideService::ApplyAndSave(Scene& scene, ScenePrefabInstanceHandle handle, const std::filesystem::path& assetPath) {
+    return Apply(scene, handle) && ScenePrefabAssetService::SaveInstancePrefab(scene, handle, assetPath);
+}
 
-    state.prefabs.RefreshContentHash(instance->prefab);
-    return true;
+bool ScenePrefabOverrideService::RevertProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath) {
+    return ScenePrefabOverrideMutationService::RevertProperty(scene, handle, nodeIndex, propertyPath);
+}
+
+bool ScenePrefabOverrideService::ApplyProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath) {
+    return ScenePrefabOverrideMutationService::ApplyProperty(scene, handle, nodeIndex, propertyPath);
+}
+
+bool ScenePrefabOverrideService::ApplyPropertyAndSave(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath, const std::filesystem::path& assetPath) {
+    return ApplyProperty(scene, handle, nodeIndex, propertyPath) && ScenePrefabAssetService::SaveInstancePrefab(scene, handle, assetPath);
 }
 
 } // namespace kb::scene

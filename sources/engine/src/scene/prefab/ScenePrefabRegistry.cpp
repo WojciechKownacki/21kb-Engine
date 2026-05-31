@@ -1,40 +1,41 @@
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 
 #include "scene/prefab/ScenePrefabHasher.hpp"
-#include "scene/prefab/ScenePrefabValidator.hpp"
+#include "scene/prefab/ScenePrefabRegistrationService.hpp"
+#include "scene/prefab/ScenePrefabVariantOverrideMutationService.hpp"
+#include "scene/prefab/ScenePrefabVariantRefreshService.hpp"
 
+#include <string_view>
 #include <utility>
 
 namespace kb::scene {
 
 ScenePrefabHandle ScenePrefabRegistry::Register(std::string name, ScenePrefab prefab) {
-    if (!ScenePrefabValidator::IsValid(prefab) || prefab.Empty()) {
-        return {};
-    }
+    return ScenePrefabRegistrationService::Register(records_, std::move(name), std::move(prefab));
+}
 
-    const std::uint64_t contentHash = ScenePrefabHasher::Hash(prefab);
-    const std::uint64_t id = nextId_++;
-    records_.emplace(
-        id,
-        ScenePrefabRecord{
-            .name = std::move(name),
-            .prefab = std::move(prefab),
-            .contentHash = contentHash,
-        });
-    return ScenePrefabHandle{ id };
+ScenePrefabHandle ScenePrefabRegistry::RegisterLoaded(std::string guid, std::string name, ScenePrefab prefab) {
+    return ScenePrefabRegistrationService::RegisterLoaded(records_, std::move(guid), std::move(name), std::move(prefab));
+}
+
+ScenePrefabHandle ScenePrefabRegistry::RegisterVariant(std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides) {
+    return ScenePrefabRegistrationService::RegisterVariant(records_, std::move(name), basePrefab, std::move(overrides));
+}
+
+ScenePrefabHandle ScenePrefabRegistry::RegisterLoadedVariant(std::string guid, std::string name, std::string basePrefabGuid, std::vector<ScenePrefabPropertyOverride> overrides) {
+    return ScenePrefabRegistrationService::RegisterLoadedVariant(records_, std::move(guid), std::move(name), std::move(basePrefabGuid), std::move(overrides));
 }
 
 bool ScenePrefabRegistry::Contains(ScenePrefabHandle handle) const noexcept {
-    return handle.IsValid() && records_.contains(handle.id_);
+    return records_.Contains(handle);
 }
 
 const ScenePrefabRecord* ScenePrefabRegistry::FindRecord(ScenePrefabHandle handle) const noexcept {
-    if (!handle.IsValid()) {
-        return nullptr;
-    }
+    return records_.Find(handle);
+}
 
-    const auto iterator = records_.find(handle.id_);
-    return iterator == records_.end() ? nullptr : &iterator->second;
+ScenePrefabRecord* ScenePrefabRegistry::FindMutableRecord(ScenePrefabHandle handle) noexcept {
+    return records_.FindMutable(handle);
 }
 
 const ScenePrefab* ScenePrefabRegistry::Find(ScenePrefabHandle handle) const noexcept {
@@ -43,12 +44,16 @@ const ScenePrefab* ScenePrefabRegistry::Find(ScenePrefabHandle handle) const noe
 }
 
 ScenePrefab* ScenePrefabRegistry::FindMutable(ScenePrefabHandle handle) noexcept {
-    if (!handle.IsValid()) {
-        return nullptr;
-    }
+    ScenePrefabRecord* record = records_.FindMutable(handle);
+    return record == nullptr ? nullptr : &record->prefab;
+}
 
-    const auto iterator = records_.find(handle.id_);
-    return iterator == records_.end() ? nullptr : &iterator->second.prefab;
+ScenePrefabHandle ScenePrefabRegistry::FindByGuid(std::string_view guid) const noexcept {
+    return records_.FindByGuid(guid);
+}
+
+bool ScenePrefabRegistry::UpsertVariantOverride(ScenePrefabHandle handle, ScenePrefabPropertyOverride property) {
+    return ScenePrefabVariantOverrideMutationService::Upsert(records_, handle, std::move(property));
 }
 
 void ScenePrefabRegistry::RefreshContentHash(ScenePrefabHandle handle) noexcept {
@@ -56,19 +61,22 @@ void ScenePrefabRegistry::RefreshContentHash(ScenePrefabHandle handle) noexcept 
         return;
     }
 
-    const auto iterator = records_.find(handle.id_);
-    if (iterator != records_.end()) {
-        iterator->second.contentHash = ScenePrefabHasher::Hash(iterator->second.prefab);
+    ScenePrefabRecord* record = records_.FindMutable(handle);
+    if (record != nullptr) {
+        record->contentHash = ScenePrefabHasher::Hash(record->prefab);
     }
 }
 
+void ScenePrefabRegistry::RefreshDerivedPrefabs(ScenePrefabHandle baseHandle) {
+    ScenePrefabVariantRefreshService::RefreshDerived(records_, baseHandle);
+}
+
 std::size_t ScenePrefabRegistry::Count() const noexcept {
-    return records_.size();
+    return records_.Count();
 }
 
 void ScenePrefabRegistry::Clear() noexcept {
-    records_.clear();
-    nextId_ = 1;
+    records_.Clear();
 }
 
 } // namespace kb::scene

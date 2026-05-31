@@ -3,6 +3,7 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPointerDragState.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -24,24 +25,24 @@ public:
         EditorDockController& dockController,
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
+        EditorPointerDragState& pointerDrag,
         const EditorMetrics& metrics) noexcept;
 
     LRESULT HandleLeftButtonDown(HWND messageWindow, LPARAM lparam);
     LRESULT HandleMouseMove(HWND messageWindow, LPARAM lparam);
-    LRESULT HandleLeftButtonUp(HWND messageWindow);
+    LRESULT HandleLeftButtonUp(HWND messageWindow, LPARAM lparam);
     LRESULT HandleSetCursor(HWND messageWindow, WPARAM wparam, LPARAM lparam);
 #endif
 
 private:
 #if defined(_WIN32)
-    [[nodiscard]] bool IsMainWindow(HWND candidate) const noexcept;
-
     HWND mainWindow_ = nullptr;
     EditorDockModel& dockModel_;
     EditorFloatingWindowManager& floatingWindows_;
     EditorDockController& dockController_;
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
+    EditorPointerDragState& pointerDrag_;
     const EditorMetrics& metrics_;
 #endif
 };

@@ -22,4 +22,12 @@ SceneEntity SceneEntities::CreateEntity(SceneObjectDesc desc) {
     return SceneEntityService::CreateEntity(scene_, std::move(desc));
 }
 
+SceneObject SceneEntities::Duplicate(SceneObject object) {
+    return SceneEntityService::DuplicateObject(scene_, object);
+}
+
+std::vector<SceneObject> SceneEntities::Duplicate(std::span<const SceneObject> objects) {
+    return SceneEntityService::DuplicateObjects(scene_, objects);
+}
+
 } // namespace kb::scene
