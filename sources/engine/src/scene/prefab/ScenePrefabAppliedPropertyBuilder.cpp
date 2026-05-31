@@ -65,6 +65,8 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
         .nodeIndex = nodeIndex,
         .target = object,
         .propertyPath = std::string{ propertyPath },
+        .value = {},
+        .objectReference = {},
         .flag = FlagForProperty(propertyPath),
     };
     if (propertyPath == "name") {
