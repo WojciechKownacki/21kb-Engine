@@ -8,6 +8,7 @@
 #include <istream>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 namespace kb::scene {
 
@@ -80,10 +81,16 @@ bool ScenePrefabAssetFieldParser::ParseNode(const ScenePrefabAssetFieldMap& fiel
 
 template <typename T>
 bool ScenePrefabAssetFieldParser::ParseNumber(std::string_view text, T& output) {
-    const char* first = text.data();
-    const char* last = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(first, last, output);
-    return result.ec == std::errc{} && result.ptr == last;
+    if constexpr (std::is_floating_point_v<T>) {
+        std::istringstream stream{ std::string{ text } };
+        std::string extra;
+        return static_cast<bool>(stream >> output) && !(stream >> extra);
+    } else {
+        const char* first = text.data();
+        const char* last = text.data() + text.size();
+        const std::from_chars_result result = std::from_chars(first, last, output);
+        return result.ec == std::errc{} && result.ptr == last;
+    }
 }
 
 template bool ScenePrefabAssetFieldParser::ParseNumber<std::size_t>(std::string_view, std::size_t&);
