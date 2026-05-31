@@ -9,7 +9,7 @@
 
 namespace kb::editor {
 
-void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating) const {
+void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating) const {
     switch (panel.kind) {
     case DockPanelKind::Hierarchy:
         HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);
@@ -18,7 +18,7 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
         InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Assets:
-        ProjectFilesPanelRenderer{}.Paint(dc, content, theme);
+        ProjectFilesPanelRenderer{}.Paint(dc, content, overlayBounds, theme, sceneContext);
         break;
     case DockPanelKind::Console:
         GdiDrawing::DrawTextBlock(

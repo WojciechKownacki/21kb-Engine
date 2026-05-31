@@ -32,7 +32,7 @@ void EditorWindowClassRegistry::Unregister() noexcept {
 bool EditorWindowClassRegistry::RegisterClass(HINSTANCE instance, WNDPROC windowProc, const wchar_t* className, const char* errorLabel) noexcept {
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
-    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     windowClass.lpfnWndProc = windowProc;
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursor(nullptr, IDC_ARROW);

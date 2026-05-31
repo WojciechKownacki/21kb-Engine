@@ -20,6 +20,10 @@ bool EditorHierarchySearchInputHandler::HandleChar(HWND messageWindow, WPARAM wp
 
 bool EditorHierarchySearchInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wparam) const {
     if (!sceneContext_.IsHierarchySearchFocused()) {
+        if (wparam == VK_DELETE && sceneContext_.DeleteSelectedHierarchyEntity()) {
+            Invalidate(messageWindow);
+            return true;
+        }
         return false;
     }
 

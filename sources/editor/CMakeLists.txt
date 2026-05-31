@@ -1,5 +1,6 @@
 add_executable(kb_editor
     include/kb/editor/EditorApplication.hpp
+    include/kb/editor/assets/EditorAssetBrowserTypes.hpp
     include/kb/editor/docking/DockTypes.hpp
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
@@ -7,6 +8,16 @@ add_executable(kb_editor
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorAssetBrowserContextCommandExecutor.cpp
+    src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
+    src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
+    src/app/EditorAssetBrowserDoubleClickHandler.cpp
+    src/app/EditorAssetBrowserInputHandler.cpp
+    src/app/EditorAssetBrowserPointerHandler.cpp
+    src/app/EditorAssetBrowserPointerPanelResolver.cpp
+    src/app/EditorAssetBrowserPrimaryClickHandler.cpp
+    src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
+    src/app/EditorAssetFolderProjectFilesDropHandler.cpp
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
@@ -18,6 +29,7 @@ add_executable(kb_editor
     src/app/EditorPointerDragSourceResolver.cpp
     src/app/EditorPointerDropHandler.cpp
     src/app/EditorPrefabAssetHierarchyDropHandler.cpp
+    src/app/EditorPrefabAssetProjectFilesDropHandler.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
@@ -27,6 +39,36 @@ add_executable(kb_editor
     src/project/EditorProjectAssetIndex.cpp
     src/project/EditorProjectPanelHitTester.cpp
     src/project/EditorProjectPaths.cpp
+    src/assets/EditorAssetBrowserAssetRows.cpp
+    src/assets/EditorAssetBrowserBreadcrumbHitTester.cpp
+    src/assets/EditorAssetBrowserBottomBarLayout.cpp
+    src/assets/EditorAssetBrowserChromeHitTester.cpp
+    src/assets/EditorAssetBrowserContentLayout.cpp
+    src/assets/EditorAssetBrowserContextMenuState.cpp
+    src/assets/EditorAssetBrowserContextMenuLayout.cpp
+    src/assets/EditorAssetBrowserContentHitTester.cpp
+    src/assets/EditorAssetBrowserDeleteConfirmState.cpp
+    src/assets/EditorAssetBrowserFolderExpansionState.cpp
+    src/assets/EditorAssetBrowserFolderRowBuilder.cpp
+    src/assets/EditorAssetBrowserGeometry.cpp
+    src/assets/EditorAssetBrowserHitPayloadResolver.cpp
+    src/assets/EditorAssetBrowserHitTester.cpp
+    src/assets/EditorAssetBrowserLayout.cpp
+    src/assets/EditorAssetBrowserOverlayHitTester.cpp
+    src/assets/EditorAssetBrowserPanelLayoutBuilder.cpp
+    src/assets/EditorAssetBrowserPathUtils.cpp
+    src/assets/EditorAssetBrowserSelectionModel.cpp
+    src/assets/EditorAssetBrowserSelectionState.cpp
+    src/assets/EditorAssetBrowserState.cpp
+    src/assets/EditorAssetBrowserStateContext.cpp
+    src/assets/EditorAssetBrowserStateRows.cpp
+    src/assets/EditorAssetBrowserStateSelection.cpp
+    src/assets/EditorAssetBrowserStateTextEdit.cpp
+    src/assets/EditorAssetBrowserStateView.cpp
+    src/assets/EditorAssetBrowserTextEditState.cpp
+    src/assets/EditorAssetBrowserToolbarLayout.cpp
+    src/assets/EditorAssetBrowserTreeHitTester.cpp
+    src/assets/EditorAssetBrowserViewState.cpp
     src/docking/DefaultDockWorkspace.cpp
     src/docking/DockDropPreviewFactory.cpp
     src/docking/DockDropPlacementPolicy.cpp
@@ -136,11 +178,46 @@ add_executable(kb_editor
     src/private/docking/FloatingWindowRectReader.hpp
     src/private/docking/FloatingWindowRegistry.hpp
     src/private/docking/FloatingWindowResizeEventResolver.hpp
+    src/private/assets/EditorAssetBrowserAssetRows.hpp
+    src/private/assets/EditorAssetBrowserBreadcrumbHitTester.hpp
+    src/private/assets/EditorAssetBrowserBottomBarLayout.hpp
+    src/private/assets/EditorAssetBrowserChromeHitTester.hpp
+    src/private/assets/EditorAssetBrowserContentLayout.hpp
+    src/private/assets/EditorAssetBrowserContextMenuState.hpp
+    src/private/assets/EditorAssetBrowserContextMenuLayout.hpp
+    src/private/assets/EditorAssetBrowserContentHitTester.hpp
+    src/private/assets/EditorAssetBrowserDeleteConfirmState.hpp
+    src/private/assets/EditorAssetBrowserFolderExpansionState.hpp
+    src/private/assets/EditorAssetBrowserFolderRowBuilder.hpp
+    src/private/assets/EditorAssetBrowserGeometry.hpp
+    src/private/assets/EditorAssetBrowserHitPayloadResolver.hpp
+    src/private/assets/EditorAssetBrowserHitTester.hpp
+    src/private/assets/EditorAssetBrowserLayout.hpp
+    src/private/assets/EditorAssetBrowserOverlayHitTester.hpp
+    src/private/assets/EditorAssetBrowserPanelLayoutBuilder.hpp
+    src/private/assets/EditorAssetBrowserPathUtils.hpp
+    src/private/assets/EditorAssetBrowserSelectionModel.hpp
+    src/private/assets/EditorAssetBrowserSelectionState.hpp
+    src/private/assets/EditorAssetBrowserToolbarLayout.hpp
+    src/private/assets/EditorAssetBrowserTreeHitTester.hpp
+    src/private/assets/EditorAssetBrowserState.hpp
+    src/private/assets/EditorAssetBrowserTextEditState.hpp
+    src/private/assets/EditorAssetBrowserViewState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
     src/private/app/EditorApplicationMessageDispatcher.hpp
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorAssetBrowserContextCommandExecutor.hpp
+    src/private/app/EditorAssetBrowserContextMenuPointerHandler.hpp
+    src/private/app/EditorAssetBrowserDeleteConfirmPointerHandler.hpp
+    src/private/app/EditorAssetBrowserDoubleClickHandler.hpp
+    src/private/app/EditorAssetBrowserInputHandler.hpp
+    src/private/app/EditorAssetBrowserPointerHandler.hpp
+    src/private/app/EditorAssetBrowserPointerPanelResolver.hpp
+    src/private/app/EditorAssetBrowserPrimaryClickHandler.hpp
+    src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
+    src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
@@ -151,6 +228,7 @@ add_executable(kb_editor
     src/private/app/EditorPointerDragSourceResolver.hpp
     src/private/app/EditorPointerDropHandler.hpp
     src/private/app/EditorPrefabAssetHierarchyDropHandler.hpp
+    src/private/app/EditorPrefabAssetProjectFilesDropHandler.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
     src/private/app/EditorWindowMessageContext.hpp
@@ -218,7 +296,18 @@ add_executable(kb_editor
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
+    src/private/rendering/ProjectFilesAssetListRenderer.hpp
+    src/private/rendering/ProjectFilesAssetTileFrameRenderer.hpp
+    src/private/rendering/ProjectFilesAssetTileMetrics.hpp
+    src/private/rendering/ProjectFilesAssetTileRenderer.hpp
+    src/private/rendering/ProjectFilesAssetViewRenderer.hpp
+    src/private/rendering/ProjectFilesBottomBarRenderer.hpp
+    src/private/rendering/ProjectFilesOverlayRenderer.hpp
+    src/private/rendering/ProjectFilesPanelDrawing.hpp
     src/private/rendering/ProjectFilesPanelRenderer.hpp
+    src/private/rendering/ProjectFilesTileTextRenderer.hpp
+    src/private/rendering/ProjectFilesToolbarRenderer.hpp
+    src/private/rendering/ProjectFilesTreeRenderer.hpp
     src/private/rendering/SceneGridRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
@@ -297,7 +386,18 @@ add_executable(kb_editor
     src/rendering/InspectorPanelRenderer.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
+    src/rendering/ProjectFilesAssetListRenderer.cpp
+    src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
+    src/rendering/ProjectFilesAssetTileMetrics.cpp
+    src/rendering/ProjectFilesAssetTileRenderer.cpp
+    src/rendering/ProjectFilesAssetViewRenderer.cpp
+    src/rendering/ProjectFilesBottomBarRenderer.cpp
+    src/rendering/ProjectFilesOverlayRenderer.cpp
+    src/rendering/ProjectFilesPanelDrawing.cpp
     src/rendering/ProjectFilesPanelRenderer.cpp
+    src/rendering/ProjectFilesTileTextRenderer.cpp
+    src/rendering/ProjectFilesToolbarRenderer.cpp
+    src/rendering/ProjectFilesTreeRenderer.cpp
     src/rendering/SceneGridRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
@@ -344,6 +444,7 @@ add_executable(kb_editor
     ../../third_party/heroicons/optimized/24/outline/plus.svg
     ../../third_party/heroicons/optimized/16/solid/eye.svg
     ../../third_party/heroicons/optimized/24/solid/cube.svg
+    ../../third_party/heroicons/optimized/24/solid/folder.svg
 )
 
 target_include_directories(kb_editor
@@ -364,12 +465,43 @@ kb_apply_quality_gates(kb_editor)
 if(BUILD_TESTING)
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
+        tests/EditorAssetBrowserTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
         tests/SvgPathTests.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
+        src/assets/EditorAssetBrowserAssetRows.cpp
+        src/assets/EditorAssetBrowserBreadcrumbHitTester.cpp
+        src/assets/EditorAssetBrowserBottomBarLayout.cpp
+        src/assets/EditorAssetBrowserChromeHitTester.cpp
+        src/assets/EditorAssetBrowserContentLayout.cpp
+        src/assets/EditorAssetBrowserContextMenuState.cpp
+        src/assets/EditorAssetBrowserContextMenuLayout.cpp
+        src/assets/EditorAssetBrowserContentHitTester.cpp
+        src/assets/EditorAssetBrowserDeleteConfirmState.cpp
+        src/assets/EditorAssetBrowserFolderExpansionState.cpp
+        src/assets/EditorAssetBrowserFolderRowBuilder.cpp
+        src/assets/EditorAssetBrowserGeometry.cpp
+        src/assets/EditorAssetBrowserHitPayloadResolver.cpp
+        src/assets/EditorAssetBrowserHitTester.cpp
+        src/assets/EditorAssetBrowserLayout.cpp
+        src/assets/EditorAssetBrowserOverlayHitTester.cpp
+        src/assets/EditorAssetBrowserPanelLayoutBuilder.cpp
+        src/assets/EditorAssetBrowserPathUtils.cpp
+        src/assets/EditorAssetBrowserSelectionModel.cpp
+        src/assets/EditorAssetBrowserSelectionState.cpp
+        src/assets/EditorAssetBrowserState.cpp
+        src/assets/EditorAssetBrowserStateContext.cpp
+        src/assets/EditorAssetBrowserStateRows.cpp
+        src/assets/EditorAssetBrowserStateSelection.cpp
+        src/assets/EditorAssetBrowserStateTextEdit.cpp
+        src/assets/EditorAssetBrowserStateView.cpp
+        src/assets/EditorAssetBrowserTextEditState.cpp
+        src/assets/EditorAssetBrowserToolbarLayout.cpp
+        src/assets/EditorAssetBrowserTreeHitTester.cpp
+        src/assets/EditorAssetBrowserViewState.cpp
         src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
         src/scene/EditorHierarchyRowFactory.cpp

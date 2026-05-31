@@ -2,13 +2,17 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/assets/ScenePrefabAssetLoader.hpp"
 
 #include <memory>
 
 namespace kb::scene {
 
 Scene::Scene()
-    : state_(std::make_unique<SceneState>()) {}
+    : state_(std::make_unique<SceneState>()) {
+    const bool registeredPrefabLoader = state_->assets.RegisterLoader(std::make_unique<ScenePrefabAssetLoader>(*this));
+    static_cast<void>(registeredPrefabLoader);
+}
 
 Scene::~Scene() {
     state_->sceneSystemScheduler.Shutdown(*this);

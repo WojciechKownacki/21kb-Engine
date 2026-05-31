@@ -89,6 +89,40 @@ void RunParentChildrenOwnershipTest() {
     kb::tests::Require(scene.Prefabs().RegisteredCount() == 0, "Destroying plain hierarchy should not register prefabs");
 }
 
+void RunHierarchyStableCreationOrderTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second" });
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
+    const kb::scene::SceneObject firstChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First Child", .parent = parent });
+    const kb::scene::SceneObject secondChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second Child", .parent = parent });
+
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 3, "Hierarchy roots should expose every root object");
+    kb::tests::Require(roots[0] == first.Entity(), "First created root should stay at the top of hierarchy roots");
+    kb::tests::Require(roots[1] == second.Entity(), "Second created root should stay after the first root");
+    kb::tests::Require(roots[2] == parent.Entity(), "Newest root should be listed at the bottom of hierarchy roots");
+
+    const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(parent.Entity());
+    kb::tests::Require(children.size() == 2, "Hierarchy children should expose every child object");
+    kb::tests::Require(children[0] == firstChild.Entity(), "First created child should stay before later siblings");
+    kb::tests::Require(children[1] == secondChild.Entity(), "Newest child should be listed at the bottom of siblings");
+}
+
+void RunHierarchyCreationOrderSurvivesDeletionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second" });
+
+    scene.Entities().Destroy(first);
+    const kb::scene::SceneObject third = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Third" });
+
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 2, "Hierarchy roots should expose remaining root objects");
+    kb::tests::Require(roots[0] == second.Entity(), "Existing root should stay above newly created root after deletion");
+    kb::tests::Require(roots[1] == third.Entity(), "New root should be appended at the bottom after deletion");
+}
+
 void RunSceneBatchDuplicateTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
@@ -149,6 +183,8 @@ namespace kb::tests {
 void RunSceneHierarchyTests() {
     RunTransformHierarchyTest();
     RunParentChildrenOwnershipTest();
+    RunHierarchyStableCreationOrderTest();
+    RunHierarchyCreationOrderSurvivesDeletionTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
 }

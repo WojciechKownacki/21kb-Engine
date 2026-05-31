@@ -18,7 +18,11 @@ namespace {
 } // namespace
 
 std::filesystem::path EditorProjectPaths::AssetsRoot() {
-    return std::filesystem::current_path() / "Project" / "Assets";
+    return ProjectRoot() / "Assets";
+}
+
+std::filesystem::path EditorProjectPaths::ProjectRoot() {
+    return std::filesystem::current_path() / "Project";
 }
 
 std::filesystem::path EditorProjectPaths::PrefabsRoot() {
@@ -26,7 +30,11 @@ std::filesystem::path EditorProjectPaths::PrefabsRoot() {
 }
 
 std::filesystem::path EditorProjectPaths::UniquePrefabPath(std::string name) {
-    std::filesystem::path root = PrefabsRoot();
+    return UniquePrefabPathInFolder(PrefabsRoot(), std::move(name));
+}
+
+std::filesystem::path EditorProjectPaths::UniquePrefabPathInFolder(const std::filesystem::path& folder, std::string name) {
+    std::filesystem::path root = folder;
     std::filesystem::create_directories(root);
 
     const std::string base = Sanitize(std::move(name));

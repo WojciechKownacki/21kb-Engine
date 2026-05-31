@@ -2,6 +2,7 @@
 
 namespace kb::tests {
 
+void RunAssetRuntimeTests();
 void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneSystemTests();

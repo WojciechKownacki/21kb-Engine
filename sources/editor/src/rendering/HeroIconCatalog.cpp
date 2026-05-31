@@ -14,6 +14,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::XMark();
     case HeroIconKind::Cube:
         return HeroIconAssets::Cube();
+    case HeroIconKind::Folder:
+        return HeroIconAssets::Folder();
     case HeroIconKind::Eye:
         return HeroIconAssets::Eye();
     case HeroIconKind::MagnifyingGlass:

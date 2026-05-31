@@ -10,6 +10,7 @@ namespace kb::editor {
 void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext) const {
     ScopedFont bodyFont(14, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, bodyFont.handle);
+    const RECT workspace = GdiDrawing::ToRect(layout.workspace);
 
     PanelContentRenderer contentRenderer;
     for (const DockPanelLayout& panelLayout : layout.panels) {
@@ -19,7 +20,7 @@ void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const
         }
 
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
-        contentRenderer.Paint(dc, content, content, *panel, theme, metrics, sceneContext, false);
+        contentRenderer.Paint(dc, content, content, workspace, *panel, theme, metrics, sceneContext, false);
     }
 }
 

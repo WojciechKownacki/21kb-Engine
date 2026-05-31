@@ -9,6 +9,7 @@ enum class HeroIconKind : std::uint8_t {
     Stop,
     XMark,
     Cube,
+    Folder,
     Eye,
     MagnifyingGlass,
     ChevronRight,

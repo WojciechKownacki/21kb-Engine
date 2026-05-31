@@ -12,6 +12,7 @@ public:
     [[nodiscard]] static HeroIconGlyph Stop() noexcept;
     [[nodiscard]] static HeroIconGlyph XMark() noexcept;
     [[nodiscard]] static HeroIconGlyph Cube() noexcept;
+    [[nodiscard]] static HeroIconGlyph Folder() noexcept;
     [[nodiscard]] static HeroIconGlyph Eye() noexcept;
     [[nodiscard]] static HeroIconGlyph MagnifyingGlass() noexcept;
     [[nodiscard]] static HeroIconGlyph ChevronRight() noexcept;
