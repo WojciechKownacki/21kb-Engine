@@ -10,7 +10,10 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <filesystem>
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -180,10 +183,32 @@ void RunRegisteredPrefabOverrideLifecycleTest() {
 
     const kb::scene::ScenePrefabOverrideReport report = scene.Prefabs().Overrides(instanceHandle);
     kb::tests::Require(report.nodes.size() == 1, "Prefab override detector should report exactly one changed node");
+    kb::tests::Require(report.properties.size() >= 3, "Prefab override detector should report property-level deltas");
     kb::tests::Require(report.nodes[0].nodeIndex == childNode, "Prefab override detector reported the wrong node");
     kb::tests::Require(kb::scene::HasPrefabOverride(report.nodes[0].flags, kb::scene::ScenePrefabOverrideFlag::Name), "Prefab override detector missed name override");
     kb::tests::Require(kb::scene::HasPrefabOverride(report.nodes[0].flags, kb::scene::ScenePrefabOverrideFlag::Transform), "Prefab override detector missed transform override");
     kb::tests::Require(kb::scene::HasPrefabOverride(report.nodes[0].flags, kb::scene::ScenePrefabOverrideFlag::Visibility), "Prefab override detector missed visibility override");
+    bool foundNameDelta = false;
+    bool foundPositionDelta = false;
+    bool foundVisibilityDelta = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : report.properties) {
+        foundNameDelta = foundNameDelta || (property.nodeIndex == childNode && property.propertyPath == "name" && property.value == "Changed Child" && property.target.Entity() == instance.ObjectAt(childNode).Entity());
+        foundPositionDelta = foundPositionDelta || (property.nodeIndex == childNode && property.propertyPath == "transform.localPosition");
+        foundVisibilityDelta = foundVisibilityDelta || (property.nodeIndex == childNode && property.propertyPath == "visibility.visible" && property.value == "false");
+    }
+    kb::tests::Require(foundNameDelta, "Prefab override detector missed name property delta");
+    kb::tests::Require(foundPositionDelta, "Prefab override detector missed transform property delta");
+    kb::tests::Require(foundVisibilityDelta, "Prefab override detector missed visibility property delta");
+
+    kb::tests::Require(scene.Prefabs().RevertOverride(instanceHandle, childNode, "name"), "Prefab single property revert failed");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(childNode)) == "Override Child", "Prefab single property revert did not restore name");
+    scene.Entities().SetName(instance.ObjectAt(childNode), "Applied Name");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instanceHandle, childNode, "name"), "Prefab single property apply failed");
+    kb::tests::Require(scene.Prefabs().RevertOverride(instanceHandle, childNode, "name"), "Prefab single property revert after apply failed");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(childNode)) == "Applied Name", "Prefab single property apply did not update the prefab baseline");
+    scene.Entities().SetName(instance.ObjectAt(childNode), "Override Child");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instanceHandle, childNode, "name"), "Prefab single property apply could not restore the baseline name");
+    scene.Entities().SetName(instance.ObjectAt(childNode), "Changed Child");
 
     kb::tests::Require(scene.Prefabs().RevertOverrides(instanceHandle), "Prefab override revert failed");
     kb::tests::Require(scene.Prefabs().Overrides(instanceHandle).Empty(), "Prefab override revert did not restore the instance");
@@ -272,6 +297,136 @@ void RunPrefabApplyRejectsDetachedTrackedChildTest() {
     kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Prefab revert did not restore detached child parent");
 }
 
+void RunPrefabVariantInstantiationTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Base Root",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+    });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("BasePrefab", std::move(prefab));
+    kb::scene::ScenePrefabPropertyOverride nameOverride{
+        .nodeIndex = rootNode,
+        .propertyPath = "name",
+        .value = "Variant Root",
+        .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+    };
+    kb::scene::ScenePrefabPropertyOverride positionOverride{
+        .nodeIndex = rootNode,
+        .propertyPath = "transform.localPosition",
+        .value = "5 0 0",
+        .flag = kb::scene::ScenePrefabOverrideFlag::Transform,
+    };
+
+    std::vector<kb::scene::ScenePrefabPropertyOverride> overrides{ nameOverride, positionOverride };
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant("VariantPrefab", baseHandle, overrides);
+    kb::tests::Require(variantHandle.IsValid(), "Prefab variant registration failed");
+
+    const kb::scene::ScenePrefabInstance baseInstance = scene.Prefabs().Instantiate(baseHandle);
+    const kb::scene::ScenePrefabInstance variantInstance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(baseInstance.ObjectAt(rootNode)) == "Base Root", "Prefab variant mutated the base prefab");
+    kb::tests::Require(scene.Entities().Name(variantInstance.ObjectAt(rootNode)) == "Variant Root", "Prefab variant did not apply name override");
+    const kb::scene::TransformComponent transform = scene.Transforms().Get(variantInstance.ObjectAt(rootNode));
+    kb::tests::Require(kb::tests::NearlyEqual(transform.localPosition.x, 5.0F), "Prefab variant did not apply transform override");
+
+    scene.Components().Visibility().Set(baseInstance.ObjectAt(rootNode).Entity(), kb::scene::VisibilityComponent{ .visible = false });
+    kb::tests::Require(scene.Prefabs().ApplyOverride(baseInstance.Handle(), rootNode, "visibility.visible"), "Prefab base apply did not accept visibility override");
+    const kb::scene::ScenePrefabInstance refreshedVariantInstance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(refreshedVariantInstance.ObjectAt(rootNode)) == "Variant Root", "Prefab variant lost its own name override after base refresh");
+    kb::tests::Require(!scene.Components().Visibility().Get(refreshedVariantInstance.ObjectAt(rootNode).Entity()).visible, "Prefab variant did not inherit refreshed base data");
+}
+
+void RunPrefabApplyOverrideToAssetTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_apply_override.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Asset Apply Root" });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("AssetApplyPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Initial prefab asset save failed");
+
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(prefabHandle);
+    scene.Entities().SetName(instance.ObjectAt(rootNode), "Applied Asset Root");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "name", prefabPath), "Prefab property apply-to-asset failed");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Applied prefab asset could not be loaded");
+    const kb::scene::ScenePrefabInstance loadedInstance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    kb::tests::Require(loadedScene.Entities().Name(loadedInstance.ObjectAt(rootNode)) == "Applied Asset Root", "Prefab apply-to-asset did not persist the override");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
+void RunNestedPrefabCompositionTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab innerPrefab;
+    const std::uint32_t innerRoot = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Inner Root" });
+    const std::uint32_t innerChild = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Inner Child",
+        .parentNode = innerRoot,
+        .visibility = kb::scene::VisibilityComponent{ .visible = true },
+    });
+    const kb::scene::ScenePrefabHandle innerHandle = scene.Prefabs().Register("InnerPrefab", std::move(innerPrefab));
+    const std::string innerGuid = scene.Prefabs().Guid(innerHandle);
+    kb::tests::Require(!innerGuid.empty(), "Nested prefab inner asset did not receive a guid");
+
+    kb::scene::ScenePrefab outerPrefab;
+    const std::uint32_t outerRoot = outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Outer Root" });
+    static_cast<void>(outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Nested Placeholder",
+        .nestedPrefabGuid = innerGuid,
+        .parentNode = outerRoot,
+    }));
+    const kb::scene::ScenePrefabHandle outerHandle = scene.Prefabs().Register("OuterPrefab", std::move(outerPrefab));
+
+    const kb::scene::ScenePrefabInstance first = scene.Prefabs().Instantiate(outerHandle);
+    kb::tests::Require(first.ObjectCount() == 3, "Nested prefab composition did not expand inner prefab nodes");
+    kb::tests::Require(scene.Entities().Name(first.ObjectAt(1)) == "Inner Root", "Nested prefab composition did not use inner root data");
+    kb::tests::Require(scene.Entities().Name(first.ObjectAt(2)) == "Inner Child", "Nested prefab composition did not use inner child data");
+    kb::tests::Require(scene.Hierarchy().Parent(first.ObjectAt(1).Entity()) == first.ObjectAt(outerRoot).Entity(), "Nested prefab root was not parented under outer node");
+    kb::tests::Require(scene.Hierarchy().Parent(first.ObjectAt(2).Entity()) == first.ObjectAt(1).Entity(), "Nested prefab child hierarchy was not preserved");
+
+    const kb::scene::ScenePrefabInstance innerInstance = scene.Prefabs().Instantiate(innerHandle);
+    scene.Components().Visibility().Set(innerInstance.ObjectAt(innerChild).Entity(), kb::scene::VisibilityComponent{ .visible = false });
+    kb::tests::Require(scene.Prefabs().ApplyOverride(innerInstance.Handle(), innerChild, "visibility.visible"), "Inner prefab baseline update failed");
+    const kb::scene::ScenePrefabInstance refreshedOuter = scene.Prefabs().Instantiate(outerHandle);
+    kb::tests::Require(!scene.Components().Visibility().Get(refreshedOuter.ObjectAt(2).Entity()).visible, "Nested prefab composition did not resolve refreshed inner prefab data");
+}
+
+void RunNestedPrefabCaptureAndRefreshTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab innerPrefab;
+    const std::uint32_t innerRoot = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Captured Inner Root" });
+    const std::uint32_t innerChild = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Captured Inner Child",
+        .parentNode = innerRoot,
+        .visibility = kb::scene::VisibilityComponent{ .visible = true },
+    });
+    const kb::scene::ScenePrefabHandle innerHandle = scene.Prefabs().Register("CapturedInnerPrefab", std::move(innerPrefab));
+
+    kb::scene::SceneObject outerRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Captured Outer Root" });
+    const kb::scene::ScenePrefabInstance nestedInstance = scene.Prefabs().Instantiate(
+        innerHandle,
+        kb::scene::ScenePrefabInstantiationSettings{ .parent = outerRoot });
+    scene.Entities().SetName(nestedInstance.ObjectAt(innerChild), "Captured Inner Child Override");
+
+    const kb::scene::ScenePrefabHandle outerHandle = scene.Prefabs().CaptureRegistered(outerRoot, "CapturedOuterPrefab");
+    const kb::scene::ScenePrefab capturedOuter = scene.Prefabs().Get(outerHandle);
+    kb::tests::Require(capturedOuter.NodeCount() == 3, "Captured outer prefab should preserve nested instance snapshot nodes");
+    kb::tests::Require(!capturedOuter.Nodes()[1].nestedPrefabGuid.empty(), "Captured nested prefab root did not retain inner prefab guid");
+    kb::tests::Require(!capturedOuter.Nodes()[1].nestedPrefabOverrides.empty(), "Captured nested prefab override deltas were not stored");
+
+    const kb::scene::ScenePrefabInstance outerInstance = scene.Prefabs().Instantiate(outerHandle);
+    kb::tests::Require(outerInstance.ObjectCount() == 3, "Captured nested prefab did not compose to the expected hierarchy");
+    kb::tests::Require(scene.Entities().Name(outerInstance.ObjectAt(2)) == "Captured Inner Child Override", "Nested prefab composition did not apply stored child override");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -283,6 +438,10 @@ void RunScenePrefabInstantiationTests() {
     RunRegisteredPrefabOverrideLifecycleTest();
     RunMissingPrefabInstanceObjectOverrideTest();
     RunPrefabApplyRejectsDetachedTrackedChildTest();
+    RunPrefabVariantInstantiationTest();
+    RunPrefabApplyOverrideToAssetTest();
+    RunNestedPrefabCompositionTest();
+    RunNestedPrefabCaptureAndRefreshTest();
 }
 
 } // namespace kb::tests

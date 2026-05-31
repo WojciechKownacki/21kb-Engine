@@ -4,7 +4,7 @@
 
 namespace kb::scene {
 
-ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandle prefab, SceneObject rootParent, std::vector<SceneObject> objects) {
+ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandle prefab, SceneObject rootParent, std::vector<SceneObject> objects, ScenePrefab resolvedPrefab) {
     if (!prefab.IsValid() || objects.empty()) {
         return {};
     }
@@ -16,6 +16,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
             .prefab = prefab,
             .rootParent = rootParent,
             .objects = std::move(objects),
+            .resolvedPrefab = std::move(resolvedPrefab),
         });
     return ScenePrefabInstanceHandle{ id };
 }
@@ -40,6 +41,36 @@ ScenePrefabInstanceRecord* ScenePrefabInstanceRegistry::FindMutable(ScenePrefabI
 
     const auto iterator = records_.find(handle.id_);
     return iterator == records_.end() ? nullptr : &iterator->second;
+}
+
+ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindRootInstance(SceneObject object) const noexcept {
+    if (!object.IsValid()) {
+        return {};
+    }
+
+    for (const auto& [id, record] : records_) {
+        if (!record.objects.empty() && record.objects.front().Entity() == object.Entity()) {
+            return ScenePrefabInstanceHandle{ id };
+        }
+    }
+    return {};
+}
+
+ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept {
+    nodeIndex = 0;
+    if (!object.IsValid()) {
+        return {};
+    }
+
+    for (const auto& [id, record] : records_) {
+        for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(record.objects.size()); ++index) {
+            if (record.objects[index].Entity() == object.Entity()) {
+                nodeIndex = index;
+                return ScenePrefabInstanceHandle{ id };
+            }
+        }
+    }
+    return {};
 }
 
 std::size_t ScenePrefabInstanceRegistry::Count() const noexcept {

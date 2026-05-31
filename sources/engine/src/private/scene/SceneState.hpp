@@ -4,6 +4,7 @@
 #include "engine/ecs/World.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
+#include "scene/history/SceneHistoryStack.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 #include "scene/systems/SceneSystemScheduler.hpp"
@@ -25,6 +26,8 @@ public:
     SceneComponentStorage componentStorage;
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
+    SceneHistoryStack undoHistory;
+    SceneHistoryStack redoHistory;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
 };

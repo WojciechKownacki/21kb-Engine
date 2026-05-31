@@ -17,6 +17,7 @@ LRESULT EditorApplicationMessageDispatcher::Dispatch(EditorApplicationState& sta
         state.floatingWindows,
         state.dockController,
         state.hierarchySelection,
+        state.pointerDrag,
     } }.Handle(messageWindow, message, wparam, lparam);
 }
 

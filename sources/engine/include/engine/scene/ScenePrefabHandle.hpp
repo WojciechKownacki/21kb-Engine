@@ -6,6 +6,7 @@
 namespace kb::scene {
 
 class ScenePrefabRegistry;
+class ScenePrefabRecordStore;
 
 class ScenePrefabHandle {
 public:
@@ -18,6 +19,7 @@ public:
     constexpr auto operator<=>(const ScenePrefabHandle&) const noexcept = default;
 
 private:
+    friend class ScenePrefabRecordStore;
     friend class ScenePrefabRegistry;
 
     explicit constexpr ScenePrefabHandle(std::uint64_t id) noexcept
