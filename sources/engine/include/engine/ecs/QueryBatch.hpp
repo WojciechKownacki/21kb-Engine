@@ -7,10 +7,10 @@
 
 namespace kb::ecs {
 
-template <typename... Components>
+template <typename... ComponentTypes>
 class QueryBatch {
 public:
-    using ComponentPointers = std::tuple<const Components*...>;
+    using ComponentPointers = std::tuple<const ComponentTypes*...>;
 
     QueryBatch(const Entity::IdType* entityIds, std::size_t count, ComponentPointers components) noexcept
         : entityIds_(entityIds)
