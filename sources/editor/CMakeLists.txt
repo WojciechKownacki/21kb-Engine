@@ -335,3 +335,40 @@ if(MSVC)
 else()
     target_compile_options(kb_editor PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
+
+if(BUILD_TESTING)
+    add_executable(kb_editor_tests
+        tests/EditorHierarchyTests.cpp
+        tests/EditorRuntimeTests.cpp
+        tests/EditorTestSuites.hpp
+        tests/EditorTestSupport.hpp
+        tests/SvgPathTests.cpp
+        src/rendering/SvgPathArcMath.cpp
+        src/rendering/SvgPathCursor.cpp
+        src/scene/EditorHierarchyExpansionState.cpp
+        src/scene/EditorHierarchyRowBuilder.cpp
+        src/scene/EditorHierarchyRowFactory.cpp
+        src/scene/EditorHierarchySearchMatcher.cpp
+        src/scene/EditorHierarchySearchState.cpp
+    )
+
+    target_include_directories(kb_editor_tests
+        PRIVATE
+            include
+            src/private
+            tests
+    )
+
+    target_link_libraries(kb_editor_tests
+        PRIVATE
+            kb_engine
+    )
+
+    add_test(NAME kb_editor_tests COMMAND kb_editor_tests)
+
+    if(MSVC)
+        target_compile_options(kb_editor_tests PRIVATE /W4 /WX)
+    else()
+        target_compile_options(kb_editor_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+endif()
