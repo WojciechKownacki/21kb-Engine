@@ -1,0 +1,37 @@
+#include "scene/prefab/ScenePrefabComponentHasher.hpp"
+
+#include "scene/prefab/ScenePrefabHashBuilder.hpp"
+
+namespace kb::scene {
+
+void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeComponents& components) noexcept {
+    ScenePrefabHashBuilder::Mix(hash, components.camera.has_value() ? 1U : 0U);
+    if (components.camera.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.camera->projection));
+        ScenePrefabHashBuilder::MixFloat(hash, components.camera->verticalFovDegrees);
+        ScenePrefabHashBuilder::MixFloat(hash, components.camera->orthographicHeight);
+        ScenePrefabHashBuilder::MixFloat(hash, components.camera->nearClip);
+        ScenePrefabHashBuilder::MixFloat(hash, components.camera->farClip);
+        ScenePrefabHashBuilder::Mix(hash, components.camera->primary ? 1U : 0U);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.meshRenderer.has_value() ? 1U : 0U);
+    if (components.meshRenderer.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->meshAssetId);
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->materialAssetId);
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->castsShadow ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->receivesShadow ? 1U : 0U);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.light.has_value() ? 1U : 0U);
+    if (components.light.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.light->kind));
+        ScenePrefabHashBuilder::MixVec3(hash, components.light->color);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->intensity);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->range);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->innerConeDegrees);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->outerConeDegrees);
+    }
+}
+
+} // namespace kb::scene
