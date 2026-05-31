@@ -12,7 +12,7 @@ option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and Und
 
 function(kb_apply_quality_gates target_name)
     if(MSVC)
-        target_compile_options(${target_name} PRIVATE /W4 /WX /FS)
+        target_compile_options(${target_name} PRIVATE /W4 /WX /FS /external:anglebrackets /external:W0)
     else()
         target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
