@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows MSVC
+            os: windows-latest
+            generator: "Visual Studio 17 2022"
+            build_editor: "ON"
+            sanitizer: "OFF"
+            targets: "kb_engine_tests;kb_editor_tests;kb_editor"
+          - name: Linux GCC ASan UBSan
+            os: ubuntu-latest
+            generator: "Unix Makefiles"
+            build_editor: "OFF"
+            sanitizer: "ON"
+            targets: "kb_engine_tests"
+          - name: macOS Clang ASan UBSan
+            os: macos-latest
+            generator: "Unix Makefiles"
+            build_editor: "OFF"
+            sanitizer: "ON"
+            targets: "kb_engine_tests"
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake
+          -S .
+          -B build/ci
+          -G "${{ matrix.generator }}"
+          -DCMAKE_BUILD_TYPE=Debug
+          -DKB_BUILD_EDITOR=${{ matrix.build_editor }}
+          -DKB_ENABLE_SANITIZERS=${{ matrix.sanitizer }}
+
+      - name: Build
+        shell: pwsh
+        run: |
+          "${{ matrix.targets }}".Split(';') | ForEach-Object {
+            cmake --build build/ci --config Debug --target $_
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build/ci -C Debug --output-on-failure

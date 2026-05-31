@@ -577,11 +577,7 @@ target_link_libraries(kb_engine
         flecs::flecs_static
 )
 
-if(MSVC)
-    target_compile_options(kb_engine PRIVATE /W4 /WX)
-else()
-    target_compile_options(kb_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
-endif()
+kb_apply_quality_gates(kb_engine)
 
 if(BUILD_TESTING)
     add_executable(kb_engine_tests
@@ -618,9 +614,5 @@ if(BUILD_TESTING)
 
     add_test(NAME kb_engine_tests COMMAND kb_engine_tests)
 
-    if(MSVC)
-        target_compile_options(kb_engine_tests PRIVATE /W4 /WX)
-    else()
-        target_compile_options(kb_engine_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
-    endif()
+    kb_apply_quality_gates(kb_engine_tests)
 endif()
