@@ -15,6 +15,14 @@ std::uint64_t ScenePrefabHasher::Hash(const ScenePrefab& prefab) noexcept {
     ScenePrefabHashBuilder::Mix(hash, prefab.NodeCount());
     for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
         ScenePrefabHashBuilder::MixString(hash, node.name);
+        ScenePrefabHashBuilder::MixString(hash, node.nestedPrefabGuid);
+        ScenePrefabHashBuilder::Mix(hash, node.nestedPrefabOverrides.size());
+        for (const ScenePrefabPropertyOverride& property : node.nestedPrefabOverrides) {
+            ScenePrefabHashBuilder::Mix(hash, property.nodeIndex);
+            ScenePrefabHashBuilder::MixString(hash, property.propertyPath);
+            ScenePrefabHashBuilder::MixString(hash, property.value);
+            ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint32_t>(property.flag));
+        }
         ScenePrefabHashBuilder::Mix(hash, node.parentNode);
         ScenePrefabHashBuilder::MixTransform(hash, node.transform);
         ScenePrefabHashBuilder::Mix(hash, node.visibility.visible ? 1U : 0U);

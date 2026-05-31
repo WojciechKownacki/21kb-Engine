@@ -65,6 +65,22 @@ bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, 
     return true;
 }
 
+kb::scene::SceneEntity EditorHierarchyRowPicker::EntityAtContentPoint(const RECT& content, int x, int y, const EditorSceneContext& sceneContext) {
+    if (!Contains(content, x, y)) {
+        return {};
+    }
+
+    const HierarchyToolbarLayoutRects toolbar = HierarchyToolbarLayout::Resolve(content);
+    if (y < toolbar.listContent.top || Contains(toolbar.addButton, x, y) || Contains(toolbar.searchBox, x, y)) {
+        return {};
+    }
+
+    const int relativeY = y - toolbar.listContent.top;
+    const std::size_t rowIndex = static_cast<std::size_t>(relativeY / kHierarchyRowHeight);
+    const std::vector<EditorHierarchyRow> rows = sceneContext.HierarchyRows();
+    return rowIndex < rows.size() ? rows[rowIndex].entity : kb::scene::SceneEntity{};
+}
+
 } // namespace kb::editor
 
 #endif
