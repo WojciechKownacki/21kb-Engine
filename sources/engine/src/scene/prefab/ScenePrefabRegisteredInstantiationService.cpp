@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
+#include "scene/prefab/ScenePrefabNestedResolver.hpp"
 
 #include <utility>
 #include <vector>
@@ -23,9 +24,10 @@ ScenePrefabInstance ScenePrefabRegisteredInstantiationService::Instantiate(Scene
         return {};
     }
 
-    const ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, *prefab, settings);
+    ScenePrefab resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, *prefab);
+    const ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, resolvedPrefab, settings);
     std::vector<SceneObject> objects = CopyObjects(instance);
-    ScenePrefabInstanceHandle instanceHandle = state.prefabInstances.Register(handle, settings.parent, objects);
+    ScenePrefabInstanceHandle instanceHandle = state.prefabInstances.Register(handle, settings.parent, objects, std::move(resolvedPrefab));
     return ScenePrefabInstance{ instanceHandle, std::move(objects) };
 }
 

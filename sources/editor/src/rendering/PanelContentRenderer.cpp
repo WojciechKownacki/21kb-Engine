@@ -4,6 +4,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/SceneGridRenderer.hpp"
 
 namespace kb::editor {
@@ -17,7 +18,7 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
         InspectorPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Assets:
-        GdiDrawing::DrawTextBlock(dc, content, "Scenes\nMaterials\nMeshes\nTextures", GdiDrawing::ToColorRef(theme.textSecondary));
+        ProjectFilesPanelRenderer{}.Paint(dc, content, theme);
         break;
     case DockPanelKind::Console:
         GdiDrawing::DrawTextBlock(

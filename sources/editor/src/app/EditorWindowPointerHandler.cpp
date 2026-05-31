@@ -1,6 +1,10 @@
 #include "app/EditorWindowPointerHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorPointerDragInteraction.hpp"
+#include "app/EditorPointerDragSourceResolver.hpp"
+#include "app/EditorWindowInvalidator.hpp"
+
 #include <windowsx.h>
 
 namespace kb::editor {
@@ -12,6 +16,7 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
     EditorDockController& dockController,
     EditorHierarchySelectionController& hierarchySelection,
     EditorSceneContext& sceneContext,
+    EditorPointerDragState& pointerDrag,
     const EditorMetrics& metrics) noexcept
     : mainWindow_(mainWindow)
     , dockModel_(dockModel)
@@ -19,17 +24,18 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
     , dockController_(dockController)
     , hierarchySelection_(hierarchySelection)
     , sceneContext_(sceneContext)
+    , pointerDrag_(pointerDrag)
     , metrics_(metrics) {}
 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
 
+    EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
+    EditorPointerDragInteraction::CaptureIfActive(messageWindow, pointerDrag_);
+
     if (hierarchySelection_.HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        InvalidateRect(mainWindow_, nullptr, FALSE);
-        if (!IsMainWindow(messageWindow)) {
-            InvalidateRect(messageWindow, nullptr, FALSE);
-        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
 
@@ -38,11 +44,22 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 }
 
 LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, LPARAM lparam) {
+    if (EditorPointerDragInteraction::Move(messageWindow, mainWindow_, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), pointerDrag_)) {
+        return 0;
+    }
     dockController_.HandlePointerMove(messageWindow, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
     return 0;
 }
 
-LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow) {
+LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
+    const int x = GET_X_LPARAM(lparam);
+    const int y = GET_Y_LPARAM(lparam);
+
+    const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
+    if (handledDrop) {
+        return 0;
+    }
+
     dockController_.HandlePointerUp(messageWindow);
     return 0;
 }
@@ -55,12 +72,11 @@ LRESULT EditorWindowPointerHandler::HandleSetCursor(HWND messageWindow, WPARAM w
     POINT point{};
     GetCursorPos(&point);
     ScreenToClient(messageWindow, &point);
+    if (EditorPointerDragInteraction::UpdateCursor(pointerDrag_)) {
+        return TRUE;
+    }
     dockController_.UpdateHoverCursor(messageWindow, point.x, point.y);
     return TRUE;
-}
-
-bool EditorWindowPointerHandler::IsMainWindow(HWND candidate) const noexcept {
-    return candidate == mainWindow_;
 }
 
 } // namespace kb::editor

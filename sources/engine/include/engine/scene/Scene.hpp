@@ -10,6 +10,7 @@ class SceneEntities;
 class SceneEntityQueries;
 class SceneHierarchyAccess;
 class SceneHierarchyQueries;
+class SceneHistory;
 class ScenePrefabs;
 class SceneRuntime;
 class SceneRuntimeQueries;
@@ -36,6 +37,7 @@ public:
     [[nodiscard]] SceneComponentQueries Components() const noexcept;
     [[nodiscard]] SceneHierarchyAccess Hierarchy() noexcept;
     [[nodiscard]] SceneHierarchyQueries Hierarchy() const noexcept;
+    [[nodiscard]] SceneHistory History() noexcept;
     [[nodiscard]] ScenePrefabs Prefabs() noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;

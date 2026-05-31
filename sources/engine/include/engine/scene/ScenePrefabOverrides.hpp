@@ -3,6 +3,7 @@
 #include "engine/scene/SceneObject.hpp"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace kb::scene {
@@ -43,11 +44,21 @@ struct ScenePrefabNodeOverride {
     ScenePrefabOverrideFlag flags = ScenePrefabOverrideFlag::None;
 };
 
+struct ScenePrefabPropertyOverride {
+    std::uint32_t nodeIndex = 0;
+    SceneObject target{};
+    std::string propertyPath;
+    std::string value;
+    SceneObject objectReference{};
+    ScenePrefabOverrideFlag flag = ScenePrefabOverrideFlag::None;
+};
+
 struct ScenePrefabOverrideReport {
     std::vector<ScenePrefabNodeOverride> nodes;
+    std::vector<ScenePrefabPropertyOverride> properties;
 
     [[nodiscard]] bool Empty() const noexcept {
-        return nodes.empty();
+        return nodes.empty() && properties.empty();
     }
 };
 

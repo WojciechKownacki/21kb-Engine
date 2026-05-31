@@ -30,23 +30,6 @@ kb::scene::SceneEntity EditorDefaultSceneFactory::Seed(kb::scene::Scene& scene) 
             .intensity = 2.0F,
         });
 
-    const kb::scene::SceneEntity cube = scene.Entities().CreateEntity(MakeObjectDesc("Cube", { 0.0F, 0.0F, 0.0F }));
-    scene.Components().MeshRenderers().Set(
-        cube,
-        kb::scene::MeshRendererComponent{
-            .meshAssetId = 1,
-            .materialAssetId = 1,
-        });
-
-    const kb::scene::SceneEntity child = scene.Entities().CreateEntity(MakeObjectDesc("Cube Child", { 1.5F, 0.0F, 0.0F }));
-    scene.Components().MeshRenderers().Set(
-        child,
-        kb::scene::MeshRendererComponent{
-            .meshAssetId = 1,
-            .materialAssetId = 2,
-        });
-    [[maybe_unused]] const bool parented = scene.Hierarchy().SetParent(child, cube);
-
     return camera;
 }
 

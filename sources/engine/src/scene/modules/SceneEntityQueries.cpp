@@ -32,6 +32,10 @@ bool SceneEntities::IsAlive(SceneEntity entity) const noexcept {
     return SceneEntityService::IsAlive(scene_, entity);
 }
 
+SceneObject SceneEntities::Object(SceneEntity entity) const noexcept {
+    return SceneEntityService::Object(scene_, entity);
+}
+
 std::size_t SceneEntities::Count() const {
     return SceneEntityService::Count(scene_);
 }

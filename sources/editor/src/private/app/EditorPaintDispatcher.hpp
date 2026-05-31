@@ -3,6 +3,7 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPointerDragState.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -25,7 +26,8 @@ public:
         EditorMetrics& metrics,
         EditorGdiRenderer& renderer,
         EditorFloatingWindowManager& floatingWindows,
-        EditorDockController& dockController) noexcept;
+        EditorDockController& dockController,
+        EditorPointerDragState& pointerDrag) noexcept;
 
     void Paint(HWND paintWindow) const;
 #endif
@@ -42,6 +44,7 @@ private:
     EditorGdiRenderer& renderer_;
     EditorFloatingWindowManager& floatingWindows_;
     EditorDockController& dockController_;
+    EditorPointerDragState& pointerDrag_;
 #endif
 };
 

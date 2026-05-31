@@ -12,7 +12,8 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     EditorMetrics& metrics,
     EditorGdiRenderer& renderer,
     EditorFloatingWindowManager& floatingWindows,
-    EditorDockController& dockController) noexcept
+    EditorDockController& dockController,
+    EditorPointerDragState& pointerDrag) noexcept
     : mainWindow_(mainWindow)
     , dockModel_(dockModel)
     , sceneContext_(sceneContext)
@@ -20,11 +21,12 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     , metrics_(metrics)
     , renderer_(renderer)
     , floatingWindows_(floatingWindows)
-    , dockController_(dockController) {}
+    , dockController_(dockController)
+    , pointerDrag_(pointerDrag) {}
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
-        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview());
+        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), pointerDrag_);
         return;
     }
 

@@ -27,6 +27,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.renderer,
             context_.floatingWindows,
             context_.dockController,
+            context_.pointerDrag,
         }.Paint(messageWindow);
         return 0;
     case WM_SIZE:

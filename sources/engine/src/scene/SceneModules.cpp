@@ -4,6 +4,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -40,6 +41,10 @@ SceneHierarchyAccess Scene::Hierarchy() noexcept {
 
 SceneHierarchyQueries Scene::Hierarchy() const noexcept {
     return SceneHierarchyQueries{ *this };
+}
+
+SceneHistory Scene::History() noexcept {
+    return SceneHistory{ *this };
 }
 
 ScenePrefabs Scene::Prefabs() noexcept {

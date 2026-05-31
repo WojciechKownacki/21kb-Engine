@@ -14,6 +14,7 @@ class EditorHierarchyRowPicker {
 public:
 #if defined(_WIN32)
     [[nodiscard]] static bool SelectAtContentPoint(const RECT& content, int x, int y, EditorSceneContext& sceneContext);
+    [[nodiscard]] static kb::scene::SceneEntity EntityAtContentPoint(const RECT& content, int x, int y, const EditorSceneContext& sceneContext);
 #endif
 };
 
