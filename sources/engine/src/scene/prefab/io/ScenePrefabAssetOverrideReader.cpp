@@ -16,8 +16,8 @@ namespace {
     ScenePrefabAssetFieldMap fields;
     while (ScenePrefabAssetFieldParser::ReadLine(input, line)) {
         if (line == ScenePrefabAssetFormat::EndOverrideMarker) {
-            std::uint64_t nodeIndex = 0;
-            std::uint64_t flag = 0;
+            std::size_t nodeIndex = 0;
+            std::size_t flag = 0;
             const auto node = fields.find(std::string{ ScenePrefabAssetFormat::OverrideNodeKey });
             const auto propertyPath = fields.find(std::string{ ScenePrefabAssetFormat::OverridePropertyPathKey });
             const auto value = fields.find(std::string{ ScenePrefabAssetFormat::OverrideValueKey });

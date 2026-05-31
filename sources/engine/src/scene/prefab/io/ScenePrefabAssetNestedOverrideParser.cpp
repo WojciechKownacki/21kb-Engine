@@ -16,8 +16,8 @@ namespace {
     const auto propertyPath = fields.find(prefix + std::string{ ScenePrefabAssetFormat::OverridePropertyPathKey });
     const auto value = fields.find(prefix + std::string{ ScenePrefabAssetFormat::OverrideValueKey });
     const auto flag = fields.find(prefix + std::string{ ScenePrefabAssetFormat::OverrideFlagKey });
-    std::uint64_t nodeIndex = 0;
-    std::uint64_t flagValue = 0;
+    std::size_t nodeIndex = 0;
+    std::size_t flagValue = 0;
     if (node == fields.end()
         || propertyPath == fields.end()
         || value == fields.end()

@@ -95,7 +95,6 @@ bool ScenePrefabAssetFieldParser::ParseNumber(std::string_view text, T& output) 
 
 template bool ScenePrefabAssetFieldParser::ParseNumber<std::size_t>(std::string_view, std::size_t&);
 template bool ScenePrefabAssetFieldParser::ParseNumber<int>(std::string_view, int&);
-template bool ScenePrefabAssetFieldParser::ParseNumber<std::uint64_t>(std::string_view, std::uint64_t&);
 template bool ScenePrefabAssetFieldParser::ParseNumber<float>(std::string_view, float&);
 
 } // namespace kb::scene
