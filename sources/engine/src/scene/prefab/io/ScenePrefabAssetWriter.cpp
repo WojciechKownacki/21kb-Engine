@@ -51,7 +51,9 @@ bool ScenePrefabAssetWriter::Write(const std::filesystem::path& path, std::strin
             .kind = ScenePrefabAssetKind::Template,
             .guid = "transient-prefab",
             .name = name,
+            .baseGuid = {},
             .prefab = &prefab,
+            .overrides = nullptr,
         });
 }
 
