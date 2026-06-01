@@ -58,6 +58,7 @@ EditorSceneBgfxViewport::~EditorSceneBgfxViewport() {
 
 void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent) noexcept {
     instance_ = instance;
+    defaultParent_ = parent;
     parent_ = parent;
 }
 
@@ -80,29 +81,53 @@ void EditorSceneBgfxViewport::Shutdown() {
     hasQueuedRect_ = false;
     lastRect_ = RECT{};
     queuedRect_ = RECT{};
+    paintParent_ = nullptr;
+    queuedParent_ = nullptr;
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
+    BeginPaintLayout(defaultParent_);
+}
+
+void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     hasQueuedRect_ = false;
+    paintParent_ = parent;
+    queuedParent_ = nullptr;
 }
 
 void EditorSceneBgfxViewport::QueuePresent(const RECT& rect) noexcept {
+    QueuePresent(defaultParent_, rect);
+}
+
+void EditorSceneBgfxViewport::QueuePresent(HWND parent, const RECT& rect) noexcept {
     queuedRect_ = rect;
+    queuedParent_ = parent;
     hasQueuedRect_ = true;
 }
 
 void EditorSceneBgfxViewport::FlushQueuedPresent() {
     if (hasQueuedRect_) {
-        Present(queuedRect_);
+        Present(queuedParent_, queuedRect_);
         hasQueuedRect_ = false;
         return;
     }
 
-    Hide();
+    if (parent_ == paintParent_) {
+        Hide();
+    }
 }
 
 void EditorSceneBgfxViewport::Present(const RECT& rect) {
-    if (parent_ == nullptr || RectWidth(rect) == 0 || RectHeight(rect) == 0) {
+    Present(defaultParent_, rect);
+}
+
+void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect) {
+    if (parent == nullptr || RectWidth(rect) == 0 || RectHeight(rect) == 0) {
+        Hide();
+        return;
+    }
+
+    if (!UseParent(parent)) {
         Hide();
         return;
     }
@@ -123,6 +148,26 @@ void EditorSceneBgfxViewport::Hide() noexcept {
     if (window_ != nullptr) {
         ShowWindow(window_, SW_HIDE);
     }
+}
+
+bool EditorSceneBgfxViewport::UseParent(HWND parent) noexcept {
+    if (parent == nullptr) {
+        return false;
+    }
+
+    if (parent_ == parent) {
+        return true;
+    }
+
+    parent_ = parent;
+    hasRect_ = false;
+
+    if (window_ == nullptr) {
+        return true;
+    }
+
+    SetParent(window_, parent_);
+    return GetParent(window_) == parent_;
 }
 
 bool EditorSceneBgfxViewport::EnsureWindow() {

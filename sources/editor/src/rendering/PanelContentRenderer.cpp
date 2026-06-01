@@ -5,11 +5,13 @@
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
-#include "rendering/SceneGridRenderer.hpp"
 
 namespace kb::editor {
 
-void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating, EditorSceneBgfxViewport* sceneViewport) const {
+void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating, EditorSceneBgfxViewport* sceneViewport, HWND sceneViewportHost) const {
+    static_cast<void>(panelFrame);
+    static_cast<void>(metrics);
+
     switch (panel.kind) {
     case DockPanelKind::Hierarchy:
         HierarchyPanelRenderer{}.Paint(dc, content, theme, sceneContext);
@@ -29,9 +31,11 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
         break;
     case DockPanelKind::Scene:
         if (sceneViewport != nullptr) {
-            sceneViewport->QueuePresent(content);
-        } else {
-            SceneGridRenderer{}.Paint(dc, panelFrame, theme, metrics);
+            if (sceneViewportHost != nullptr) {
+                sceneViewport->QueuePresent(sceneViewportHost, content);
+            } else {
+                sceneViewport->QueuePresent(content);
+            }
         }
         break;
     case DockPanelKind::Generic:
