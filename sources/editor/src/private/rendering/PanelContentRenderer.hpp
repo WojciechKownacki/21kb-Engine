@@ -2,6 +2,7 @@
 
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -15,7 +16,7 @@ namespace kb::editor {
 class PanelContentRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating) const;
+    void Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating, EditorSceneBgfxViewport* sceneViewport = nullptr) const;
 #endif
 };
 

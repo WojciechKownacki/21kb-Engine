@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
+option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ON)
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 
 function(kb_apply_quality_gates target_name)
@@ -33,6 +34,23 @@ set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
 
 add_subdirectory(sources/engine engine)
+
+if(KB_BUILD_RENDERER)
+    set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS_SHADER OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS_BIN2C OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS_GEOMETRY OFF CACHE BOOL "" FORCE)
+    set(BGFX_BUILD_TOOLS_TEXTURE OFF CACHE BOOL "" FORCE)
+    set(BGFX_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BGFX_CUSTOM_TARGETS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/bgfx.cmake third_party/bgfx.cmake EXCLUDE_FROM_ALL)
+
+    include(CMake/KbBgfxRuntimeShaders.cmake)
+    add_subdirectory(sources/renderer renderer)
+    add_subdirectory(samples/render_smoke render_smoke)
+endif()
 
 if(KB_BUILD_EDITOR)
     if(NOT WIN32)

@@ -5,6 +5,7 @@
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -25,6 +26,7 @@ public:
         EditorTheme& theme,
         EditorMetrics& metrics,
         EditorGdiRenderer& renderer,
+        EditorSceneBgfxViewport& sceneViewport,
         EditorFloatingWindowManager& floatingWindows,
         EditorDockController& dockController,
         EditorPointerDragState& pointerDrag) noexcept;
@@ -42,6 +44,7 @@ private:
     EditorTheme& theme_;
     EditorMetrics& metrics_;
     EditorGdiRenderer& renderer_;
+    EditorSceneBgfxViewport& sceneViewport_;
     EditorFloatingWindowManager& floatingWindows_;
     EditorDockController& dockController_;
     EditorPointerDragState& pointerDrag_;

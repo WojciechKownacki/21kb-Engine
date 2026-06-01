@@ -7,7 +7,7 @@
 
 namespace kb::editor {
 
-void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext) const {
+void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) const {
     ScopedFont bodyFont(14, FW_NORMAL);
     const ScopedGdiObject selectedFont(dc, bodyFont.handle);
     const RECT workspace = GdiDrawing::ToRect(layout.workspace);
@@ -20,7 +20,7 @@ void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const
         }
 
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
-        contentRenderer.Paint(dc, content, content, workspace, *panel, theme, metrics, sceneContext, false);
+        contentRenderer.Paint(dc, content, content, workspace, *panel, theme, metrics, sceneContext, false, &sceneViewport);
     }
 }
 

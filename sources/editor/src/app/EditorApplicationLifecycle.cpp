@@ -28,6 +28,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     }
 
     EditorMainWindow::EnableDarkMode(state.window);
+    state.sceneViewport.Configure(state.instance, state.window);
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 
@@ -39,6 +40,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 }
 
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
+    state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 
     if (state.window != nullptr) {

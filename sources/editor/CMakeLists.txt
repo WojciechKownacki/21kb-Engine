@@ -260,6 +260,7 @@ add_executable(kb_editor
     src/private/rendering/EditorPanelContentResolver.hpp
     src/private/rendering/EditorSurfaceKind.hpp
     src/private/rendering/EditorSurfacePainter.hpp
+    src/private/rendering/EditorSceneBgfxViewport.hpp
     src/private/rendering/EditorTabIndicatorPainter.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
@@ -357,6 +358,7 @@ add_executable(kb_editor
     src/rendering/EditorDragOverlayRenderer.cpp
     src/rendering/EditorGdiRenderer.cpp
     src/rendering/EditorPanelContentResolver.cpp
+    src/rendering/EditorSceneBgfxViewport.cpp
     src/rendering/EditorSurfacePainter.cpp
     src/rendering/EditorSurfaceStyle.cpp
     src/rendering/EditorTabIndicatorPainter.cpp
@@ -453,13 +455,25 @@ target_include_directories(kb_editor
         src/private
 )
 
+set_target_properties(kb_editor PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+add_custom_command(TARGET kb_editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kb_editor>" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor.exe"
+    VERBATIM
+)
+
 target_link_libraries(kb_editor
     PRIVATE
         kb_engine
+        kb_renderer
 )
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
 
+kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
 if(BUILD_TESTING)
