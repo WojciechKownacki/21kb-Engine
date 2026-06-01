@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(CTest)
 
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
-option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ON)
+option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 
 function(kb_apply_quality_gates target_name)
@@ -36,6 +36,10 @@ add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
 add_subdirectory(sources/engine engine)
 
 if(KB_BUILD_RENDERER)
+    if(NOT WIN32)
+        message(FATAL_ERROR "KB_BUILD_RENDERER currently requires the Win32 bgfx surface integration. Configure with -DKB_BUILD_RENDERER=OFF on non-Windows hosts.")
+    endif()
+
     set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
