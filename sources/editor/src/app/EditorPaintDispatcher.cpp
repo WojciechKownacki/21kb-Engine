@@ -33,7 +33,7 @@ void EditorPaintDispatcher::Paint(HWND paintWindow) const {
     }
 
     if (const DockPanel* panel = dockModel_.Queries().FindPanel(floatingWindows_.Queries().PanelId(paintWindow)); panel != nullptr) {
-        renderer_.PaintFloating(paintWindow, *panel, theme_, metrics_, sceneContext_);
+        renderer_.PaintFloating(paintWindow, *panel, theme_, metrics_, sceneContext_, sceneViewport_);
     }
 }
 
