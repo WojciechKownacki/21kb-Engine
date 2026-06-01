@@ -6,6 +6,7 @@
 #include "app/EditorPointerDragState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -29,6 +30,7 @@ struct EditorApplicationState {
     EditorTheme theme = MakeEditorDarkTheme();
     EditorMetrics metrics;
     EditorGdiRenderer renderer;
+    EditorSceneBgfxViewport sceneViewport;
     EditorFloatingWindowManager floatingWindows;
     EditorDockController dockController;
     EditorHierarchySelectionController hierarchySelection;

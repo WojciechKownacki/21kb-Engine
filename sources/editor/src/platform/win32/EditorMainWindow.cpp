@@ -8,7 +8,7 @@
 namespace kb::editor {
 
 HWND EditorMainWindow::Create(HINSTANCE instance, const wchar_t* className, const wchar_t* title, int width, int height, void* createParam) noexcept {
-    constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW;
+    constexpr DWORD windowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     RECT windowRect{ 0, 0, width, height };
     AdjustWindowRect(&windowRect, windowStyle, FALSE);
 

@@ -17,19 +17,20 @@ struct MainWindowPaintContext {
     const EditorSceneContext* sceneContext = nullptr;
     const DockDropPreview* preview = nullptr;
     const EditorPointerDragState* drag = nullptr;
+    EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, paintContext->preview);
+    DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, paintContext->preview, *paintContext->sceneViewport);
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
 }
 
 } // namespace
 
-void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag) {
+void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, EditorSceneBgfxViewport& sceneViewport) {
     MainWindowPaintContext context{
         .dockModel = &dockModel,
         .theme = &theme,
@@ -37,8 +38,11 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         .sceneContext = &sceneContext,
         .preview = preview,
         .drag = &drag,
+        .sceneViewport = &sceneViewport,
     };
+    sceneViewport.BeginPaintLayout();
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
+    sceneViewport.FlushQueuedPresent();
 }
 
 } // namespace kb::editor
