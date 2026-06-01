@@ -26,6 +26,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.theme,
             context_.metrics,
             context_.renderer,
+            context_.sceneViewport,
             context_.floatingWindows,
             context_.dockController,
             context_.pointerDrag,
