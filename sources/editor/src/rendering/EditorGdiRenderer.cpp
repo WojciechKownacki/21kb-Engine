@@ -10,8 +10,8 @@ void EditorGdiRenderer::Paint(HWND window, const EditorDockModel& dockModel, con
     MainWindowBackBufferPainter::Paint(window, dockModel, theme, metrics, sceneContext, preview, drag, sceneViewport);
 }
 
-void EditorGdiRenderer::PaintFloating(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext) const {
-    FloatingWindowBackBufferPainter::Paint(window, panel, theme, metrics, sceneContext);
+void EditorGdiRenderer::PaintFloating(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) const {
+    FloatingWindowBackBufferPainter::Paint(window, panel, theme, metrics, sceneContext, sceneViewport);
 }
 
 } // namespace kb::editor

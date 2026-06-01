@@ -26,9 +26,12 @@ public:
     void Configure(HINSTANCE instance, HWND parent) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
+    void BeginPaintLayout(HWND parent) noexcept;
     void QueuePresent(const RECT& rect) noexcept;
+    void QueuePresent(HWND parent, const RECT& rect) noexcept;
     void FlushQueuedPresent();
     void Present(const RECT& rect);
+    void Present(HWND parent, const RECT& rect);
     void Hide() noexcept;
 
 private:
@@ -45,6 +48,7 @@ private:
         HWND window_ = nullptr;
     };
 
+    [[nodiscard]] bool UseParent(HWND parent) noexcept;
     [[nodiscard]] bool EnsureWindow();
     [[nodiscard]] bool EnsureRenderer();
     void MoveTo(const RECT& rect);
@@ -53,10 +57,13 @@ private:
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
     HINSTANCE instance_ = nullptr;
+    HWND defaultParent_ = nullptr;
     HWND parent_ = nullptr;
     HWND window_ = nullptr;
     RECT lastRect_{};
     RECT queuedRect_{};
+    HWND paintParent_ = nullptr;
+    HWND queuedParent_ = nullptr;
     bool hasRect_ = false;
     bool hasQueuedRect_ = false;
     bool windowClassRegistered_ = false;

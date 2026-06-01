@@ -16,7 +16,7 @@ namespace kb::editor {
 class PanelContentRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating, EditorSceneBgfxViewport* sceneViewport = nullptr) const;
+    void Paint(HDC dc, const RECT& content, const RECT& panelFrame, const RECT& overlayBounds, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, bool floating, EditorSceneBgfxViewport* sceneViewport = nullptr, HWND sceneViewportHost = nullptr) const;
 #endif
 };
 
