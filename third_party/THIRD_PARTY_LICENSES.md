@@ -14,6 +14,20 @@ bgfx copyright and license notices must be retained in source distributions.
 For binary distributions, the bgfx copyright notice, license conditions and
 disclaimer must be reproduced in the documentation and/or other materials.
 
+## bgfx.cmake vendor bundle
+
+- Repository: https://github.com/bkaradzic/bgfx.cmake
+- Local path: `third_party/bgfx.cmake`
+- Includes: `bgfx`, `bx`, and `bimg`
+- License: CC0 1.0 for the CMake wrapper, BSD 2-Clause for `bgfx`, `bx`, and `bimg`
+- License files: `third_party/bgfx.cmake/LICENSE`, `third_party/bgfx.cmake/bgfx/LICENSE`,
+  `third_party/bgfx.cmake/bx/LICENSE`, `third_party/bgfx.cmake/bimg/LICENSE`
+
+The bundled bgfx family copyright and license notices must be retained in
+source distributions. For binary distributions, the BSD copyright notices,
+license conditions, and disclaimers must be reproduced in the documentation
+and/or other materials.
+
 ## Flecs
 
 - Repository: https://github.com/SanderMertens/flecs

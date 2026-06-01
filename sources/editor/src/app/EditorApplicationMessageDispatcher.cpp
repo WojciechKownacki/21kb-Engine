@@ -14,6 +14,7 @@ LRESULT EditorApplicationMessageDispatcher::Dispatch(EditorApplicationState& sta
         state.theme,
         state.metrics,
         state.renderer,
+        state.sceneViewport,
         state.floatingWindows,
         state.dockController,
         state.hierarchySelection,

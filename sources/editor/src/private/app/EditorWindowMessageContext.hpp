@@ -5,6 +5,7 @@
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -25,6 +26,7 @@ struct EditorWindowMessageContext {
     EditorTheme& theme;
     EditorMetrics& metrics;
     EditorGdiRenderer& renderer;
+    EditorSceneBgfxViewport& sceneViewport;
     EditorFloatingWindowManager& floatingWindows;
     EditorDockController& dockController;
     EditorHierarchySelectionController& hierarchySelection;
