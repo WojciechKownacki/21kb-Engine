@@ -15,6 +15,7 @@ struct DisplayConfig {
     std::uint32_t targetFps = 180;
     bool requestGpuDebugLayers = false;
     bool flushAfterRender = false;
+    bool allowHeadlessNoop = false;
     std::uint8_t msaaSamples = 0;
     std::int32_t preferredBgfxRendererType = -1;
 

@@ -1,6 +1,7 @@
 #include "rendering/DockWorkspaceChromeRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/DockPanelFramePainter.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiDrawing.hpp"
 
@@ -24,8 +25,7 @@ void DockWorkspaceChromeRenderer::PaintLeaves(HDC dc, const DockLayout& layout, 
             continue;
         }
 
-        const EditorSurfaceKind panelSurface = activePanel->kind == DockPanelKind::Scene ? EditorSurfaceKind::ScenePanel : EditorSurfaceKind::DockPanel;
-        EditorSurfacePainter::Frame(dc, GdiDrawing::ToRect(leaf.frame), theme, panelSurface, GdiDrawing::ToColorRef(theme.borderPanel));
+        DockPanelFramePainter{}.Paint(dc, GdiDrawing::ToRect(leaf.frame), activePanel->kind, theme);
 
         EditorSurfacePainter::Fill(dc, GdiDrawing::ToRect(leaf.tabStrip), theme, EditorSurfaceKind::HeaderStrip);
     }

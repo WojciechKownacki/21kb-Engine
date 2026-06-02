@@ -4,12 +4,19 @@
 #include "scene/SceneState.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 
+#include <atomic>
 #include <memory>
 
 namespace kb::scene {
+namespace {
+
+std::atomic<std::uint64_t> g_nextSceneId{ 1U };
+
+} // namespace
 
 Scene::Scene()
-    : state_(std::make_unique<SceneState>()) {
+    : state_(std::make_unique<SceneState>())
+    , id_(g_nextSceneId.fetch_add(1U, std::memory_order_relaxed)) {
     const bool registeredPrefabLoader = state_->assets.RegisterLoader(std::make_unique<ScenePrefabAssetLoader>(*this));
     static_cast<void>(registeredPrefabLoader);
 }
@@ -25,6 +32,10 @@ SceneState& SceneAccess::State(Scene& scene) noexcept {
 
 const SceneState& SceneAccess::State(const Scene& scene) noexcept {
     return *scene.state_;
+}
+
+std::uint64_t Scene::Id() const noexcept {
+    return id_;
 }
 
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {

@@ -6,6 +6,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyContentResolver.hpp"
 
 #include <windowsx.h>
@@ -56,8 +57,28 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
     }
     const std::optional<RECT> assetContent = EditorPanelContentResolver::Resolve(DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    const std::optional<EditorResolvedPanelContent> sceneContent = EditorPanelContentResolver::ResolvePanel(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const bool inAssetPanel = assetContent.has_value() && PointInRect(*assetContent, x, y);
     const bool inHierarchyPanel = hierarchyContent.has_value() && PointInRect(*hierarchyContent, x, y);
+
+    if (sceneContent.has_value()) {
+        const SceneViewportToolbarRects sceneToolbar = SceneViewportToolbarRenderer::Resolve(sceneContent->content);
+        if (PointInRect(sceneToolbar.profileButton, x, y)) {
+            sceneContext_.ViewportPreview(sceneContent->panelId).CycleProfile();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return 0;
+        }
+        if (PointInRect(sceneToolbar.fitButton, x, y)) {
+            sceneContext_.ViewportPreview(sceneContent->panelId).CycleFitMode();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return 0;
+        }
+        if (PointInRect(sceneToolbar.cameraButton, x, y)) {
+            sceneContext_.ViewportPreview(sceneContent->panelId).CycleCameraMode();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return 0;
+        }
+    }
 
     EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
     EditorPointerDragInteraction::CaptureIfActive(messageWindow, pointerDrag_);

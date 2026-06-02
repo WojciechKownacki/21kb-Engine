@@ -1,0 +1,95 @@
+#pragma once
+
+#include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/scene/SceneRenderTypes.hpp"
+
+#include <cstdint>
+#include <cstddef>
+#include <optional>
+#include <unordered_map>
+#include <vector>
+
+namespace kb::render {
+
+class RenderResourceRegistry;
+class SceneRenderResourceMap;
+enum class RenderPassKind : std::uint8_t;
+
+enum class MeshPassType : std::uint8_t {
+    Depth,
+    BaseOpaque,
+    BaseTransparent,
+    ShadowDepth,
+    SelectionId,
+    EditorSelection,
+    Gizmo,
+};
+
+[[nodiscard]] const char* MeshPassTypeName(MeshPassType pass) noexcept;
+[[nodiscard]] std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexcept;
+
+enum class MeshPipelineResourceValidation : std::uint8_t {
+    ResolveAndValidate,
+    Skip,
+};
+
+struct MeshDrawCommand {
+    MeshPassType pass = MeshPassType::BaseOpaque;
+    std::uint64_t meshAssetId = 0;
+    std::uint64_t materialAssetId = 0;
+    std::uint32_t sectionIndex = 0;
+    std::uint32_t materialSlot = 0;
+    std::uint32_t indexStart = 0;
+    std::uint32_t indexCount = 0;
+    std::uint16_t depthBucket = 0;
+    RenderMeshHandle mesh{};
+    RenderMaterialHandle material{};
+    const RenderMeshResource* meshResource = nullptr;
+    const RenderMaterialResource* materialResource = nullptr;
+    std::uint64_t state = 0;
+    std::uint64_t sortKey = 0;
+    std::vector<SceneRenderMeshInstance> instances;
+};
+
+struct MeshPipelineBuildDesc {
+    MeshPassType pass = MeshPassType::BaseOpaque;
+    const std::vector<SceneRenderDrawGroup>* drawGroups = nullptr;
+    const RenderResourceRegistry* resources = nullptr;
+    const SceneRenderResourceMap* resourceMap = nullptr;
+    const RenderMeshResource* resolvedMeshResource = nullptr;
+    const RenderMaterialResource* resolvedMaterialResource = nullptr;
+    const SceneRenderCamera* camera = nullptr;
+    SceneRenderDiagnostics* diagnostics = nullptr;
+    std::uint32_t maxDrawCommands = 0;
+    std::uint32_t maxVisibleInstances = 0;
+    MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
+};
+
+struct MeshCommandLookupKey {
+    std::uint64_t materialAssetId = 0;
+    std::uint64_t materialHandleValue = 0;
+
+    [[nodiscard]] friend constexpr bool operator==(MeshCommandLookupKey lhs, MeshCommandLookupKey rhs) noexcept = default;
+};
+
+struct MeshCommandLookupKeyHash {
+    [[nodiscard]] std::size_t operator()(MeshCommandLookupKey key) const noexcept;
+};
+
+struct MeshPipelineBuildResult {
+    std::vector<MeshDrawCommand> commands;
+    std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
+    SceneRenderSubmitStats stats{};
+};
+
+class MeshPipelineProcessor {
+public:
+    MeshPipelineProcessor() = delete;
+
+    [[nodiscard]] static MeshPipelineBuildResult Build(const MeshPipelineBuildDesc& desc) noexcept;
+    static void BuildInto(const MeshPipelineBuildDesc& desc, MeshPipelineBuildResult& result) noexcept;
+    static void CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept;
+};
+
+} // namespace kb::render

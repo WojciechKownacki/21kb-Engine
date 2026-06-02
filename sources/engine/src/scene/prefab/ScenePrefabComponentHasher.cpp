@@ -2,6 +2,8 @@
 
 #include "scene/prefab/ScenePrefabHashBuilder.hpp"
 
+#include <cstdint>
+
 namespace kb::scene {
 
 void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeComponents& components) noexcept {
@@ -19,6 +21,10 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
     if (components.meshRenderer.has_value()) {
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->meshAssetId);
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->materialAssetId);
+        ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->materialSlotOverrideCount);
+        for (std::uint32_t slotIndex = 0U; slotIndex < components.meshRenderer->materialSlotOverrideCount && slotIndex < kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
+            ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->materialSlotAssetIds[slotIndex]);
+        }
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->castsShadow ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, components.meshRenderer->receivesShadow ? 1U : 0U);
     }

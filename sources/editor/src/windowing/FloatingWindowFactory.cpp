@@ -8,7 +8,7 @@
 namespace kb::editor {
 
 HWND FloatingWindowFactory::Create(HINSTANCE instance, HWND owner, const wchar_t* className, const std::string& titleText, const DockRect& rect) noexcept {
-    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU;
+    constexpr DWORD floatingStyle = WS_POPUP | WS_SYSMENU | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     const std::wstring title(titleText.begin(), titleText.end());
     const LONG_PTR ownerApplication = GetWindowLongPtrW(owner, GWLP_USERDATA);
     HWND floating = CreateWindowExW(

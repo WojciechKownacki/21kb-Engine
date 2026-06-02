@@ -251,6 +251,7 @@ add_executable(kb_editor
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
     src/private/rendering/DockPanelChromeRenderer.hpp
+    src/private/rendering/DockPanelFramePainter.hpp
     src/private/rendering/DockWorkspaceChromeRenderer.hpp
     src/private/rendering/DockWorkspaceContentRenderer.hpp
     src/private/rendering/DockWorkspaceRenderer.hpp
@@ -309,7 +310,7 @@ add_executable(kb_editor
     src/private/rendering/ProjectFilesTileTextRenderer.hpp
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
-    src/private/rendering/SceneGridRenderer.hpp
+    src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
     src/private/rendering/SvgGraphicsPathBuilder.hpp
@@ -339,6 +340,7 @@ add_executable(kb_editor
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorScenePrefabActions.hpp
+    src/private/scene/EditorViewportPreviewState.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -351,6 +353,7 @@ add_executable(kb_editor
     src/platform/win32/Win32ErrorReporter.cpp
     src/rendering/DockDropPreviewRenderer.cpp
     src/rendering/DockPanelChromeRenderer.cpp
+    src/rendering/DockPanelFramePainter.cpp
     src/rendering/DockWorkspaceChromeRenderer.cpp
     src/rendering/DockWorkspaceContentRenderer.cpp
     src/rendering/DockWorkspaceRenderer.cpp
@@ -400,7 +403,7 @@ add_executable(kb_editor
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
-    src/rendering/SceneGridRenderer.cpp
+    src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
     src/rendering/SvgPathArcMath.cpp
@@ -428,6 +431,7 @@ add_executable(kb_editor
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorScenePrefabActions.cpp
+    src/scene/EditorViewportPreviewState.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -471,7 +475,7 @@ target_link_libraries(kb_editor
         kb_renderer
 )
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 d2d1 d3d11 dxgi)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
@@ -480,6 +484,7 @@ if(BUILD_TESTING)
     add_executable(kb_editor_tests
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
+        tests/EditorViewportPreviewTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
@@ -521,6 +526,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
+        src/scene/EditorViewportPreviewState.cpp
     )
 
     target_include_directories(kb_editor_tests
