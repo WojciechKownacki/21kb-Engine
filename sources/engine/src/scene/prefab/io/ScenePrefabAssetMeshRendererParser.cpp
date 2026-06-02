@@ -2,8 +2,10 @@
 
 #include "engine/scene/SceneComponents.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace kb::scene {
 namespace {
@@ -23,6 +25,28 @@ template <typename T>
     return true;
 }
 
+[[nodiscard]] bool ParseOptionalMaterialSlotOverrides(const ScenePrefabAssetFieldMap& fields, MeshRendererComponent& meshRenderer) {
+    const auto countIterator = fields.find("meshRenderer.materialSlotOverrideCount");
+    if (countIterator == fields.end()) {
+        return true;
+    }
+
+    std::size_t parsedCount = 0U;
+    if (!ScenePrefabAssetFieldParser::ParseNumber(countIterator->second, parsedCount)) {
+        return false;
+    }
+
+    meshRenderer.materialSlotOverrideCount = static_cast<std::uint32_t>(
+        std::min<std::size_t>(parsedCount, kMaxMeshRendererMaterialSlotOverrides));
+    for (std::uint32_t slotIndex = 0U; slotIndex < meshRenderer.materialSlotOverrideCount; ++slotIndex) {
+        const std::string key = "meshRenderer.materialSlotAssetId." + std::to_string(slotIndex);
+        if (!ParseAssetId(fields, key, meshRenderer.materialSlotAssetIds[slotIndex])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool ScenePrefabAssetMeshRendererParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeComponents& components) {
@@ -39,6 +63,7 @@ bool ScenePrefabAssetMeshRendererParser::Parse(const ScenePrefabAssetFieldMap& f
     bool receivesShadow = false;
     if (!ParseAssetId(fields, "meshRenderer.meshAssetId", meshRenderer.meshAssetId)
         || !ParseAssetId(fields, "meshRenderer.materialAssetId", meshRenderer.materialAssetId)
+        || !ParseOptionalMaterialSlotOverrides(fields, meshRenderer)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.castsShadow", castsShadow)
         || !ScenePrefabAssetFieldParser::ParseBool(fields, "meshRenderer.receivesShadow", receivesShadow)) {
         return false;

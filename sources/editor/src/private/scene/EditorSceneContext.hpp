@@ -6,10 +6,12 @@
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
+#include "scene/EditorViewportPreviewState.hpp"
 
 #include <string>
 #include <string_view>
 #include <filesystem>
+#include <unordered_map>
 #include <vector>
 
 namespace kb::editor {
@@ -22,6 +24,10 @@ public:
     [[nodiscard]] const kb::scene::Scene& Scene() const noexcept;
     [[nodiscard]] EditorAssetBrowserState& AssetBrowser() noexcept;
     [[nodiscard]] const EditorAssetBrowserState& AssetBrowser() const noexcept;
+    [[nodiscard]] EditorViewportPreviewState& ViewportPreview() noexcept;
+    [[nodiscard]] const EditorViewportPreviewState& ViewportPreview() const noexcept;
+    [[nodiscard]] EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) noexcept;
+    [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     void SelectEntity(kb::scene::SceneEntity entity) noexcept;
@@ -60,6 +66,7 @@ public:
 private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
+    mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
     kb::scene::SceneEntity selectedEntity_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;

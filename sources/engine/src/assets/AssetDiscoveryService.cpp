@@ -6,6 +6,7 @@
 
 #include <set>
 #include <system_error>
+#include <unordered_map>
 
 namespace kb::assets {
 
@@ -18,6 +19,11 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
     std::set<std::uint64_t> discoveredIds;
     std::vector<AssetMetadata> previousAssets;
     previousAssets.assign(registry.All().begin(), registry.All().end());
+    std::unordered_map<std::uint64_t, AssetMetadata> previousById;
+    previousById.reserve(previousAssets.size());
+    for (const AssetMetadata& metadata : previousAssets) {
+        previousById.emplace(metadata.id.value, metadata);
+    }
 
     for (const AssetMount& mount : mounts.Mounts()) {
         std::error_code error;
@@ -51,6 +57,13 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 .dependencies = {},
                 .runtimeLoadable = true,
             };
+            const auto previous = previousById.find(id.value);
+            if (previous != previousById.end() &&
+                (previous->second.contentHash != metadata.contentHash ||
+                 previous->second.type != metadata.type ||
+                 NormalizeAssetPath(previous->second.virtualPath) != NormalizeAssetPath(metadata.virtualPath))) {
+                static_cast<void>(cache.erase(id.value));
+            }
             if (registry.Upsert(std::move(metadata))) {
                 ++discovered;
                 discoveredIds.insert(id.value);

@@ -38,6 +38,7 @@ private:
     bool initialized_ = false;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
+    std::uint32_t resetFlags_ = 0;
     void* nativeWindowHandle_ = nullptr;
     void* nativeDisplayHandle_ = nullptr;
     std::unique_ptr<BgfxEngineCallback> callback_;

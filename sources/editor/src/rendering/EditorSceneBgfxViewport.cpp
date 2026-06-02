@@ -1,18 +1,33 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
+#include "engine/scene/Scene.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
+
 #include <bgfx/bgfx.h>
+#include <bgfx/platform.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <d2d1helper.h>
+#include <limits>
+#include <cmath>
+#include <vector>
 
 namespace kb::editor {
 namespace {
 
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
+constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
+constexpr std::uint32_t kMaxEditorViewportIndex =
+    (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
-[[nodiscard]] bool EqualRectValue(const RECT& lhs, const RECT& rhs) noexcept {
-    return lhs.left == rhs.left && lhs.top == rhs.top && lhs.right == rhs.right && lhs.bottom == rhs.bottom;
+template <typename T>
+void SafeRelease(T*& value) noexcept {
+    if (value != nullptr) {
+        value->Release();
+        value = nullptr;
+    }
 }
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
@@ -23,7 +38,234 @@ constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
 }
 
+[[nodiscard]] bool FitsBgfxTextureExtent(std::uint32_t value) noexcept {
+    return value > 0U && value <= static_cast<std::uint32_t>(std::numeric_limits<std::uint16_t>::max());
+}
+
+[[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
+    const std::uint32_t boundsWidth = RectWidth(bounds);
+    const std::uint32_t boundsHeight = RectHeight(bounds);
+    if (boundsWidth == 0U || boundsHeight == 0U || renderWidth == 0U || renderHeight == 0U) {
+        return bounds;
+    }
+
+    double scale = 1.0;
+    const double scaleX = static_cast<double>(boundsWidth) / static_cast<double>(renderWidth);
+    const double scaleY = static_cast<double>(boundsHeight) / static_cast<double>(renderHeight);
+    switch (fitMode) {
+    case EditorViewportFitMode::Fit:
+        scale = std::min(scaleX, scaleY);
+        break;
+    case EditorViewportFitMode::OneToOne:
+        scale = 1.0;
+        break;
+    case EditorViewportFitMode::Fill:
+        scale = std::max(scaleX, scaleY);
+        break;
+    }
+
+    const LONG width = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderWidth) * scale)));
+    const LONG height = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderHeight) * scale)));
+    const LONG centerX = bounds.left + static_cast<LONG>(boundsWidth / 2U);
+    const LONG centerY = bounds.top + static_cast<LONG>(boundsHeight / 2U);
+    return RECT{
+        .left = centerX - width / 2,
+        .top = centerY - height / 2,
+        .right = centerX - width / 2 + width,
+        .bottom = centerY - height / 2 + height,
+    };
+}
+
 } // namespace
+
+EditorSceneBgfxViewport::SceneTexturePresentTarget::~SceneTexturePresentTarget() {
+    Shutdown();
+}
+
+bool EditorSceneBgfxViewport::SceneTexturePresentTarget::Ensure(std::uint32_t width, std::uint32_t height) {
+    if (!FitsBgfxTextureExtent(width) || !FitsBgfxTextureExtent(height)) {
+        Shutdown();
+        return false;
+    }
+
+    if (bgfx::isValid(frameBuffer_) && texture_ != nullptr && surface_ != nullptr && width_ == width && height_ == height) {
+        return true;
+    }
+
+    Shutdown();
+
+    if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) {
+        return false;
+    }
+
+    const bgfx::InternalData* internalData = bgfx::getInternalData();
+    if (internalData == nullptr || internalData->context == nullptr) {
+        return false;
+    }
+
+    auto* device = static_cast<ID3D11Device*>(internalData->context);
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    desc.MiscFlags = 0;
+
+    ID3D11Texture2D* texture = nullptr;
+    if (FAILED(device->CreateTexture2D(&desc, nullptr, &texture)) || texture == nullptr) {
+        return false;
+    }
+
+    IDXGISurface* surface = nullptr;
+    if (FAILED(texture->QueryInterface(__uuidof(IDXGISurface), reinterpret_cast<void**>(&surface))) || surface == nullptr) {
+        SafeRelease(texture);
+        return false;
+    }
+
+    constexpr std::uint64_t textureFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    bgfxTexture_ = bgfx::createTexture2D(
+        static_cast<std::uint16_t>(width),
+        static_cast<std::uint16_t>(height),
+        false,
+        1,
+        bgfx::TextureFormat::BGRA8,
+        textureFlags);
+    if (!bgfx::isValid(bgfxTexture_)) {
+        SafeRelease(surface);
+        SafeRelease(texture);
+        return false;
+    }
+
+    (void)bgfx::overrideInternal(bgfxTexture_, reinterpret_cast<std::uintptr_t>(texture));
+
+    frameBuffer_ = bgfx::createFrameBuffer(1, &bgfxTexture_, false);
+    if (!bgfx::isValid(frameBuffer_)) {
+        bgfx::destroy(bgfxTexture_);
+        bgfxTexture_ = BGFX_INVALID_HANDLE;
+        SafeRelease(surface);
+        SafeRelease(texture);
+        return false;
+    }
+
+    texture_ = texture;
+    surface_ = surface;
+    width_ = width;
+    height_ = height;
+    return true;
+}
+
+void EditorSceneBgfxViewport::SceneTexturePresentTarget::Shutdown() noexcept {
+    if (bgfx::isValid(frameBuffer_)) {
+        bgfx::destroy(frameBuffer_);
+        frameBuffer_ = BGFX_INVALID_HANDLE;
+    }
+    if (bgfx::isValid(bgfxTexture_)) {
+        bgfx::destroy(bgfxTexture_);
+        bgfxTexture_ = BGFX_INVALID_HANDLE;
+    }
+    SafeRelease(surface_);
+    SafeRelease(texture_);
+    width_ = 0;
+    height_ = 0;
+}
+
+bgfx::FrameBufferHandle EditorSceneBgfxViewport::SceneTexturePresentTarget::FrameBuffer() const noexcept {
+    return frameBuffer_;
+}
+
+IDXGISurface* EditorSceneBgfxViewport::SceneTexturePresentTarget::Surface() const noexcept {
+    return surface_;
+}
+
+std::uint32_t EditorSceneBgfxViewport::SceneTexturePresentTarget::Width() const noexcept {
+    return width_;
+}
+
+std::uint32_t EditorSceneBgfxViewport::SceneTexturePresentTarget::Height() const noexcept {
+    return height_;
+}
+
+EditorSceneBgfxViewport::D2DScenePresenter::~D2DScenePresenter() {
+    Shutdown();
+}
+
+bool EditorSceneBgfxViewport::D2DScenePresenter::EnsureRenderTarget() {
+    if (renderTarget_ != nullptr) {
+        return true;
+    }
+
+    if (factory_ == nullptr) {
+        if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory_)) || factory_ == nullptr) {
+            return false;
+        }
+    }
+
+    const D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
+        0.0F,
+        0.0F,
+        D2D1_RENDER_TARGET_USAGE_NONE,
+        D2D1_FEATURE_LEVEL_DEFAULT);
+
+    return SUCCEEDED(factory_->CreateDCRenderTarget(&properties, &renderTarget_)) && renderTarget_ != nullptr;
+}
+
+void EditorSceneBgfxViewport::D2DScenePresenter::ResetBitmap() noexcept {
+    SafeRelease(bitmap_);
+    SafeRelease(bitmapSurface_);
+}
+
+bool EditorSceneBgfxViewport::D2DScenePresenter::Present(HDC dc, const RECT& bounds, const RECT& destination, IDXGISurface* surface) {
+    if (dc == nullptr || surface == nullptr || RectWidth(bounds) == 0U || RectHeight(bounds) == 0U || RectWidth(destination) == 0U || RectHeight(destination) == 0U) {
+        return false;
+    }
+
+    if (!EnsureRenderTarget()) {
+        return false;
+    }
+
+    if (bitmap_ == nullptr || bitmapSurface_ != surface) {
+        ResetBitmap();
+        const D2D1_BITMAP_PROPERTIES properties = D2D1::BitmapProperties(
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+        if (FAILED(renderTarget_->CreateSharedBitmap(__uuidof(IDXGISurface), surface, &properties, &bitmap_)) || bitmap_ == nullptr) {
+            return false;
+        }
+        bitmapSurface_ = surface;
+        bitmapSurface_->AddRef();
+    }
+
+    if (FAILED(renderTarget_->BindDC(dc, &bounds))) {
+        ResetBitmap();
+        return false;
+    }
+
+    const float left = static_cast<float>(destination.left - bounds.left);
+    const float top = static_cast<float>(destination.top - bounds.top);
+    const float right = static_cast<float>(destination.right - bounds.left);
+    const float bottom = static_cast<float>(destination.bottom - bounds.top);
+    renderTarget_->BeginDraw();
+    renderTarget_->DrawBitmap(bitmap_, D2D1::RectF(left, top, right, bottom), 1.0F, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    if (FAILED(renderTarget_->EndDraw())) {
+        ResetBitmap();
+        return false;
+    }
+
+    return true;
+}
+
+void EditorSceneBgfxViewport::D2DScenePresenter::Shutdown() noexcept {
+    ResetBitmap();
+    SafeRelease(renderTarget_);
+    SafeRelease(factory_);
+}
 
 EditorSceneBgfxViewport::Win32Surface::Win32Surface(HWND window) noexcept
     : window_(window) {}
@@ -59,30 +301,21 @@ EditorSceneBgfxViewport::~EditorSceneBgfxViewport() {
 void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent) noexcept {
     instance_ = instance;
     defaultParent_ = parent;
-    parent_ = parent;
 }
 
 void EditorSceneBgfxViewport::Shutdown() {
-    triangle_.Shutdown();
-    triangleReady_ = false;
-    renderer_.Shutdown();
+    ShutdownGpuResources();
 
-    if (window_ != nullptr) {
-        DestroyWindow(window_);
-        window_ = nullptr;
-    }
+    sessions_.clear();
 
     if (windowClassRegistered_ && instance_ != nullptr) {
         UnregisterClassW(kSceneViewportClassName, instance_);
         windowClassRegistered_ = false;
     }
 
-    hasRect_ = false;
-    hasQueuedRect_ = false;
-    lastRect_ = RECT{};
-    queuedRect_ = RECT{};
     paintParent_ = nullptr;
-    queuedParent_ = nullptr;
+    deviceWindow_ = nullptr;
+    nextDetachedViewportIndex_ = 1;
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -90,91 +323,105 @@ void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
-    hasQueuedRect_ = false;
     paintParent_ = parent;
-    queuedParent_ = nullptr;
-}
-
-void EditorSceneBgfxViewport::QueuePresent(const RECT& rect) noexcept {
-    QueuePresent(defaultParent_, rect);
-}
-
-void EditorSceneBgfxViewport::QueuePresent(HWND parent, const RECT& rect) noexcept {
-    queuedRect_ = rect;
-    queuedParent_ = parent;
-    hasQueuedRect_ = true;
-}
-
-void EditorSceneBgfxViewport::FlushQueuedPresent() {
-    if (hasQueuedRect_) {
-        Present(queuedParent_, queuedRect_);
-        hasQueuedRect_ = false;
-        return;
-    }
-
-    if (parent_ == paintParent_) {
-        Hide();
+    if (ViewportSession* session = FindSession(parent); session != nullptr) {
+        session->presentedInCurrentPaint = false;
     }
 }
 
-void EditorSceneBgfxViewport::Present(const RECT& rect) {
-    Present(defaultParent_, rect);
+void EditorSceneBgfxViewport::EndPaintLayout() {
+    ViewportSession* session = FindSession(paintParent_);
+    if (session != nullptr && !session->presentedInCurrentPaint) {
+        HideSession(paintParent_);
+    }
 }
 
-void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect) {
+void EditorSceneBgfxViewport::Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme) {
+    Present(dc, defaultParent_, rect, scene, theme);
+}
+
+void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme) {
+    Present(dc, parent, rect, scene, theme, PresentSettings{});
+}
+
+void EditorSceneBgfxViewport::Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings) {
+    Present(dc, defaultParent_, rect, scene, theme, settings);
+}
+
+void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings) {
+    static_cast<void>(theme);
+
     if (parent == nullptr || RectWidth(rect) == 0 || RectHeight(rect) == 0) {
-        Hide();
+        HideSession(parent);
         return;
     }
 
-    if (!UseParent(parent)) {
-        Hide();
+    ViewportSession* session = EnsureSession(parent);
+    if (session == nullptr) {
         return;
     }
+    session->presentedInCurrentPaint = true;
 
-    if (!EnsureWindow()) {
-        return;
-    }
-
-    MoveTo(rect);
     if (!EnsureRenderer()) {
+        HideSession(parent);
         return;
     }
 
-    RenderFrame();
+    if (!RenderAndPresent(dc, rect, *session, scene, settings)) {
+        HideSession(parent);
+    }
 }
 
 void EditorSceneBgfxViewport::Hide() noexcept {
-    if (window_ != nullptr) {
-        ShowWindow(window_, SW_HIDE);
+    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
+        if (session != nullptr) {
+            session->presentedInCurrentPaint = false;
+        }
     }
 }
 
-bool EditorSceneBgfxViewport::UseParent(HWND parent) noexcept {
-    if (parent == nullptr) {
-        return false;
+EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::EnsureSession(HWND host) {
+    if (host == nullptr) {
+        return nullptr;
     }
 
-    if (parent_ == parent) {
-        return true;
+    if (ViewportSession* existing = FindSession(host); existing != nullptr) {
+        return existing;
     }
 
-    parent_ = parent;
-    hasRect_ = false;
-
-    if (window_ == nullptr) {
-        return true;
+    std::uint32_t viewportIndex = 0U;
+    if (host != defaultParent_) {
+        viewportIndex = nextDetachedViewportIndex_;
+        if (viewportIndex > kMaxEditorViewportIndex) {
+            return nullptr;
+        }
+        ++nextDetachedViewportIndex_;
     }
 
-    SetParent(window_, parent_);
-    return GetParent(window_) == parent_;
+    std::unique_ptr<ViewportSession> session = std::make_unique<ViewportSession>();
+    session->host = host;
+    session->viewportIndex = viewportIndex;
+    sessions_.push_back(std::move(session));
+    return sessions_.back().get();
 }
 
-bool EditorSceneBgfxViewport::EnsureWindow() {
-    if (window_ != nullptr) {
+EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::FindSession(HWND host) noexcept {
+    if (host == nullptr) {
+        return nullptr;
+    }
+
+    const auto iter = std::ranges::find_if(sessions_, [host](const std::unique_ptr<ViewportSession>& session) {
+        return session != nullptr && session->host == host;
+    });
+    return iter == sessions_.end() ? nullptr : iter->get();
+}
+
+bool EditorSceneBgfxViewport::EnsureDeviceWindow() {
+    if (deviceWindow_ != nullptr && IsWindow(deviceWindow_) != 0) {
         return true;
     }
-    if (instance_ == nullptr || parent_ == nullptr) {
+
+    if (instance_ == nullptr) {
         return false;
     }
 
@@ -192,21 +439,20 @@ bool EditorSceneBgfxViewport::EnsureWindow() {
         windowClassRegistered_ = true;
     }
 
-    window_ = CreateWindowExW(
+    deviceWindow_ = CreateWindowExW(
         0,
         kSceneViewportClassName,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        WS_POPUP | WS_DISABLED | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
         0,
         0,
         1,
         1,
-        parent_,
+        nullptr,
         nullptr,
         instance_,
         this);
-
-    return window_ != nullptr;
+    return deviceWindow_ != nullptr;
 }
 
 bool EditorSceneBgfxViewport::EnsureRenderer() {
@@ -214,7 +460,11 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
         return true;
     }
 
-    Win32Surface surface(window_);
+    if (!EnsureDeviceWindow()) {
+        return false;
+    }
+
+    Win32Surface surface(deviceWindow_);
     render::DisplayConfig config{};
     config.syncMode = render::DisplaySyncMode::VSync;
     config.targetFps = 120;
@@ -224,43 +474,125 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
         return false;
     }
 
-    triangleReady_ = triangle_.Initialize();
-    InvalidateRect(window_, nullptr, FALSE);
+    InvalidateRect(deviceWindow_, nullptr, FALSE);
     return true;
 }
 
-void EditorSceneBgfxViewport::MoveTo(const RECT& rect) {
-    if (window_ == nullptr) {
-        return;
-    }
-
-    if (!hasRect_ || !EqualRectValue(lastRect_, rect)) {
-        const std::uint32_t width = RectWidth(rect);
-        const std::uint32_t height = RectHeight(rect);
-        MoveWindow(window_, rect.left, rect.top, static_cast<int>(width), static_cast<int>(height), TRUE);
-        ShowWindow(window_, SW_SHOW);
-        if (renderer_.IsInitialized()) {
-            renderer_.OnResize(width, height);
-        }
-        lastRect_ = rect;
-        hasRect_ = true;
+void EditorSceneBgfxViewport::HideSession(HWND host) noexcept {
+    ViewportSession* session = FindSession(host);
+    if (session != nullptr) {
+        session->presentedInCurrentPaint = false;
     }
 }
 
-void EditorSceneBgfxViewport::RenderFrame() {
-    if (!renderer_.BeginFrame()) {
-        return;
+void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
+    if (window == deviceWindow_) {
+        for (const std::unique_ptr<ViewportSession>& session : sessions_) {
+            if (session != nullptr) {
+                session->sceneTarget.Shutdown();
+                session->postProcessTargets.Shutdown();
+                session->presentTarget.Shutdown();
+            }
+        }
+    }
+}
+
+void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
+    ShutdownSessionFramebuffers();
+    scenePresenter_.Shutdown();
+    renderer_.Shutdown();
+    if (deviceWindow_ != nullptr && IsWindow(deviceWindow_) != 0) {
+        const HWND window = deviceWindow_;
+        deviceWindow_ = nullptr;
+        DestroyWindow(window);
+    } else {
+        deviceWindow_ = nullptr;
+    }
+}
+
+void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
+    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
+        if (session != nullptr) {
+            session->sceneTarget.Shutdown();
+            session->postProcessTargets.Shutdown();
+            session->presentTarget.Shutdown();
+        }
+    }
+}
+
+bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
+    if (!renderer_.IsInitialized()) {
+        return false;
     }
 
-    renderer_.SubmitClear(0x14202AFFU);
-    if (triangleReady_) {
-        triangle_.Submit();
-    } else {
-        bgfx::dbgTextClear();
-        bgfx::dbgTextPrintf(2, 1, 0x0C, "bgfx active");
-        bgfx::dbgTextPrintf(2, 2, 0x0C, "triangle shader not found");
+    const std::uint32_t panelWidth = RectWidth(rect);
+    const std::uint32_t panelHeight = RectHeight(rect);
+    const std::uint32_t width = settings.renderWidth == 0U ? panelWidth : settings.renderWidth;
+    const std::uint32_t height = settings.renderHeight == 0U ? panelHeight : settings.renderHeight;
+    render::Renderer::SceneFrameSubmission submission{};
+    if (!BuildSubmission(session, scene, width, height, settings, submission)) {
+        return false;
     }
+
+    if (!renderer_.BeginFrame()) {
+        return false;
+    }
+
+    const bool submitted = renderer_.SubmitScene(*submission.scene, submission.desc);
     renderer_.EndFrame();
+    if (!submitted) {
+        return false;
+    }
+
+    const RECT destination = CenteredRectFor(rect, width, height, settings.fitMode);
+    return scenePresenter_.Present(dc, rect, destination, session.presentTarget.Surface());
+}
+
+bool EditorSceneBgfxViewport::BuildSubmission(ViewportSession& session, const kb::scene::Scene& scene, std::uint32_t width, std::uint32_t height, const PresentSettings& settings, render::Renderer::SceneFrameSubmission& submission) {
+    if (width == 0U || height == 0U) {
+        return false;
+    }
+
+    if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
+            .extent = render::RenderExtent{width, height},
+            .colorPolicy = render::SceneColorFormatPolicy::Auto,
+        })) {
+        return false;
+    }
+    if (!session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
+            .extent = render::RenderExtent{width, height},
+            .colorPolicy = render::SceneColorFormatPolicy::Auto,
+        })) {
+        return false;
+    }
+
+    if (!session.presentTarget.Ensure(width, height)) {
+        return false;
+    }
+
+    submission = render::Renderer::SceneFrameSubmission{
+        .scene = &scene,
+        .desc = render::RenderSceneSubmitDesc{
+        .target = render::RenderSceneTargetBinding{
+            .frameBuffer = session.sceneTarget.FrameBuffer(),
+            .colorTexture = session.sceneTarget.ColorTexture(),
+            .viewport = render::RenderViewportDesc{
+                .id = render::RenderViewportId{ session.viewportIndex + 1U },
+                .extent = render::RenderExtent{ width, height },
+                .viewportIndex = session.viewportIndex,
+            },
+        },
+        .postProcess = session.postProcessTargets.Binding(),
+        .finalComposite = render::RenderFinalCompositeTargetBinding{
+            .frameBuffer = session.presentTarget.FrameBuffer(),
+            .extent = render::RenderExtent{ width, height },
+            .enabled = true,
+        },
+        .cameraOverride = settings.cameraOverride,
+        .clearRgba = kSceneClearRgba,
+        },
+    };
+    return true;
 }
 
 LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -278,17 +610,13 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
         EndPaint(window, &paint);
-        if (viewport != nullptr) {
-            viewport->RenderFrame();
-        }
         return 0;
     }
-    case WM_SIZE:
-        if (viewport != nullptr && wparam != SIZE_MINIMIZED && viewport->renderer_.IsInitialized()) {
-            viewport->renderer_.OnResize(static_cast<std::uint32_t>(LOWORD(lparam)), static_cast<std::uint32_t>(HIWORD(lparam)));
-            viewport->RenderFrame();
+    case WM_NCDESTROY:
+        if (viewport != nullptr) {
+            viewport->ReleaseWindow(window);
         }
-        return 0;
+        break;
     default:
         break;
     }
