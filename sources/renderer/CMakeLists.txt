@@ -22,6 +22,9 @@ add_library(kb_renderer STATIC
     include/kb/render/frame/RenderTargetDesc.hpp
     include/kb/render/frame/RenderViewportDesc.hpp
     include/kb/render/frame/RenderViewportViewIds.hpp
+    include/kb/render/overlay/SceneGizmoPass.hpp
+    include/kb/render/overlay/SceneGridPass.hpp
+    include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
     include/kb/render/post/SceneDisplayCompositeRenderer.hpp
@@ -67,6 +70,9 @@ add_library(kb_renderer STATIC
     src/frame/RenderFrameState.cpp
     src/frame/RenderPassGraph.cpp
     src/frame/RenderPassKind.cpp
+    src/overlay/SceneGizmoPass.cpp
+    src/overlay/SceneGridPass.cpp
+    src/overlay/SelectionOutlineCompositePass.cpp
     src/post/PostProcessChain.cpp
     src/post/PostProcessRenderTarget.cpp
     src/post/SceneDisplayCompositeRenderer.cpp
@@ -119,6 +125,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -132,11 +139,15 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_present_tex.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS

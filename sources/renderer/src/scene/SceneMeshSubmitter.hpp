@@ -8,6 +8,7 @@
 
 #include <bgfx/bgfx.h>
 
+#include <span>
 #include <vector>
 
 namespace kb::render {
@@ -26,7 +27,8 @@ public:
         SceneRenderDiagnostics* diagnostics = nullptr,
         SceneRenderDrawBudget drawBudget = {},
         SceneRenderLightingConfig lightingConfig = {},
-        const SceneRenderShadowMapBinding* shadowMap = nullptr) const;
+        const SceneRenderShadowMapBinding* shadowMap = nullptr,
+        std::span<const std::uint64_t> selectedEntityIds = {}) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -37,12 +39,14 @@ public:
         const SceneRenderCamera* camera = nullptr,
         SceneRenderDiagnostics* diagnostics = nullptr,
         SceneRenderDrawBudget drawBudget = {},
-        SceneRenderLightingConfig lightingConfig = {}) noexcept;
+        SceneRenderLightingConfig lightingConfig = {},
+        std::span<const std::uint64_t> selectedEntityIds = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
+    bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle shadowSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;

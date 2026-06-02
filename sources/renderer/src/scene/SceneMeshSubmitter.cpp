@@ -489,6 +489,11 @@ bool SceneMeshSubmitter::Initialize() {
         Shutdown();
         return false;
     }
+    selectionProgram_ = ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_selection_instanced.sc");
+    if (!bgfx::isValid(selectionProgram_)) {
+        Shutdown();
+        return false;
+    }
 
     albedoSampler_ = bgfx::createUniform("s_albedo", bgfx::UniformType::Sampler);
     shadowSampler_ = bgfx::createUniform("s_shadowMap", bgfx::UniformType::Sampler);
@@ -646,6 +651,10 @@ void SceneMeshSubmitter::Shutdown() {
         bgfx::destroy(meshProgram_);
         meshProgram_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(selectionProgram_)) {
+        bgfx::destroy(selectionProgram_);
+        selectionProgram_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(shadowProgram_)) {
         bgfx::destroy(shadowProgram_);
         shadowProgram_ = BGFX_INVALID_HANDLE;
@@ -662,7 +671,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     const SceneRenderCamera* camera,
     SceneRenderDiagnostics* diagnostics,
     SceneRenderDrawBudget drawBudget,
-    SceneRenderLightingConfig lightingConfig) noexcept {
+    SceneRenderLightingConfig lightingConfig,
+    std::span<const std::uint64_t> selectedEntityIds) noexcept {
     drawGroupsScratch.reserve(renderScene.MeshProxyCount());
     renderScene.BuildDrawGroups(drawGroupsScratch);
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
@@ -674,6 +684,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
+        .selectedEntityIds = selectedEntityIds,
     }, pipelineScratch);
     pipelineScratch.stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(drawGroupsScratch.capacity());
     pipelineScratch.stats.meshDrawGroupInstanceScratchCapacity = DrawGroupInstanceCapacity(drawGroupsScratch);
@@ -711,7 +722,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     SceneRenderDiagnostics* diagnostics,
     SceneRenderDrawBudget drawBudget,
     SceneRenderLightingConfig lightingConfig,
-    const SceneRenderShadowMapBinding* shadowMap) const {
+    const SceneRenderShadowMapBinding* shadowMap,
+    std::span<const std::uint64_t> selectedEntityIds) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -731,6 +743,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
+        .selectedEntityIds = selectedEntityIds,
     }, pipelineScratch_);
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
@@ -771,11 +784,12 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         bgfx::InstanceDataBuffer instanceBuffer{};
         bgfx::allocInstanceDataBuffer(&instanceBuffer, availableInstances, RenderInstanceBuffer::Stride());
         auto* instanceData = reinterpret_cast<RenderInstanceData*>(instanceBuffer.data);
+        const bool selectionPass = pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
         RenderInstanceBuffer::Copy(
             std::span<RenderInstanceData>(instanceData, availableInstances),
             std::span<const SceneRenderMeshInstance>(command.instances.data(), availableInstances),
-            command.materialResource,
-            pass != MeshPassType::ShadowDepth);
+            selectionPass ? nullptr : command.materialResource,
+            pass != MeshPassType::ShadowDepth && !selectionPass);
 
         bgfx::setInstanceDataBuffer(&instanceBuffer, 0U, static_cast<std::uint32_t>(availableInstances));
         bgfx::setVertexBuffer(0, command.meshResource->vertexBuffer);
@@ -790,6 +804,10 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         bgfx::ProgramHandle program = meshProgram_;
         if (pass == MeshPassType::ShadowDepth) {
             program = shadowProgram_;
+        } else if (selectionPass) {
+            const std::array<float, 16> disabledShadowViewProj{};
+            bgfx::setUniform(shadowViewProjUniform_, disabledShadowViewProj.data());
+            program = selectionProgram_;
         } else {
             const bgfx::TextureHandle normalTexture = ResolveNormalTexture(command.materialResource, resources, resourceMap, fallbackNormalTexture_);
             const bgfx::TextureHandle metallicRoughnessTexture = ResolveMetallicRoughnessTexture(command.materialResource, resources, resourceMap, fallbackWhiteTexture_);
@@ -835,6 +853,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
 bool SceneMeshSubmitter::IsInitialized() const noexcept {
     return bgfx::isValid(meshProgram_) &&
         bgfx::isValid(shadowProgram_) &&
+        bgfx::isValid(selectionProgram_) &&
         bgfx::isValid(albedoSampler_) &&
         bgfx::isValid(shadowSampler_) &&
         bgfx::isValid(normalSampler_) &&
