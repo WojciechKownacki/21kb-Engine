@@ -1,6 +1,7 @@
 #include "rendering/DockPanelChromeRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/DockPanelFramePainter.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/EditorTabIndicatorPainter.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -10,8 +11,7 @@
 namespace kb::editor {
 
 void DockPanelChromeRenderer::Paint(HDC dc, const RECT& rect, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, bool active) const {
-    const EditorSurfaceKind panelSurface = panel.kind == DockPanelKind::Scene ? EditorSurfaceKind::ScenePanel : EditorSurfaceKind::DockPanel;
-    EditorSurfacePainter::Frame(dc, rect, theme, panelSurface, GdiDrawing::ToColorRef(theme.borderPanel));
+    DockPanelFramePainter{}.Paint(dc, rect, panel.kind, theme);
 
     RECT tabStrip{ rect.left + 1, rect.top + 1, rect.right - 1, rect.top + metrics.tabStripHeight };
     EditorSurfacePainter::Fill(dc, tabStrip, theme, EditorSurfaceKind::HeaderStrip);

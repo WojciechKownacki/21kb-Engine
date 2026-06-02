@@ -44,6 +44,22 @@ const EditorAssetBrowserState& EditorSceneContext::AssetBrowser() const noexcept
     return assetBrowser_;
 }
 
+EditorViewportPreviewState& EditorSceneContext::ViewportPreview() noexcept {
+    return ViewportPreview(0U);
+}
+
+const EditorViewportPreviewState& EditorSceneContext::ViewportPreview() const noexcept {
+    return ViewportPreview(0U);
+}
+
+EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint64_t viewportKey) noexcept {
+    return viewportPreviews_.try_emplace(viewportKey).first->second;
+}
+
+const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint64_t viewportKey) const noexcept {
+    return viewportPreviews_.try_emplace(viewportKey).first->second;
+}
+
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
     return selectedEntity_;
 }

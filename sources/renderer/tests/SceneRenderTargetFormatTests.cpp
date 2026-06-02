@@ -1,0 +1,110 @@
+#include "RendererTestSupport.hpp"
+
+#include "kb/render/SceneRenderTarget.hpp"
+#include "kb/render/SceneRenderTargetFormat.hpp"
+#include "kb/render/frame/RenderSceneSubmitDesc.hpp"
+
+#include <string_view>
+
+namespace kb::render::tests {
+namespace {
+
+void SceneColorPolicyMapsToExplicitFormats() {
+    Require(SceneColorFormatForPolicy(SceneColorFormatPolicy::Rgba16F) == bgfx::TextureFormat::RGBA16F, "RGBA16F policy mapped to the wrong format");
+    Require(SceneColorFormatForPolicy(SceneColorFormatPolicy::Rgba16) == bgfx::TextureFormat::RGBA16, "RGBA16 policy mapped to the wrong format");
+    Require(SceneColorFormatForPolicy(SceneColorFormatPolicy::Rgba8) == bgfx::TextureFormat::RGBA8, "RGBA8 policy mapped to the wrong format");
+    Require(SceneColorFormatForPolicy(SceneColorFormatPolicy::Auto) == bgfx::TextureFormat::Count, "Auto policy should not map to a fixed format");
+}
+
+void SceneColorHdrClassificationIsStrict() {
+    Require(SceneColorFormatIsHdr(bgfx::TextureFormat::RGBA16F), "RGBA16F should be classified as HDR");
+    Require(!SceneColorFormatIsHdr(bgfx::TextureFormat::RGBA16), "RGBA16 should be an explicit non-HDR fallback");
+    Require(!SceneColorFormatIsHdr(bgfx::TextureFormat::RGBA8), "RGBA8 should be an explicit non-HDR fallback");
+    Require(!SceneColorFormatIsHdr(bgfx::TextureFormat::BGRA8), "BGRA8 should not be accepted as scene HDR");
+}
+
+void SceneDepthPreferredClassificationIsStrict() {
+    SceneDepthFormatSelection d32f{
+        .format = bgfx::TextureFormat::D32F,
+        .status = SceneTargetFormatSelectionStatus::Selected,
+    };
+    SceneDepthFormatSelection d32{
+        .format = bgfx::TextureFormat::D32,
+        .status = SceneTargetFormatSelectionStatus::Selected,
+    };
+    SceneDepthFormatSelection d24s8{
+        .format = bgfx::TextureFormat::D24S8,
+        .status = SceneTargetFormatSelectionStatus::CapabilityFallback,
+    };
+
+    Require(d32f.IsPreferred(), "D32F should be a preferred scene depth format");
+    Require(d32.IsPreferred(), "D32 should be a preferred scene depth format");
+    Require(!d24s8.IsPreferred(), "D24S8 should be an explicit fallback depth format");
+}
+
+void SceneTargetFormatNamesAreExplicit() {
+    Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA16F) == std::string_view{"RGBA16F"}, "RGBA16F format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA16) == std::string_view{"RGBA16"}, "RGBA16 format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA8) == std::string_view{"RGBA8"}, "RGBA8 format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::D32F) == std::string_view{"D32F"}, "D32F format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::D32) == std::string_view{"D32"}, "D32 format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::D24S8) == std::string_view{"D24S8"}, "D24S8 format name is unstable");
+}
+
+void SceneRenderTargetDescRequiresValidExtent() {
+    Require(!SceneRenderTargetDesc{}.IsValid(), "Default SceneRenderTargetDesc should be invalid");
+    Require(SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}}.IsValid(), "SceneRenderTargetDesc rejected a valid extent");
+}
+
+void RenderTargetDescSupportsSceneFallbackFormats() {
+    Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba16, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA16 fallback format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba16F, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA16F HDR format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba8, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA8 fallback format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::D32, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected D32 fallback depth format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::D32F, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected D32F depth format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::D24S8, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected D24S8 fallback depth format");
+}
+
+void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
+    RenderSceneSubmitDesc desc{};
+    desc.target.viewport = RenderViewportDesc{
+        .id = RenderViewportId{1U},
+        .extent = RenderExtent{320U, 200U},
+        .viewportIndex = 0U,
+    };
+    Require(desc.IsValid(), "RenderSceneSubmitDesc rejected a valid scene target without final composite");
+
+    desc.finalComposite.enabled = true;
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted enabled final composite without extent");
+
+    desc.finalComposite.extent = RenderExtent{320U, 200U};
+    Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted enabled final composite without post-process target");
+
+    desc.postProcess = RenderPostProcessTargetBinding{
+        .bloomFrameBuffer = bgfx::FrameBufferHandle{1U},
+        .bloomTexture = bgfx::TextureHandle{2U},
+        .pingFrameBuffer = bgfx::FrameBufferHandle{3U},
+        .pingTexture = bgfx::TextureHandle{4U},
+        .combineFrameBuffer = bgfx::FrameBufferHandle{5U},
+        .combineTexture = bgfx::TextureHandle{6U},
+        .finalFrameBuffer = bgfx::FrameBufferHandle{7U},
+        .finalTexture = bgfx::TextureHandle{8U},
+        .extent = RenderExtent{320U, 200U},
+        .enabled = true,
+    };
+    Require(desc.IsValid(), "RenderSceneSubmitDesc rejected enabled final composite with valid post-process target");
+}
+
+} // namespace
+
+void RunSceneRenderTargetFormatTests() {
+    SceneColorPolicyMapsToExplicitFormats();
+    SceneColorHdrClassificationIsStrict();
+    SceneDepthPreferredClassificationIsStrict();
+    SceneTargetFormatNamesAreExplicit();
+    SceneRenderTargetDescRequiresValidExtent();
+    RenderTargetDescSupportsSceneFallbackFormats();
+    SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled();
+}
+
+} // namespace kb::render::tests

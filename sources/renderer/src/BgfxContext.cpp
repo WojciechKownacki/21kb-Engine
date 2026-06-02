@@ -53,7 +53,8 @@ BgfxContext::~BgfxContext() {
 }
 
 bool BgfxContext::Initialize(RenderSurface& surface, const DisplayConfig& config, bgfx::RendererType::Enum preferredBackend) {
-    if (surface.NativeWindowHandle() == nullptr) {
+    const bool headlessNoop = config.allowHeadlessNoop && preferredBackend == bgfx::RendererType::Noop;
+    if (surface.NativeWindowHandle() == nullptr && !headlessNoop) {
         return false;
     }
 
@@ -64,7 +65,8 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     if (initialized_) {
         return true;
     }
-    if (width == 0 || height == 0 || nwh == nullptr) {
+    const bool headlessNoop = config.allowHeadlessNoop && preferredBackend == bgfx::RendererType::Noop;
+    if (width == 0 || height == 0 || (nwh == nullptr && !headlessNoop)) {
         return false;
     }
 
@@ -73,6 +75,7 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     nativeDisplayHandle_ = ndt;
 
     bgfx::Init init{};
+    resetFlags_ = config.ComputeResetFlags();
     init.callback = callback_.get();
     init.platformData.ndt = ndt;
     init.platformData.nwh = nwh;
@@ -82,7 +85,7 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
     init.platformData.type = bgfx::NativeWindowHandleType::Default;
     init.resolution.width = width;
     init.resolution.height = height;
-    init.resolution.reset = config.ComputeResetFlags();
+    init.resolution.reset = resetFlags_;
     init.type = preferredBackend;
     init.vendorId = BGFX_PCI_ID_NONE;
 
@@ -94,6 +97,7 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
         callback_.reset();
         nativeWindowHandle_ = nullptr;
         nativeDisplayHandle_ = nullptr;
+        resetFlags_ = 0;
         return false;
     }
 
@@ -114,6 +118,7 @@ void BgfxContext::Shutdown() {
     initialized_ = false;
     width_ = 0;
     height_ = 0;
+    resetFlags_ = 0;
     nativeWindowHandle_ = nullptr;
     nativeDisplayHandle_ = nullptr;
 }
@@ -123,8 +128,13 @@ void BgfxContext::Reset(std::uint32_t width, std::uint32_t height, std::uint32_t
         return;
     }
 
+    if (width_ == width && height_ == height && resetFlags_ == resetFlags) {
+        return;
+    }
+
     width_ = width;
     height_ = height;
+    resetFlags_ = resetFlags;
     bgfx::reset(width, height, resetFlags);
 }
 

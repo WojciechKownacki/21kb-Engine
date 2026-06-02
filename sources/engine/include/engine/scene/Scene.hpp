@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace kb::scene {
@@ -44,11 +45,13 @@ public:
     [[nodiscard]] ScenePrefabs Prefabs() noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
+    [[nodiscard]] std::uint64_t Id() const noexcept;
 
 private:
     friend class SceneAccess;
 
     std::unique_ptr<SceneState> state_;
+    std::uint64_t id_ = 0;
 };
 
 } // namespace kb::scene

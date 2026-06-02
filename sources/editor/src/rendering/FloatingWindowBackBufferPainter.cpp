@@ -38,7 +38,7 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
     };
     sceneViewport.BeginPaintLayout(window);
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
-    sceneViewport.FlushQueuedPresent();
+    sceneViewport.EndPaintLayout();
 }
 
 } // namespace kb::editor

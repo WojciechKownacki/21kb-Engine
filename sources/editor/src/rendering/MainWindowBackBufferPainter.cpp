@@ -42,7 +42,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
     };
     sceneViewport.BeginPaintLayout();
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
-    sceneViewport.FlushQueuedPresent();
+    sceneViewport.EndPaintLayout();
 }
 
 } // namespace kb::editor
