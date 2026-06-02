@@ -20,7 +20,7 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_engine_tests;kb_editor_tests;kb_editor"
+            targets: "kb_engine_tests;kb_renderer_tests;kb_editor_tests;kb_editor"
           - name: Linux GCC ASan UBSan
             os: ubuntu-latest
             generator: "Unix Makefiles"

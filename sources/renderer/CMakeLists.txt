@@ -105,7 +105,7 @@ add_library(kb_renderer STATIC
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vfetchoptimizer.cpp
 )
 
-if(TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
+if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
     set(KB_RENDERER_GENERATED_SHADER_DIR ${CMAKE_BINARY_DIR}/generated_shaders)
     set(KB_RENDERER_SHADER_RUNTIME_DIR ${CMAKE_BINARY_DIR}/shaders)
     set(KB_RENDERER_SHADER_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
