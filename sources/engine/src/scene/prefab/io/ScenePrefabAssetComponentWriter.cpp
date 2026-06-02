@@ -2,6 +2,7 @@
 
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <cstdint>
 #include <ostream>
 
 namespace kb::scene {
@@ -28,6 +29,10 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
     if (components.meshRenderer.has_value()) {
         output << "meshRenderer.meshAssetId=" << components.meshRenderer->meshAssetId << '\n';
         output << "meshRenderer.materialAssetId=" << components.meshRenderer->materialAssetId << '\n';
+        output << "meshRenderer.materialSlotOverrideCount=" << components.meshRenderer->materialSlotOverrideCount << '\n';
+        for (std::uint32_t slotIndex = 0U; slotIndex < components.meshRenderer->materialSlotOverrideCount && slotIndex < kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
+            output << "meshRenderer.materialSlotAssetId." << slotIndex << '=' << components.meshRenderer->materialSlotAssetIds[slotIndex] << '\n';
+        }
         output << "meshRenderer.castsShadow=" << (components.meshRenderer->castsShadow ? 1 : 0) << '\n';
         output << "meshRenderer.receivesShadow=" << (components.meshRenderer->receivesShadow ? 1 : 0) << '\n';
     }

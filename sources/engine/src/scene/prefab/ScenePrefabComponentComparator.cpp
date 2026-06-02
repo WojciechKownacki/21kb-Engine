@@ -21,6 +21,8 @@ namespace {
 [[nodiscard]] bool Equal(const MeshRendererComponent& lhs, const MeshRendererComponent& rhs) noexcept {
     return lhs.meshAssetId == rhs.meshAssetId
         && lhs.materialAssetId == rhs.materialAssetId
+        && lhs.materialSlotAssetIds == rhs.materialSlotAssetIds
+        && lhs.materialSlotOverrideCount == rhs.materialSlotOverrideCount
         && lhs.castsShadow == rhs.castsShadow
         && lhs.receivesShadow == rhs.receivesShadow;
 }

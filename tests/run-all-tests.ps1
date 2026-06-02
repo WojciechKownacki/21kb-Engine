@@ -14,5 +14,6 @@ if (!$SkipConfigure) {
 }
 
 Invoke-Native cmake --build $buildPath --config $Config --target kb_engine_tests
+Invoke-Native cmake --build $buildPath --config $Config --target kb_renderer_tests
 Invoke-Native cmake --build $buildPath --config $Config --target kb_editor_tests
 Invoke-Native ctest --test-dir $buildPath -C $Config --output-on-failure

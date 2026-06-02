@@ -1,17 +1,132 @@
 #pragma once
 
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/SceneRenderTarget.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/frame/EditorRenderPassSubmitter.hpp"
+#include "kb/render/frame/FinalCompositePass.hpp"
+#include "kb/render/frame/RenderFramePipeline.hpp"
+#include "kb/render/frame/RenderFrameState.hpp"
+#include "kb/render/frame/RenderSceneSubmitDesc.hpp"
+#include "kb/render/post/PostProcessChain.hpp"
+#include "kb/render/post/ScenePostProcessRenderer.hpp"
+#include "kb/render/post/ScenePostProcessTargets.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
+#include "kb/render/runtime/RuntimeFrameResourceReferences.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
+#include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/runtime/RuntimeRenderResourceCache.hpp"
+#include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "kb/render/scene/SceneRenderTypes.hpp"
+#include "kb/render/scene/RenderSceneStore.hpp"
+#include "kb/render/shadow/ShadowMapResource.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace kb::render {
 
 class BgfxContext;
+class EcsRenderSceneSynchronizer;
+class RenderScene;
 class RenderSurface;
+class SceneRenderer;
+
+} // namespace kb::render
+
+namespace kb::scene {
+class Scene;
+}
+
+namespace kb::render {
 
 class Renderer {
 public:
+    static constexpr std::uint64_t kRuntimeAssetRetentionFrames = 120ULL;
+    static constexpr std::uint64_t kRuntimeAssetDiscoveryIntervalFrames = 30ULL;
+
+    struct RuntimeSceneResourceStats {
+        std::uint32_t cachedMeshCount = 0;
+        std::uint32_t cachedMaterialCount = 0;
+        std::uint32_t cachedTextureCount = 0;
+        std::uint32_t cachedMeshCapacity = 0;
+        std::uint32_t cachedMaterialCapacity = 0;
+        std::uint32_t cachedTextureCapacity = 0;
+        std::uint32_t referencedMeshAssetCount = 0;
+        std::uint32_t referencedMaterialAssetCount = 0;
+        std::uint32_t referencedTextureAssetCount = 0;
+        std::uint32_t unresolvedMaterialTexturePathCount = 0;
+        std::uint32_t referencedMeshAssetCapacity = 0;
+        std::uint32_t referencedMaterialAssetCapacity = 0;
+        std::uint32_t referencedTextureAssetCapacity = 0;
+        std::uint32_t scenePassSubmitStatsCapacity = 0;
+        std::uint32_t registeredRuntimeAssetLoaderSceneCount = 0;
+        std::uint32_t runtimeAssetDiscoverySceneCount = 0;
+        std::uint32_t runtimeAssetDiscoverySceneCapacity = 0;
+        std::uint32_t renderSceneCount = 0;
+        std::uint32_t renderSceneCapacity = 0;
+        std::uint32_t renderSceneMeshProxyCount = 0;
+        std::uint32_t renderSceneCameraProxyCount = 0;
+        std::uint32_t renderSceneLightProxyCount = 0;
+        std::uint32_t renderSceneMeshProxyCapacity = 0;
+        std::uint32_t renderSceneCameraProxyCapacity = 0;
+        std::uint32_t renderSceneLightProxyCapacity = 0;
+        std::uint32_t renderSceneDrawGroupLookupCapacity = 0;
+        std::uint32_t meshResourceSlotCapacity = 0;
+        std::uint32_t materialResourceSlotCapacity = 0;
+        std::uint32_t textureResourceSlotCapacity = 0;
+        std::uint32_t meshBindingCapacity = 0;
+        std::uint32_t materialBindingCapacity = 0;
+        std::uint32_t textureBindingCapacity = 0;
+        std::uint32_t shadowMapSize = 0;
+        std::uint64_t shadowMapAllocationBytes = 0;
+        bool shadowMapAllocated = false;
+        std::uint32_t syncMeshSeenCount = 0;
+        std::uint32_t syncCameraSeenCount = 0;
+        std::uint32_t syncLightSeenCount = 0;
+        std::uint32_t syncMeshSeenCapacity = 0;
+        std::uint32_t syncCameraSeenCapacity = 0;
+        std::uint32_t syncLightSeenCapacity = 0;
+        std::uint32_t syncTransformCacheCount = 0;
+        std::uint32_t syncTransformResolvingCount = 0;
+        std::uint32_t syncTransformCacheCapacity = 0;
+        std::uint32_t syncTransformResolvingCapacity = 0;
+        std::uint32_t defaultForwardLightCapacity = kMaxSceneForwardLights;
+        std::uint32_t defaultEnvironmentLightingMode = static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Constant) + 1U;
+        std::uint32_t defaultEnvironmentLightingSampleCount = 1U;
+        std::uint32_t defaultShadowFilterSampleCount = 9U;
+        std::uint64_t retentionFrames = kRuntimeAssetRetentionFrames;
+        std::uint64_t assetDiscoveryIntervalFrames = kRuntimeAssetDiscoveryIntervalFrames;
+    };
+
+    struct RuntimeSceneResourceReserveDesc {
+        std::uint32_t sceneCount = 0;
+        std::uint32_t cachedMeshes = 0;
+        std::uint32_t cachedMaterials = 0;
+        std::uint32_t cachedTextures = 0;
+        std::uint32_t frameReferencedMeshes = 0;
+        std::uint32_t frameReferencedMaterials = 0;
+        std::uint32_t frameReferencedTextures = 0;
+        std::uint32_t scenePassSubmitStats = 0;
+        std::uint32_t renderSceneMeshProxies = 0;
+        std::uint32_t renderSceneCameraProxies = 0;
+        std::uint32_t renderSceneLightProxies = 0;
+        std::uint32_t renderSceneDrawGroupKeys = 0;
+        std::uint32_t meshResourceSlots = 0;
+        std::uint32_t materialResourceSlots = 0;
+        std::uint32_t textureResourceSlots = 0;
+        std::uint32_t meshBindings = 0;
+        std::uint32_t materialBindings = 0;
+        std::uint32_t textureBindings = 0;
+        std::uint32_t syncMeshProxies = 0;
+        std::uint32_t syncCameraProxies = 0;
+        std::uint32_t syncLightProxies = 0;
+        std::uint32_t syncTransformCacheEntries = 0;
+        std::uint32_t syncTransformResolvingEntries = 0;
+    };
+
     Renderer();
     ~Renderer();
 
@@ -23,7 +138,18 @@ public:
 
     [[nodiscard]] bool BeginFrame();
     void EndFrame();
-    void SubmitClear(std::uint32_t rgba, float depth = 1.0F, std::uint8_t stencil = 0);
+    void SubmitClear(std::uint32_t rgba, float depth = SceneDepthPolicy::ClearDepth(), std::uint8_t stencil = 0);
+    void SubmitScene(const kb::scene::Scene& scene);
+    [[nodiscard]] bool SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc);
+    struct SceneFrameSubmission {
+        const kb::scene::Scene* scene = nullptr;
+        RenderSceneSubmitDesc desc{};
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return scene != nullptr && desc.IsValid();
+        }
+    };
+    [[nodiscard]] bool SubmitScenes(std::span<const SceneFrameSubmission> submissions);
     void OnResize(std::uint32_t width, std::uint32_t height);
 
     [[nodiscard]] bool IsInitialized() const noexcept;
@@ -31,9 +157,54 @@ public:
     [[nodiscard]] std::uint32_t BackbufferWidth() const noexcept;
     [[nodiscard]] std::uint32_t BackbufferHeight() const noexcept;
     [[nodiscard]] void* NativeWindowHandle() const noexcept;
+    [[nodiscard]] std::uint32_t LastCompletedFrame() const noexcept;
+    [[nodiscard]] RenderResourceRegistry* SceneResources() noexcept;
+    [[nodiscard]] const RenderResourceRegistry* SceneResources() const noexcept;
+    [[nodiscard]] SceneRenderResourceMap* SceneResourceMap() noexcept;
+    [[nodiscard]] const SceneRenderResourceMap* SceneResourceMap() const noexcept;
+    [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
+    [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
+    [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
+    [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
+    void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
+    void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
+    [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
+    void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
+    [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
+    void SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept;
+    [[nodiscard]] std::uint64_t RuntimeAssetDiscoveryIntervalFrames() const noexcept;
+    void ReleaseScene(const kb::scene::Scene& scene) noexcept;
+    void ReleaseAllScenes() noexcept;
 
 private:
+    [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
+    [[nodiscard]] RenderScene& RenderSceneFor(const kb::scene::Scene& scene);
+    void ApplyRuntimeSceneResourceReserve();
     std::unique_ptr<BgfxContext> context_;
+    std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
+    RenderSceneStore renderSceneStore_;
+    std::unique_ptr<SceneRenderer> sceneRenderer_;
+    std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
+    std::unique_ptr<FinalCompositePass> finalCompositePass_;
+    SceneRenderTarget defaultSceneTarget_;
+    ScenePostProcessTargets defaultPostProcessTargets_;
+    ShadowMapResource defaultShadowMap_;
+    RenderFramePipeline framePipeline_;
+    RenderFrameState frameState_;
+    EditorRenderPassSubmitter editorPassSubmitter_;
+    PostProcessChain postProcessChain_;
+    SceneRenderSubmitStats lastSceneSubmitStats_{};
+    std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
+    SceneRenderDiagnostics lastSceneDiagnostics_{};
+    RuntimeRenderResourceCache runtimeResourceCache_;
+    RuntimeFrameResourceReferences frameReferences_;
+    RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;
+    RuntimeMaterialResolver runtimeMaterialResolver_;
+    RuntimeSceneResourceReserveDesc runtimeSceneResourceReserveDesc_{};
+    SceneRenderDrawBudget defaultSceneDrawBudget_{};
+    SceneRenderLightingConfig defaultSceneLightingConfig_{};
+    std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;
+    std::uint32_t lastCompletedFrame_ = 0;
     DisplayConfig displayConfig_{};
     bool frameActive_ = false;
 };
