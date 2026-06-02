@@ -92,6 +92,16 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(*loaded.Get() == "hello runtime asset", "Text asset payload was not preserved");
     kb::tests::Require(manager.LoadedCount() == 1, "Runtime asset cache did not retain the loaded asset");
 
+    const kb::assets::AssetId textAssetId = metadata->id;
+    const std::uint64_t oldContentHash = metadata->contentHash;
+    WriteTextFile(assetsRoot / "Text" / "Greeting.txt", "updated runtime asset");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Mounted asset rediscovery did not update the changed text asset");
+    metadata = manager.Registry().Find(textAssetId);
+    kb::tests::Require(metadata != nullptr && metadata->contentHash != oldContentHash, "Asset rediscovery did not refresh the content hash");
+    kb::tests::Require(!manager.IsLoaded(textAssetId), "Asset rediscovery did not invalidate cached payload after content change");
+    const kb::assets::AssetHandle<std::string> reloaded = manager.Load<std::string>(textAssetId);
+    kb::tests::Require(reloaded.IsLoaded() && *reloaded.Get() == "updated runtime asset", "Asset manager did not reload changed file content");
+
     const kb::assets::AssetHandle<int> wrongType = manager.Load<int>(metadata->id);
     kb::tests::Require(!wrongType.IsLoaded(), "Asset manager accepted a mismatched typed load");
     kb::tests::Require(!manager.LastError().empty(), "Asset manager did not report a mismatched typed load error");
