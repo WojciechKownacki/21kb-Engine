@@ -3,6 +3,7 @@
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/SceneRenderTargetFormat.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
+#include "kb/render/post/ScenePostProcessTargets.hpp"
 
 #include <string_view>
 
@@ -81,18 +82,32 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
     Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted enabled final composite without post-process target");
 
     desc.postProcess = RenderPostProcessTargetBinding{
-        .bloomFrameBuffer = bgfx::FrameBufferHandle{1U},
-        .bloomTexture = bgfx::TextureHandle{2U},
-        .pingFrameBuffer = bgfx::FrameBufferHandle{3U},
-        .pingTexture = bgfx::TextureHandle{4U},
-        .combineFrameBuffer = bgfx::FrameBufferHandle{5U},
-        .combineTexture = bgfx::TextureHandle{6U},
-        .finalFrameBuffer = bgfx::FrameBufferHandle{7U},
-        .finalTexture = bgfx::TextureHandle{8U},
+        .selectionMaskFrameBuffer = bgfx::FrameBufferHandle{1U},
+        .selectionMaskTexture = bgfx::TextureHandle{2U},
+        .bloomFrameBuffer = bgfx::FrameBufferHandle{3U},
+        .bloomTexture = bgfx::TextureHandle{4U},
+        .pingFrameBuffer = bgfx::FrameBufferHandle{5U},
+        .pingTexture = bgfx::TextureHandle{6U},
+        .combineFrameBuffer = bgfx::FrameBufferHandle{7U},
+        .combineTexture = bgfx::TextureHandle{8U},
+        .finalFrameBuffer = bgfx::FrameBufferHandle{9U},
+        .finalTexture = bgfx::TextureHandle{10U},
         .extent = RenderExtent{320U, 200U},
         .enabled = true,
     };
     Require(desc.IsValid(), "RenderSceneSubmitDesc rejected enabled final composite with valid post-process target");
+}
+
+void DefaultPostProcessTargetsBindingIsDisabledAndInvalid() {
+    const ScenePostProcessTargets targets;
+    const RenderPostProcessTargetBinding binding = targets.Binding();
+
+    Require(!binding.enabled, "Default post-process binding should be disabled");
+    Require(binding.IsValid(), "Disabled post-process binding should be valid");
+    Require(!bgfx::isValid(binding.selectionMaskFrameBuffer), "Default selection mask framebuffer should be invalid");
+    Require(!bgfx::isValid(binding.selectionMaskTexture), "Default selection mask texture should be invalid");
+    Require(!bgfx::isValid(binding.finalFrameBuffer), "Default final framebuffer should be invalid");
+    Require(!bgfx::isValid(binding.finalTexture), "Default final texture should be invalid");
 }
 
 } // namespace
@@ -105,6 +120,7 @@ void RunSceneRenderTargetFormatTests() {
     SceneRenderTargetDescRequiresValidExtent();
     RenderTargetDescSupportsSceneFallbackFormats();
     SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled();
+    DefaultPostProcessTargetsBindingIsDisabledAndInvalid();
 }
 
 } // namespace kb::render::tests

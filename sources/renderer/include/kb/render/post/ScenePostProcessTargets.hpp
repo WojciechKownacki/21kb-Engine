@@ -22,7 +22,7 @@ struct ScenePostProcessTargetsDesc {
 
 class ScenePostProcessTargets {
 public:
-    static constexpr std::size_t kTargetCount = 4U;
+    static constexpr std::size_t kTargetCount = 5U;
 
     ScenePostProcessTargets() = default;
     ~ScenePostProcessTargets();
@@ -40,15 +40,17 @@ public:
 
 private:
     enum TargetIndex : std::size_t {
-        Bloom = 0U,
-        Ping = 1U,
-        Combine = 2U,
-        Final = 3U,
+        SelectionMask = 0U,
+        Bloom = 1U,
+        Ping = 2U,
+        Combine = 3U,
+        Final = 4U,
     };
 
     [[nodiscard]] bool CreateTargets(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy);
 
     std::array<bgfx::TextureHandle, kTargetCount> textures_{{
+        BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
@@ -59,11 +61,13 @@ private:
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
     }};
     SceneColorFormatSelection colorSelection_{};
     SceneColorFormatPolicy colorPolicy_ = SceneColorFormatPolicy::Auto;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
+    bool allocated_ = false;
 };
 
 } // namespace kb::render

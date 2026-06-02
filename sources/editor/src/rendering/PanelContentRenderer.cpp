@@ -244,7 +244,6 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
             const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
             SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
             const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content);
-            GdiDrawing::FillRectColor(dc, sceneRects.renderArea, GdiDrawing::ToColorRef(theme.background));
             const EditorViewportProfile profile = viewportState.Profile();
             const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
             const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
@@ -254,6 +253,7 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
                 .fitMode = viewportState.FitMode(),
                 .safeArea = profile.safeArea,
                 .cameraOverride = BuildCameraOverride(sceneContext, viewportState.CameraMode(), renderWidth, renderHeight),
+                .selectedEntityIds = { sceneContext.SelectedEntity().Id() },
                 .drawSafeArea = profile.devicePreview,
             };
             if (sceneViewportHost != nullptr) {

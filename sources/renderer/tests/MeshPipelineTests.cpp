@@ -172,6 +172,37 @@ void RunMeshPipelineFiltersShadowCastingInstancesTest() {
     Require(result.commands[0].instances[0].entityId == 1U, "MeshPipeline shadow pass kept the wrong instance");
 }
 
+void RunMeshPipelineFiltersSelectionInstancesTest() {
+    const std::array<std::uint64_t, 1U> selected{2U};
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U },
+            },
+        },
+    };
+
+    const MeshPipelineBuildResult emptySelection = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::SelectionId,
+        .drawGroups = &drawGroups,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(emptySelection.commands.empty(), "MeshPipeline selection pass rendered without selected entities");
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::SelectionId,
+        .drawGroups = &drawGroups,
+        .selectedEntityIds = selected,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.commands.size() == 1U, "MeshPipeline selection pass did not emit a command for selected entities");
+    Require(result.commands[0].instances.size() == 1U, "MeshPipeline selection pass did not filter unselected instances");
+    Require(result.commands[0].instances[0].entityId == 2U, "MeshPipeline selection pass kept the wrong entity");
+}
+
 void RunMeshPipelineReportsShadowPassMissingResourcesOnlyForCastersTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
@@ -586,6 +617,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest();
     RunMeshPipelineBuildIntoReusesCommandInstanceCapacityTest();
     RunMeshPipelineFiltersShadowCastingInstancesTest();
+    RunMeshPipelineFiltersSelectionInstancesTest();
     RunMeshPipelineReportsShadowPassMissingResourcesOnlyForCastersTest();
     RunSceneRendererValidatesExplicitMeshPassTest();
     RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest();

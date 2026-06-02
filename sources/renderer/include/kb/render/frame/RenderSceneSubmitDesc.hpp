@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace kb::render {
 
@@ -32,6 +33,8 @@ struct RenderFinalCompositeTargetBinding {
 };
 
 struct RenderPostProcessTargetBinding {
+    bgfx::FrameBufferHandle selectionMaskFrameBuffer = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle selectionMaskTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle bloomFrameBuffer = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle bloomTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle pingFrameBuffer = BGFX_INVALID_HANDLE;
@@ -45,6 +48,7 @@ struct RenderPostProcessTargetBinding {
 
     [[nodiscard]] bool IsValid() const noexcept {
         return !enabled || (
+            bgfx::isValid(selectionMaskFrameBuffer) && bgfx::isValid(selectionMaskTexture) &&
             bgfx::isValid(bloomFrameBuffer) && bgfx::isValid(bloomTexture) &&
             bgfx::isValid(pingFrameBuffer) && bgfx::isValid(pingTexture) &&
             bgfx::isValid(combineFrameBuffer) && bgfx::isValid(combineTexture) &&
@@ -61,6 +65,7 @@ struct RenderSceneSubmitDesc {
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
+    std::span<const std::uint64_t> selectedEntityIds{};
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;

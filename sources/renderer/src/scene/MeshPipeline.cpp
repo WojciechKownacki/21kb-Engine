@@ -174,15 +174,20 @@ struct Frustum {
     return (passKey << 60U) | (materialKey << 40U) | (meshKey << 20U) | static_cast<std::uint64_t>(SortDepthBucket(pass, depthBucket));
 }
 
-[[nodiscard]] bool InstanceCanEverBelongToPass(MeshPassType pass, const SceneRenderMeshInstance& instance) noexcept {
+[[nodiscard]] bool IsSelectedEntity(std::span<const std::uint64_t> selectedEntityIds, std::uint64_t entityId) noexcept {
+    return std::ranges::find(selectedEntityIds, entityId) != selectedEntityIds.end();
+}
+
+[[nodiscard]] bool InstanceCanEverBelongToPass(MeshPassType pass, const SceneRenderMeshInstance& instance, std::span<const std::uint64_t> selectedEntityIds) noexcept {
     switch (pass) {
     case MeshPassType::ShadowDepth:
         return instance.castsShadow;
+    case MeshPassType::SelectionId:
+    case MeshPassType::EditorSelection:
+        return IsSelectedEntity(selectedEntityIds, instance.entityId);
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
     case MeshPassType::BaseTransparent:
-    case MeshPassType::SelectionId:
-    case MeshPassType::EditorSelection:
     case MeshPassType::Gizmo:
         return true;
     }
@@ -190,10 +195,10 @@ struct Frustum {
     return true;
 }
 
-[[nodiscard]] std::uint32_t CountPassInstances(MeshPassType pass, const SceneRenderDrawGroup& group) noexcept {
+[[nodiscard]] std::uint32_t CountPassInstances(MeshPassType pass, const SceneRenderDrawGroup& group, std::span<const std::uint64_t> selectedEntityIds) noexcept {
     std::uint32_t count = 0U;
     for (const SceneRenderMeshInstance& instance : group.instances) {
-        count += InstanceCanEverBelongToPass(pass, instance) ? 1U : 0U;
+        count += InstanceCanEverBelongToPass(pass, instance, selectedEntityIds) ? 1U : 0U;
     }
     return count;
 }
@@ -204,13 +209,14 @@ void EmitPassDiagnostics(
     SceneRenderDiagnosticSeverity severity,
     MeshPassType pass,
     const SceneRenderDrawGroup& group,
-    std::uint64_t materialAssetId) {
+    std::uint64_t materialAssetId,
+    std::span<const std::uint64_t> selectedEntityIds) {
     if (diagnostics == nullptr) {
         return;
     }
 
     for (const SceneRenderMeshInstance& instance : group.instances) {
-        if (!InstanceCanEverBelongToPass(pass, instance)) {
+        if (!InstanceCanEverBelongToPass(pass, instance, selectedEntityIds)) {
             continue;
         }
         diagnostics->events.push_back(SceneRenderDiagnosticEvent{
@@ -244,7 +250,7 @@ void EmitInstanceDiagnostic(
     });
 }
 
-[[nodiscard]] bool InstanceBelongsToPass(MeshPassType pass, const SceneRenderMeshInstance& instance, const RenderMaterialResource* material) noexcept {
+[[nodiscard]] bool InstanceBelongsToPass(MeshPassType pass, const SceneRenderMeshInstance& instance, const RenderMaterialResource* material, std::span<const std::uint64_t> selectedEntityIds) noexcept {
     switch (pass) {
     case MeshPassType::Depth:
         return !IsTransparent(material);
@@ -256,6 +262,7 @@ void EmitInstanceDiagnostic(
         return instance.castsShadow && !IsTransparent(material);
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
+        return IsSelectedEntity(selectedEntityIds, instance.entityId);
     case MeshPassType::Gizmo:
         return true;
     }
@@ -275,7 +282,7 @@ void EmitInstanceDiagnostic(
     case MeshPassType::BaseTransparent:
         return SceneDepthPolicy::SceneDepthReadState() | BGFX_STATE_BLEND_ALPHA | cullState | rasterStateExtra;
     case MeshPassType::SelectionId:
-        return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | SceneDepthPolicy::DepthTestState() | cullState | rasterStateExtra;
+        return BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | cullState | rasterStateExtra;
     case MeshPassType::EditorSelection:
     case MeshPassType::Gizmo:
         return SceneDepthPolicy::SceneOverlayState(true) | cullState | rasterStateExtra;
@@ -482,7 +489,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
     std::size_t writeCommandCount = 0U;
     std::uint32_t acceptedInstanceCount = 0U;
     for (const SceneRenderDrawGroup& group : *desc.drawGroups) {
-        const std::uint32_t instanceCount = CountPassInstances(desc.pass, group);
+        const std::uint32_t instanceCount = CountPassInstances(desc.pass, group, desc.selectedEntityIds);
         if (instanceCount == 0U) {
             continue;
         }
@@ -495,7 +502,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                 result.stats.visibleMeshCount += instanceCount;
                 ++result.stats.visibleDrawGroupCount;
                 result.stats.missingMeshBindingCount += instanceCount;
-                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId);
+                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId, desc.selectedEntityIds);
                 continue;
             }
 
@@ -504,14 +511,14 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                 result.stats.visibleMeshCount += instanceCount;
                 ++result.stats.visibleDrawGroupCount;
                 result.stats.missingMeshResourceCount += instanceCount;
-                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId);
+                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId, desc.selectedEntityIds);
                 continue;
             }
             if (!IsSceneMeshVertexFormatSupported(meshResource->vertexFormat)) {
                 result.stats.visibleMeshCount += instanceCount;
                 ++result.stats.visibleDrawGroupCount;
                 result.stats.unsupportedMeshVertexFormatCount += instanceCount;
-                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId);
+                EmitPassDiagnostics(desc.diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, desc.pass, group, group.materialAssetId, desc.selectedEntityIds);
                 continue;
             }
         }
@@ -533,7 +540,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
             result.commandLookupScratch.reserve(instanceCount);
             std::uint32_t culledForSection = 0U;
             for (SceneRenderMeshInstance instance : group.instances) {
-                if (!InstanceCanEverBelongToPass(desc.pass, instance)) {
+                if (!InstanceCanEverBelongToPass(desc.pass, instance, desc.selectedEntityIds)) {
                     continue;
                 }
                 const std::uint64_t materialAssetId = MaterialAssetForSectionInstance(group, instance, meshResource, section);
@@ -543,7 +550,7 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                     materialResource = ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
                     ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
                 }
-                if (!InstanceBelongsToPass(desc.pass, instance, materialResource)) {
+                if (!InstanceBelongsToPass(desc.pass, instance, materialResource, desc.selectedEntityIds)) {
                     continue;
                 }
                 instance.worldBounds = TransformBounds(section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds), instance.model);
