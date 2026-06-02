@@ -99,13 +99,13 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         pass.Reads(RenderGraphResource::BloomCombine).Writes(RenderGraphResource::PostProcessFinal);
         break;
     case RenderPassKind::EditorSceneOverlays:
-        pass.Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::SceneColor);
+        pass.Reads(RenderGraphResource::SceneDepth).Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::PostProcessFinal);
         break;
     case RenderPassKind::FinalComposite:
         pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::FinalOutput);
         break;
     case RenderPassKind::EditorUiComposite:
-        pass.Reads(RenderGraphResource::FinalOutput).Writes(RenderGraphResource::FinalOutput);
+        pass.Reads(RenderGraphResource::FinalOutput).Reads(RenderGraphResource::SelectionMask).Writes(RenderGraphResource::FinalOutput);
         break;
     }
     return pass;

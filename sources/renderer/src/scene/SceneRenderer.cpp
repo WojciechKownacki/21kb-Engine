@@ -74,7 +74,7 @@ void SceneRenderer::Submit(bgfx::ViewId viewId, const RenderScene& renderScene, 
     SubmitMeshPass(viewId, MeshPassType::BaseOpaque, renderScene, viewportWidth, viewportHeight, cameraOverride, drawBudget, lightingConfig);
 }
 
-void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride, SceneRenderDrawBudget drawBudget, SceneRenderLightingConfig lightingConfig, const SceneRenderShadowMapBinding* shadowMap) const {
+void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride, SceneRenderDrawBudget drawBudget, SceneRenderLightingConfig lightingConfig, const SceneRenderShadowMapBinding* shadowMap, std::span<const std::uint64_t> selectedEntityIds) const {
     lastSubmitStats_ = SceneRenderSubmitStats{};
     lastDiagnostics_.Clear();
     const SceneRenderDrawBudget effectiveDrawBudget = ResolveDrawBudget(drawBudget, defaultDrawBudget_);
@@ -92,7 +92,8 @@ void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const
             camera,
             &lastDiagnostics_,
             effectiveDrawBudget,
-            effectiveLightingConfig);
+            effectiveLightingConfig,
+            selectedEntityIds);
         return;
     }
 
@@ -106,7 +107,7 @@ void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const
     bgfx::touch(viewId);
 
     if (meshSubmitter_ != nullptr) {
-        lastSubmitStats_ = meshSubmitter_->Submit(viewId, renderScene, resources_, resourceMap_, pass, camera, &lastDiagnostics_, effectiveDrawBudget, effectiveLightingConfig, shadowMap);
+        lastSubmitStats_ = meshSubmitter_->Submit(viewId, renderScene, resources_, resourceMap_, pass, camera, &lastDiagnostics_, effectiveDrawBudget, effectiveLightingConfig, shadowMap, selectedEntityIds);
     }
 }
 

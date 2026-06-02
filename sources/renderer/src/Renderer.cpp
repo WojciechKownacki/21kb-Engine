@@ -166,6 +166,10 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    if (!editorPassSubmitter_.Initialize()) {
+        Shutdown();
+        return false;
+    }
 
     postProcessChain_.Clear();
     if (!postProcessChain_.AddPass(PostProcessChain::kDefaultIdentityPass)) {
@@ -177,6 +181,13 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
 }
 
 void Renderer::Shutdown() {
+    if (context_ == nullptr && sceneRenderer_ == nullptr && scenePostProcessRenderer_ == nullptr &&
+        finalCompositePass_ == nullptr && renderSceneSynchronizer_ == nullptr) {
+        frameActive_ = false;
+        frameState_.Reset();
+        return;
+    }
+
     frameActive_ = false;
     lastSceneSubmitStats_ = SceneRenderSubmitStats{};
     lastScenePassSubmitStats_.clear();
@@ -194,6 +205,7 @@ void Renderer::Shutdown() {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
     }
+    editorPassSubmitter_.Shutdown();
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->Shutdown();
         sceneRenderer_.reset();
@@ -305,7 +317,7 @@ bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmi
 bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastSceneSubmitStats_ = SceneRenderSubmitStats{};
     lastScenePassSubmitStats_.clear();
-    lastScenePassSubmitStats_.reserve(submissions.size() * 3U);
+    lastScenePassSubmitStats_.reserve(submissions.size() * 4U);
     lastSceneDiagnostics_.Clear();
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     frameReferences_.Clear();
@@ -459,10 +471,36 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
     }
     editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
+    if (desc.postProcess.enabled && bgfx::isValid(desc.postProcess.selectionMaskFrameBuffer) && !desc.selectedEntityIds.empty()) {
+        sceneRenderer_->SubmitMeshPass(
+            viewportPlan.viewIds.selectionMask,
+            MeshPassType::SelectionId,
+            renderScene,
+            width,
+            height,
+            desc.cameraOverride.has_value() ? &(*desc.cameraOverride) : nullptr,
+            desc.drawBudget,
+            effectiveLightingConfig,
+            nullptr,
+            desc.selectedEntityIds);
+        lastSceneDiagnostics_ += sceneRenderer_->LastDiagnostics();
+        lastScenePassSubmitStats_.push_back(SceneRenderPassSubmitStats{
+            .viewportId = desc.target.viewport.id.value,
+            .viewportIndex = desc.target.viewport.viewportIndex,
+            .pass = MeshPassType::SelectionId,
+            .stats = sceneRenderer_->LastSubmitStats(),
+        });
+    }
+
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
+    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
+        ? &(*desc.cameraOverride)
+        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
 
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr && scenePostProcessRenderer_ != nullptr) {
         const PostProcessOutput postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
             .sceneColor = desc.target.colorTexture,
+            .selectionMask = desc.postProcess.selectionMaskTexture,
             .outputFrameBuffer = desc.postProcess.finalFrameBuffer,
             .outputColor = desc.postProcess.finalTexture,
             .extent = desc.target.viewport.extent,
@@ -480,7 +518,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             return false;
         }
 
-        editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc);
+        editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
 
         const FinalCompositePassDesc compositeDesc{
             .viewId = viewportPlan.viewIds.finalComposite,
@@ -496,7 +534,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return true;
     }
 
-    editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc);
+    editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
     editorPassSubmitter_.SubmitUiComposite(viewportPlan, desc);
     return true;
 }

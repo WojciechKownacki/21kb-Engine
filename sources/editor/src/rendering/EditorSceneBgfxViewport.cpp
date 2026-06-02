@@ -9,9 +9,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <d2d1helper.h>
-#include <limits>
+#include <cstdlib>
 #include <cmath>
+#include <span>
 #include <vector>
 
 namespace kb::editor {
@@ -22,24 +22,12 @@ constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
 constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
-template <typename T>
-void SafeRelease(T*& value) noexcept {
-    if (value != nullptr) {
-        value->Release();
-        value = nullptr;
-    }
-}
-
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
 }
 
 [[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
-}
-
-[[nodiscard]] bool FitsBgfxTextureExtent(std::uint32_t value) noexcept {
-    return value > 0U && value <= static_cast<std::uint32_t>(std::numeric_limits<std::uint16_t>::max());
 }
 
 [[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
@@ -77,195 +65,6 @@ void SafeRelease(T*& value) noexcept {
 }
 
 } // namespace
-
-EditorSceneBgfxViewport::SceneTexturePresentTarget::~SceneTexturePresentTarget() {
-    Shutdown();
-}
-
-bool EditorSceneBgfxViewport::SceneTexturePresentTarget::Ensure(std::uint32_t width, std::uint32_t height) {
-    if (!FitsBgfxTextureExtent(width) || !FitsBgfxTextureExtent(height)) {
-        Shutdown();
-        return false;
-    }
-
-    if (bgfx::isValid(frameBuffer_) && texture_ != nullptr && surface_ != nullptr && width_ == width && height_ == height) {
-        return true;
-    }
-
-    Shutdown();
-
-    if (bgfx::getRendererType() != bgfx::RendererType::Direct3D11) {
-        return false;
-    }
-
-    const bgfx::InternalData* internalData = bgfx::getInternalData();
-    if (internalData == nullptr || internalData->context == nullptr) {
-        return false;
-    }
-
-    auto* device = static_cast<ID3D11Device*>(internalData->context);
-    D3D11_TEXTURE2D_DESC desc{};
-    desc.Width = width;
-    desc.Height = height;
-    desc.MipLevels = 1;
-    desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    desc.SampleDesc.Count = 1;
-    desc.SampleDesc.Quality = 0;
-    desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    desc.CPUAccessFlags = 0;
-    desc.MiscFlags = 0;
-
-    ID3D11Texture2D* texture = nullptr;
-    if (FAILED(device->CreateTexture2D(&desc, nullptr, &texture)) || texture == nullptr) {
-        return false;
-    }
-
-    IDXGISurface* surface = nullptr;
-    if (FAILED(texture->QueryInterface(__uuidof(IDXGISurface), reinterpret_cast<void**>(&surface))) || surface == nullptr) {
-        SafeRelease(texture);
-        return false;
-    }
-
-    constexpr std::uint64_t textureFlags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    bgfxTexture_ = bgfx::createTexture2D(
-        static_cast<std::uint16_t>(width),
-        static_cast<std::uint16_t>(height),
-        false,
-        1,
-        bgfx::TextureFormat::BGRA8,
-        textureFlags);
-    if (!bgfx::isValid(bgfxTexture_)) {
-        SafeRelease(surface);
-        SafeRelease(texture);
-        return false;
-    }
-
-    (void)bgfx::overrideInternal(bgfxTexture_, reinterpret_cast<std::uintptr_t>(texture));
-
-    frameBuffer_ = bgfx::createFrameBuffer(1, &bgfxTexture_, false);
-    if (!bgfx::isValid(frameBuffer_)) {
-        bgfx::destroy(bgfxTexture_);
-        bgfxTexture_ = BGFX_INVALID_HANDLE;
-        SafeRelease(surface);
-        SafeRelease(texture);
-        return false;
-    }
-
-    texture_ = texture;
-    surface_ = surface;
-    width_ = width;
-    height_ = height;
-    return true;
-}
-
-void EditorSceneBgfxViewport::SceneTexturePresentTarget::Shutdown() noexcept {
-    if (bgfx::isValid(frameBuffer_)) {
-        bgfx::destroy(frameBuffer_);
-        frameBuffer_ = BGFX_INVALID_HANDLE;
-    }
-    if (bgfx::isValid(bgfxTexture_)) {
-        bgfx::destroy(bgfxTexture_);
-        bgfxTexture_ = BGFX_INVALID_HANDLE;
-    }
-    SafeRelease(surface_);
-    SafeRelease(texture_);
-    width_ = 0;
-    height_ = 0;
-}
-
-bgfx::FrameBufferHandle EditorSceneBgfxViewport::SceneTexturePresentTarget::FrameBuffer() const noexcept {
-    return frameBuffer_;
-}
-
-IDXGISurface* EditorSceneBgfxViewport::SceneTexturePresentTarget::Surface() const noexcept {
-    return surface_;
-}
-
-std::uint32_t EditorSceneBgfxViewport::SceneTexturePresentTarget::Width() const noexcept {
-    return width_;
-}
-
-std::uint32_t EditorSceneBgfxViewport::SceneTexturePresentTarget::Height() const noexcept {
-    return height_;
-}
-
-EditorSceneBgfxViewport::D2DScenePresenter::~D2DScenePresenter() {
-    Shutdown();
-}
-
-bool EditorSceneBgfxViewport::D2DScenePresenter::EnsureRenderTarget() {
-    if (renderTarget_ != nullptr) {
-        return true;
-    }
-
-    if (factory_ == nullptr) {
-        if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory_)) || factory_ == nullptr) {
-            return false;
-        }
-    }
-
-    const D2D1_RENDER_TARGET_PROPERTIES properties = D2D1::RenderTargetProperties(
-        D2D1_RENDER_TARGET_TYPE_DEFAULT,
-        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE),
-        0.0F,
-        0.0F,
-        D2D1_RENDER_TARGET_USAGE_NONE,
-        D2D1_FEATURE_LEVEL_DEFAULT);
-
-    return SUCCEEDED(factory_->CreateDCRenderTarget(&properties, &renderTarget_)) && renderTarget_ != nullptr;
-}
-
-void EditorSceneBgfxViewport::D2DScenePresenter::ResetBitmap() noexcept {
-    SafeRelease(bitmap_);
-    SafeRelease(bitmapSurface_);
-}
-
-bool EditorSceneBgfxViewport::D2DScenePresenter::Present(HDC dc, const RECT& bounds, const RECT& destination, IDXGISurface* surface) {
-    if (dc == nullptr || surface == nullptr || RectWidth(bounds) == 0U || RectHeight(bounds) == 0U || RectWidth(destination) == 0U || RectHeight(destination) == 0U) {
-        return false;
-    }
-
-    if (!EnsureRenderTarget()) {
-        return false;
-    }
-
-    if (bitmap_ == nullptr || bitmapSurface_ != surface) {
-        ResetBitmap();
-        const D2D1_BITMAP_PROPERTIES properties = D2D1::BitmapProperties(
-            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
-        if (FAILED(renderTarget_->CreateSharedBitmap(__uuidof(IDXGISurface), surface, &properties, &bitmap_)) || bitmap_ == nullptr) {
-            return false;
-        }
-        bitmapSurface_ = surface;
-        bitmapSurface_->AddRef();
-    }
-
-    if (FAILED(renderTarget_->BindDC(dc, &bounds))) {
-        ResetBitmap();
-        return false;
-    }
-
-    const float left = static_cast<float>(destination.left - bounds.left);
-    const float top = static_cast<float>(destination.top - bounds.top);
-    const float right = static_cast<float>(destination.right - bounds.left);
-    const float bottom = static_cast<float>(destination.bottom - bounds.top);
-    renderTarget_->BeginDraw();
-    renderTarget_->DrawBitmap(bitmap_, D2D1::RectF(left, top, right, bottom), 1.0F, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-    if (FAILED(renderTarget_->EndDraw())) {
-        ResetBitmap();
-        return false;
-    }
-
-    return true;
-}
-
-void EditorSceneBgfxViewport::D2DScenePresenter::Shutdown() noexcept {
-    ResetBitmap();
-    SafeRelease(renderTarget_);
-    SafeRelease(factory_);
-}
 
 EditorSceneBgfxViewport::Win32Surface::Win32Surface(HWND window) noexcept
     : window_(window) {}
@@ -362,13 +161,8 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
     }
     session->presentedInCurrentPaint = true;
 
-    if (!EnsureRenderer()) {
-        HideSession(parent);
-        return;
-    }
-
     if (!RenderAndPresent(dc, rect, *session, scene, settings)) {
-        HideSession(parent);
+        FailRender("Scene render/present failed");
     }
 }
 
@@ -416,12 +210,23 @@ EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::FindSession(H
     return iter == sessions_.end() ? nullptr : iter->get();
 }
 
-bool EditorSceneBgfxViewport::EnsureDeviceWindow() {
+bool EditorSceneBgfxViewport::EnsureDeviceWindow(HWND parent, const RECT& rect) {
     if (deviceWindow_ != nullptr && IsWindow(deviceWindow_) != 0) {
+        if (GetParent(deviceWindow_) != parent) {
+            SetParent(deviceWindow_, parent);
+        }
+        SetWindowPos(
+            deviceWindow_,
+            HWND_TOP,
+            rect.left,
+            rect.top,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            SWP_SHOWWINDOW);
         return true;
     }
 
-    if (instance_ == nullptr) {
+    if (instance_ == nullptr || parent == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U) {
         return false;
     }
 
@@ -443,25 +248,26 @@ bool EditorSceneBgfxViewport::EnsureDeviceWindow() {
         0,
         kSceneViewportClassName,
         L"",
-        WS_POPUP | WS_DISABLED | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-        0,
-        0,
-        1,
-        1,
-        nullptr,
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        rect.left,
+        rect.top,
+        static_cast<int>(RectWidth(rect)),
+        static_cast<int>(RectHeight(rect)),
+        parent,
         nullptr,
         instance_,
         this);
     return deviceWindow_ != nullptr;
 }
 
-bool EditorSceneBgfxViewport::EnsureRenderer() {
-    if (renderer_.IsInitialized()) {
-        return true;
+bool EditorSceneBgfxViewport::EnsureRenderer(HWND parent, const RECT& rect) {
+    if (!EnsureDeviceWindow(parent, rect)) {
+        return false;
     }
 
-    if (!EnsureDeviceWindow()) {
-        return false;
+    if (renderer_.IsInitialized()) {
+        renderer_.OnResize(RectWidth(rect), RectHeight(rect));
+        return true;
     }
 
     Win32Surface surface(deviceWindow_);
@@ -483,6 +289,9 @@ void EditorSceneBgfxViewport::HideSession(HWND host) noexcept {
     if (session != nullptr) {
         session->presentedInCurrentPaint = false;
     }
+    if (deviceWindow_ != nullptr && IsWindow(deviceWindow_) != 0 && (host == nullptr || GetParent(deviceWindow_) == host)) {
+        ShowWindow(deviceWindow_, SW_HIDE);
+    }
 }
 
 void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
@@ -491,7 +300,6 @@ void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
             if (session != nullptr) {
                 session->sceneTarget.Shutdown();
                 session->postProcessTargets.Shutdown();
-                session->presentTarget.Shutdown();
             }
         }
     }
@@ -499,7 +307,6 @@ void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
 
 void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
     ShutdownSessionFramebuffers();
-    scenePresenter_.Shutdown();
     renderer_.Shutdown();
     if (deviceWindow_ != nullptr && IsWindow(deviceWindow_) != 0) {
         const HWND window = deviceWindow_;
@@ -515,22 +322,30 @@ void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
         if (session != nullptr) {
             session->sceneTarget.Shutdown();
             session->postProcessTargets.Shutdown();
-            session->presentTarget.Shutdown();
         }
     }
 }
 
-bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
-    if (!renderer_.IsInitialized()) {
-        return false;
-    }
+void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
+    MessageBoxA(nullptr, reason == nullptr ? "Scene render failed" : reason, "21kb Editor - Scene Render Fatal", MB_OK | MB_ICONERROR);
+    std::abort();
+}
 
+bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
+    static_cast<void>(dc);
     const std::uint32_t panelWidth = RectWidth(rect);
     const std::uint32_t panelHeight = RectHeight(rect);
     const std::uint32_t width = settings.renderWidth == 0U ? panelWidth : settings.renderWidth;
     const std::uint32_t height = settings.renderHeight == 0U ? panelHeight : settings.renderHeight;
+    const RECT destination = CenteredRectFor(rect, width, height, settings.fitMode);
+    const std::uint32_t outputWidth = RectWidth(destination);
+    const std::uint32_t outputHeight = RectHeight(destination);
+    if (!EnsureRenderer(session.host, destination)) {
+        return false;
+    }
+
     render::Renderer::SceneFrameSubmission submission{};
-    if (!BuildSubmission(session, scene, width, height, settings, submission)) {
+    if (!BuildSubmission(session, scene, width, height, outputWidth, outputHeight, settings, submission)) {
         return false;
     }
 
@@ -544,29 +359,24 @@ bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, Viewpor
         return false;
     }
 
-    const RECT destination = CenteredRectFor(rect, width, height, settings.fitMode);
-    return scenePresenter_.Present(dc, rect, destination, session.presentTarget.Surface());
+    return true;
 }
 
-bool EditorSceneBgfxViewport::BuildSubmission(ViewportSession& session, const kb::scene::Scene& scene, std::uint32_t width, std::uint32_t height, const PresentSettings& settings, render::Renderer::SceneFrameSubmission& submission) {
-    if (width == 0U || height == 0U) {
+bool EditorSceneBgfxViewport::BuildSubmission(ViewportSession& session, const kb::scene::Scene& scene, std::uint32_t renderWidth, std::uint32_t renderHeight, std::uint32_t outputWidth, std::uint32_t outputHeight, const PresentSettings& settings, render::Renderer::SceneFrameSubmission& submission) {
+    if (renderWidth == 0U || renderHeight == 0U || outputWidth == 0U || outputHeight == 0U) {
         return false;
     }
 
     if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
-            .extent = render::RenderExtent{width, height},
+            .extent = render::RenderExtent{renderWidth, renderHeight},
             .colorPolicy = render::SceneColorFormatPolicy::Auto,
         })) {
         return false;
     }
     if (!session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
-            .extent = render::RenderExtent{width, height},
+            .extent = render::RenderExtent{renderWidth, renderHeight},
             .colorPolicy = render::SceneColorFormatPolicy::Auto,
         })) {
-        return false;
-    }
-
-    if (!session.presentTarget.Ensure(width, height)) {
         return false;
     }
 
@@ -578,17 +388,20 @@ bool EditorSceneBgfxViewport::BuildSubmission(ViewportSession& session, const kb
             .colorTexture = session.sceneTarget.ColorTexture(),
             .viewport = render::RenderViewportDesc{
                 .id = render::RenderViewportId{ session.viewportIndex + 1U },
-                .extent = render::RenderExtent{ width, height },
+                .extent = render::RenderExtent{ renderWidth, renderHeight },
                 .viewportIndex = session.viewportIndex,
             },
         },
         .postProcess = session.postProcessTargets.Binding(),
         .finalComposite = render::RenderFinalCompositeTargetBinding{
-            .frameBuffer = session.presentTarget.FrameBuffer(),
-            .extent = render::RenderExtent{ width, height },
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .extent = render::RenderExtent{ outputWidth, outputHeight },
             .enabled = true,
         },
         .cameraOverride = settings.cameraOverride,
+        .selectedEntityIds = settings.selectedEntityIds[0] == 0U
+            ? std::span<const std::uint64_t>{}
+            : std::span<const std::uint64_t>{settings.selectedEntityIds.data(), settings.selectedEntityIds.size()},
         .clearRgba = kSceneClearRgba,
         },
     };

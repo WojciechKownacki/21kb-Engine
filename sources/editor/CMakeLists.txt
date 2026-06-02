@@ -475,7 +475,7 @@ target_link_libraries(kb_editor
         kb_renderer
 )
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 d2d1 d3d11 dxgi)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
