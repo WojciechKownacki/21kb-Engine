@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -63,6 +64,7 @@ struct MeshPipelineBuildDesc {
     SceneRenderDiagnostics* diagnostics = nullptr;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;
+    std::span<const std::uint64_t> selectedEntityIds{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
 };
 

@@ -12,6 +12,7 @@ constexpr std::uint64_t kPostProcessColorTextureFlags =
     BGFX_SAMPLER_V_CLAMP;
 
 constexpr std::array<const char*, ScenePostProcessTargets::kTargetCount> kTargetNames{
+    "KB Editor Selection Mask",
     "KB Post Bloom HDR",
     "KB Post Ping HDR",
     "KB Post Combine HDR",
@@ -54,13 +55,17 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
         return false;
     }
 
+    allocated_ = true;
     for (std::size_t index = 0; index < kTargetCount; ++index) {
+        const bgfx::TextureFormat::Enum textureFormat = index == SelectionMask
+            ? bgfx::TextureFormat::RGBA8
+            : colorSelection_.format;
         textures_[index] = bgfx::createTexture2D(
             static_cast<std::uint16_t>(width),
             static_cast<std::uint16_t>(height),
             false,
             1,
-            colorSelection_.format,
+            textureFormat,
             kPostProcessColorTextureFlags);
         if (!bgfx::isValid(textures_[index])) {
             Shutdown();
@@ -82,6 +87,9 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
 }
 
 void ScenePostProcessTargets::Shutdown() noexcept {
+    if (!allocated_) {
+        return;
+    }
     for (bgfx::FrameBufferHandle& frameBuffer : frameBuffers_) {
         if (bgfx::isValid(frameBuffer)) {
             bgfx::destroy(frameBuffer);
@@ -100,9 +108,13 @@ void ScenePostProcessTargets::Shutdown() noexcept {
     colorPolicy_ = SceneColorFormatPolicy::Auto;
     width_ = 0;
     height_ = 0;
+    allocated_ = false;
 }
 
 bool ScenePostProcessTargets::IsValid() const noexcept {
+    if (!allocated_) {
+        return false;
+    }
     return std::ranges::all_of(textures_, [](bgfx::TextureHandle texture) {
                return bgfx::isValid(texture);
            }) &&
@@ -120,7 +132,10 @@ SceneColorFormatSelection ScenePostProcessTargets::ColorSelection() const noexce
 }
 
 RenderPostProcessTargetBinding ScenePostProcessTargets::Binding() const noexcept {
+    const bool valid = IsValid();
     return RenderPostProcessTargetBinding{
+        .selectionMaskFrameBuffer = frameBuffers_[SelectionMask],
+        .selectionMaskTexture = textures_[SelectionMask],
         .bloomFrameBuffer = frameBuffers_[Bloom],
         .bloomTexture = textures_[Bloom],
         .pingFrameBuffer = frameBuffers_[Ping],
@@ -130,7 +145,7 @@ RenderPostProcessTargetBinding ScenePostProcessTargets::Binding() const noexcept
         .finalFrameBuffer = frameBuffers_[Final],
         .finalTexture = textures_[Final],
         .extent = Extent(),
-        .enabled = true,
+        .enabled = valid,
     };
 }
 
