@@ -51,6 +51,7 @@ CMakeUserPresets.json
 # Generated dependency / temp files
 # =========================
 /Project/
+/temp/
 *.d
 *.gcno
 *.gcda
