@@ -38,7 +38,7 @@ void EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int 
     }
 
     dockModel.Commands().ActivatePanel(hit.panelId);
-    drag = DockPointerDragFactory::FromDockHit(window, layout, hit);
+    drag = DockPointerDragFactory::FromDockHit(window, layout, hit, x, y);
     InvalidateRect(window, nullptr, FALSE);
 }
 

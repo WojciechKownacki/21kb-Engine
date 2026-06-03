@@ -36,6 +36,14 @@ struct RenderMeshEmbeddedMaterial {
     std::string metallicRoughnessTexturePath;
     std::string occlusionTexturePath;
     std::string emissiveTexturePath;
+    std::string clearcoatTexturePath;
+    std::string clearcoatRoughnessTexturePath;
+    std::string sheenColorTexturePath;
+    std::string transmissionTexturePath;
+    std::string thicknessTexturePath;
+    std::string anisotropyTexturePath;
+    std::string decalTexturePath;
+    std::string layerMaskTexturePath;
 };
 
 struct RenderMeshAssetData {
@@ -44,6 +52,8 @@ struct RenderMeshAssetData {
     std::vector<std::uint16_t> indices16;
     std::vector<std::uint32_t> indices32;
     std::vector<RenderMeshSectionDesc> sections;
+    std::vector<RenderMeshletDesc> meshlets;
+    std::vector<RenderMeshLodDesc> lods;
     std::vector<RenderMaterialSlotDesc> materialSlots;
     std::vector<std::string> materialNames;
     std::vector<RenderMeshEmbeddedMaterial> embeddedMaterials;

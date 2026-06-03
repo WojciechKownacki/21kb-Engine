@@ -36,6 +36,28 @@ namespace {
         static_cast<std::uint64_t>(BytesPerPixel(resource.target.format));
 }
 
+[[nodiscard]] bool IsDepthFormat(RenderTargetFormat format) noexcept {
+    return format == RenderTargetFormat::D32 || format == RenderTargetFormat::D32F || format == RenderTargetFormat::D24S8;
+}
+
+[[nodiscard]] RenderGraphResourceAccess ReadAccessFor(const RenderGraphResourceDesc& resource) noexcept {
+    if (resource.id == RenderGraphResource::FinalOutput) {
+        return RenderGraphResourceAccess::Present;
+    }
+    return IsDepthFormat(resource.target.format) ? RenderGraphResourceAccess::DepthRead : RenderGraphResourceAccess::ShaderRead;
+}
+
+[[nodiscard]] RenderGraphResourceAccess WriteAccessFor(const RenderGraphResourceDesc& resource) noexcept {
+    return IsDepthFormat(resource.target.format) ? RenderGraphResourceAccess::DepthWrite : RenderGraphResourceAccess::RenderTargetWrite;
+}
+
+[[nodiscard]] bool AccessNeedsBarrier(RenderGraphResourceAccess before, RenderGraphResourceAccess after) noexcept {
+    if (before == RenderGraphResourceAccess::Undefined || before == after) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 const char* RenderPassGraphValidationStatusName(RenderPassGraphValidationStatus status) noexcept {
@@ -277,6 +299,114 @@ RenderPassGraphCompileResult RenderPassGraph::Compile() const {
             }
         }
         result.resourceUsages.push_back(usage);
+    }
+
+    result.passProfiles.reserve(passes_.size());
+    for (const RenderPassDesc& pass : passes_) {
+        if (!pass.enabled) {
+            continue;
+        }
+        RenderGraphPassProfile profile{
+            .pass = pass.kind,
+            .viewId = pass.viewId,
+            .readCount = static_cast<std::uint16_t>(std::min<std::size_t>(pass.reads.size(), UINT16_MAX)),
+            .writeCount = static_cast<std::uint16_t>(std::min<std::size_t>(pass.writes.size(), UINT16_MAX)),
+            .emitsBgfxView = pass.emitsBgfxView,
+        };
+        for (const RenderGraphResourceId write : pass.writes) {
+            if (const RenderGraphResourceDesc* resource = FindResource(write); resource != nullptr) {
+                profile.estimatedTargetBytes += ResourceBytes(*resource);
+            }
+        }
+        result.passProfiles.push_back(profile);
+    }
+
+    std::array<RenderGraphResourceAccess, RenderGraphResource::Max> lastAccess{};
+    std::array<RenderPassKind, RenderGraphResource::Max> lastPass{};
+    for (const RenderGraphResourceDesc& resource : resources_) {
+        if (resource.id.value < lastAccess.size() && resource.lifetime == RenderGraphResourceLifetime::External) {
+            lastAccess[resource.id.value] = ReadAccessFor(resource);
+        }
+    }
+    for (const RenderPassDesc& pass : passes_) {
+        if (!pass.enabled) {
+            continue;
+        }
+        const auto transition = [&result, &lastAccess, &lastPass, this, &pass](RenderGraphResourceId resourceId, RenderGraphResourceAccess afterAccess) {
+            if (resourceId.value >= lastAccess.size()) {
+                return;
+            }
+            const RenderGraphResourceAccess beforeAccess = lastAccess[resourceId.value];
+            if (AccessNeedsBarrier(beforeAccess, afterAccess)) {
+                result.barriers.push_back(RenderGraphResourceBarrier{
+                    .resource = resourceId,
+                    .beforePass = lastPass[resourceId.value],
+                    .afterPass = pass.kind,
+                    .beforeAccess = beforeAccess,
+                    .afterAccess = afterAccess,
+                });
+            }
+            lastAccess[resourceId.value] = afterAccess;
+            lastPass[resourceId.value] = pass.kind;
+        };
+        for (const RenderGraphResourceId read : pass.reads) {
+            if (const RenderGraphResourceDesc* resource = FindResource(read); resource != nullptr) {
+                transition(read, ReadAccessFor(*resource));
+            }
+        }
+        for (const RenderGraphResourceId write : pass.writes) {
+            if (const RenderGraphResourceDesc* resource = FindResource(write); resource != nullptr) {
+                transition(write, WriteAccessFor(*resource));
+            }
+        }
+    }
+
+    for (std::size_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
+        std::uint64_t activeTransientBytes = 0;
+        for (std::size_t resourceIndex = 0; resourceIndex < resources_.size(); ++resourceIndex) {
+            const RenderGraphResourceDesc& resource = resources_[resourceIndex];
+            const RenderGraphResourceUsage& usage = result.resourceUsages[resourceIndex];
+            if (resource.lifetime != RenderGraphResourceLifetime::Transient || usage.firstPassIndex == 0xFFFFU) {
+                continue;
+            }
+            const std::uint16_t activePassIndex = static_cast<std::uint16_t>(passIndex);
+            if (usage.firstPassIndex <= activePassIndex && activePassIndex <= usage.lastPassIndex) {
+                activeTransientBytes += ResourceBytes(resource);
+            }
+        }
+        result.estimatedAliasedTransientBytes = std::max(result.estimatedAliasedTransientBytes, activeTransientBytes);
+    }
+    result.transientAliasingSavingsBytes =
+        result.estimatedTransientBytes > result.estimatedAliasedTransientBytes
+            ? result.estimatedTransientBytes - result.estimatedAliasedTransientBytes
+            : 0U;
+
+    std::vector<std::uint16_t> aliasLastPass;
+    result.aliases.reserve(resources_.size());
+    for (std::size_t resourceIndex = 0; resourceIndex < resources_.size(); ++resourceIndex) {
+        const RenderGraphResourceDesc& resource = resources_[resourceIndex];
+        const RenderGraphResourceUsage& usage = result.resourceUsages[resourceIndex];
+        if (resource.lifetime != RenderGraphResourceLifetime::Transient || usage.firstPassIndex == 0xFFFFU) {
+            continue;
+        }
+
+        std::uint16_t aliasSlot = 0xFFFFU;
+        for (std::uint16_t slot = 0U; slot < aliasLastPass.size(); ++slot) {
+            if (aliasLastPass[slot] < usage.firstPassIndex) {
+                aliasSlot = slot;
+                aliasLastPass[slot] = usage.lastPassIndex;
+                break;
+            }
+        }
+        if (aliasSlot == 0xFFFFU) {
+            aliasSlot = static_cast<std::uint16_t>(aliasLastPass.size());
+            aliasLastPass.push_back(usage.lastPassIndex);
+        }
+        result.aliases.push_back(RenderGraphResourceAlias{
+            .resource = resource.id,
+            .aliasSlot = aliasSlot,
+            .byteSize = ResourceBytes(resource),
+        });
     }
 
     return result;
