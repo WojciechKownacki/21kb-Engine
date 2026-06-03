@@ -157,6 +157,53 @@ struct Frustum {
     return static_cast<std::uint16_t>(shifted);
 }
 
+[[nodiscard]] float ScreenCoverageEstimate(const SceneRenderCamera* camera, const RenderBoundsSphere& worldBounds) noexcept {
+    if (camera == nullptr || !worldBounds.IsValid()) {
+        return 1.0F;
+    }
+    const float depth = std::max(std::abs(ViewDepth(camera, worldBounds)), worldBounds.radius);
+    return std::clamp(worldBounds.radius / std::max(depth, 0.0001F), 0.0F, 1.0F);
+}
+
+[[nodiscard]] std::uint8_t SelectLodLevel(const RenderMeshResource* mesh, const SceneRenderMeshInstance& instance, const SceneRenderCamera* camera) noexcept {
+    if (mesh == nullptr || mesh->lods.empty()) {
+        return 0U;
+    }
+
+    const RenderBoundsSphere worldBounds = TransformBounds(mesh->bounds, instance.model);
+    const float coverage = ScreenCoverageEstimate(camera, worldBounds);
+    std::uint8_t selected = static_cast<std::uint8_t>(std::min<std::size_t>(mesh->lods.size() - 1U, UINT8_MAX));
+    for (std::size_t lodIndex = 0U; lodIndex < mesh->lods.size(); ++lodIndex) {
+        const RenderMeshLodDesc& lod = mesh->lods[lodIndex];
+        if (coverage >= lod.minScreenCoverage) {
+            selected = static_cast<std::uint8_t>(std::min<std::size_t>(lodIndex, UINT8_MAX));
+            break;
+        }
+    }
+    return selected;
+}
+
+[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> MeshletRangeForSection(const RenderMeshResource* mesh, std::uint32_t sectionIndex) noexcept {
+    if (mesh == nullptr || mesh->meshlets.empty()) {
+        return {0U, 0U};
+    }
+
+    std::uint32_t first = 0U;
+    std::uint32_t count = 0U;
+    bool found = false;
+    for (std::uint32_t meshletIndex = 0U; meshletIndex < mesh->meshlets.size(); ++meshletIndex) {
+        if (mesh->meshlets[meshletIndex].sectionIndex != sectionIndex) {
+            continue;
+        }
+        if (!found) {
+            first = meshletIndex;
+            found = true;
+        }
+        ++count;
+    }
+    return {first, count};
+}
+
 [[nodiscard]] std::uint32_t ResourceKey20(std::uint64_t value) noexcept {
     return static_cast<std::uint32_t>(value & 0xFFFFFU);
 }
@@ -388,8 +435,11 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     command.materialAssetId = 0U;
     command.sectionIndex = 0U;
     command.materialSlot = 0U;
+    command.firstMeshlet = 0U;
+    command.meshletCount = 0U;
     command.indexStart = 0U;
     command.indexCount = 0U;
+    command.lodLevel = 0U;
     command.depthBucket = 0U;
     command.mesh = {};
     command.material = {};
@@ -407,6 +457,27 @@ void ResetCommandKeepingInstanceStorage(MeshDrawCommand& command) noexcept {
     MeshDrawCommand& command = result.commands[index];
     ResetCommandKeepingInstanceStorage(command);
     return command;
+}
+
+void AppendGpuDrivenInputRecord(
+    MeshPipelineBuildResult& result,
+    const SceneRenderMeshInstance& instance,
+    std::uint32_t drawCommandIndex,
+    std::uint8_t lodLevel,
+    std::pair<std::uint32_t, std::uint32_t> meshletRange) {
+    result.gpuDrivenInputRecords.push_back(SceneGpuDrivenInputRecord{
+        .entityId = instance.entityId,
+        .worldBounds = {
+            instance.worldBounds.center[0],
+            instance.worldBounds.center[1],
+            instance.worldBounds.center[2],
+            instance.worldBounds.radius,
+        },
+        .drawCommandIndex = drawCommandIndex,
+        .lodLevel = lodLevel,
+        .firstMeshlet = meshletRange.first,
+        .meshletCount = meshletRange.second,
+    });
 }
 
 } // namespace
@@ -472,6 +543,8 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
     for (MeshDrawCommand& command : result.commands) {
         command.instances.clear();
     }
+    result.gpuDrivenInputRecords.clear();
+    result.gpuDrivenCpuValidationRecords.clear();
     result.stats = SceneRenderSubmitStats{};
     if (desc.drawGroups == nullptr) {
         result.commands.clear();
@@ -536,11 +609,19 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
         const std::uint32_t sectionCount = sections == nullptr || sections->empty() ? 1U : static_cast<std::uint32_t>(sections->size());
         for (std::uint32_t sectionIndex = 0U; sectionIndex < sectionCount; ++sectionIndex) {
             const RenderMeshSection& section = sections == nullptr || sections->empty() ? fallbackSection : (*sections)[sectionIndex];
+            const std::pair<std::uint32_t, std::uint32_t> meshletRange = MeshletRangeForSection(meshResource, sectionIndex);
             result.commandLookupScratch.clear();
             result.commandLookupScratch.reserve(instanceCount);
             std::uint32_t culledForSection = 0U;
             for (SceneRenderMeshInstance instance : group.instances) {
                 if (!InstanceCanEverBelongToPass(desc.pass, instance, desc.selectedEntityIds)) {
+                    continue;
+                }
+                const std::uint8_t selectedLod = SelectLodLevel(meshResource, instance, desc.camera);
+                if (meshResource != nullptr && !meshResource->lods.empty()) {
+                    ++result.stats.lodSelectionCount;
+                }
+                if (selectedLod != section.lodLevel) {
                     continue;
                 }
                 const std::uint64_t materialAssetId = MaterialAssetForSectionInstance(group, instance, meshResource, section);
@@ -554,7 +635,21 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                     continue;
                 }
                 instance.worldBounds = TransformBounds(section.bounds.IsValid() ? section.bounds : (meshResource == nullptr ? RenderBoundsSphere{} : meshResource->bounds), instance.model);
+                const bool gpuDrivenCandidate =
+                    meshResource != nullptr &&
+                    (meshResource->gpuCullingEnabled || meshResource->indirectDrawsEnabled || meshResource->meshletCullingEnabled);
                 if (!IsInsideFrustum(frustum, instance.worldBounds)) {
+                    if (gpuDrivenCandidate) {
+                        AppendGpuDrivenInputRecord(result, instance, UINT32_MAX, selectedLod, meshletRange);
+                        result.gpuDrivenCpuValidationRecords.push_back(SceneGpuDrivenInstanceValidationRecord{
+                            .entityId = instance.entityId,
+                            .lodLevel = selectedLod,
+                            .firstMeshlet = meshletRange.first,
+                            .meshletCount = meshletRange.second,
+                            .visible = false,
+                            .dropped = false,
+                        });
+                    }
                     ++culledForSection;
                     continue;
                 }
@@ -565,12 +660,37 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                 };
                 const auto commandLookupIt = result.commandLookupScratch.find(commandKey);
                 MeshDrawCommand* command = commandLookupIt == result.commandLookupScratch.end() ? nullptr : &result.commands[commandLookupIt->second];
+                std::uint32_t drawCommandIndex = commandLookupIt == result.commandLookupScratch.end()
+                    ? static_cast<std::uint32_t>(writeCommandCount)
+                    : static_cast<std::uint32_t>(commandLookupIt->second);
                 if (command == nullptr && desc.maxDrawCommands != 0U && writeCommandCount >= desc.maxDrawCommands) {
+                    if (gpuDrivenCandidate) {
+                        AppendGpuDrivenInputRecord(result, instance, UINT32_MAX, selectedLod, meshletRange);
+                        result.gpuDrivenCpuValidationRecords.push_back(SceneGpuDrivenInstanceValidationRecord{
+                            .entityId = instance.entityId,
+                            .lodLevel = selectedLod,
+                            .firstMeshlet = meshletRange.first,
+                            .meshletCount = meshletRange.second,
+                            .visible = true,
+                            .dropped = true,
+                        });
+                    }
                     ++result.stats.droppedInstanceCount;
                     EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
                     continue;
                 }
                 if (desc.maxVisibleInstances != 0U && acceptedInstanceCount >= desc.maxVisibleInstances) {
+                    if (gpuDrivenCandidate) {
+                        AppendGpuDrivenInputRecord(result, instance, UINT32_MAX, selectedLod, meshletRange);
+                        result.gpuDrivenCpuValidationRecords.push_back(SceneGpuDrivenInstanceValidationRecord{
+                            .entityId = instance.entityId,
+                            .lodLevel = selectedLod,
+                            .firstMeshlet = meshletRange.first,
+                            .meshletCount = meshletRange.second,
+                            .visible = true,
+                            .dropped = true,
+                        });
+                    }
                     ++result.stats.droppedInstanceCount;
                     EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::DroppedInstances, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
                     continue;
@@ -582,8 +702,11 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                     command->materialAssetId = materialAssetId;
                     command->sectionIndex = sectionIndex;
                     command->materialSlot = section.materialSlot;
+                    command->firstMeshlet = meshletRange.first;
+                    command->meshletCount = meshletRange.second;
                     command->indexStart = section.indexStart;
                     command->indexCount = section.indexCount;
+                    command->lodLevel = section.lodLevel;
                     command->mesh = meshHandle;
                     command->material = materialHandle;
                     command->meshResource = meshResource;
@@ -595,7 +718,28 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
                     result.stats.meshCommandLookupCapacity = std::max<std::uint32_t>(
                         result.stats.meshCommandLookupCapacity,
                         static_cast<std::uint32_t>(result.commandLookupScratch.bucket_count()));
+                    drawCommandIndex = static_cast<std::uint32_t>(writeCommandCount);
                     ++writeCommandCount;
+                }
+                if (meshResource != nullptr && meshResource->gpuCullingEnabled) {
+                    ++result.stats.gpuDrivenDrawCandidateCount;
+                }
+                if (meshResource != nullptr && meshResource->indirectDrawsEnabled) {
+                    ++result.stats.indirectDrawCandidateCount;
+                }
+                if (meshResource != nullptr && meshResource->meshletCullingEnabled) {
+                    result.stats.meshletCullingCandidateCount += std::max<std::uint32_t>(meshletRange.second, 1U);
+                }
+                if (gpuDrivenCandidate) {
+                    AppendGpuDrivenInputRecord(result, instance, drawCommandIndex, selectedLod, meshletRange);
+                    result.gpuDrivenCpuValidationRecords.push_back(SceneGpuDrivenInstanceValidationRecord{
+                        .entityId = instance.entityId,
+                        .lodLevel = selectedLod,
+                        .firstMeshlet = meshletRange.first,
+                        .meshletCount = meshletRange.second,
+                        .visible = true,
+                        .dropped = false,
+                    });
                 }
                 command->sortKey += instance.depthBucket;
                 command->instances.push_back(instance);
@@ -621,6 +765,33 @@ void MeshPipelineProcessor::BuildInto(const MeshPipelineBuildDesc& desc, MeshPip
     result.stats.meshPipelineCommandCount = static_cast<std::uint32_t>(result.commands.size());
     result.stats.meshPipelineCommandCapacity = static_cast<std::uint32_t>(result.commands.capacity());
     result.stats.meshPipelineSortKeyCount = result.stats.meshPipelineCommandCount;
+    result.stats.gpuDrivenInputInstanceCount = static_cast<std::uint32_t>(result.gpuDrivenInputRecords.size());
+    const SceneGpuDrivenFeatureRequest gpuDrivenRequest{
+        .gpuCullingRequested = result.stats.gpuDrivenDrawCandidateCount != 0U,
+        .indirectDrawRequested = result.stats.indirectDrawCandidateCount != 0U,
+        .meshletSubmitRequested = result.stats.meshletCullingCandidateCount != 0U,
+    };
+    if (gpuDrivenRequest.HasAnyRequest()) {
+        const SceneGpuDrivenFeatureDecision gpuDrivenDecision = SceneGpuDrivenFeatureClassifier::Decide(
+            gpuDrivenRequest,
+            desc.gpuDrivenSupport);
+        result.stats.gpuDrivenFeatureState = gpuDrivenDecision.state;
+        result.stats.gpuDrivenCounterSource = gpuDrivenDecision.counterSource;
+        result.stats.gpuDrivenFallbackReason = gpuDrivenDecision.fallbackReason;
+        result.stats.gpuDrivenFallbackCount = gpuDrivenDecision.UsesFallback() ? 1U : 0U;
+        if (gpuDrivenDecision.state == SceneGpuDrivenFeatureState::CpuValidationOnly) {
+            const SceneGpuDrivenParityValidationResult parity = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+                .cpuRecords = result.gpuDrivenCpuValidationRecords,
+                .gpuRecords = result.gpuDrivenCpuValidationRecords,
+                .droppedInstanceBudget = desc.maxDroppedInstances,
+            });
+            result.stats.gpuDrivenParityValidationStatus = parity.status;
+            result.stats.gpuDrivenParityMismatchEntityId = parity.entityId;
+            result.stats.gpuDrivenParityValidationCount = static_cast<std::uint32_t>(result.gpuDrivenCpuValidationRecords.size());
+            result.stats.gpuDrivenParityCpuDroppedInstanceCount = parity.cpuDroppedInstanceCount;
+            result.stats.gpuDrivenParityGpuDroppedInstanceCount = parity.gpuDroppedInstanceCount;
+        }
+    }
 }
 
 void MeshPipelineProcessor::CountCommandsAsSubmitted(SceneRenderSubmitStats& stats, const std::vector<MeshDrawCommand>& commands) noexcept {

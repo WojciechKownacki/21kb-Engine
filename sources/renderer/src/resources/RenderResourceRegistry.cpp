@@ -52,6 +52,32 @@ constexpr std::uint64_t kDeferredDestroyFrameDelay = 3U;
             return false;
         }
     }
+    if (desc.gpuDriven.meshletCount > 0U && desc.gpuDriven.meshlets == nullptr) {
+        return false;
+    }
+    if (desc.gpuDriven.lodCount > 0U && desc.gpuDriven.lods == nullptr) {
+        return false;
+    }
+    for (std::uint32_t meshletIndex = 0U; meshletIndex < desc.gpuDriven.meshletCount; ++meshletIndex) {
+        const RenderMeshletDesc& meshlet = desc.gpuDriven.meshlets[meshletIndex];
+        if (!meshlet.IsValid() ||
+            meshlet.indexStart >= desc.indexCount ||
+            meshlet.indexCount > desc.indexCount - meshlet.indexStart ||
+            meshlet.vertexStart >= desc.vertexCount ||
+            meshlet.vertexCount > desc.vertexCount - meshlet.vertexStart) {
+            return false;
+        }
+    }
+    for (std::uint32_t lodIndex = 0U; lodIndex < desc.gpuDriven.lodCount; ++lodIndex) {
+        const RenderMeshLodDesc& lod = desc.gpuDriven.lods[lodIndex];
+        if (!lod.IsValid() ||
+            lod.firstSection > desc.sectionCount ||
+            lod.sectionCount > desc.sectionCount - lod.firstSection ||
+            lod.firstMeshlet > desc.gpuDriven.meshletCount ||
+            lod.meshletCount > desc.gpuDriven.meshletCount - lod.firstMeshlet) {
+            return false;
+        }
+    }
     for (std::uint32_t index = 0U; index < desc.indexCount; ++index) {
         if (IndexAt(desc, index) >= desc.vertexCount) {
             return false;
@@ -169,6 +195,7 @@ constexpr std::uint64_t kDeferredDestroyFrameDelay = 3U;
             .indexCount = section.indexCount,
             .materialSlot = section.materialSlot,
             .bounds = section.bounds.IsValid() ? section.bounds : ComputeBounds(desc, section.indexStart, section.indexCount),
+            .lodLevel = section.lodLevel,
         });
     }
     return sections;
@@ -291,6 +318,14 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     const RenderBoundsSphere meshBounds = desc.bounds.IsValid() ? desc.bounds : ComputeBounds(desc, 0U, desc.indexCount);
     std::vector<RenderMeshSection> sections = BuildSections(desc, meshBounds);
     std::vector<RenderMaterialSlot> materialSlots = BuildMaterialSlots(desc, sections);
+    std::vector<RenderMeshletDesc> meshlets;
+    if (desc.gpuDriven.meshletCount > 0U) {
+        meshlets.assign(desc.gpuDriven.meshlets, desc.gpuDriven.meshlets + desc.gpuDriven.meshletCount);
+    }
+    std::vector<RenderMeshLodDesc> lods;
+    if (desc.gpuDriven.lodCount > 0U) {
+        lods.assign(desc.gpuDriven.lods, desc.gpuDriven.lods + desc.gpuDriven.lodCount);
+    }
     slot.resource = RenderMeshResource{
         .vertexBuffer = vertexBuffer,
         .indexBuffer = indexBuffer,
@@ -300,9 +335,14 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
         .indexFormat = desc.indexFormat,
         .sections = std::move(sections),
         .materialSlots = std::move(materialSlots),
+        .meshlets = std::move(meshlets),
+        .lods = std::move(lods),
         .bounds = meshBounds,
         .rasterStateExtra = desc.rasterStateExtra,
         .doubleSided = desc.doubleSided,
+        .gpuCullingEnabled = desc.gpuDriven.allowGpuCulling && desc.gpuDriven.meshletCount > 0U,
+        .indirectDrawsEnabled = desc.gpuDriven.allowIndirectDraws && desc.gpuDriven.meshletCount > 0U,
+        .meshletCullingEnabled = desc.gpuDriven.allowMeshletCulling && desc.gpuDriven.meshletCount > 0U,
     };
     slot.occupied = true;
     slot.pendingDestroy = false;
@@ -353,18 +393,49 @@ RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMateri
     slot.resource.occlusionStrength = desc.occlusionStrength;
     slot.resource.emissiveStrength = desc.emissiveStrength;
     slot.resource.alphaCutoff = desc.alphaCutoff;
+    slot.resource.clearcoatFactor = desc.clearcoatFactor;
+    slot.resource.clearcoatRoughnessFactor = desc.clearcoatRoughnessFactor;
+    std::memcpy(slot.resource.sheenColor, desc.sheenColor, sizeof(slot.resource.sheenColor));
+    slot.resource.sheenRoughnessFactor = desc.sheenRoughnessFactor;
+    slot.resource.transmissionFactor = desc.transmissionFactor;
+    slot.resource.thicknessFactor = desc.thicknessFactor;
+    std::memcpy(slot.resource.attenuationColor, desc.attenuationColor, sizeof(slot.resource.attenuationColor));
+    slot.resource.attenuationDistance = desc.attenuationDistance;
+    std::memcpy(slot.resource.subsurfaceColor, desc.subsurfaceColor, sizeof(slot.resource.subsurfaceColor));
+    slot.resource.subsurfaceFactor = desc.subsurfaceFactor;
+    slot.resource.anisotropyStrength = desc.anisotropyStrength;
+    slot.resource.anisotropyRotation = desc.anisotropyRotation;
+    slot.resource.layerWeight = desc.layerWeight;
     slot.resource.alphaMode = desc.alphaMode;
+    slot.resource.decalBlendMode = desc.decalBlendMode;
+    slot.resource.layerBlendMode = desc.layerBlendMode;
     slot.resource.doubleSided = desc.doubleSided;
     slot.resource.albedoTextureAssetId = desc.albedoTextureAssetId;
     slot.resource.normalTextureAssetId = desc.normalTextureAssetId;
     slot.resource.metallicRoughnessTextureAssetId = desc.metallicRoughnessTextureAssetId;
     slot.resource.occlusionTextureAssetId = desc.occlusionTextureAssetId;
     slot.resource.emissiveTextureAssetId = desc.emissiveTextureAssetId;
+    slot.resource.clearcoatTextureAssetId = desc.clearcoatTextureAssetId;
+    slot.resource.clearcoatRoughnessTextureAssetId = desc.clearcoatRoughnessTextureAssetId;
+    slot.resource.sheenColorTextureAssetId = desc.sheenColorTextureAssetId;
+    slot.resource.transmissionTextureAssetId = desc.transmissionTextureAssetId;
+    slot.resource.thicknessTextureAssetId = desc.thicknessTextureAssetId;
+    slot.resource.anisotropyTextureAssetId = desc.anisotropyTextureAssetId;
+    slot.resource.decalTextureAssetId = desc.decalTextureAssetId;
+    slot.resource.layerMaskTextureAssetId = desc.layerMaskTextureAssetId;
     slot.resource.albedoTexture = desc.albedoTexture;
     slot.resource.normalTexture = desc.normalTexture;
     slot.resource.metallicRoughnessTexture = desc.metallicRoughnessTexture;
     slot.resource.occlusionTexture = desc.occlusionTexture;
     slot.resource.emissiveTexture = desc.emissiveTexture;
+    slot.resource.clearcoatTexture = desc.clearcoatTexture;
+    slot.resource.clearcoatRoughnessTexture = desc.clearcoatRoughnessTexture;
+    slot.resource.sheenColorTexture = desc.sheenColorTexture;
+    slot.resource.transmissionTexture = desc.transmissionTexture;
+    slot.resource.thicknessTexture = desc.thicknessTexture;
+    slot.resource.anisotropyTexture = desc.anisotropyTexture;
+    slot.resource.decalTexture = desc.decalTexture;
+    slot.resource.layerMaskTexture = desc.layerMaskTexture;
     slot.occupied = true;
     slot.pendingDestroy = false;
     return RenderMaterialHandle{ detail::MakeRenderHandleValue(slotIndex, slot.generation) };

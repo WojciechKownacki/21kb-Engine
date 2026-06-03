@@ -6,12 +6,15 @@ void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
 void RunRendererRuntimeSubmitTests();
+void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
 void RunSceneDisplayCompositeTests();
+void RunSceneExposureMeterTests();
 void RunSceneDepthPolicyTests();
 void RunRenderSceneSyncTests();
 void RunSceneRenderTargetFormatTests();
 void RunSceneRenderExtractorTests();
+void RunShaderManifestTests();
 }
 
 int main() {
@@ -19,12 +22,15 @@ int main() {
     kb::render::tests::RunPostProcessChainTests();
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
+    kb::render::tests::RunRendererCapabilityReportTests();
     kb::render::tests::RunRendererRuntimeSubmitTests();
     kb::render::tests::RunMeshPipelineTests();
     kb::render::tests::RunSceneDisplayCompositeTests();
+    kb::render::tests::RunSceneExposureMeterTests();
     kb::render::tests::RunSceneDepthPolicyTests();
     kb::render::tests::RunRenderSceneSyncTests();
     kb::render::tests::RunSceneRenderTargetFormatTests();
     kb::render::tests::RunSceneRenderExtractorTests();
+    kb::render::tests::RunShaderManifestTests();
     return EXIT_SUCCESS;
 }

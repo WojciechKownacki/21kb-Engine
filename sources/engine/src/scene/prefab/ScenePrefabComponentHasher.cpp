@@ -37,6 +37,11 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.light->range);
         ScenePrefabHashBuilder::MixFloat(hash, components.light->innerConeDegrees);
         ScenePrefabHashBuilder::MixFloat(hash, components.light->outerConeDegrees);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->areaWidth);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->areaHeight);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->contactShadowLength);
+        ScenePrefabHashBuilder::MixFloat(hash, components.light->volumetricScattering);
+        ScenePrefabHashBuilder::Mix(hash, components.light->castsShadow ? 1U : 0U);
     }
 }
 

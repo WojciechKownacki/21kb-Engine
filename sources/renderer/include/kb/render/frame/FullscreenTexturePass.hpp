@@ -9,8 +9,21 @@
 namespace kb::render {
 
 enum class FullscreenTextureTonemapOperator : std::uint8_t {
+    None,
     Aces,
     AgxApprox,
+};
+
+struct FullscreenTextureAutoExposureSettings {
+    bool enabled = false;
+    float meteredAverageLuminance = 0.18F;
+    float middleGray = 0.18F;
+    float minExposureStops = -8.0F;
+    float maxExposureStops = 8.0F;
+    float biasStops = 0.0F;
+    bool temporalAdaptationEnabled = true;
+    float brightAdaptationRate = 4.0F;
+    float darkAdaptationRate = 1.5F;
 };
 
 struct FullscreenTextureOutputTransform {
@@ -18,13 +31,17 @@ struct FullscreenTextureOutputTransform {
     float gamma = 2.2F;
     FullscreenTextureTonemapOperator tonemap = FullscreenTextureTonemapOperator::Aces;
     float colorGradingLutStrength = 0.0F;
+    FullscreenTextureAutoExposureSettings autoExposure{};
 };
+
+[[nodiscard]] float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransform& transform) noexcept;
 
 struct FullscreenTexturePassDesc {
     bgfx::ViewId viewId = 0;
     bgfx::TextureHandle sourceTexture = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     RenderExtent extent{};
+    RenderViewportRect outputRect{};
     FullscreenTextureOutputTransform outputTransform{};
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;

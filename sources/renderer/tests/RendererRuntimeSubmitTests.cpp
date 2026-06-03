@@ -364,6 +364,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(passStats[0].stats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit shadow pass did not report shadow map allocation bytes");
     Require(passStats[1].pass == MeshPassType::BaseOpaque && passStats[1].stats.submittedMeshCount == instanceCount, "Runtime submit opaque pass stats are wrong");
     Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 1U, "Runtime submit transparent pass stats are wrong");
+    Require(renderer.LastSceneExposureStats().empty(), "Runtime submit without post-process unexpectedly reported exposure stats");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
     Require(runtimeStats.cachedMeshCount == 1U, "Runtime submit did not cache exactly one mesh resource");
@@ -505,11 +506,68 @@ void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
+    kb::scene::Scene scene;
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Renderer did not initialize for same-frame multi-viewport test");
+    Require(renderer.BeginFrame(), "Renderer did not begin same-frame multi-viewport test");
+
+    const RenderSceneSubmitDesc docked{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+    };
+    const RenderSceneSubmitDesc detached{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 2U },
+                .extent = RenderExtent{ 96U, 72U },
+                .viewportIndex = 1U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+    };
+    const std::array<Renderer::SceneFrameSubmission, 2U> submissions{
+        Renderer::SceneFrameSubmission{ .scene = &scene, .desc = docked },
+        Renderer::SceneFrameSubmission{ .scene = &scene, .desc = detached },
+    };
+
+    Require(renderer.SubmitScenes(submissions), "Renderer rejected docked and detached viewport submissions in one frame");
+    const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+    Require(passStats.size() == 4U, "Same-frame multi-viewport test did not report both scene passes for both viewports");
+    Require(passStats[0].viewportId == 1U && passStats[0].viewportIndex == 0U, "Docked viewport opaque pass metadata is wrong");
+    Require(passStats[1].viewportId == 1U && passStats[1].viewportIndex == 0U, "Docked viewport transparent pass metadata is wrong");
+    Require(passStats[2].viewportId == 2U && passStats[2].viewportIndex == 1U, "Detached viewport opaque pass metadata is wrong");
+    Require(passStats[3].viewportId == 2U && passStats[3].viewportIndex == 1U, "Detached viewport transparent pass metadata is wrong");
+    Require(!renderer.LastSceneSubmitStats().HasMissingResources(), "Same-frame multi-viewport test reported missing resources for an empty scene");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+}
+
 } // namespace
 
 void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
+    RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 
 } // namespace kb::render::tests
