@@ -647,7 +647,8 @@ if(BUILD_TESTING)
             kb_engine
     )
 
-    add_test(NAME kb_engine_tests COMMAND kb_engine_tests)
+    add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)
+    set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     kb_apply_quality_gates(kb_engine_tests)
 endif()

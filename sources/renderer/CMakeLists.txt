@@ -334,7 +334,8 @@ if(BUILD_TESTING)
             kb_renderer
     )
 
-    add_test(NAME kb_renderer_tests COMMAND kb_renderer_tests)
+    add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
+    set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     kb_apply_quality_gates(kb_renderer_tests)
 endif()
