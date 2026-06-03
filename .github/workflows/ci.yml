@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: ${{ matrix.name }}
@@ -15,21 +18,21 @@ jobs:
       matrix:
         include:
           - name: Windows MSVC
-            os: windows-latest
-            generator: "Visual Studio 17 2022"
+            os: windows-2025
+            generator: "Visual Studio 18 2026"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
             targets: "kb_engine_tests;kb_renderer_tests;kb_editor_tests;kb_editor"
           - name: Linux GCC ASan UBSan
-            os: ubuntu-latest
+            os: ubuntu-24.04
             generator: "Unix Makefiles"
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
             targets: "kb_engine_tests"
           - name: macOS Clang ASan UBSan
-            os: macos-latest
+            os: macos-15
             generator: "Unix Makefiles"
             build_editor: "OFF"
             build_renderer: "OFF"
@@ -38,21 +41,25 @@ jobs:
 
     steps:
       - name: Check out sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
       - name: Configure
         shell: pwsh
-        run: >
-          cmake
-          -S .
-          -B build/ci
-          -G "${{ matrix.generator }}"
-          -DCMAKE_BUILD_TYPE=Debug
-          -DKB_BUILD_EDITOR=${{ matrix.build_editor }}
-          -DKB_BUILD_RENDERER=${{ matrix.build_renderer }}
-          -DKB_ENABLE_SANITIZERS=${{ matrix.sanitizer }}
+        run: |
+          $configureArgs = @(
+            "-S", ".",
+            "-B", "build/ci",
+            "-G", "${{ matrix.generator }}",
+            "-DKB_BUILD_EDITOR=${{ matrix.build_editor }}",
+            "-DKB_BUILD_RENDERER=${{ matrix.build_renderer }}",
+            "-DKB_ENABLE_SANITIZERS=${{ matrix.sanitizer }}"
+          )
+          if ("${{ matrix.generator }}" -ne "Visual Studio 18 2026") {
+            $configureArgs += "-DCMAKE_BUILD_TYPE=Debug"
+          }
+          cmake @configureArgs
 
       - name: Build
         shell: pwsh
