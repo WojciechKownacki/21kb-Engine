@@ -16,7 +16,7 @@ public:
     DockPointerDragFactory() = delete;
 
 #if defined(_WIN32)
-    [[nodiscard]] static DockPointerDrag FromDockHit(HWND window, const DockLayout& layout, const DockHit& hit) noexcept;
+    [[nodiscard]] static DockPointerDrag FromDockHit(HWND window, const DockLayout& layout, const DockHit& hit, int x, int y) noexcept;
     [[nodiscard]] static DockPointerDrag FromFloatingWindow(HWND window, std::uint32_t panelId, int x, int y, const EditorMetrics& metrics) noexcept;
 #endif
 

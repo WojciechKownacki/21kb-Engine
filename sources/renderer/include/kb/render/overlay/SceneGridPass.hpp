@@ -11,6 +11,7 @@ struct SceneGridPassDesc {
     bgfx::ViewId viewId = 0;
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     RenderExtent extent{};
+    RenderViewportRect outputRect{};
     const SceneRenderCamera* camera = nullptr;
 
     [[nodiscard]] bool IsValid() const noexcept;

@@ -15,6 +15,7 @@
 #include <bx/math.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 
@@ -190,6 +191,36 @@ struct CameraBasis {
     return std::nullopt;
 }
 
+[[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildViewportPresentSettings(
+    const EditorSceneContext& sceneContext,
+    std::uint32_t panelId,
+    DockPanelKind panelKind,
+    const EditorViewportPreviewState& viewportState,
+    const SceneViewportToolbarRects& sceneRects) {
+    const EditorViewportProfile profile = viewportState.Profile();
+    const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
+    const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
+    const bool sceneView = panelKind == DockPanelKind::Scene;
+    std::optional<kb::render::SceneRenderCamera> cameraOverride;
+    if (sceneView) {
+        cameraOverride = BuildEditorCamera(renderWidth, renderHeight);
+    } else {
+        cameraOverride = BuildCameraOverride(sceneContext, EditorViewportCameraMode::GameCamera, renderWidth, renderHeight);
+    }
+
+    return EditorSceneBgfxViewport::PresentSettings{
+        .renderWidth = renderWidth,
+        .renderHeight = renderHeight,
+        .fitMode = viewportState.FitMode(),
+        .safeArea = profile.safeArea,
+        .cameraOverride = cameraOverride,
+        .selectedEntityIds = sceneView ? std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() } : std::array<std::uint64_t, 1U>{},
+        .viewportKey = panelId,
+        .editorSceneOverlaysEnabled = sceneView,
+        .drawSafeArea = profile.devicePreview,
+    };
+}
+
 void DrawSafeAreaOverlay(HDC dc, const RECT& destination, const EditorViewportProfile& profile, const EditorTheme& theme) {
     if (!profile.devicePreview || profile.width == 0U || profile.height == 0U) {
         return;
@@ -240,22 +271,20 @@ void PanelContentRenderer::Paint(HDC dc, const RECT& content, const RECT& panelF
             GdiDrawing::ToColorRef(theme.textDisabled));
         break;
     case DockPanelKind::Scene:
+    case DockPanelKind::Game:
         if (sceneViewport != nullptr) {
             const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
-            SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
+            SceneViewportToolbarRenderer::Paint(
+                dc,
+                content,
+                theme,
+                viewportState,
+                panel.kind == DockPanelKind::Scene ? "Editor Cam" : "Game Cam");
             const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content);
             const EditorViewportProfile profile = viewportState.Profile();
             const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
             const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
-            const EditorSceneBgfxViewport::PresentSettings settings{
-                .renderWidth = renderWidth,
-                .renderHeight = renderHeight,
-                .fitMode = viewportState.FitMode(),
-                .safeArea = profile.safeArea,
-                .cameraOverride = BuildCameraOverride(sceneContext, viewportState.CameraMode(), renderWidth, renderHeight),
-                .selectedEntityIds = { sceneContext.SelectedEntity().Id() },
-                .drawSafeArea = profile.devicePreview,
-            };
+            const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
             if (sceneViewportHost != nullptr) {
                 sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
             } else {

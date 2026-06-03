@@ -2,6 +2,7 @@
 
 #include "kb/render/resources/RenderHandles.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/scene/SceneGpuDrivenFrameResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <cstdint>
@@ -41,8 +42,11 @@ struct MeshDrawCommand {
     std::uint64_t materialAssetId = 0;
     std::uint32_t sectionIndex = 0;
     std::uint32_t materialSlot = 0;
+    std::uint32_t firstMeshlet = 0;
+    std::uint32_t meshletCount = 0;
     std::uint32_t indexStart = 0;
     std::uint32_t indexCount = 0;
+    std::uint8_t lodLevel = 0;
     std::uint16_t depthBucket = 0;
     RenderMeshHandle mesh{};
     RenderMaterialHandle material{};
@@ -64,7 +68,9 @@ struct MeshPipelineBuildDesc {
     SceneRenderDiagnostics* diagnostics = nullptr;
     std::uint32_t maxDrawCommands = 0;
     std::uint32_t maxVisibleInstances = 0;
+    std::uint32_t maxDroppedInstances = 0;
     std::span<const std::uint64_t> selectedEntityIds{};
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     MeshPipelineResourceValidation resourceValidation = MeshPipelineResourceValidation::ResolveAndValidate;
 };
 
@@ -81,6 +87,8 @@ struct MeshCommandLookupKeyHash {
 
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
+    std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
+    std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;
     SceneRenderSubmitStats stats{};
 };

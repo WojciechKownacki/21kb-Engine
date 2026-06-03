@@ -22,6 +22,51 @@ enum class RenderPassGraphValidationStatus : std::uint8_t {
     PassWithoutOutput,
 };
 
+enum class RenderGraphResourceAccess : std::uint8_t {
+    Undefined,
+    RenderTargetRead,
+    RenderTargetWrite,
+    DepthRead,
+    DepthWrite,
+    ShaderRead,
+    ComputeRead,
+    ComputeWrite,
+    CopyRead,
+    CopyWrite,
+    Present,
+};
+
+enum class RenderGraphDebugView : std::uint8_t {
+    None,
+    ResourceLifetime,
+    Aliasing,
+    Barriers,
+    PassCost,
+};
+
+struct RenderGraphResourceBarrier {
+    RenderGraphResourceId resource{};
+    RenderPassKind beforePass = RenderPassKind::SceneTargetSetup;
+    RenderPassKind afterPass = RenderPassKind::SceneTargetSetup;
+    RenderGraphResourceAccess beforeAccess = RenderGraphResourceAccess::Undefined;
+    RenderGraphResourceAccess afterAccess = RenderGraphResourceAccess::Undefined;
+};
+
+struct RenderGraphResourceAlias {
+    RenderGraphResourceId resource{};
+    std::uint16_t aliasSlot = 0xFFFFU;
+    std::uint64_t byteSize = 0;
+};
+
+struct RenderGraphPassProfile {
+    RenderPassKind pass = RenderPassKind::SceneTargetSetup;
+    std::uint16_t viewId = 0;
+    std::uint16_t readCount = 0;
+    std::uint16_t writeCount = 0;
+    std::uint64_t estimatedTargetBytes = 0;
+    bool emitsBgfxView = false;
+};
+
 struct RenderPassGraphValidationResult {
     RenderPassGraphValidationStatus status = RenderPassGraphValidationStatus::EmptyGraph;
     RenderPassKind pass = RenderPassKind::SceneTargetSetup;
@@ -43,9 +88,15 @@ struct RenderGraphResourceUsage {
 struct RenderPassGraphCompileResult {
     RenderPassGraphValidationResult validation{};
     std::vector<RenderGraphResourceUsage> resourceUsages;
+    std::vector<RenderGraphResourceBarrier> barriers;
+    std::vector<RenderGraphResourceAlias> aliases;
+    std::vector<RenderGraphPassProfile> passProfiles;
     std::uint64_t estimatedTransientBytes = 0;
+    std::uint64_t estimatedAliasedTransientBytes = 0;
+    std::uint64_t transientAliasingSavingsBytes = 0;
     std::uint32_t transientResourceCount = 0;
     std::uint32_t externalResourceCount = 0;
+    RenderGraphDebugView debugView = RenderGraphDebugView::None;
 
     [[nodiscard]] bool Succeeded() const noexcept {
         return validation.Succeeded();

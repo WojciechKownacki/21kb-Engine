@@ -17,6 +17,8 @@ struct DockPointerDrag {
     std::uint32_t panelId = 0;
     int offsetX = 0;
     int offsetY = 0;
+    int startX = 0;
+    int startY = 0;
     std::uint32_t splitterNodeId = 0;
     std::uint32_t sourceLeafId = 0;
     std::uint32_t sourceTabIndex = 0;

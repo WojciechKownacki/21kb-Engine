@@ -1,0 +1,31 @@
+if(NOT DEFINED KB_SHADER_ROOT)
+    message(FATAL_ERROR "KB_SHADER_ROOT is required")
+endif()
+
+if(NOT DEFINED KB_SHADER_PROFILES)
+    message(FATAL_ERROR "KB_SHADER_PROFILES is required")
+endif()
+
+if(NOT DEFINED KB_SHADER_MANIFEST)
+    message(FATAL_ERROR "KB_SHADER_MANIFEST is required")
+endif()
+
+set(_missing "")
+foreach(_profile IN LISTS KB_SHADER_PROFILES)
+    foreach(_shader IN LISTS KB_SHADER_MANIFEST)
+        set(_shader_path "${KB_SHADER_ROOT}/${_profile}/${_shader}.bin")
+        if(NOT EXISTS "${_shader_path}")
+            list(APPEND _missing "${_profile}/${_shader}.bin")
+        endif()
+    endforeach()
+endforeach()
+
+if(_missing)
+    string(REPLACE ";" "\n  " _missing_lines "${_missing}")
+    message(FATAL_ERROR "Shader manifest validation failed. Missing runtime shader variants:\n  ${_missing_lines}")
+endif()
+
+list(LENGTH KB_SHADER_PROFILES _profile_count)
+list(LENGTH KB_SHADER_MANIFEST _shader_count)
+math(EXPR _variant_count "${_profile_count} * ${_shader_count}")
+message(STATUS "Shader manifest validation passed for ${_variant_count} variants in ${KB_SHADER_ROOT}")

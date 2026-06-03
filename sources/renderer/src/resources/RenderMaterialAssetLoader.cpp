@@ -108,6 +108,44 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool ParseDecalBlendMode(std::string_view rest, RenderMaterialDecalBlendMode& output) noexcept {
+    rest = Trim(rest);
+    if (EqualsIgnoreCase(rest, "DISABLED") || EqualsIgnoreCase(rest, "NONE")) {
+        output = RenderMaterialDecalBlendMode::Disabled;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "BASE_COLOR") || EqualsIgnoreCase(rest, "BASECOLOR")) {
+        output = RenderMaterialDecalBlendMode::BaseColor;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "NORMAL")) {
+        output = RenderMaterialDecalBlendMode::Normal;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "PBR")) {
+        output = RenderMaterialDecalBlendMode::Pbr;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseLayerBlendMode(std::string_view rest, RenderMaterialLayerBlendMode& output) noexcept {
+    rest = Trim(rest);
+    if (EqualsIgnoreCase(rest, "REPLACE")) {
+        output = RenderMaterialLayerBlendMode::Replace;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "ADD")) {
+        output = RenderMaterialLayerBlendMode::Add;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "MULTIPLY")) {
+        output = RenderMaterialLayerBlendMode::Multiply;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool ParseBool(std::string_view rest, bool& output) noexcept {
     rest = Trim(rest);
     if (EqualsIgnoreCase(rest, "true") || EqualsIgnoreCase(rest, "1") || EqualsIgnoreCase(rest, "yes")) {
@@ -208,8 +246,83 @@ std::optional<RenderMaterialAssetData> RenderMaterialAssetLoader::LoadMaterial(s
                 return std::nullopt;
             }
             sawMaterialProperty = true;
+        } else if (keyword == "clearcoatFactor") {
+            if (!ParseFloat(rest, asset.desc.clearcoatFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "clearcoatRoughnessFactor") {
+            if (!ParseFloat(rest, asset.desc.clearcoatRoughnessFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "sheenColor") {
+            if (!ParseVec3(rest, asset.desc.sheenColor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "sheenRoughnessFactor") {
+            if (!ParseFloat(rest, asset.desc.sheenRoughnessFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "transmissionFactor") {
+            if (!ParseFloat(rest, asset.desc.transmissionFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "thicknessFactor") {
+            if (!ParseFloat(rest, asset.desc.thicknessFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "attenuationColor") {
+            if (!ParseVec3(rest, asset.desc.attenuationColor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "attenuationDistance") {
+            if (!ParseFloat(rest, asset.desc.attenuationDistance)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "subsurfaceColor") {
+            if (!ParseVec3(rest, asset.desc.subsurfaceColor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "subsurfaceFactor") {
+            if (!ParseFloat(rest, asset.desc.subsurfaceFactor)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "anisotropyStrength") {
+            if (!ParseFloat(rest, asset.desc.anisotropyStrength)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "anisotropyRotation") {
+            if (!ParseFloat(rest, asset.desc.anisotropyRotation)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "layerWeight") {
+            if (!ParseFloat(rest, asset.desc.layerWeight)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
         } else if (keyword == "alphaMode") {
             if (!ParseAlphaMode(rest, asset.desc.alphaMode)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "decalBlendMode") {
+            if (!ParseDecalBlendMode(rest, asset.desc.decalBlendMode)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "layerBlendMode") {
+            if (!ParseLayerBlendMode(rest, asset.desc.layerBlendMode)) {
                 return std::nullopt;
             }
             sawMaterialProperty = true;
@@ -257,6 +370,70 @@ std::optional<RenderMaterialAssetData> RenderMaterialAssetLoader::LoadMaterial(s
             sawMaterialProperty = true;
         } else if (keyword == "emissiveTexture") {
             asset.emissiveTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "clearcoatTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.clearcoatTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "clearcoatTexture") {
+            asset.clearcoatTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "clearcoatRoughnessTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.clearcoatRoughnessTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "clearcoatRoughnessTexture") {
+            asset.clearcoatRoughnessTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "sheenColorTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.sheenColorTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "sheenColorTexture") {
+            asset.sheenColorTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "transmissionTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.transmissionTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "transmissionTexture") {
+            asset.transmissionTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "thicknessTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.thicknessTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "thicknessTexture") {
+            asset.thicknessTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "anisotropyTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.anisotropyTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "anisotropyTexture") {
+            asset.anisotropyTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "decalTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.decalTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "decalTexture") {
+            asset.decalTexturePath = std::string{ rest };
+            sawMaterialProperty = true;
+        } else if (keyword == "layerMaskTextureAssetId") {
+            if (!ParseUint64(rest, asset.desc.layerMaskTextureAssetId)) {
+                return std::nullopt;
+            }
+            sawMaterialProperty = true;
+        } else if (keyword == "layerMaskTexture") {
+            asset.layerMaskTexturePath = std::string{ rest };
             sawMaterialProperty = true;
         } else {
             return std::nullopt;

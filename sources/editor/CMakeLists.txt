@@ -250,6 +250,7 @@ add_executable(kb_editor
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
+    src/private/rendering/DockDropPreviewOverlayWindow.hpp
     src/private/rendering/DockPanelChromeRenderer.hpp
     src/private/rendering/DockPanelFramePainter.hpp
     src/private/rendering/DockWorkspaceChromeRenderer.hpp
@@ -352,6 +353,7 @@ add_executable(kb_editor
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
     src/rendering/DockDropPreviewRenderer.cpp
+    src/rendering/DockDropPreviewOverlayWindow.cpp
     src/rendering/DockPanelChromeRenderer.cpp
     src/rendering/DockPanelFramePainter.cpp
     src/rendering/DockWorkspaceChromeRenderer.cpp
@@ -485,10 +487,45 @@ if(BUILD_TESTING)
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
         tests/EditorViewportPreviewTests.cpp
+        tests/EditorDockingTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
         tests/SvgPathTests.cpp
+        src/docking/DefaultDockWorkspace.cpp
+        src/docking/DockCenterPanelInserter.cpp
+        src/docking/DockDropEdgeBandClassifier.cpp
+        src/docking/DockDropPlacementPolicy.cpp
+        src/docking/DockDropPreviewFactory.cpp
+        src/docking/DockDropPreviewResolver.cpp
+        src/docking/DockDropZoneClassifier.cpp
+        src/docking/DockDropZoneDepthSelector.cpp
+        src/docking/DockGeometry.cpp
+        src/docking/DockHitTester.cpp
+        src/docking/DockLayoutBuilder.cpp
+        src/docking/DockLeafLayoutBuilder.cpp
+        src/docking/DockLeafPanelOrder.cpp
+        src/docking/DockMainLayoutResolver.cpp
+        src/docking/DockModelQueries.cpp
+        src/docking/DockNodeFactory.cpp
+        src/docking/DockNodeFinder.cpp
+        src/docking/DockNodeIdSource.cpp
+        src/docking/DockNodeLayoutBuilder.cpp
+        src/docking/DockNodeQuery.cpp
+        src/docking/DockNodeSlotFinder.cpp
+        src/docking/DockPanelCollection.cpp
+        src/docking/DockPanelDocking.cpp
+        src/docking/DockPanelRemover.cpp
+        src/docking/DockSplitLayoutBuilder.cpp
+        src/docking/DockSplitPanelInserter.cpp
+        src/docking/DockSplitterResizer.cpp
+        src/docking/DockTabIndexResolver.cpp
+        src/docking/DockTreeMutation.cpp
+        src/docking/DockTreePruner.cpp
+        src/docking/DockTypes.cpp
+        src/docking/EditorDockModel.cpp
+        src/docking/EditorDockModelCommands.cpp
+        src/docking/EditorDockModelQueries.cpp
         src/rendering/SvgPathArcMath.cpp
         src/rendering/SvgPathCursor.cpp
         src/assets/EditorAssetBrowserAssetRows.cpp

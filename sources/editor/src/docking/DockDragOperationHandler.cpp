@@ -8,6 +8,16 @@
 #include "docking/DockSplitterDragHandler.hpp"
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool TabDragThresholdReached(const DockPointerDrag& drag, int x, int y) noexcept {
+    constexpr int kTabDragThresholdPixelsSquared = 36;
+    const int dx = x - drag.startX;
+    const int dy = y - drag.startY;
+    return (dx * dx + dy * dy) >= kTabDragThresholdPixelsSquared;
+}
+
+} // namespace
 
 void DockDragOperationHandler::Move(
     DockPointerDrag& drag,
@@ -25,6 +35,10 @@ void DockDragOperationHandler::Move(
     }
 
     if (drag.kind != DockHitKind::Tab || drag.panelId == 0) {
+        return;
+    }
+
+    if (!TabDragThresholdReached(drag, x, y)) {
         return;
     }
 

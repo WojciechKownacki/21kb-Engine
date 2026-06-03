@@ -98,12 +98,14 @@ bool BgfxContext::InitializeImpl(std::uint32_t width, std::uint32_t height, void
         nativeWindowHandle_ = nullptr;
         nativeDisplayHandle_ = nullptr;
         resetFlags_ = 0;
+        capabilityReport_ = {};
         return false;
     }
 
     width_ = width;
     height_ = height;
     initialized_ = true;
+    capabilityReport_ = BuildRendererCapabilityReport(preferredBackend);
     bgfx::setDebug(BGFX_DEBUG_TEXT);
     return true;
 }
@@ -121,6 +123,7 @@ void BgfxContext::Shutdown() {
     resetFlags_ = 0;
     nativeWindowHandle_ = nullptr;
     nativeDisplayHandle_ = nullptr;
+    capabilityReport_ = {};
 }
 
 void BgfxContext::Reset(std::uint32_t width, std::uint32_t height, std::uint32_t resetFlags) {
@@ -160,6 +163,10 @@ std::uint32_t BgfxContext::Height() const noexcept {
 
 void* BgfxContext::NativeWindowHandle() const noexcept {
     return nativeWindowHandle_;
+}
+
+const RendererCapabilityReport& BgfxContext::CapabilityReport() const noexcept {
+    return capabilityReport_;
 }
 
 } // namespace kb::render

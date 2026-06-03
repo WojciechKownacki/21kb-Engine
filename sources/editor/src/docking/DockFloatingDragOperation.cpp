@@ -43,7 +43,7 @@ void DockFloatingDragOperation::MoveWindow(DockPointerDrag& drag, POINT screen, 
     GetWindowRect(floating, &rect);
     const int x = screen.x - drag.offsetX;
     const int y = screen.y - drag.offsetY;
-    SetWindowPos(floating, HWND_TOP, x, y, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE);
+    SetWindowPos(floating, HWND_TOP, x, y, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW);
     dockModel.Commands().MoveFloatingPanel(drag.panelId, x, y);
 }
 

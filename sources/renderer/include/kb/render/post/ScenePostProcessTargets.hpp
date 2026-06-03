@@ -22,7 +22,7 @@ struct ScenePostProcessTargetsDesc {
 
 class ScenePostProcessTargets {
 public:
-    static constexpr std::size_t kTargetCount = 5U;
+    static constexpr std::size_t kTargetCount = 8U;
 
     ScenePostProcessTargets() = default;
     ~ScenePostProcessTargets();
@@ -43,13 +43,20 @@ private:
         SelectionMask = 0U,
         Bloom = 1U,
         Ping = 2U,
-        Combine = 3U,
-        Final = 4U,
+        MotionVectors = 3U,
+        TemporalHistory0 = 4U,
+        TemporalHistory1 = 5U,
+        Combine = 6U,
+        Final = 7U,
     };
 
     [[nodiscard]] bool CreateTargets(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy);
+    [[nodiscard]] bool CreateBloomPyramidTargets(std::uint32_t width, std::uint32_t height);
 
     std::array<bgfx::TextureHandle, kTargetCount> textures_{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
@@ -62,11 +69,32 @@ private:
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
         BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
     }};
+    std::array<bgfx::FrameBufferHandle, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> bloomMipFrameBuffers_{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+    }};
+    std::array<bgfx::FrameBufferHandle, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> pingMipFrameBuffers_{{
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+        BGFX_INVALID_HANDLE,
+    }};
+    std::array<RenderExtent, RenderPostProcessTargetBinding::kMaxBloomPyramidMips> bloomMipExtents_{};
     SceneColorFormatSelection colorSelection_{};
     SceneColorFormatPolicy colorPolicy_ = SceneColorFormatPolicy::Auto;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
+    std::uint8_t bloomMipCount_ = 0;
     bool allocated_ = false;
 };
 

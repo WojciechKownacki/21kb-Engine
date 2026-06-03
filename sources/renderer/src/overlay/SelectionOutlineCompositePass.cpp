@@ -47,7 +47,7 @@ SelectionOutlineCompositePass::~SelectionOutlineCompositePass() {
 }
 
 bool SelectionOutlineCompositePassDesc::IsValid() const noexcept {
-    return bgfx::isValid(selectionMask) && extent.IsValid();
+    return bgfx::isValid(selectionMask) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid());
 }
 
 bool SelectionOutlineCompositePass::Initialize() {
@@ -102,9 +102,17 @@ bool SelectionOutlineCompositePass::Submit(const SelectionOutlineCompositePassDe
     }
 
     const std::array<float, 16> identity = IdentityMatrix();
+    const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
+        ? desc.outputRect
+        : RenderViewportRect{.extent = desc.extent};
     bgfx::setViewName(desc.viewId, "KB Editor Selection Outline");
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
-    bgfx::setViewRect(desc.viewId, 0, 0, ClampToViewExtent(desc.extent.width), ClampToViewExtent(desc.extent.height));
+    bgfx::setViewRect(
+        desc.viewId,
+        ClampToViewExtent(outputRect.x),
+        ClampToViewExtent(outputRect.y),
+        ClampToViewExtent(outputRect.extent.width),
+        ClampToViewExtent(outputRect.extent.height));
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
     bgfx::setViewClear(desc.viewId, BGFX_CLEAR_NONE);
     bgfx::setViewMode(desc.viewId, bgfx::ViewMode::Sequential);

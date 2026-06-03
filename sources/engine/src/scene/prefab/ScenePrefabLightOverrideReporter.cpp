@@ -14,7 +14,12 @@ namespace {
         && lhs.intensity == rhs.intensity
         && lhs.range == rhs.range
         && lhs.innerConeDegrees == rhs.innerConeDegrees
-        && lhs.outerConeDegrees == rhs.outerConeDegrees;
+        && lhs.outerConeDegrees == rhs.outerConeDegrees
+        && lhs.areaWidth == rhs.areaWidth
+        && lhs.areaHeight == rhs.areaHeight
+        && lhs.contactShadowLength == rhs.contactShadowLength
+        && lhs.volumetricScattering == rhs.volumetricScattering
+        && lhs.castsShadow == rhs.castsShadow;
 }
 
 } // namespace
@@ -48,6 +53,21 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
     }
     if (actual->outerConeDegrees != expected->outerConeDegrees) {
         ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.outerConeDegrees", ScenePrefabOverrideValueFormatter::ToString(actual->outerConeDegrees), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->areaWidth != expected->areaWidth) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.areaWidth", ScenePrefabOverrideValueFormatter::ToString(actual->areaWidth), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->areaHeight != expected->areaHeight) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.areaHeight", ScenePrefabOverrideValueFormatter::ToString(actual->areaHeight), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->contactShadowLength != expected->contactShadowLength) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.contactShadowLength", ScenePrefabOverrideValueFormatter::ToString(actual->contactShadowLength), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->volumetricScattering != expected->volumetricScattering) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.volumetricScattering", ScenePrefabOverrideValueFormatter::ToString(actual->volumetricScattering), ScenePrefabOverrideFlag::Light);
+    }
+    if (actual->castsShadow != expected->castsShadow) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.castsShadow", actual->castsShadow ? "true" : "false", ScenePrefabOverrideFlag::Light);
     }
 }
 

@@ -32,6 +32,8 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultDrawBudget() const noexcept;
     void SetDefaultLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultLightingConfig() const noexcept;
+    void SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport support) noexcept;
+    [[nodiscard]] SceneGpuDrivenFeatureSupport GpuDrivenRuntimeSupport() const noexcept;
     void TickFrame() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
@@ -55,6 +57,7 @@ private:
     mutable SceneRenderDiagnostics lastDiagnostics_{};
     SceneRenderDrawBudget defaultDrawBudget_{};
     SceneRenderLightingConfig defaultLightingConfig_{};
+    SceneGpuDrivenFeatureSupport gpuDrivenRuntimeSupport_{};
     bool initialized_ = false;
 };
 

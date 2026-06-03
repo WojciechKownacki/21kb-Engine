@@ -33,7 +33,12 @@ namespace {
         && lhs.intensity == rhs.intensity
         && lhs.range == rhs.range
         && lhs.innerConeDegrees == rhs.innerConeDegrees
-        && lhs.outerConeDegrees == rhs.outerConeDegrees;
+        && lhs.outerConeDegrees == rhs.outerConeDegrees
+        && lhs.areaWidth == rhs.areaWidth
+        && lhs.areaHeight == rhs.areaHeight
+        && lhs.contactShadowLength == rhs.contactShadowLength
+        && lhs.volumetricScattering == rhs.volumetricScattering
+        && lhs.castsShadow == rhs.castsShadow;
 }
 
 template <typename T>

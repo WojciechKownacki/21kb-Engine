@@ -149,7 +149,12 @@ struct Basis {
         current.intensity != next.intensity ||
         current.range != next.range ||
         current.innerConeDegrees != next.innerConeDegrees ||
-        current.outerConeDegrees != next.outerConeDegrees) {
+        current.outerConeDegrees != next.outerConeDegrees ||
+        current.areaWidth != next.areaWidth ||
+        current.areaHeight != next.areaHeight ||
+        current.contactShadowLength != next.contactShadowLength ||
+        current.volumetricScattering != next.volumetricScattering ||
+        current.castsShadow != next.castsShadow) {
         dirty |= RenderProxyDirtyFlag::Light;
     }
     if (current.visible != next.visible) {
@@ -446,16 +451,22 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
             static_cast<void>(entityId);
             continue;
         }
+        const Basis basis = BasisFromQuat(light.rotation);
         outSnapshot.lights.push_back(SceneRenderLight{
             .entityId = light.entityId,
             .kind = light.kind,
             .position = { light.position[0], light.position[1], light.position[2] },
-            .direction = { BasisFromQuat(light.rotation).zx, BasisFromQuat(light.rotation).zy, BasisFromQuat(light.rotation).zz },
+            .direction = { basis.zx, basis.zy, basis.zz },
             .color = { light.color[0], light.color[1], light.color[2] },
             .intensity = light.intensity,
             .range = light.range,
             .innerConeCos = std::cos(DegreesToRadians(light.innerConeDegrees)),
             .outerConeCos = std::cos(DegreesToRadians(light.outerConeDegrees)),
+            .areaWidth = light.areaWidth,
+            .areaHeight = light.areaHeight,
+            .contactShadowLength = light.contactShadowLength,
+            .volumetricScattering = light.volumetricScattering,
+            .castsShadow = light.castsShadow,
         });
     }
 }

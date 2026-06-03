@@ -5,6 +5,7 @@
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
+#include "kb/render/resources/NativeWindowFramebuffer.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #if defined(_WIN32)
@@ -38,6 +40,8 @@ public:
         EditorViewportSafeArea safeArea{};
         std::optional<render::SceneRenderCamera> cameraOverride{};
         std::array<std::uint64_t, 1U> selectedEntityIds{};
+        std::uint64_t viewportKey = 0;
+        bool editorSceneOverlaysEnabled = true;
         bool drawSafeArea = false;
     };
 
@@ -60,12 +64,34 @@ public:
     void Hide() noexcept;
 
 private:
+    struct HostSurface {
+        HWND host = nullptr;
+        HWND window = nullptr;
+        RECT rect{};
+        bool presentedInCurrentPaint = false;
+        render::NativeWindowFramebuffer presentTarget;
+    };
+
     struct ViewportSession {
         HWND host = nullptr;
+        std::uint64_t key = 0;
         std::uint32_t viewportIndex = 0;
         bool presentedInCurrentPaint = false;
+        std::array<std::uint64_t, 1U> selectedEntityIds{};
         render::SceneRenderTarget sceneTarget;
         render::ScenePostProcessTargets postProcessTargets;
+    };
+
+    struct PendingPresent {
+        ViewportSession* session = nullptr;
+        HWND host = nullptr;
+        RECT destination{};
+        const kb::scene::Scene* scene = nullptr;
+        PresentSettings settings{};
+        std::uint32_t renderWidth = 0;
+        std::uint32_t renderHeight = 0;
+        std::uint32_t outputWidth = 0;
+        std::uint32_t outputHeight = 0;
     };
 
     class Win32Surface final : public render::RenderSurface {
@@ -81,28 +107,41 @@ private:
         HWND window_ = nullptr;
     };
 
-    [[nodiscard]] ViewportSession* EnsureSession(HWND host);
-    [[nodiscard]] ViewportSession* FindSession(HWND host) noexcept;
-    [[nodiscard]] bool EnsureDeviceWindow(HWND parent, const RECT& rect);
-    [[nodiscard]] bool EnsureRenderer(HWND parent, const RECT& rect);
-    void HideSession(HWND host) noexcept;
+    [[nodiscard]] ViewportSession* EnsureSession(HWND host, std::uint64_t key);
+    [[nodiscard]] ViewportSession* FindSession(HWND host, std::uint64_t key) noexcept;
+    [[nodiscard]] ViewportSession* FindSessionByKey(std::uint64_t key) noexcept;
+    [[nodiscard]] HostSurface* EnsureHostSurface(HWND host);
+    [[nodiscard]] HostSurface* FindHostSurface(HWND host) noexcept;
+    [[nodiscard]] HostSurface* FindHostSurfaceByWindow(HWND window) noexcept;
+    [[nodiscard]] bool EnsureWindowClass();
+    [[nodiscard]] bool EnsureContextWindow();
+    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent*> presents);
+    [[nodiscard]] bool EnsureRenderer();
+    [[nodiscard]] bool EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height);
+    void HideHostSurface(HostSurface& surface) noexcept;
+    void HideSession(HWND host, std::uint64_t key) noexcept;
     void ReleaseWindow(HWND window) noexcept;
     void ShutdownGpuResources() noexcept;
     void ShutdownSessionFramebuffers() noexcept;
+    [[nodiscard]] bool SubmitPendingPaint();
     [[noreturn]] static void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
-    [[nodiscard]] bool BuildSubmission(ViewportSession& session, const kb::scene::Scene& scene, std::uint32_t renderWidth, std::uint32_t renderHeight, std::uint32_t outputWidth, std::uint32_t outputHeight, const PresentSettings& settings, render::Renderer::SceneFrameSubmission& submission);
+    [[nodiscard]] bool QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
+    [[nodiscard]] bool BuildSubmission(const PendingPresent& present, const HostSurface& surface, render::Renderer::SceneFrameSubmission& submission);
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
     HINSTANCE instance_ = nullptr;
     HWND defaultParent_ = nullptr;
-    HWND deviceWindow_ = nullptr;
+    HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     bool windowClassRegistered_ = false;
     render::Renderer renderer_;
     std::vector<std::unique_ptr<ViewportSession>> sessions_;
-    std::uint32_t nextDetachedViewportIndex_ = 1;
+    std::vector<std::unique_ptr<HostSurface>> hostSurfaces_;
+    std::vector<PendingPresent> pendingPresents_;
+    std::vector<render::Renderer::SceneFrameSubmission> pendingSubmissions_;
+    std::uint32_t nextViewportIndex_ = 0;
 #endif
 };
 

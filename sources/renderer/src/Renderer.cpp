@@ -1,18 +1,24 @@
 #include "kb/render/Renderer.hpp"
 
 #include "kb/render/BgfxContext.hpp"
+#include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 
 #include <bgfx/bgfx.h>
+#include <bx/math.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -30,6 +36,45 @@ namespace {
         0.0F, 0.0F, 1.0F, 0.0F,
         0.0F, 0.0F, 0.0F, 1.0F,
     };
+}
+
+[[nodiscard]] float Halton(std::uint64_t index, std::uint32_t base) noexcept {
+    float result = 0.0F;
+    float fraction = 1.0F / static_cast<float>(base);
+    while (index > 0U) {
+        result += fraction * static_cast<float>(index % base);
+        index /= base;
+        fraction /= static_cast<float>(base);
+    }
+    return result;
+}
+
+[[nodiscard]] std::array<float, 2> TemporalJitter(std::uint64_t frameIndex, RenderExtent extent, bool enabled) noexcept {
+    if (!enabled || !extent.IsValid()) {
+        return {0.0F, 0.0F};
+    }
+    const std::uint64_t sequenceIndex = (frameIndex % 8ULL) + 1ULL;
+    return {
+        ((Halton(sequenceIndex, 2U) * 2.0F) - 1.0F) / static_cast<float>(std::max(1U, extent.width)),
+        ((Halton(sequenceIndex, 3U) * 2.0F) - 1.0F) / static_cast<float>(std::max(1U, extent.height)),
+    };
+}
+
+void ApplyProjectionJitter(SceneRenderCamera& camera, std::array<float, 2> jitter) noexcept {
+    camera.projection[8] += jitter[0] * 2.0F;
+    camera.projection[9] += jitter[1] * 2.0F;
+}
+
+[[nodiscard]] std::array<float, 16> ViewProjection(const SceneRenderCamera& camera) noexcept {
+    std::array<float, 16> viewProjection{};
+    bx::mtxMul(viewProjection.data(), camera.view.data(), camera.projection.data());
+    return viewProjection;
+}
+
+[[nodiscard]] std::array<float, 16> InverseMatrix(const std::array<float, 16>& matrix) noexcept {
+    std::array<float, 16> inverse{};
+    bx::mtxInverse(inverse.data(), matrix.data());
+    return inverse;
 }
 
 void ApplyViewOrder(std::span<const std::uint16_t> viewOrder) {
@@ -85,6 +130,8 @@ void ConfigureShadowDepthView(bgfx::ViewId viewId, bgfx::FrameBufferHandle frame
     constexpr SceneRenderLightingConfig defaultConfig{};
     return SceneRenderLightingConfig{
         .maxForwardLights = requested.maxForwardLights != defaultConfig.maxForwardLights ? requested.maxForwardLights : fallback.maxForwardLights,
+        .lightingPath = requested.lightingPath != defaultConfig.lightingPath ? requested.lightingPath : fallback.lightingPath,
+        .clusterDimensions = requested.clusterDimensions != defaultConfig.clusterDimensions ? requested.clusterDimensions : fallback.clusterDimensions,
         .ambientColor = requested.ambientColor != defaultConfig.ambientColor ? requested.ambientColor : fallback.ambientColor,
         .ambientIntensity = requested.ambientIntensity != defaultConfig.ambientIntensity ? requested.ambientIntensity : fallback.ambientIntensity,
         .environmentMode = requested.environmentMode != defaultConfig.environmentMode ? requested.environmentMode : fallback.environmentMode,
@@ -92,12 +139,20 @@ void ConfigureShadowDepthView(bgfx::ViewId viewId, bgfx::FrameBufferHandle frame
         .environmentGroundColor = requested.environmentGroundColor != defaultConfig.environmentGroundColor ? requested.environmentGroundColor : fallback.environmentGroundColor,
         .environmentDiffuseIntensity = requested.environmentDiffuseIntensity != defaultConfig.environmentDiffuseIntensity ? requested.environmentDiffuseIntensity : fallback.environmentDiffuseIntensity,
         .environmentSpecularIntensity = requested.environmentSpecularIntensity != defaultConfig.environmentSpecularIntensity ? requested.environmentSpecularIntensity : fallback.environmentSpecularIntensity,
+        .ibl = requested.ibl.HasEnvironment() || requested.ibl.reflectionProbeCount != 0U ? requested.ibl : fallback.ibl,
+        .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
         .shadowMapSize = requested.shadowMapSize != defaultConfig.shadowMapSize ? requested.shadowMapSize : fallback.shadowMapSize,
+        .shadowCascadeCount = requested.shadowCascadeCount != defaultConfig.shadowCascadeCount ? requested.shadowCascadeCount : fallback.shadowCascadeCount,
+        .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
         .shadowDistance = requested.shadowDistance != defaultConfig.shadowDistance ? requested.shadowDistance : fallback.shadowDistance,
         .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
         .shadowsEnabled = requested.shadowsEnabled != defaultConfig.shadowsEnabled ? requested.shadowsEnabled : fallback.shadowsEnabled,
+        .stableShadowCascades = requested.stableShadowCascades != defaultConfig.stableShadowCascades ? requested.stableShadowCascades : fallback.stableShadowCascades,
+        .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
+        .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
+        .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
     };
 }
 
@@ -107,6 +162,12 @@ void ConfigureShadowDepthView(bgfx::ViewId viewId, bgfx::FrameBufferHandle frame
         return 1U;
     case SceneRenderShadowFilter::Pcf3x3:
         return 9U;
+    case SceneRenderShadowFilter::Evsm:
+        return 4U;
+    case SceneRenderShadowFilter::Msm:
+        return 4U;
+    case SceneRenderShadowFilter::Pcss:
+        return 16U;
     }
     return 9U;
 }
@@ -119,6 +180,8 @@ void ConfigureShadowDepthView(bgfx::ViewId viewId, bgfx::FrameBufferHandle frame
         return 1U;
     case SceneRenderEnvironmentMode::Hemisphere:
         return 2U;
+    case SceneRenderEnvironmentMode::ImageBased:
+        return 4U;
     }
     return 1U;
 }
@@ -138,6 +201,10 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     bgfx::RendererType::Enum preferred = bgfx::RendererType::Count;
     if (displayConfig_.preferredBgfxRendererType >= 0 && displayConfig_.preferredBgfxRendererType < static_cast<std::int32_t>(bgfx::RendererType::Count)) {
         preferred = static_cast<bgfx::RendererType::Enum>(displayConfig_.preferredBgfxRendererType);
+    } else {
+        bgfx::RendererType::Enum supportedBackends[bgfx::RendererType::Count]{};
+        const std::uint8_t supportedBackendCount = bgfx::getSupportedRenderers(static_cast<std::uint8_t>(bgfx::RendererType::Count), supportedBackends);
+        preferred = ResolvePreferredRendererBackend(supportedBackends, supportedBackendCount);
     }
 
     if (!context_->Initialize(surface, displayConfig_, preferred)) {
@@ -152,6 +219,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     sceneRenderer_->SetDefaultDrawBudget(defaultSceneDrawBudget_);
     sceneRenderer_->SetDefaultLightingConfig(defaultSceneLightingConfig_);
+    SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     ApplyRuntimeSceneResourceReserve();
 
@@ -160,6 +228,7 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    static_cast<void>(sceneExposureMeter_.InitializeGpuResources());
 
     finalCompositePass_ = std::make_unique<FinalCompositePass>();
     if (!finalCompositePass_->Initialize()) {
@@ -171,11 +240,11 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         return false;
     }
 
-    postProcessChain_.Clear();
-    if (!postProcessChain_.AddPass(PostProcessChain::kDefaultIdentityPass)) {
+    if (!postProcessChain_.Configure(PostProcessChain::DefaultSceneChainDesc())) {
         Shutdown();
         return false;
     }
+    SetDefaultPostProcessSettings(defaultPostProcessSettings_);
 
     return true;
 }
@@ -191,12 +260,15 @@ void Renderer::Shutdown() {
     frameActive_ = false;
     lastSceneSubmitStats_ = SceneRenderSubmitStats{};
     lastScenePassSubmitStats_.clear();
+    lastSceneExposureStats_.clear();
     lastSceneDiagnostics_.Clear();
+    temporalViewportStates_.clear();
     frameState_.Reset();
     renderSceneStore_.ReleaseAll();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     frameReferences_.Clear();
     runtimeAssetDiscovery_.Clear();
+    sceneExposureMeter_.ShutdownGpuResources();
     defaultShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
     defaultSceneTarget_.Shutdown();
@@ -214,6 +286,7 @@ void Renderer::Shutdown() {
         scenePostProcessRenderer_->Shutdown();
         scenePostProcessRenderer_.reset();
     }
+    sceneExposureMeter_.Reset();
     if (context_ != nullptr) {
         context_->Shutdown();
         context_.reset();
@@ -286,6 +359,7 @@ void Renderer::SubmitScene(const kb::scene::Scene& scene) {
         .target = RenderSceneTargetBinding{
             .frameBuffer = defaultSceneTarget_.FrameBuffer(),
             .colorTexture = defaultSceneTarget_.ColorTexture(),
+            .depthTexture = defaultSceneTarget_.DepthTexture(),
             .viewport = RenderViewportDesc{
                 .id = RenderViewportId{ 1U },
                 .extent = extent,
@@ -318,6 +392,8 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastSceneSubmitStats_ = SceneRenderSubmitStats{};
     lastScenePassSubmitStats_.clear();
     lastScenePassSubmitStats_.reserve(submissions.size() * 4U);
+    lastSceneExposureStats_.clear();
+    lastSceneExposureStats_.reserve(submissions.size());
     lastSceneDiagnostics_.Clear();
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     frameReferences_.Clear();
@@ -436,6 +512,19 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         }
     }
 
+    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
+    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
+        ? &(*desc.cameraOverride)
+        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    std::optional<SceneRenderCamera> jitteredCamera{};
+    const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
+    const std::array<float, 2> jitter = TemporalJitter(frameIndex, desc.target.viewport.extent, defaultPostProcessSettings_.temporalJitterEnabled);
+    if (overlayCamera != nullptr) {
+        jitteredCamera = *overlayCamera;
+        ApplyProjectionJitter(*jitteredCamera, jitter);
+    }
+    const SceneRenderCamera* sceneCamera = jitteredCamera.has_value() ? &(*jitteredCamera) : overlayCamera;
+
     const auto submitMeshPass = [&](bgfx::ViewId viewId, RenderPassKind passKind, MeshPassType fallback, const SceneRenderShadowMapBinding* shadowMap) {
         const MeshPassType meshPass = MeshPassForViewportPass(viewportPlan, passKind, fallback);
         sceneRenderer_->SubmitMeshPass(
@@ -444,7 +533,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderScene,
             width,
             height,
-            desc.cameraOverride.has_value() ? &(*desc.cameraOverride) : nullptr,
+            sceneCamera,
             desc.drawBudget,
             effectiveLightingConfig,
             shadowMap);
@@ -478,7 +567,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             renderScene,
             width,
             height,
-            desc.cameraOverride.has_value() ? &(*desc.cameraOverride) : nullptr,
+            sceneCamera,
             desc.drawBudget,
             effectiveLightingConfig,
             nullptr,
@@ -492,13 +581,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         });
     }
 
-    const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
-    const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
-        ? &(*desc.cameraOverride)
-        : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
-
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr && scenePostProcessRenderer_ != nullptr) {
-        const PostProcessOutput postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
+        PostProcessOutput postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
             .sceneColor = desc.target.colorTexture,
             .selectionMask = desc.postProcess.selectionMaskTexture,
             .outputFrameBuffer = desc.postProcess.finalFrameBuffer,
@@ -508,34 +592,130 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         if (!postProcessOutput.IsValid()) {
             return false;
         }
+        SceneRenderExposureSubmitStats exposureStats{
+            .viewportId = desc.target.viewport.id.value,
+            .viewportIndex = desc.target.viewport.viewportIndex,
+            .meteredAverageLuminance = postProcessOutput.outputTransform.autoExposure.meteredAverageLuminance,
+            .adaptedAverageLuminance = postProcessOutput.outputTransform.autoExposure.meteredAverageLuminance,
+            .autoExposureEnabled = postProcessOutput.outputTransform.autoExposure.enabled,
+            .temporalAdaptationEnabled = postProcessOutput.outputTransform.autoExposure.temporalAdaptationEnabled,
+        };
+        if (postProcessOutput.outputTransform.autoExposure.enabled) {
+            const FullscreenTextureAutoExposureSettings& autoExposure = postProcessOutput.outputTransform.autoExposure;
+            float meteredAverageLuminance = autoExposure.meteredAverageLuminance;
+            bool shouldApplyTemporalAdaptation = true;
+            if (postProcessOutput.postProcessSettings.autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::Manual) {
+                exposureStats.source = SceneRenderExposureMeteringSource::Manual;
+                shouldApplyTemporalAdaptation = false;
+            } else if (postProcessOutput.postProcessSettings.autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::HdrColor) {
+                const SceneHdrExposureReadbackResult hdrReadback = sceneExposureMeter_.SubmitHdrReadback(SceneHdrExposureReadbackDesc{
+                    .viewId = viewportPlan.viewIds.postProcessExposureReadback,
+                    .hdrColor = desc.target.colorTexture,
+                    .extent = desc.target.viewport.extent,
+                    .completedFrame = lastCompletedFrame_,
+                });
+                exposureStats.gpuReadbackSubmitted = hdrReadback.submitted;
+                exposureStats.gpuReadbackSampleAvailable = hdrReadback.sampleAvailable;
+                exposureStats.gpuReadbackSampleValid = hdrReadback.hasValidSample;
+                if (hdrReadback.hasValidSample) {
+                    meteredAverageLuminance = hdrReadback.meteredAverageLuminance;
+                    exposureStats.source = SceneRenderExposureMeteringSource::HdrReadback;
+                } else {
+                    meteredAverageLuminance = SceneExposureMeter::EstimateAverageLuminance(renderScene, effectiveLightingConfig);
+                    exposureStats.source = SceneRenderExposureMeteringSource::HdrReadbackPendingFallback;
+                }
+            } else {
+                meteredAverageLuminance = SceneExposureMeter::EstimateAverageLuminance(renderScene, effectiveLightingConfig);
+                exposureStats.source = SceneRenderExposureMeteringSource::SceneLighting;
+            }
+            exposureStats.meteredAverageLuminance = meteredAverageLuminance;
+            exposureStats.adaptedAverageLuminance = shouldApplyTemporalAdaptation
+                ? sceneExposureMeter_.Update(meteredAverageLuminance, SceneExposureAdaptationDesc{
+                      .enabled = autoExposure.temporalAdaptationEnabled,
+                      .deltaSeconds = 1.0F / 60.0F,
+                      .brightAdaptationRate = autoExposure.brightAdaptationRate,
+                      .darkAdaptationRate = autoExposure.darkAdaptationRate,
+                  })
+                : meteredAverageLuminance;
+            postProcessOutput.outputTransform.autoExposure.meteredAverageLuminance = exposureStats.adaptedAverageLuminance;
+        }
+        lastSceneExposureStats_.push_back(exposureStats);
 
+        ScenePostProcessSettings postProcessSettings = postProcessOutput.postProcessSettings;
+        postProcessSettings.bloomEnabled = postProcessOutput.bloomEnabled;
+        RenderPostProcessTargetBinding postProcessTarget = desc.postProcess;
+        postProcessTarget.SelectTemporalHistory(frameIndex);
+        TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+        const bool temporalHistoryValid = temporalState.hasHistory && temporalState.extent == desc.target.viewport.extent;
+        const std::array<float, 16> currentViewProjection = sceneCamera == nullptr ? IdentityMatrix() : ViewProjection(*sceneCamera);
+        const std::array<float, 16> inverseCurrentViewProjection = InverseMatrix(currentViewProjection);
+        const std::array<float, 16> previousViewProjection = temporalHistoryValid ? temporalState.previousViewProjection : currentViewProjection;
+        const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
         const bgfx::TextureHandle scenePostProcessOutput = scenePostProcessRenderer_->Submit(ScenePostProcessSubmitDesc{
             .sceneColor = desc.target.colorTexture,
-            .target = desc.postProcess,
+            .sceneDepth = desc.target.depthTexture,
+            .target = postProcessTarget,
             .viewIds = viewportPlan.viewIds,
+            .settings = postProcessSettings,
+            .temporal = SceneTemporalReprojectionDesc{
+                .depthTexture = desc.target.depthTexture,
+                .currentViewProjection = currentViewProjection,
+                .inverseCurrentViewProjection = inverseCurrentViewProjection,
+                .previousViewProjection = previousViewProjection,
+                .jitterAndParams = {
+                    jitter[0],
+                    jitter[1],
+                    postProcessSettings.temporalAntiAliasingEnabled ? 1.0F : 0.0F,
+                    homogeneousDepth ? 1.0F : 0.0F,
+                },
+                .historyValid = temporalHistoryValid,
+            },
         });
         if (!bgfx::isValid(scenePostProcessOutput)) {
             return false;
         }
+        temporalState.extent = desc.target.viewport.extent;
+        temporalState.previousViewProjection = currentViewProjection;
+        temporalState.hasHistory = true;
 
-        editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
-
+        SceneDisplayOutputTransform outputTransform = postProcessOutput.outputTransform;
+        if (!postProcessOutput.tonemapEnabled) {
+            outputTransform = SceneDisplayOutputTransform{
+                .exposureStops = 0.0F,
+                .gamma = 1.0F,
+                .tonemap = SceneDisplayTonemapOperator::None,
+                .colorGradingLutStrength = 0.0F,
+            };
+        }
         const FinalCompositePassDesc compositeDesc{
             .viewId = viewportPlan.viewIds.finalComposite,
             .postProcessColor = scenePostProcessOutput,
             .frameBuffer = desc.finalComposite.frameBuffer,
             .extent = desc.finalComposite.extent,
+            .outputRect = desc.finalComposite.outputRect,
+            .outputTransform = outputTransform,
+            .clearRgba = desc.clearRgba,
+            .clearTarget = desc.finalComposite.clearTarget,
         };
         if (!finalCompositePass_->Submit(compositeDesc)) {
             return false;
         }
 
-        editorPassSubmitter_.SubmitUiComposite(viewportPlan, desc);
+        if (desc.editorSceneOverlaysEnabled) {
+            editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
+        } else {
+            editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, nullptr);
+        }
+        editorPassSubmitter_.SubmitUiComposite(viewportPlan, desc, postProcessOutput.selectionOutlineEnabled);
         return true;
     }
 
-    editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
-    editorPassSubmitter_.SubmitUiComposite(viewportPlan, desc);
+    if (desc.editorSceneOverlaysEnabled) {
+        editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, overlayCamera);
+    } else {
+        editorPassSubmitter_.SubmitSceneOverlays(viewportPlan, desc, nullptr);
+    }
+    editorPassSubmitter_.SubmitUiComposite(viewportPlan, desc, true);
     return true;
 }
 
@@ -555,6 +735,7 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
 
     defaultPostProcessTargets_.Shutdown();
     defaultSceneTarget_.Shutdown();
+    temporalViewportStates_.clear();
     context_->Reset(width, height, displayConfig_.ComputeResetFlags());
 }
 
@@ -576,6 +757,11 @@ std::uint32_t Renderer::BackbufferHeight() const noexcept {
 
 void* Renderer::NativeWindowHandle() const noexcept {
     return context_ == nullptr ? nullptr : context_->NativeWindowHandle();
+}
+
+const RendererCapabilityReport& Renderer::CapabilityReport() const noexcept {
+    static const RendererCapabilityReport emptyReport{};
+    return context_ == nullptr ? emptyReport : context_->CapabilityReport();
 }
 
 std::uint32_t Renderer::LastCompletedFrame() const noexcept {
@@ -604,6 +790,10 @@ SceneRenderSubmitStats Renderer::LastSceneSubmitStats() const noexcept {
 
 std::span<const SceneRenderPassSubmitStats> Renderer::LastScenePassSubmitStats() const noexcept {
     return lastScenePassSubmitStats_;
+}
+
+std::span<const SceneRenderExposureSubmitStats> Renderer::LastSceneExposureStats() const noexcept {
+    return lastSceneExposureStats_;
 }
 
 const SceneRenderDiagnostics& Renderer::LastSceneDiagnostics() const noexcept {
@@ -707,6 +897,87 @@ SceneRenderLightingConfig Renderer::DefaultSceneLightingConfig() const noexcept 
     return defaultSceneLightingConfig_;
 }
 
+void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
+    gpuDrivenRuntimeDispatchEnabled_ = enabled;
+    if (sceneRenderer_ == nullptr || context_ == nullptr) {
+        return;
+    }
+
+    const RendererCapabilityReport& capabilityReport = context_->CapabilityReport();
+    sceneRenderer_->SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport{
+        .computeCullingSupported = capabilityReport.gpuDrivenComputeCullingSupported,
+        .indirectDrawSupported = enabled ? false : capabilityReport.gpuDrivenIndirectSubmitSupported,
+        .meshletSubmitSupported = capabilityReport.gpuDrivenMeshletSubmitSupported,
+        .runtimeGpuDispatchSupported = enabled && capabilityReport.gpuDrivenComputeCullingSupported,
+    });
+}
+
+bool Renderer::GpuDrivenRuntimeDispatchEnabled() const noexcept {
+    return gpuDrivenRuntimeDispatchEnabled_;
+}
+
+void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {
+    settings.bloomStrength = std::max(settings.bloomStrength, 0.0F);
+    settings.bloomThreshold = std::max(settings.bloomThreshold, 0.0F);
+    settings.bloomSoftKnee = std::clamp(settings.bloomSoftKnee, 0.0F, 1.0F);
+    settings.bloomRadiusPixels = std::max(settings.bloomRadiusPixels, 0.0F);
+    settings.temporalHistoryBlend = std::clamp(settings.temporalHistoryBlend, 0.0F, 1.0F);
+    settings.outputTransform.gamma = std::max(settings.outputTransform.gamma, 0.001F);
+    settings.outputTransform.colorGradingLutStrength = std::clamp(settings.outputTransform.colorGradingLutStrength, 0.0F, 1.0F);
+    settings.outputTransform.autoExposure.meteredAverageLuminance = std::max(settings.outputTransform.autoExposure.meteredAverageLuminance, 0.0001F);
+    settings.outputTransform.autoExposure.middleGray = std::max(settings.outputTransform.autoExposure.middleGray, 0.0001F);
+    settings.outputTransform.autoExposure.brightAdaptationRate = std::max(settings.outputTransform.autoExposure.brightAdaptationRate, 0.0F);
+    settings.outputTransform.autoExposure.darkAdaptationRate = std::max(settings.outputTransform.autoExposure.darkAdaptationRate, 0.0F);
+    defaultPostProcessSettings_ = settings;
+    if (std::optional<PostProcessPass> bloom = postProcessChain_.FindPass(PostProcessPassKind::Bloom); bloom.has_value()) {
+        bloom->enabled = settings.bloomEnabled;
+        bloom->postProcessSettings = settings;
+        static_cast<void>(postProcessChain_.SetPass(*bloom));
+    }
+    if (std::optional<PostProcessPass> tonemap = postProcessChain_.FindPass(PostProcessPassKind::Tonemap); tonemap.has_value()) {
+        tonemap->enabled = settings.tonemapEnabled;
+        tonemap->postProcessSettings = settings;
+        tonemap->outputTransform = settings.outputTransform;
+        static_cast<void>(postProcessChain_.SetPass(*tonemap));
+    }
+}
+
+ScenePostProcessSettings Renderer::DefaultPostProcessSettings() const noexcept {
+    return defaultPostProcessSettings_;
+}
+
+bool Renderer::ConfigurePostProcessChain(const PostProcessChainDesc& desc) {
+    return postProcessChain_.Configure(desc);
+}
+
+bool Renderer::AddPostProcessPass(PostProcessPass pass) {
+    return postProcessChain_.AddPass(pass);
+}
+
+bool Renderer::InsertPostProcessPass(std::uint32_t index, PostProcessPass pass) {
+    return postProcessChain_.InsertPass(index, pass);
+}
+
+bool Renderer::RemovePostProcessPass(PostProcessPassKind kind) noexcept {
+    return postProcessChain_.RemovePass(kind);
+}
+
+bool Renderer::SetPostProcessPass(PostProcessPass pass) {
+    return postProcessChain_.SetPass(pass);
+}
+
+bool Renderer::SetPostProcessPassEnabled(PostProcessPassKind kind, bool enabled) noexcept {
+    return postProcessChain_.SetPassEnabled(kind, enabled);
+}
+
+std::optional<PostProcessPass> Renderer::FindPostProcessPass(PostProcessPassKind kind) const noexcept {
+    return postProcessChain_.FindPass(kind);
+}
+
+std::span<const PostProcessPass> Renderer::PostProcessPasses() const noexcept {
+    return postProcessChain_.Passes();
+}
+
 void Renderer::SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept {
     runtimeAssetDiscovery_.SetDiscoveryIntervalFrames(frameInterval);
 }
@@ -725,6 +996,22 @@ void Renderer::ReleaseAllScenes() noexcept {
     renderSceneStore_.ReleaseAll();
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     runtimeAssetDiscovery_.Clear();
+}
+
+Renderer::TemporalViewportState& Renderer::TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex) {
+    const auto iter = std::ranges::find_if(temporalViewportStates_, [viewportId, viewportIndex](const TemporalViewportState& state) {
+        return state.viewportId == viewportId && state.viewportIndex == viewportIndex;
+    });
+    if (iter != temporalViewportStates_.end()) {
+        return *iter;
+    }
+
+    temporalViewportStates_.push_back(TemporalViewportState{
+        .viewportId = viewportId,
+        .viewportIndex = viewportIndex,
+        .previousViewProjection = IdentityMatrix(),
+    });
+    return temporalViewportStates_.back();
 }
 
 void Renderer::ApplyRuntimeSceneResourceReserve() {

@@ -23,6 +23,9 @@ vec3 agx_approx(vec3 color)
 
 vec3 tonemap_display(vec3 color)
 {
+    if (u_tonemapParams.z < 0.0) {
+        return saturate(color);
+    }
     return u_tonemapParams.z < 0.5 ? aces_fitted(color) : agx_approx(color);
 }
 

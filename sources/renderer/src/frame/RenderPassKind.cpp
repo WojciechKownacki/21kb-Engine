@@ -11,13 +11,16 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::OpaqueScene,
     RenderPassKind::TransparentScene,
     RenderPassKind::EditorSelectionMask,
+    RenderPassKind::PostProcessExposureReadback,
+    RenderPassKind::PostProcessMotionVectors,
+    RenderPassKind::PostProcessTaaResolve,
     RenderPassKind::PostProcessBloomPrefilter,
     RenderPassKind::PostProcessBloomBlurH,
     RenderPassKind::PostProcessBloomBlurV,
     RenderPassKind::PostProcessHdrCombine,
     RenderPassKind::PostProcessHdrFinalize,
-    RenderPassKind::EditorSceneOverlays,
     RenderPassKind::FinalComposite,
+    RenderPassKind::EditorSceneOverlays,
     RenderPassKind::EditorUiComposite,
 };
 
@@ -35,6 +38,12 @@ const char* RenderPassKindName(RenderPassKind kind) noexcept {
         return "TransparentScene";
     case RenderPassKind::EditorSelectionMask:
         return "EditorSelectionMask";
+    case RenderPassKind::PostProcessExposureReadback:
+        return "PostProcessExposureReadback";
+    case RenderPassKind::PostProcessMotionVectors:
+        return "PostProcessMotionVectors";
+    case RenderPassKind::PostProcessTaaResolve:
+        return "PostProcessTaaResolve";
     case RenderPassKind::PostProcessBloomPrefilter:
         return "PostProcessBloomPrefilter";
     case RenderPassKind::PostProcessBloomBlurH:

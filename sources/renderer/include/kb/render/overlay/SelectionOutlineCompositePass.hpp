@@ -11,6 +11,7 @@ struct SelectionOutlineCompositePassDesc {
     bgfx::TextureHandle selectionMask = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     RenderExtent extent{};
+    RenderViewportRect outputRect{};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

@@ -15,12 +15,18 @@ NativeWindowFramebuffer::~NativeWindowFramebuffer() {
     Shutdown();
 }
 
+bool NativeWindowFramebufferDesc::IsValid() const noexcept {
+    return nativeWindow != nullptr && FitsBgfxSwapChainExtent(width) && FitsBgfxSwapChainExtent(height) &&
+           colorFormat != bgfx::TextureFormat::Count;
+}
+
 bool NativeWindowFramebuffer::Ensure(
     void* nativeWindow,
     std::uint32_t width,
     std::uint32_t height,
     bgfx::TextureFormat::Enum colorFormat,
-    bgfx::TextureFormat::Enum depthFormat) {
+    bgfx::TextureFormat::Enum depthFormat,
+    bool flushBeforeRecreate) {
     if (nativeWindow == nullptr || !FitsBgfxSwapChainExtent(width) || !FitsBgfxSwapChainExtent(height)) {
         return false;
     }
@@ -30,7 +36,11 @@ bool NativeWindowFramebuffer::Ensure(
         return true;
     }
 
+    const bool replacingActiveSwapchain = IsValid();
     Shutdown();
+    if (flushBeforeRecreate && replacingActiveSwapchain) {
+        bgfx::frame();
+    }
 
     frameBuffer_ = bgfx::createFrameBuffer(
         nativeWindow,
@@ -49,6 +59,14 @@ bool NativeWindowFramebuffer::Ensure(
     width_ = width;
     height_ = height;
     return true;
+}
+
+bool NativeWindowFramebuffer::Ensure(const NativeWindowFramebufferDesc& desc) {
+    if (!desc.IsValid()) {
+        return false;
+    }
+
+    return Ensure(desc.nativeWindow, desc.width, desc.height, desc.colorFormat, desc.depthFormat, desc.flushBeforeRecreate);
 }
 
 void NativeWindowFramebuffer::Shutdown() noexcept {
@@ -78,6 +96,14 @@ std::uint32_t NativeWindowFramebuffer::Height() const noexcept {
 
 void* NativeWindowFramebuffer::NativeWindow() const noexcept {
     return nativeWindow_;
+}
+
+bgfx::TextureFormat::Enum NativeWindowFramebuffer::ColorFormat() const noexcept {
+    return colorFormat_;
+}
+
+bgfx::TextureFormat::Enum NativeWindowFramebuffer::DepthFormat() const noexcept {
+    return depthFormat_;
 }
 
 bool NativeWindowFramebuffer::IsValid() const noexcept {

@@ -22,11 +22,14 @@ constexpr RenderGraphResourceId SceneColor{ 1U };
 constexpr RenderGraphResourceId SceneDepth{ 2U };
 constexpr RenderGraphResourceId ShadowMap{ 3U };
 constexpr RenderGraphResourceId SelectionMask{ 4U };
-constexpr RenderGraphResourceId BloomPrefilter{ 5U };
-constexpr RenderGraphResourceId BloomPing{ 6U };
-constexpr RenderGraphResourceId BloomCombine{ 7U };
-constexpr RenderGraphResourceId PostProcessFinal{ 8U };
-constexpr RenderGraphResourceId FinalOutput{ 9U };
+constexpr RenderGraphResourceId ExposureReadback{ 5U };
+constexpr RenderGraphResourceId MotionVectors{ 6U };
+constexpr RenderGraphResourceId TemporalHistory{ 7U };
+constexpr RenderGraphResourceId BloomPrefilter{ 8U };
+constexpr RenderGraphResourceId BloomPing{ 9U };
+constexpr RenderGraphResourceId BloomCombine{ 10U };
+constexpr RenderGraphResourceId PostProcessFinal{ 11U };
+constexpr RenderGraphResourceId FinalOutput{ 12U };
 constexpr std::uint16_t Max = 64U;
 
 } // namespace RenderGraphResource

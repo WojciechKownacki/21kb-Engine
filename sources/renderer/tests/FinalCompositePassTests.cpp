@@ -30,11 +30,39 @@ void FinalCompositeDefaultsToDisplayTonemapTransform() {
     Require(NearlyEqual(desc.outputTransform.gamma, 2.2F), "Final composite should default to display gamma 2.2");
 }
 
+void FullscreenTextureExposureResolverSupportsManualAndAutoExposure() {
+    Require(NearlyEqual(ResolveFullscreenTextureExposureStops(FullscreenTextureOutputTransform{
+                            .exposureStops = 1.5F,
+                        }), 1.5F),
+        "Manual fullscreen exposure should preserve configured stops");
+
+    Require(NearlyEqual(ResolveFullscreenTextureExposureStops(FullscreenTextureOutputTransform{
+                            .autoExposure = FullscreenTextureAutoExposureSettings{
+                                .enabled = true,
+                                .meteredAverageLuminance = 0.09F,
+                                .middleGray = 0.18F,
+                            },
+                        }), 1.0F),
+        "Auto exposure should brighten a scene one stop when metered luminance is half middle gray");
+
+    Require(NearlyEqual(ResolveFullscreenTextureExposureStops(FullscreenTextureOutputTransform{
+                            .autoExposure = FullscreenTextureAutoExposureSettings{
+                                .enabled = true,
+                                .meteredAverageLuminance = 18.0F,
+                                .middleGray = 0.18F,
+                                .minExposureStops = -2.0F,
+                                .maxExposureStops = 2.0F,
+                            },
+                        }), -2.0F),
+        "Auto exposure should clamp to minimum exposure stops");
+}
+
 } // namespace
 
 void RunFinalCompositePassTests() {
     FinalCompositeRequiresPostProcessColorAndExtent();
     FinalCompositeDefaultsToDisplayTonemapTransform();
+    FullscreenTextureExposureResolverSupportsManualAndAutoExposure();
 }
 
 } // namespace kb::render::tests

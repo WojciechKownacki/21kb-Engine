@@ -17,6 +17,7 @@ struct SceneDisplayCompositeDesc {
     bgfx::TextureHandle hdrColor = BGFX_INVALID_HANDLE;
     bgfx::FrameBufferHandle frameBuffer = BGFX_INVALID_HANDLE;
     RenderExtent extent{};
+    RenderViewportRect outputRect{};
     SceneDisplayOutputTransform outputTransform{};
     std::uint32_t clearRgba = 0x000000FFU;
     bool clearTarget = false;
