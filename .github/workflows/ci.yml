@@ -42,6 +42,10 @@ jobs:
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: advice.defaultBranchName
+          GIT_CONFIG_VALUE_0: "false"
         with:
           submodules: recursive
 
