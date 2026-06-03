@@ -45,6 +45,11 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.range=" << components.light->range << '\n';
         output << "light.innerConeDegrees=" << components.light->innerConeDegrees << '\n';
         output << "light.outerConeDegrees=" << components.light->outerConeDegrees << '\n';
+        output << "light.areaWidth=" << components.light->areaWidth << '\n';
+        output << "light.areaHeight=" << components.light->areaHeight << '\n';
+        output << "light.contactShadowLength=" << components.light->contactShadowLength << '\n';
+        output << "light.volumetricScattering=" << components.light->volumetricScattering << '\n';
+        output << "light.castsShadow=" << (components.light->castsShadow ? 1 : 0) << '\n';
     }
 }
 

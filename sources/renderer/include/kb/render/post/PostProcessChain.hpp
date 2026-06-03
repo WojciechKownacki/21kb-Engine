@@ -1,10 +1,13 @@
 #pragma once
 
 #include "kb/render/frame/RenderTargetDesc.hpp"
+#include "kb/render/post/SceneDisplayCompositeRenderer.hpp"
+#include "kb/render/post/ScenePostProcessRenderer.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -40,6 +43,12 @@ enum class PostProcessColorSpace : std::uint8_t {
 struct PostProcessPass {
     PostProcessPassKind kind = PostProcessPassKind::IdentityCopy;
     bool enabled = true;
+    ScenePostProcessSettings postProcessSettings{};
+    SceneDisplayOutputTransform outputTransform{};
+};
+
+struct PostProcessChainDesc {
+    std::vector<PostProcessPass> passes{};
 };
 
 struct PostProcessInput {
@@ -58,10 +67,15 @@ struct PostProcessOutput {
     RenderExtent extent{};
     PostProcessPassKind producer = PostProcessPassKind::IdentityCopy;
     PostProcessColorSpace colorSpace = PostProcessColorSpace::SceneHdr;
+    ScenePostProcessSettings postProcessSettings{};
+    SceneDisplayOutputTransform outputTransform{};
     std::uint32_t enabledPassCount = 0;
     bool passthrough = true;
     bool gpuSubmitted = false;
     bool sceneHdrPreserved = true;
+    bool bloomEnabled = false;
+    bool selectionOutlineEnabled = false;
+    bool tonemapEnabled = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -70,8 +84,16 @@ class PostProcessChain {
 public:
     static constexpr PostProcessPass kDefaultIdentityPass{};
 
+    [[nodiscard]] static PostProcessChainDesc DefaultSceneChainDesc();
+
     void Clear() noexcept;
+    [[nodiscard]] bool Configure(const PostProcessChainDesc& desc);
     [[nodiscard]] bool AddPass(PostProcessPass pass);
+    [[nodiscard]] bool InsertPass(std::uint32_t index, PostProcessPass pass);
+    [[nodiscard]] bool RemovePass(PostProcessPassKind kind) noexcept;
+    [[nodiscard]] bool SetPass(PostProcessPass pass);
+    [[nodiscard]] bool SetPassEnabled(PostProcessPassKind kind, bool enabled) noexcept;
+    [[nodiscard]] std::optional<PostProcessPass> FindPass(PostProcessPassKind kind) const noexcept;
     [[nodiscard]] std::span<const PostProcessPass> Passes() const noexcept;
     [[nodiscard]] bool HasEnabledPasses() const noexcept;
     [[nodiscard]] PostProcessOutput Evaluate(const PostProcessInput& input) const;

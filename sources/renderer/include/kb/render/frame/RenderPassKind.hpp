@@ -12,6 +12,9 @@ enum class RenderPassKind : std::uint8_t {
     OpaqueScene,
     TransparentScene,
     EditorSelectionMask,
+    PostProcessExposureReadback,
+    PostProcessMotionVectors,
+    PostProcessTaaResolve,
     PostProcessBloomPrefilter,
     PostProcessBloomBlurH,
     PostProcessBloomBlurV,
@@ -22,7 +25,7 @@ enum class RenderPassKind : std::uint8_t {
     EditorUiComposite,
 };
 
-constexpr std::size_t RenderPassKindCount = 13U;
+constexpr std::size_t RenderPassKindCount = 16U;
 
 [[nodiscard]] const char* RenderPassKindName(RenderPassKind kind) noexcept;
 [[nodiscard]] std::span<const RenderPassKind> RequiredRenderPassKinds() noexcept;

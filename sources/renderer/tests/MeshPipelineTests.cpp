@@ -4,6 +4,8 @@
 #include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
+#include "kb/render/scene/SceneGpuDrivenParityValidator.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
@@ -591,6 +593,448 @@ void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
     Require(result.stats.culledInstanceCount == 1U, "MeshPipeline culling stats did not count culled instances");
 }
 
+void RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 12U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 0.1F };
+    mesh.sections = {
+        RenderMeshSection{
+            .indexStart = 0U,
+            .indexCount = 6U,
+            .bounds = mesh.bounds,
+            .lodLevel = 0U,
+        },
+        RenderMeshSection{
+            .indexStart = 6U,
+            .indexCount = 6U,
+            .bounds = mesh.bounds,
+            .lodLevel = 1U,
+        },
+    };
+    mesh.meshlets = {
+        RenderMeshletDesc{
+            .indexStart = 0U,
+            .indexCount = 6U,
+            .vertexStart = 0U,
+            .vertexCount = 4U,
+            .sectionIndex = 0U,
+            .bounds = mesh.bounds,
+            .lodLevel = 0U,
+        },
+        RenderMeshletDesc{
+            .indexStart = 6U,
+            .indexCount = 6U,
+            .vertexStart = 0U,
+            .vertexCount = 4U,
+            .sectionIndex = 1U,
+            .bounds = mesh.bounds,
+            .lodLevel = 1U,
+        },
+    };
+    mesh.lods = {
+        RenderMeshLodDesc{ .firstSection = 0U, .sectionCount = 1U, .firstMeshlet = 0U, .meshletCount = 1U, .minScreenCoverage = 0.5F },
+        RenderMeshLodDesc{ .firstSection = 1U, .sectionCount = 1U, .firstMeshlet = 1U, .meshletCount = 1U, .minScreenCoverage = 0.0F },
+    };
+    mesh.gpuCullingEnabled = true;
+    mesh.indirectDrawsEnabled = true;
+    mesh.meshletCullingEnabled = true;
+
+    const SceneRenderCamera camera{
+        .view = IdentityMatrix(),
+        .projection = IdentityMatrix(),
+    };
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.1F) },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .model = TranslationMatrix(0.0F, 0.0F, 0.9F) },
+            },
+        },
+    };
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .camera = &camera,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.commands.size() == 2U, "MeshPipeline did not emit one command per selected LOD section");
+    bool sawLod0 = false;
+    bool sawLod1 = false;
+    for (const MeshDrawCommand& command : result.commands) {
+        if (command.lodLevel == 0U) {
+            sawLod0 = command.instances.size() == 1U && command.instances[0].entityId == 1U && command.firstMeshlet == 0U && command.meshletCount == 1U;
+        }
+        if (command.lodLevel == 1U) {
+            sawLod1 = command.instances.size() == 1U && command.instances[0].entityId == 2U && command.firstMeshlet == 1U && command.meshletCount == 1U;
+        }
+    }
+    Require(sawLod0, "MeshPipeline did not select the near instance into LOD0 meshlet range");
+    Require(sawLod1, "MeshPipeline did not select the far instance into LOD1 meshlet range");
+    Require(result.stats.gpuDrivenDrawCandidateCount == 2U, "MeshPipeline did not count GPU-driven draw candidates");
+    Require(result.stats.indirectDrawCandidateCount == 2U, "MeshPipeline did not count indirect draw candidates");
+    Require(result.stats.meshletCullingCandidateCount == 2U, "MeshPipeline did not count meshlet culling candidates");
+    Require(result.stats.gpuDrivenInputInstanceCount == 2U, "MeshPipeline did not build GPU-driven input records");
+    Require(result.gpuDrivenInputRecords.size() == 2U, "MeshPipeline did not preserve GPU-driven input batch records");
+    Require(result.gpuDrivenInputRecords[0].IsValid(), "MeshPipeline produced an invalid GPU-driven bounds record");
+    Require(result.stats.lodSelectionCount == 4U, "MeshPipeline did not evaluate LOD selection for every section candidate");
+    Require(result.stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::CpuValidationOnly, "MeshPipeline reported CPU GPU-driven candidates as executed GPU work");
+    Require(result.stats.gpuDrivenCounterSource == SceneGpuDrivenCounterSource::CpuCandidates, "MeshPipeline did not mark GPU-driven counters as CPU candidates");
+    Require(result.stats.gpuCullingDispatchCount == 0U, "MeshPipeline reported GPU culling dispatches without a GPU pass");
+    Require(result.stats.indirectDrawSubmitCount == 0U, "MeshPipeline reported indirect submits without a GPU pass");
+    Require(result.stats.meshletSubmitCount == 0U, "MeshPipeline reported meshlet submits without a GPU pass");
+}
+
+void RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest() {
+    constexpr SceneGpuDrivenFeatureRequest fullRequest{
+        .gpuCullingRequested = true,
+        .indirectDrawRequested = true,
+        .meshletSubmitRequested = true,
+    };
+
+    Require(
+        SceneGpuDrivenFeatureClassifier::Resolve(fullRequest, SceneGpuDrivenFeatureSupport{}) ==
+            SceneGpuDrivenFeatureState::CpuValidationOnly,
+        "GPU-driven classifier did not fall back to CPU validation when compute is unavailable");
+    Require(
+        SceneGpuDrivenFeatureClassifier::Resolve(fullRequest, SceneGpuDrivenFeatureSupport{.computeCullingSupported = true}) ==
+            SceneGpuDrivenFeatureState::CpuValidationOnly,
+        "GPU-driven classifier did not keep CPU validation when runtime GPU dispatch is unavailable");
+    Require(
+        SceneGpuDrivenFeatureClassifier::Resolve(fullRequest, SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        }) == SceneGpuDrivenFeatureState::ComputeCulling,
+        "GPU-driven classifier did not enable compute culling when only compute is available");
+    Require(
+        SceneGpuDrivenFeatureClassifier::Resolve(fullRequest, SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        }) == SceneGpuDrivenFeatureState::IndirectDrawSubmit,
+        "GPU-driven classifier did not enable indirect draw submit when indirect draws are available");
+    Require(
+        SceneGpuDrivenFeatureClassifier::Resolve(fullRequest, SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .meshletSubmitSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        }) == SceneGpuDrivenFeatureState::MeshletSubmit,
+        "GPU-driven classifier did not enable meshlet submit when all requested capabilities are available");
+    Require(
+        SceneGpuDrivenFeatureClassifier::CounterSourceForState(SceneGpuDrivenFeatureState::CpuValidationOnly) ==
+            SceneGpuDrivenCounterSource::CpuCandidates,
+        "GPU-driven classifier did not mark CPU validation counters as CPU candidates");
+    Require(
+        SceneGpuDrivenFeatureClassifier::CounterSourceForState(SceneGpuDrivenFeatureState::ComputeCulling) ==
+            SceneGpuDrivenCounterSource::GpuDispatchCounters,
+        "GPU-driven classifier did not mark compute culling counters as GPU dispatch counters");
+}
+
+void RunGpuDrivenFeatureClassifierReportsIndirectFallbackTest() {
+    constexpr SceneGpuDrivenFeatureRequest indirectRequest{
+        .gpuCullingRequested = true,
+        .indirectDrawRequested = true,
+    };
+
+    constexpr SceneGpuDrivenFeatureDecision noCompute = SceneGpuDrivenFeatureClassifier::Decide(
+        indirectRequest,
+        SceneGpuDrivenFeatureSupport{});
+    Require(noCompute.state == SceneGpuDrivenFeatureState::CpuValidationOnly, "GPU-driven fallback did not use CPU validation without compute");
+    Require(noCompute.counterSource == SceneGpuDrivenCounterSource::CpuCandidates, "GPU-driven fallback did not mark CPU validation counters");
+    Require(noCompute.fallbackReason == SceneGpuDrivenFallbackReason::ComputeUnsupported, "GPU-driven fallback did not report missing compute support");
+    Require(noCompute.UsesFallback(), "GPU-driven fallback decision did not mark missing compute as a fallback");
+
+    constexpr SceneGpuDrivenFeatureDecision noIndirect = SceneGpuDrivenFeatureClassifier::Decide(
+        indirectRequest,
+        SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        });
+    Require(noIndirect.state == SceneGpuDrivenFeatureState::ComputeCulling, "GPU-driven fallback did not downgrade indirect submit to compute culling");
+    Require(noIndirect.counterSource == SceneGpuDrivenCounterSource::GpuDispatchCounters, "GPU-driven fallback did not mark compute counters as GPU dispatch counters");
+    Require(noIndirect.fallbackReason == SceneGpuDrivenFallbackReason::IndirectDrawUnsupported, "GPU-driven fallback did not report missing indirect draw support");
+    Require(noIndirect.UsesFallback(), "GPU-driven fallback decision did not mark missing indirect draw as a fallback");
+
+    constexpr SceneGpuDrivenFeatureDecision runtimeDispatchMissing = SceneGpuDrivenFeatureClassifier::Decide(
+        indirectRequest,
+        SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+        });
+    Require(runtimeDispatchMissing.state == SceneGpuDrivenFeatureState::CpuValidationOnly, "GPU-driven fallback did not use CPU validation when runtime dispatch is unavailable");
+    Require(runtimeDispatchMissing.counterSource == SceneGpuDrivenCounterSource::CpuCandidates, "GPU-driven runtime fallback did not mark CPU candidate counters");
+    Require(runtimeDispatchMissing.fallbackReason == SceneGpuDrivenFallbackReason::RuntimeGpuDispatchUnavailable, "GPU-driven fallback did not report missing runtime GPU dispatch");
+
+    constexpr SceneGpuDrivenFeatureDecision available = SceneGpuDrivenFeatureClassifier::Decide(
+        indirectRequest,
+        SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        });
+    Require(available.state == SceneGpuDrivenFeatureState::IndirectDrawSubmit, "GPU-driven classifier did not keep indirect submit when supported");
+    Require(available.fallbackReason == SceneGpuDrivenFallbackReason::None, "GPU-driven classifier reported fallback for supported indirect submit");
+    Require(!available.UsesFallback(), "GPU-driven classifier marked supported indirect submit as fallback");
+}
+
+void RunMeshPipelineAppliesGpuDrivenRuntimeFallbackPolicyTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F };
+    mesh.sections = {
+        RenderMeshSection{
+            .indexStart = 0U,
+            .indexCount = 3U,
+            .bounds = mesh.bounds,
+        },
+    };
+    mesh.meshlets = {
+        RenderMeshletDesc{
+            .indexStart = 0U,
+            .indexCount = 3U,
+            .vertexStart = 0U,
+            .vertexCount = 3U,
+            .sectionIndex = 0U,
+            .bounds = mesh.bounds,
+        },
+    };
+    mesh.gpuCullingEnabled = true;
+    mesh.indirectDrawsEnabled = true;
+    mesh.meshletCullingEnabled = true;
+
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() } },
+        },
+    };
+
+    MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .gpuDrivenSupport = SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+        },
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::CpuValidationOnly, "MeshPipeline did not fall back to CPU validation when runtime GPU dispatch is unavailable");
+    Require(result.stats.gpuDrivenCounterSource == SceneGpuDrivenCounterSource::CpuCandidates, "MeshPipeline runtime fallback did not mark CPU candidate counters");
+    Require(result.stats.gpuDrivenFallbackReason == SceneGpuDrivenFallbackReason::RuntimeGpuDispatchUnavailable, "MeshPipeline did not report runtime GPU dispatch fallback");
+    Require(result.stats.gpuDrivenFallbackCount == 1U, "MeshPipeline did not count runtime GPU dispatch fallback");
+    Require(result.stats.gpuDrivenParityValidationStatus == SceneGpuDrivenParityValidationStatus::Valid, "MeshPipeline runtime fallback did not run valid parity validation");
+    Require(result.stats.gpuDrivenParityValidationCount == 1U, "MeshPipeline runtime fallback did not expose parity validation record count");
+
+    result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .gpuDrivenSupport = SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .meshletSubmitSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        },
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(result.stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::MeshletSubmit, "MeshPipeline did not keep meshlet submit when runtime support is complete");
+    Require(result.stats.gpuDrivenCounterSource == SceneGpuDrivenCounterSource::GpuDispatchCounters, "MeshPipeline did not mark complete runtime support as GPU counters");
+    Require(result.stats.gpuDrivenFallbackReason == SceneGpuDrivenFallbackReason::None, "MeshPipeline reported fallback when runtime support is complete");
+}
+
+void RunMeshPipelineParityValidationTracksDroppedBudgetTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F };
+    mesh.sections = {
+        RenderMeshSection{
+            .indexStart = 0U,
+            .indexCount = 3U,
+            .bounds = mesh.bounds,
+        },
+    };
+    mesh.gpuCullingEnabled = true;
+
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .model = IdentityMatrix() },
+                SceneRenderMeshInstance{ .entityId = 3U, .meshAssetId = 42U, .model = IdentityMatrix() },
+            },
+        },
+    };
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .maxVisibleInstances = 1U,
+        .maxDroppedInstances = 0U,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.stats.droppedInstanceCount == 2U, "MeshPipeline test setup did not drop two instances");
+    Require(result.stats.gpuDrivenInputInstanceCount == 3U, "MeshPipeline did not keep GPU-driven input records for dropped instances");
+    Require(result.stats.gpuDrivenParityValidationStatus == SceneGpuDrivenParityValidationStatus::Valid, "MeshPipeline should not enforce dropped budget when it is disabled");
+    Require(result.stats.gpuDrivenParityCpuDroppedInstanceCount == 2U, "MeshPipeline parity validation did not count CPU dropped instances");
+    Require(result.stats.gpuDrivenParityGpuDroppedInstanceCount == 2U, "MeshPipeline parity validation did not count runtime dropped instances");
+
+    const MeshPipelineBuildResult strictBudgetResult = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .maxVisibleInstances = 1U,
+        .maxDroppedInstances = 1U,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(strictBudgetResult.stats.gpuDrivenParityValidationStatus == SceneGpuDrivenParityValidationStatus::DroppedInstanceBudgetExceeded, "MeshPipeline parity validation did not enforce dropped instance budget");
+    Require(strictBudgetResult.stats.gpuDrivenParityValidationCount == 3U, "MeshPipeline parity validation did not include visible and dropped records");
+}
+
+void RunGpuDrivenFeatureClassifierReportsMeshletFallbackTest() {
+    constexpr SceneGpuDrivenFeatureRequest meshletRequest{
+        .gpuCullingRequested = true,
+        .indirectDrawRequested = true,
+        .meshletSubmitRequested = true,
+    };
+
+    constexpr SceneGpuDrivenFeatureDecision noMeshlet = SceneGpuDrivenFeatureClassifier::Decide(
+        meshletRequest,
+        SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        });
+    Require(noMeshlet.state == SceneGpuDrivenFeatureState::IndirectDrawSubmit, "GPU-driven classifier did not fall back from meshlet submit to indirect submit");
+    Require(noMeshlet.fallbackReason == SceneGpuDrivenFallbackReason::MeshletSubmitUnsupported, "GPU-driven classifier did not report missing meshlet submit support");
+
+    constexpr SceneGpuDrivenFeatureDecision noRequest = SceneGpuDrivenFeatureClassifier::Decide(
+        SceneGpuDrivenFeatureRequest{},
+        SceneGpuDrivenFeatureSupport{
+            .computeCullingSupported = true,
+            .indirectDrawSupported = true,
+            .meshletSubmitSupported = true,
+            .runtimeGpuDispatchSupported = true,
+        });
+    Require(noRequest.state == SceneGpuDrivenFeatureState::Disabled, "GPU-driven classifier enabled a feature without a request");
+    Require(noRequest.fallbackReason == SceneGpuDrivenFallbackReason::FeatureNotRequested, "GPU-driven classifier did not report unrequested features distinctly");
+    Require(!noRequest.UsesFallback(), "GPU-driven classifier marked an unrequested feature as a quality fallback");
+}
+
+void RunGpuDrivenParityValidatorAcceptsMatchingRecordsTest() {
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 2U> cpuRecords{{
+        SceneGpuDrivenInstanceValidationRecord{
+            .entityId = 10U,
+            .lodLevel = 0U,
+            .firstMeshlet = 0U,
+            .meshletCount = 2U,
+            .visible = true,
+        },
+        SceneGpuDrivenInstanceValidationRecord{
+            .entityId = 11U,
+            .lodLevel = 1U,
+            .firstMeshlet = 2U,
+            .meshletCount = 1U,
+            .visible = false,
+            .dropped = true,
+        },
+    }};
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 2U> gpuRecords = cpuRecords;
+
+    const SceneGpuDrivenParityValidationResult result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = cpuRecords,
+        .gpuRecords = gpuRecords,
+        .droppedInstanceBudget = 1U,
+    });
+
+    Require(result.IsValid(), "GPU-driven parity validator rejected matching CPU/GPU records");
+    Require(result.cpuDroppedInstanceCount == 1U, "GPU-driven parity validator did not count CPU dropped instances");
+    Require(result.gpuDroppedInstanceCount == 1U, "GPU-driven parity validator did not count GPU dropped instances");
+}
+
+void RunGpuDrivenParityValidatorReportsCullingLodAndMeshletMismatchesTest() {
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 1U> cpuRecords{{
+        SceneGpuDrivenInstanceValidationRecord{
+            .entityId = 20U,
+            .lodLevel = 0U,
+            .firstMeshlet = 3U,
+            .meshletCount = 2U,
+            .visible = true,
+        },
+    }};
+
+    std::array<SceneGpuDrivenInstanceValidationRecord, 1U> gpuRecords = cpuRecords;
+    gpuRecords[0].visible = false;
+    SceneGpuDrivenParityValidationResult result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = cpuRecords,
+        .gpuRecords = gpuRecords,
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::VisibilityMismatch, "GPU-driven parity validator did not report visibility mismatch");
+    Require(result.entityId == 20U && result.cpuVisible && !result.gpuVisible, "GPU-driven parity visibility mismatch did not preserve debug values");
+
+    gpuRecords = cpuRecords;
+    gpuRecords[0].lodLevel = 1U;
+    result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = cpuRecords,
+        .gpuRecords = gpuRecords,
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::LodMismatch, "GPU-driven parity validator did not report LOD mismatch");
+    Require(result.cpuLodLevel == 0U && result.gpuLodLevel == 1U, "GPU-driven parity LOD mismatch did not preserve LOD values");
+
+    gpuRecords = cpuRecords;
+    gpuRecords[0].firstMeshlet = 4U;
+    gpuRecords[0].meshletCount = 1U;
+    result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = cpuRecords,
+        .gpuRecords = gpuRecords,
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::MeshletRangeMismatch, "GPU-driven parity validator did not report meshlet range mismatch");
+    Require(result.cpuFirstMeshlet == 3U && result.gpuFirstMeshlet == 4U, "GPU-driven parity meshlet mismatch did not preserve first meshlet values");
+    Require(result.cpuMeshletCount == 2U && result.gpuMeshletCount == 1U, "GPU-driven parity meshlet mismatch did not preserve meshlet count values");
+}
+
+void RunGpuDrivenParityValidatorReportsMissingRecordsAndDropBudgetTest() {
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 1U> cpuRecords{{
+        SceneGpuDrivenInstanceValidationRecord{.entityId = 30U, .visible = true},
+    }};
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 1U> gpuRecords{{
+        SceneGpuDrivenInstanceValidationRecord{.entityId = 31U, .visible = true},
+    }};
+
+    SceneGpuDrivenParityValidationResult result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = cpuRecords,
+        .gpuRecords = {},
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::GpuRecordMissing, "GPU-driven parity validator did not report missing GPU record");
+    Require(result.entityId == 30U, "GPU-driven parity missing GPU record did not preserve CPU entity id");
+
+    result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = {},
+        .gpuRecords = gpuRecords,
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::CpuRecordMissing, "GPU-driven parity validator did not report missing CPU record");
+    Require(result.entityId == 31U, "GPU-driven parity missing CPU record did not preserve GPU entity id");
+
+    const std::array<SceneGpuDrivenInstanceValidationRecord, 2U> droppedRecords{{
+        SceneGpuDrivenInstanceValidationRecord{.entityId = 40U, .dropped = true},
+        SceneGpuDrivenInstanceValidationRecord{.entityId = 41U, .dropped = true},
+    }};
+    result = SceneGpuDrivenParityValidator::Validate(SceneGpuDrivenParityValidationDesc{
+        .cpuRecords = droppedRecords,
+        .gpuRecords = droppedRecords,
+        .droppedInstanceBudget = 1U,
+    });
+    Require(result.status == SceneGpuDrivenParityValidationStatus::DroppedInstanceBudgetExceeded, "GPU-driven parity validator did not report dropped instance budget overflow");
+    Require(result.cpuDroppedInstanceCount == 2U && result.gpuDroppedInstanceCount == 2U, "GPU-driven parity drop budget result did not preserve dropped counts");
+}
+
 void RunRenderScenePropagatesMeshPassFlagsTest() {
     RenderScene renderScene;
     static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
@@ -628,6 +1072,15 @@ void RunMeshPipelineTests() {
     RunMeshPipelineUsesMaterialDoubleSidedStateTest();
     RunMeshPipelineSortsTransparentCommandsBackToFrontTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
+    RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
+    RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest();
+    RunGpuDrivenFeatureClassifierReportsIndirectFallbackTest();
+    RunMeshPipelineAppliesGpuDrivenRuntimeFallbackPolicyTest();
+    RunMeshPipelineParityValidationTracksDroppedBudgetTest();
+    RunGpuDrivenFeatureClassifierReportsMeshletFallbackTest();
+    RunGpuDrivenParityValidatorAcceptsMatchingRecordsTest();
+    RunGpuDrivenParityValidatorReportsCullingLodAndMeshletMismatchesTest();
+    RunGpuDrivenParityValidatorReportsMissingRecordsAndDropBudgetTest();
     RunRenderScenePropagatesMeshPassFlagsTest();
 }
 

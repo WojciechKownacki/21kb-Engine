@@ -87,13 +87,15 @@ void EditorRenderPassSubmitter::SubmitSelectionMask(const RenderViewportPlan& vi
 
 void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, const SceneRenderCamera* camera) const {
     if (camera != nullptr && IsInitialized()) {
-        const bool overlayPostProcessTarget = desc.finalComposite.enabled && desc.postProcess.enabled && bgfx::isValid(desc.postProcess.finalFrameBuffer);
-        const bgfx::FrameBufferHandle frameBuffer = overlayPostProcessTarget ? desc.postProcess.finalFrameBuffer : desc.target.frameBuffer;
-        const RenderExtent extent = overlayPostProcessTarget ? desc.postProcess.extent : desc.target.viewport.extent;
+        const bool overlayFinalTarget = desc.finalComposite.enabled;
+        const bgfx::FrameBufferHandle frameBuffer = overlayFinalTarget ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
+        const RenderExtent extent = overlayFinalTarget ? desc.finalComposite.extent : desc.target.viewport.extent;
+        const RenderViewportRect outputRect = overlayFinalTarget ? desc.finalComposite.outputRect : RenderViewportRect{};
         const SceneGridPassDesc gridDesc{
             .viewId = viewportPlan.viewIds.sceneOverlays,
             .frameBuffer = frameBuffer,
             .extent = extent,
+            .outputRect = outputRect,
             .camera = camera,
         };
         static_cast<void>(gridPass_.Submit(gridDesc));
@@ -101,6 +103,7 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
             .viewId = viewportPlan.viewIds.sceneOverlays,
             .frameBuffer = frameBuffer,
             .extent = extent,
+            .outputRect = outputRect,
             .camera = camera,
         }));
         return;
@@ -113,15 +116,17 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
         "KB Editor Scene Overlays");
 }
 
-void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const {
+void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, bool selectionOutlineEnabled) const {
     const RenderExtent extent = desc.finalComposite.enabled ? desc.finalComposite.extent : desc.target.viewport.extent;
     const bgfx::FrameBufferHandle frameBuffer = desc.finalComposite.enabled ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
-    if (IsInitialized() && desc.finalComposite.enabled && bgfx::isValid(desc.postProcess.selectionMaskTexture) && !desc.selectedEntityIds.empty()) {
+    const RenderViewportRect outputRect = desc.finalComposite.enabled ? desc.finalComposite.outputRect : RenderViewportRect{};
+    if (selectionOutlineEnabled && IsInitialized() && desc.finalComposite.enabled && bgfx::isValid(desc.postProcess.selectionMaskTexture) && !desc.selectedEntityIds.empty()) {
         static_cast<void>(selectionOutlinePass_.Submit(SelectionOutlineCompositePassDesc{
             .viewId = viewportPlan.viewIds.editorUiComposite,
             .selectionMask = desc.postProcess.selectionMaskTexture,
             .frameBuffer = frameBuffer,
             .extent = extent,
+            .outputRect = outputRect,
         }));
     }
     SubmitEmptyEditorView(

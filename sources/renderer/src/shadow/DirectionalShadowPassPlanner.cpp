@@ -48,6 +48,35 @@ struct Basis {
     };
 }
 
+[[nodiscard]] std::array<float, 3> TransformPointColumnMajor(const std::array<float, 16>& matrix, const std::array<float, 3>& point) noexcept {
+    return {
+        matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
+        matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13],
+        matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14],
+    };
+}
+
+void SnapShadowViewToTexel(
+    std::array<float, 16>& view,
+    const std::array<float, 3>& worldCenter,
+    float orthoHeight,
+    std::uint32_t shadowMapSize) noexcept {
+    if (shadowMapSize == 0U || orthoHeight <= 0.0F) {
+        return;
+    }
+
+    const float texelWorldSize = orthoHeight / static_cast<float>(shadowMapSize);
+    if (texelWorldSize <= 0.0F) {
+        return;
+    }
+
+    const std::array<float, 3> lightCenter = TransformPointColumnMajor(view, worldCenter);
+    const float snappedX = std::round(lightCenter[0] / texelWorldSize) * texelWorldSize;
+    const float snappedY = std::round(lightCenter[1] / texelWorldSize) * texelWorldSize;
+    view[12] += snappedX - lightCenter[0];
+    view[13] += snappedY - lightCenter[1];
+}
+
 [[nodiscard]] RenderBoundsSphere TransformBoundsForShadow(const RenderBoundsSphere& localBounds, const std::array<float, 16>& model) noexcept {
     if (!localBounds.IsValid()) {
         return RenderBoundsSphere{
@@ -110,6 +139,12 @@ struct Basis {
         return 1.0F;
     case SceneRenderShadowFilter::Pcf3x3:
         return 3.0F;
+    case SceneRenderShadowFilter::Evsm:
+        return 4.0F;
+    case SceneRenderShadowFilter::Msm:
+        return 5.0F;
+    case SceneRenderShadowFilter::Pcss:
+        return 6.0F;
     }
     return 3.0F;
 }
@@ -120,7 +155,7 @@ struct Basis {
     float selectedScore = 0.0F;
     for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
         const LightRenderProxyDesc& light = proxy.desc;
-        if (!light.visible || light.kind != RenderLightKind::Directional || light.intensity <= 0.0F || MaxLightChannel(light) <= 0.0F) {
+        if (!light.visible || !light.castsShadow || light.kind != RenderLightKind::Directional || light.intensity <= 0.0F || MaxLightChannel(light) <= 0.0F) {
             continue;
         }
         const float score = light.intensity * MaxLightChannel(light);
@@ -226,6 +261,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     bx::mtxLookAt(setup.camera.view.data(), eye, center, up);
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     const float orthoHeight = std::max(radius * 2.0F, 1.0F);
+    SnapShadowViewToTexel(setup.camera.view, casterBounds.center, orthoHeight, lightingConfig.shadowMapSize);
     SceneDepthPolicy::MakeOrthographic(
         setup.camera.projection.data(),
         orthoHeight,

@@ -12,10 +12,12 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/Renderer.hpp"
+#include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -90,6 +92,11 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
         .range = 25.0F,
         .innerConeDegrees = 20.0F,
         .outerConeDegrees = 40.0F,
+        .areaWidth = 3.0F,
+        .areaHeight = 1.5F,
+        .contactShadowLength = 0.25F,
+        .volumetricScattering = 0.4F,
+        .castsShadow = false,
     });
 
     RenderScene renderScene;
@@ -102,6 +109,10 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
     Require(NearlyEqual(proxy->desc.color[0], 0.7F) && NearlyEqual(proxy->desc.color[1], 0.8F) && NearlyEqual(proxy->desc.color[2], 0.9F), "RenderScene did not preserve ECS light color");
     Require(NearlyEqual(proxy->desc.intensity, 6.0F), "RenderScene did not preserve ECS light intensity");
     Require(NearlyEqual(proxy->desc.range, 25.0F), "RenderScene did not preserve ECS light range");
+    Require(NearlyEqual(proxy->desc.areaWidth, 3.0F) && NearlyEqual(proxy->desc.areaHeight, 1.5F), "RenderScene did not preserve ECS light area size");
+    Require(NearlyEqual(proxy->desc.contactShadowLength, 0.25F), "RenderScene did not preserve ECS light contact shadow length");
+    Require(NearlyEqual(proxy->desc.volumetricScattering, 0.4F), "RenderScene did not preserve ECS light volumetric scattering");
+    Require(!proxy->desc.castsShadow, "RenderScene did not preserve ECS light shadow flag");
 
     SceneRenderSnapshot snapshot;
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
@@ -111,6 +122,10 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
     Require(NearlyEqual(snapshot.lights[0].direction[2], 1.0F), "RenderScene snapshot did not publish light direction");
     Require(NearlyEqual(snapshot.lights[0].intensity, 6.0F), "RenderScene snapshot did not preserve light intensity");
     Require(snapshot.lights[0].innerConeCos > snapshot.lights[0].outerConeCos, "RenderScene snapshot did not publish ordered spot cone cosines");
+    Require(NearlyEqual(snapshot.lights[0].areaWidth, 3.0F) && NearlyEqual(snapshot.lights[0].areaHeight, 1.5F), "RenderScene snapshot did not publish area light size");
+    Require(NearlyEqual(snapshot.lights[0].contactShadowLength, 0.25F), "RenderScene snapshot did not publish contact shadow length");
+    Require(NearlyEqual(snapshot.lights[0].volumetricScattering, 0.4F), "RenderScene snapshot did not publish volumetric scattering");
+    Require(!snapshot.lights[0].castsShadow, "RenderScene snapshot did not publish light shadow flag");
 }
 
 void RunTracksUpdatesWithoutReplacingProxyTest() {
@@ -576,6 +591,17 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     first.meshDrawGroupLookupCapacity = 6U;
     first.meshCommandLookupCapacity = 9U;
     first.meshPipelineScratchInstanceCapacity = 8U;
+    first.gpuDrivenDrawCandidateCount = 2U;
+    first.indirectDrawCandidateCount = 1U;
+    first.meshletCullingCandidateCount = 3U;
+    first.gpuDrivenInputInstanceCount = 4U;
+    first.gpuDrivenBufferCapacity = 64U;
+    first.gpuDrivenUploadBytes = 272U;
+    first.lodSelectionCount = 4U;
+    first.gpuDrivenFeatureState = SceneGpuDrivenFeatureState::CpuValidationOnly;
+    first.gpuDrivenCounterSource = SceneGpuDrivenCounterSource::CpuCandidates;
+    first.gpuDrivenFallbackReason = SceneGpuDrivenFallbackReason::RuntimeGpuDispatchUnavailable;
+    first.gpuDrivenFallbackCount = 1U;
     first.instanceUploadBytes = 128U;
     first.sceneLightCount = 2U;
     first.submittedForwardLightCount = 1U;
@@ -611,6 +637,18 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     second.meshDrawGroupLookupCapacity = 11U;
     second.meshCommandLookupCapacity = 13U;
     second.meshPipelineScratchInstanceCapacity = 16U;
+    second.gpuDrivenDrawCandidateCount = 5U;
+    second.indirectDrawCandidateCount = 4U;
+    second.meshletCullingCandidateCount = 7U;
+    second.gpuDrivenInputInstanceCount = 6U;
+    second.gpuDrivenBufferCapacity = 128U;
+    second.gpuDrivenUploadBytes = 400U;
+    second.lodSelectionCount = 8U;
+    second.gpuDrivenFeatureState = SceneGpuDrivenFeatureState::ComputeCulling;
+    second.gpuDrivenCounterSource = SceneGpuDrivenCounterSource::GpuDispatchCounters;
+    second.gpuDrivenFallbackReason = SceneGpuDrivenFallbackReason::IndirectDrawUnsupported;
+    second.gpuDrivenFallbackCount = 2U;
+    second.gpuCullingDispatchCount = 2U;
     second.instanceUploadBytes = 256U;
     second.sceneLightCount = 3U;
     second.submittedForwardLightCount = 2U;
@@ -645,6 +683,18 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     Require(first.meshDrawGroupLookupCapacity == 17U, "SceneRenderSubmitStats did not aggregate draw group lookup capacity");
     Require(first.meshCommandLookupCapacity == 22U, "SceneRenderSubmitStats did not aggregate command lookup capacity");
     Require(first.meshPipelineScratchInstanceCapacity == 24U, "SceneRenderSubmitStats did not aggregate scratch instance capacity");
+    Require(first.gpuDrivenDrawCandidateCount == 7U, "SceneRenderSubmitStats did not aggregate GPU-driven CPU candidate count");
+    Require(first.indirectDrawCandidateCount == 5U, "SceneRenderSubmitStats did not aggregate indirect draw candidate count");
+    Require(first.meshletCullingCandidateCount == 10U, "SceneRenderSubmitStats did not aggregate meshlet culling candidate count");
+    Require(first.gpuDrivenInputInstanceCount == 10U, "SceneRenderSubmitStats did not aggregate GPU-driven input instance count");
+    Require(first.gpuDrivenBufferCapacity == 128U, "SceneRenderSubmitStats did not preserve GPU-driven buffer capacity high watermark");
+    Require(first.gpuDrivenUploadBytes == 672U, "SceneRenderSubmitStats did not aggregate GPU-driven upload bytes");
+    Require(first.lodSelectionCount == 12U, "SceneRenderSubmitStats did not aggregate LOD selection count");
+    Require(first.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::ComputeCulling, "SceneRenderSubmitStats did not preserve the highest GPU-driven feature state");
+    Require(first.gpuDrivenCounterSource == SceneGpuDrivenCounterSource::GpuDispatchCounters, "SceneRenderSubmitStats did not preserve the highest-fidelity GPU-driven counter source");
+    Require(first.gpuDrivenFallbackReason == SceneGpuDrivenFallbackReason::IndirectDrawUnsupported, "SceneRenderSubmitStats did not preserve the highest-priority GPU-driven fallback reason");
+    Require(first.gpuDrivenFallbackCount == 3U, "SceneRenderSubmitStats did not aggregate GPU-driven fallback count");
+    Require(first.gpuCullingDispatchCount == 2U, "SceneRenderSubmitStats did not aggregate GPU culling dispatch count");
     Require(first.instanceUploadBytes == 384U, "SceneRenderSubmitStats did not aggregate instance upload bytes");
     Require(first.sceneLightCount == 5U, "SceneRenderSubmitStats did not aggregate scene light count");
     Require(first.submittedForwardLightCount == 3U, "SceneRenderSubmitStats did not aggregate submitted forward light count");
@@ -826,6 +876,207 @@ void RunRendererStoresDefaultSceneLightingConfigTest() {
     Require(renderer.RuntimeResourceStats().defaultEnvironmentLightingSampleCount == 2U, "Renderer runtime stats did not expose the configured scene environment sample count");
 }
 
+void RunRendererStoresDefaultPostProcessSettingsTest() {
+    Renderer renderer;
+    Require(renderer.ConfigurePostProcessChain(PostProcessChain::DefaultSceneChainDesc()), "Renderer rejected default post-process chain before setting bloom options");
+    renderer.SetDefaultPostProcessSettings(ScenePostProcessSettings{
+        .bloomEnabled = false,
+        .bloomStrength = -1.0F,
+        .bloomThreshold = -2.0F,
+        .bloomSoftKnee = 2.0F,
+        .bloomRadiusPixels = -3.0F,
+    });
+
+    const ScenePostProcessSettings settings = renderer.DefaultPostProcessSettings();
+    Require(!settings.bloomEnabled, "Renderer did not store configured post-process bloom toggle");
+    Require(NearlyEqual(settings.bloomStrength, 0.0F), "Renderer did not clamp post-process bloom strength");
+    Require(NearlyEqual(settings.bloomThreshold, 0.0F), "Renderer did not clamp post-process bloom threshold");
+    Require(NearlyEqual(settings.bloomSoftKnee, 1.0F), "Renderer did not clamp post-process bloom soft knee");
+    Require(NearlyEqual(settings.bloomRadiusPixels, 0.0F), "Renderer did not clamp post-process bloom radius");
+    Require(settings.tonemapEnabled, "Renderer should keep tonemap enabled by default");
+    Require(settings.outputTransform.autoExposure.enabled, "Renderer default post-process settings should keep auto exposure enabled");
+
+    const auto bloomPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
+        return pass.kind == PostProcessPassKind::Bloom;
+    });
+    Require(bloomPass != renderer.PostProcessPasses().end(), "Renderer post-process chain is missing bloom after settings update");
+    Require(!bloomPass->enabled, "Renderer did not synchronize bloom pass enabled state with default settings");
+    Require(NearlyEqual(bloomPass->postProcessSettings.bloomStrength, 0.0F), "Renderer did not synchronize clamped bloom strength to the bloom pass");
+    Require(NearlyEqual(bloomPass->postProcessSettings.bloomSoftKnee, 1.0F), "Renderer did not synchronize clamped bloom soft knee to the bloom pass");
+
+    const auto tonemapPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
+        return pass.kind == PostProcessPassKind::Tonemap;
+    });
+    Require(tonemapPass != renderer.PostProcessPasses().end(), "Renderer post-process chain is missing tonemap after settings update");
+    Require(tonemapPass->enabled, "Renderer disabled tonemap while applying bloom-only settings");
+    Require(tonemapPass->outputTransform.autoExposure.enabled, "Renderer did not synchronize auto exposure to the tonemap pass");
+}
+
+void RunRendererSynchronizesTonemapPostProcessSettingsTest() {
+    Renderer renderer;
+    Require(renderer.ConfigurePostProcessChain(PostProcessChain::DefaultSceneChainDesc()), "Renderer rejected default post-process chain before setting tonemap options");
+    renderer.SetDefaultPostProcessSettings(ScenePostProcessSettings{
+        .tonemapEnabled = true,
+        .outputTransform = SceneDisplayOutputTransform{
+            .gamma = -1.0F,
+            .tonemap = SceneDisplayTonemapOperator::AgxApprox,
+            .colorGradingLutStrength = 4.0F,
+            .autoExposure = FullscreenTextureAutoExposureSettings{
+                .enabled = true,
+                .meteredAverageLuminance = 0.09F,
+                .middleGray = 0.18F,
+                .minExposureStops = -4.0F,
+                .maxExposureStops = 4.0F,
+                .biasStops = 0.5F,
+            },
+        },
+    });
+
+    const ScenePostProcessSettings settings = renderer.DefaultPostProcessSettings();
+    Require(NearlyEqual(settings.outputTransform.gamma, 0.001F), "Renderer did not clamp tonemap gamma");
+    Require(NearlyEqual(settings.outputTransform.colorGradingLutStrength, 1.0F), "Renderer did not clamp color grading strength");
+    Require(NearlyEqual(ResolveFullscreenTextureExposureStops(settings.outputTransform), 1.5F), "Renderer stored the wrong auto exposure transform");
+
+    const std::optional<PostProcessPass> tonemapPass = renderer.FindPostProcessPass(PostProcessPassKind::Tonemap);
+    Require(tonemapPass.has_value(), "Renderer could not find tonemap pass after settings update");
+    Require(tonemapPass->outputTransform.tonemap == SceneDisplayTonemapOperator::AgxApprox, "Renderer did not synchronize tonemap operator");
+    Require(NearlyEqual(ResolveFullscreenTextureExposureStops(tonemapPass->outputTransform), 1.5F), "Renderer did not synchronize auto exposure to tonemap pass");
+}
+
+void RunSceneExposureMeterEstimatesLightingLuminanceTest() {
+    RenderScene scene;
+    const SceneRenderLightingConfig dimConfig{
+        .ambientColor = { 0.01F, 0.01F, 0.01F },
+        .ambientIntensity = 1.0F,
+        .environmentMode = SceneRenderEnvironmentMode::Disabled,
+    };
+    const float dimLuminance = SceneExposureMeter::EstimateAverageLuminance(scene, dimConfig);
+    Require(dimLuminance >= 0.0001F, "SceneExposureMeter returned an invalid minimum luminance");
+
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 10U,
+        .kind = RenderLightKind::Directional,
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 4.0F,
+        .visible = true,
+    }));
+    const float brightLuminance = SceneExposureMeter::EstimateAverageLuminance(scene, dimConfig);
+    Require(brightLuminance > dimLuminance, "SceneExposureMeter did not react to a visible directional light");
+
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 10U,
+        .kind = RenderLightKind::Directional,
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 100.0F,
+        .visible = false,
+    }));
+    const float hiddenLuminance = SceneExposureMeter::EstimateAverageLuminance(scene, dimConfig);
+    Require(NearlyEqual(hiddenLuminance, dimLuminance), "SceneExposureMeter counted an invisible light");
+}
+
+void RunSceneExposureMeterBuildsHistogramTest() {
+    RenderScene scene;
+    const SceneRenderLightingConfig config{
+        .ambientColor = { 0.02F, 0.02F, 0.02F },
+        .ambientIntensity = 1.0F,
+        .environmentMode = SceneRenderEnvironmentMode::Disabled,
+    };
+
+    const SceneExposureHistogram dimHistogram = SceneExposureMeter::BuildLightingHistogram(scene, config);
+    Require(dimHistogram.totalWeight > 0.0F, "SceneExposureMeter did not seed a dim lighting histogram");
+    const float dimMetered = SceneExposureMeter::MeterAverageLuminance(dimHistogram);
+
+    static_cast<void>(scene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 20U,
+        .kind = RenderLightKind::Directional,
+        .color = { 1.0F, 1.0F, 1.0F },
+        .intensity = 16.0F,
+        .visible = true,
+    }));
+
+    const SceneExposureHistogram brightHistogram = SceneExposureMeter::BuildLightingHistogram(scene, config);
+    const float brightMetered = SceneExposureMeter::MeterAverageLuminance(brightHistogram);
+    Require(brightHistogram.totalWeight > dimHistogram.totalWeight, "SceneExposureMeter did not accumulate lighting histogram samples");
+    Require(brightMetered > dimMetered, "SceneExposureMeter histogram did not meter brighter lighting");
+}
+
+void RunSceneExposureMeterBuildsHdrReadbackHistogramTest() {
+    std::vector<std::uint8_t> dimPixels(SceneExposureMeter::kHdrReadbackByteCount, 0U);
+    for (std::uint32_t pixel = 0; pixel < SceneExposureMeter::kHdrReadbackPixelCount; ++pixel) {
+        const std::uint32_t offset = pixel * SceneExposureMeter::kHdrReadbackBytesPerPixel;
+        dimPixels[offset] = 24U;
+        dimPixels[offset + 3U] = 255U;
+    }
+
+    SceneExposureHistogram dimHistogram = SceneExposureMeter::BuildHdrReadbackHistogram(dimPixels);
+    Require(dimHistogram.totalWeight == static_cast<float>(SceneExposureMeter::kHdrReadbackPixelCount), "HDR readback histogram did not count valid pixels");
+    const float dimMetered = SceneExposureMeter::MeterAverageLuminance(dimHistogram);
+
+    std::vector<std::uint8_t> brightPixels = dimPixels;
+    for (std::uint32_t pixel = SceneExposureMeter::kHdrReadbackPixelCount / 2U; pixel < SceneExposureMeter::kHdrReadbackPixelCount; ++pixel) {
+        const std::uint32_t offset = pixel * SceneExposureMeter::kHdrReadbackBytesPerPixel;
+        brightPixels[offset] = 220U;
+    }
+
+    const SceneExposureHistogram brightHistogram = SceneExposureMeter::BuildHdrReadbackHistogram(brightPixels);
+    const float brightMetered = SceneExposureMeter::MeterAverageLuminance(brightHistogram);
+    Require(brightMetered > dimMetered, "HDR readback histogram did not meter brighter encoded HDR samples");
+}
+
+void RunSceneExposureMeterTemporalAdaptationTest() {
+    SceneExposureMeter meter;
+    const float initial = meter.Update(0.18F, SceneExposureAdaptationDesc{.enabled = true, .deltaSeconds = 1.0F});
+    Require(NearlyEqual(initial, 0.18F), "SceneExposureMeter should initialize directly to the first luminance sample");
+    Require(meter.HasHistory(), "SceneExposureMeter did not mark initialized exposure history");
+
+    const float adapted = meter.Update(18.0F, SceneExposureAdaptationDesc{
+        .enabled = true,
+        .deltaSeconds = 1.0F / 60.0F,
+        .brightAdaptationRate = 1.0F,
+        .darkAdaptationRate = 1.0F,
+    });
+    Require(adapted > initial, "SceneExposureMeter temporal adaptation did not move toward a brighter sample");
+    Require(adapted < 18.0F, "SceneExposureMeter temporal adaptation jumped directly to the target sample");
+
+    const float reset = meter.Update(0.09F, SceneExposureAdaptationDesc{.enabled = false});
+    Require(NearlyEqual(reset, 0.09F), "SceneExposureMeter should bypass temporal adaptation when disabled");
+}
+
+void RunRendererExposesPostProcessChainConfigurationTest() {
+    Renderer renderer;
+    Require(renderer.ConfigurePostProcessChain(PostProcessChainDesc{
+        .passes = {
+            PostProcessChain::kDefaultIdentityPass,
+            PostProcessPass{.kind = PostProcessPassKind::Tonemap, .enabled = false},
+        },
+    }), "Renderer rejected a valid custom post-process chain");
+    Require(renderer.PostProcessPasses().size() == 2U, "Renderer did not store the custom post-process chain");
+    Require(renderer.SetPostProcessPassEnabled(PostProcessPassKind::Tonemap, true), "Renderer did not toggle a post-process pass");
+    Require(renderer.PostProcessPasses()[1].enabled, "Renderer did not persist a toggled post-process pass");
+    Require(renderer.SetPostProcessPass(PostProcessPass{
+        .kind = PostProcessPassKind::Tonemap,
+        .enabled = true,
+        .outputTransform = SceneDisplayOutputTransform{
+            .exposureStops = 1.0F,
+            .gamma = 2.0F,
+            .tonemap = SceneDisplayTonemapOperator::AgxApprox,
+        },
+    }), "Renderer did not replace an existing post-process pass");
+    Require(NearlyEqual(renderer.PostProcessPasses()[1].outputTransform.exposureStops, 1.0F), "Renderer did not persist post-process tonemap settings");
+    Require(renderer.InsertPostProcessPass(1U, PostProcessPass{.kind = PostProcessPassKind::Bloom, .enabled = false}), "Renderer did not insert a new post-process pass");
+    Require(renderer.PostProcessPasses()[1].kind == PostProcessPassKind::Bloom, "Renderer inserted a post-process pass at the wrong index");
+    Require(renderer.FindPostProcessPass(PostProcessPassKind::Bloom).has_value(), "Renderer did not find an inserted post-process pass");
+    Require(renderer.RemovePostProcessPass(PostProcessPassKind::Bloom), "Renderer did not remove an inserted post-process pass");
+    Require(!renderer.FindPostProcessPass(PostProcessPassKind::Bloom).has_value(), "Renderer found a removed post-process pass");
+    Require(renderer.AddPostProcessPass(PostProcessPass{.kind = PostProcessPassKind::Bloom, .enabled = true}), "Renderer did not append a post-process pass");
+    Require(!renderer.ConfigurePostProcessChain(PostProcessChainDesc{
+        .passes = {
+            PostProcessPass{.kind = PostProcessPassKind::Bloom, .enabled = true},
+            PostProcessPass{.kind = PostProcessPassKind::Bloom, .enabled = false},
+        },
+    }), "Renderer accepted a post-process chain with duplicate pass kinds");
+}
+
 void RunSceneRendererAppliesForwardLightBudgetInValidationStatsTest() {
     RenderScene renderScene;
     for (std::uint32_t index = 0U; index < 5U; ++index) {
@@ -868,6 +1119,49 @@ void RunSceneRendererReportsEnvironmentLightingStatsTest() {
     Require(disabledStats.submittedEnvironmentLightingCount == 0U, "SceneRenderer validation reported disabled environment lighting as active");
     Require(disabledStats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::Disabled) + 1U, "SceneRenderer validation did not report disabled environment mode");
     Require(disabledStats.environmentLightingSampleCount == 0U, "SceneRenderer validation reported disabled environment samples");
+}
+
+void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 1U,
+        .kind = RenderLightKind::AreaRect,
+        .intensity = 2.0F,
+        .range = 12.0F,
+        .areaWidth = 4.0F,
+        .areaHeight = 2.0F,
+        .contactShadowLength = 0.5F,
+        .volumetricScattering = 0.75F,
+        .visible = true,
+    }));
+
+    SceneRenderLightingConfig lighting{};
+    lighting.maxForwardLights = 4U;
+    lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
+    lighting.clusterDimensions = { 4U, 3U, 2U };
+    lighting.environmentMode = SceneRenderEnvironmentMode::ImageBased;
+    lighting.globalIllumination = SceneRenderGlobalIlluminationMode::ProbeGrid;
+    lighting.ibl.reflectionProbeCount = 2U;
+    lighting.ibl.reflectionProbes[0].shape = SceneRenderReflectionProbeShape::Box;
+    lighting.ibl.reflectionProbes[0].parallaxCorrection = true;
+    lighting.ibl.reflectionProbes[1].shape = SceneRenderReflectionProbeShape::Infinite;
+    lighting.contactShadowsEnabled = true;
+    lighting.volumetricLightingEnabled = true;
+
+    SceneRenderer renderer;
+    renderer.SetDefaultLightingConfig(lighting);
+    const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(renderScene);
+    Require(stats.lightingPath == static_cast<std::uint32_t>(SceneRenderLightingPath::ClusteredForwardPlus) + 1U, "SceneRenderer validation did not report clustered lighting path");
+    Require(stats.lightClusterCount == 24U, "SceneRenderer validation did not report clustered light grid size");
+    Require(stats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::ImageBased) + 1U, "SceneRenderer validation did not report IBL environment mode");
+    Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
+    Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");
+    Require(stats.localReflectionProbeCount == 1U, "SceneRenderer validation did not report local reflection probes");
+    Require(stats.parallaxCorrectedProbeCount == 2U, "SceneRenderer validation did not report parallax corrected probes");
+    Require(stats.globalIlluminationMode == static_cast<std::uint32_t>(SceneRenderGlobalIlluminationMode::ProbeGrid) + 1U, "SceneRenderer validation did not report GI mode");
+    Require(stats.submittedAreaLightCount == 1U, "SceneRenderer validation did not report submitted area lights");
+    Require(stats.submittedVolumetricLightCount == 1U, "SceneRenderer validation did not report volumetric lights");
+    Require(stats.contactShadowLightCount == 1U, "SceneRenderer validation did not report contact shadow lights");
 }
 
 void RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest() {
@@ -913,6 +1207,42 @@ void RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest() {
     Require(stats.submittedForwardLightCount == 1U, "SceneRenderer validation selected the wrong number of forward lights");
     Require(stats.skippedForwardLightCount == 1U, "SceneRenderer validation did not report valid lights skipped by selection budget");
     Require(stats.invalidLightCount == 3U, "SceneRenderer validation did not report invalid lights separately");
+}
+
+void RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 42U,
+        .visible = true,
+        .castsShadow = true,
+    }));
+    static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 10U,
+        .kind = RenderLightKind::Directional,
+        .intensity = 100.0F,
+        .castsShadow = false,
+        .visible = true,
+    }));
+    static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 11U,
+        .kind = RenderLightKind::Directional,
+        .intensity = 1.0F,
+        .castsShadow = true,
+        .visible = true,
+    }));
+
+    RenderResourceRegistry resources;
+    SceneRenderResourceMap resourceMap;
+    const DirectionalShadowSetup setup = DirectionalShadowPassPlanner{}.Build(
+        renderScene,
+        resources,
+        resourceMap,
+        SceneRenderLightingConfig{},
+        BGFX_INVALID_HANDLE);
+
+    Require(setup.valid, "Directional shadow planner did not build setup for the shadow-casting directional light");
+    Require(setup.lightEntityId == 11U, "Directional shadow planner selected a directional light with castsShadow disabled");
 }
 
 void RunRendererStoresRuntimeAssetDiscoveryIntervalTest() {
@@ -1032,9 +1362,18 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererStoresDefaultLightingConfigTest();
     RunRendererStoresDefaultSceneDrawBudgetTest();
     RunRendererStoresDefaultSceneLightingConfigTest();
+    RunRendererStoresDefaultPostProcessSettingsTest();
+    RunRendererSynchronizesTonemapPostProcessSettingsTest();
+    RunSceneExposureMeterEstimatesLightingLuminanceTest();
+    RunSceneExposureMeterBuildsHistogramTest();
+    RunSceneExposureMeterBuildsHdrReadbackHistogramTest();
+    RunSceneExposureMeterTemporalAdaptationTest();
+    RunRendererExposesPostProcessChainConfigurationTest();
     RunSceneRendererAppliesForwardLightBudgetInValidationStatsTest();
     RunSceneRendererReportsEnvironmentLightingStatsTest();
+    RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest();
     RunSceneRendererReportsInvalidLightsSeparatelyFromBudgetSkipsTest();
+    RunDirectionalShadowPlannerSkipsNonShadowCastingLightsTest();
     RunRendererStoresRuntimeAssetDiscoveryIntervalTest();
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();
     RunSyncUsesFreshLocalTransformsWithoutRuntimeUpdateTest();

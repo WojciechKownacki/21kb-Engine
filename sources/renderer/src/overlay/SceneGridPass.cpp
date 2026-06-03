@@ -62,10 +62,18 @@ void AddLine(std::array<LineVertex, 164U>& vertices, std::uint32_t& count, float
 }
 
 void ConfigureOverlayView(const SceneGridPassDesc& desc) {
+    const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
+        ? desc.outputRect
+        : RenderViewportRect{.extent = desc.extent};
     bgfx::setViewName(desc.viewId, "KB Editor Grid");
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
     bgfx::setViewTransform(desc.viewId, desc.camera->view.data(), desc.camera->projection.data());
-    bgfx::setViewRect(desc.viewId, 0, 0, ClampToViewExtent(desc.extent.width), ClampToViewExtent(desc.extent.height));
+    bgfx::setViewRect(
+        desc.viewId,
+        ClampToViewExtent(outputRect.x),
+        ClampToViewExtent(outputRect.y),
+        ClampToViewExtent(outputRect.extent.width),
+        ClampToViewExtent(outputRect.extent.height));
     bgfx::setViewClear(desc.viewId, BGFX_CLEAR_NONE);
     bgfx::setViewMode(desc.viewId, bgfx::ViewMode::Sequential);
     bgfx::touch(desc.viewId);
@@ -78,7 +86,7 @@ SceneGridPass::~SceneGridPass() {
 }
 
 bool SceneGridPassDesc::IsValid() const noexcept {
-    return extent.IsValid() && camera != nullptr;
+    return extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr;
 }
 
 bool SceneGridPass::Initialize() {
