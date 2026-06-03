@@ -3,18 +3,28 @@
 #include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/frame/RenderPassKind.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace kb::render {
 
 struct RenderViewportViewIds {
+    static constexpr std::size_t kBloomPyramidExtraMipCount = 5U;
+
     std::uint16_t shadowDepth = ViewId::Invalid;
     std::uint16_t opaqueScene = ViewId::Invalid;
     std::uint16_t transparentScene = ViewId::Invalid;
     std::uint16_t selectionMask = ViewId::Invalid;
+    std::uint16_t postProcessExposureReadback = ViewId::Invalid;
+    std::uint16_t postProcessMotionVectors = ViewId::Invalid;
+    std::uint16_t postProcessTaaResolve = ViewId::Invalid;
     std::uint16_t postProcessBloomPrefilter = ViewId::Invalid;
     std::uint16_t postProcessBloomBlurH = ViewId::Invalid;
     std::uint16_t postProcessBloomBlurV = ViewId::Invalid;
+    std::array<std::uint16_t, kBloomPyramidExtraMipCount> postProcessBloomDownsampleViews{};
+    std::array<std::uint16_t, kBloomPyramidExtraMipCount> postProcessBloomMipBlurHViews{};
+    std::array<std::uint16_t, kBloomPyramidExtraMipCount> postProcessBloomMipBlurVViews{};
     std::uint16_t postProcessHdrCombine = ViewId::Invalid;
     std::uint16_t postProcessHdrFinalize = ViewId::Invalid;
     std::uint16_t sceneOverlays = ViewId::Invalid;
@@ -33,6 +43,12 @@ struct RenderViewportViewIds {
             return transparentScene;
         case RenderPassKind::EditorSelectionMask:
             return selectionMask;
+        case RenderPassKind::PostProcessExposureReadback:
+            return postProcessExposureReadback;
+        case RenderPassKind::PostProcessMotionVectors:
+            return postProcessMotionVectors;
+        case RenderPassKind::PostProcessTaaResolve:
+            return postProcessTaaResolve;
         case RenderPassKind::PostProcessBloomPrefilter:
             return postProcessBloomPrefilter;
         case RenderPassKind::PostProcessBloomBlurH:
@@ -59,10 +75,22 @@ struct RenderViewportViewIds {
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
         return ViewId::IsValid(shadowDepth) && ViewId::IsValid(opaqueScene) && ViewId::IsValid(transparentScene) && ViewId::IsValid(selectionMask) &&
-               ViewId::IsValid(postProcessBloomPrefilter) && ViewId::IsValid(postProcessBloomBlurH) &&
-               ViewId::IsValid(postProcessBloomBlurV) && ViewId::IsValid(postProcessHdrCombine) &&
-               ViewId::IsValid(postProcessHdrFinalize) && ViewId::IsValid(sceneOverlays) &&
-               ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite);
+               ViewId::IsValid(postProcessExposureReadback) && ViewId::IsValid(postProcessBloomPrefilter) && ViewId::IsValid(postProcessBloomBlurH) &&
+               ViewId::IsValid(postProcessMotionVectors) && ViewId::IsValid(postProcessTaaResolve) &&
+               ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
+               BloomMipViewsAreValid(postProcessBloomMipBlurHViews) && BloomMipViewsAreValid(postProcessBloomMipBlurVViews) &&
+               ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
+               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite);
+    }
+
+private:
+    [[nodiscard]] static constexpr bool BloomMipViewsAreValid(const std::array<std::uint16_t, kBloomPyramidExtraMipCount>& views) noexcept {
+        for (const std::uint16_t view : views) {
+            if (!ViewId::IsValid(view)) {
+                return false;
+            }
+        }
+        return true;
     }
 };
 
@@ -75,9 +103,15 @@ public:
                 .opaqueScene = ViewId::Scene3D,
                 .transparentScene = ViewId::TransparentScene,
                 .selectionMask = ViewId::EditorSelectionMask,
+                .postProcessExposureReadback = ViewId::PostProcessExposureReadback,
+                .postProcessMotionVectors = ViewId::PostProcessMotionVectors,
+                .postProcessTaaResolve = ViewId::PostProcessTaaResolve,
                 .postProcessBloomPrefilter = ViewId::PostProcessBloomPrefilter,
                 .postProcessBloomBlurH = ViewId::PostProcessBloomBlurH,
                 .postProcessBloomBlurV = ViewId::PostProcessBloomBlurV,
+                .postProcessBloomDownsampleViews = BloomMipViews(ViewId::PostProcessBloomDownsampleStart),
+                .postProcessBloomMipBlurHViews = BloomMipViews(ViewId::PostProcessBloomMipBlurHStart),
+                .postProcessBloomMipBlurVViews = BloomMipViews(ViewId::PostProcessBloomMipBlurVStart),
                 .postProcessHdrCombine = ViewId::PostProcessHdrCombine,
                 .postProcessHdrFinalize = ViewId::PostProcessHdrFinalize,
                 .sceneOverlays = ViewId::Overlay,
@@ -96,15 +130,30 @@ public:
             .opaqueScene = static_cast<std::uint16_t>(base + 1U),
             .transparentScene = static_cast<std::uint16_t>(base + 2U),
             .selectionMask = static_cast<std::uint16_t>(base + 3U),
-            .postProcessBloomPrefilter = static_cast<std::uint16_t>(base + 4U),
-            .postProcessBloomBlurH = static_cast<std::uint16_t>(base + 5U),
-            .postProcessBloomBlurV = static_cast<std::uint16_t>(base + 6U),
-            .postProcessHdrCombine = static_cast<std::uint16_t>(base + 7U),
-            .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 8U),
-            .sceneOverlays = static_cast<std::uint16_t>(base + 9U),
-            .finalComposite = static_cast<std::uint16_t>(base + 10U),
-            .editorUiComposite = static_cast<std::uint16_t>(base + 11U),
+            .postProcessExposureReadback = static_cast<std::uint16_t>(base + 4U),
+            .postProcessMotionVectors = static_cast<std::uint16_t>(base + 5U),
+            .postProcessTaaResolve = static_cast<std::uint16_t>(base + 6U),
+            .postProcessBloomPrefilter = static_cast<std::uint16_t>(base + 7U),
+            .postProcessBloomBlurH = static_cast<std::uint16_t>(base + 8U),
+            .postProcessBloomBlurV = static_cast<std::uint16_t>(base + 9U),
+            .postProcessBloomDownsampleViews = BloomMipViews(base + 15U),
+            .postProcessBloomMipBlurHViews = BloomMipViews(base + 20U),
+            .postProcessBloomMipBlurVViews = BloomMipViews(base + 25U),
+            .postProcessHdrCombine = static_cast<std::uint16_t>(base + 10U),
+            .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 11U),
+            .sceneOverlays = static_cast<std::uint16_t>(base + 12U),
+            .finalComposite = static_cast<std::uint16_t>(base + 13U),
+            .editorUiComposite = static_cast<std::uint16_t>(base + 14U),
         };
+    }
+
+private:
+    [[nodiscard]] static constexpr std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> BloomMipViews(std::uint32_t start) noexcept {
+        std::array<std::uint16_t, RenderViewportViewIds::kBloomPyramidExtraMipCount> views{};
+        for (std::size_t index = 0; index < views.size(); ++index) {
+            views[index] = static_cast<std::uint16_t>(start + index);
+        }
+        return views;
     }
 };
 

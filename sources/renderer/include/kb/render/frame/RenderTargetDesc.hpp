@@ -36,6 +36,18 @@ struct RenderExtent {
     [[nodiscard]] friend constexpr bool operator==(RenderExtent lhs, RenderExtent rhs) noexcept = default;
 };
 
+struct RenderViewportRect {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    RenderExtent extent{};
+
+    [[nodiscard]] constexpr bool IsValid() const noexcept {
+        return extent.IsValid();
+    }
+
+    [[nodiscard]] friend constexpr bool operator==(RenderViewportRect lhs, RenderViewportRect rhs) noexcept = default;
+};
+
 struct RenderTargetDesc {
     RenderTargetRole role = RenderTargetRole::SceneColorHdr;
     RenderTargetFormat format = RenderTargetFormat::Unknown;

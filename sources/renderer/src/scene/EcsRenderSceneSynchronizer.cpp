@@ -72,6 +72,12 @@ namespace {
         return RenderLightKind::Point;
     case kb::scene::LightKind::Spot:
         return RenderLightKind::Spot;
+    case kb::scene::LightKind::AreaRect:
+        return RenderLightKind::AreaRect;
+    case kb::scene::LightKind::AreaDisk:
+        return RenderLightKind::AreaDisk;
+    case kb::scene::LightKind::Tube:
+        return RenderLightKind::Tube;
     }
     return RenderLightKind::Point;
 }
@@ -139,6 +145,11 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
         .range = light.range,
         .innerConeDegrees = light.innerConeDegrees,
         .outerConeDegrees = light.outerConeDegrees,
+        .areaWidth = light.areaWidth,
+        .areaHeight = light.areaHeight,
+        .contactShadowLength = light.contactShadowLength,
+        .volumetricScattering = light.volumetricScattering,
+        .castsShadow = light.castsShadow,
         .visible = IsVisible(*sync->scene, entity),
     }));
     static_cast<void>(transform);

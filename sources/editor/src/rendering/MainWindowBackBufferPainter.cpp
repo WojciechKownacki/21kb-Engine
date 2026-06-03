@@ -1,6 +1,7 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 
 #if defined(_WIN32)
+#include "rendering/DockDropPreviewOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/EditorDragOverlayRenderer.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
@@ -24,8 +25,13 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, paintContext->preview, *paintContext->sceneViewport);
+    DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, nullptr, *paintContext->sceneViewport);
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
+}
+
+[[nodiscard]] DockDropPreviewOverlayWindow& MainDropPreviewOverlay() {
+    static DockDropPreviewOverlayWindow overlay;
+    return overlay;
 }
 
 } // namespace
@@ -43,6 +49,11 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
     sceneViewport.BeginPaintLayout();
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
     sceneViewport.EndPaintLayout();
+    if (preview != nullptr) {
+        MainDropPreviewOverlay().Show(window, *preview, theme);
+    } else {
+        MainDropPreviewOverlay().Hide();
+    }
 }
 
 } // namespace kb::editor

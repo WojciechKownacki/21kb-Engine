@@ -6,6 +6,17 @@
 
 namespace kb::render {
 
+struct NativeWindowFramebufferDesc {
+    void* nativeWindow = nullptr;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    bgfx::TextureFormat::Enum colorFormat = bgfx::TextureFormat::BGRA8;
+    bgfx::TextureFormat::Enum depthFormat = bgfx::TextureFormat::Count;
+    bool flushBeforeRecreate = false;
+
+    [[nodiscard]] bool IsValid() const noexcept;
+};
+
 class NativeWindowFramebuffer {
 public:
     NativeWindowFramebuffer() = default;
@@ -19,13 +30,17 @@ public:
         std::uint32_t width,
         std::uint32_t height,
         bgfx::TextureFormat::Enum colorFormat = bgfx::TextureFormat::BGRA8,
-        bgfx::TextureFormat::Enum depthFormat = bgfx::TextureFormat::D24S8);
+        bgfx::TextureFormat::Enum depthFormat = bgfx::TextureFormat::Count,
+        bool flushBeforeRecreate = false);
+    [[nodiscard]] bool Ensure(const NativeWindowFramebufferDesc& desc);
     void Shutdown() noexcept;
 
     [[nodiscard]] bgfx::FrameBufferHandle FrameBuffer() const noexcept;
     [[nodiscard]] std::uint32_t Width() const noexcept;
     [[nodiscard]] std::uint32_t Height() const noexcept;
     [[nodiscard]] void* NativeWindow() const noexcept;
+    [[nodiscard]] bgfx::TextureFormat::Enum ColorFormat() const noexcept;
+    [[nodiscard]] bgfx::TextureFormat::Enum DepthFormat() const noexcept;
     [[nodiscard]] bool IsValid() const noexcept;
 
 private:

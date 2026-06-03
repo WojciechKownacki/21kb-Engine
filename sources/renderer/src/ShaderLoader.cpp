@@ -1,5 +1,7 @@
 #include "kb/render/ShaderLoader.hpp"
 
+#include "kb/render/ShaderManifest.hpp"
+
 #include <bgfx/bgfx.h>
 #include <bx/string.h>
 
@@ -50,26 +52,6 @@ namespace {
     return roots;
 }
 
-[[nodiscard]] const char* ShaderProfileDirectory() noexcept {
-    switch (bgfx::getRendererType()) {
-    case bgfx::RendererType::Noop:
-    case bgfx::RendererType::Direct3D11:
-        return "shaders/dxbc";
-    case bgfx::RendererType::Direct3D12:
-        return "shaders/dxil";
-    case bgfx::RendererType::Vulkan:
-        return "shaders/spirv";
-    case bgfx::RendererType::OpenGL:
-        return "shaders/glsl";
-    case bgfx::RendererType::OpenGLES:
-        return "shaders/essl";
-    case bgfx::RendererType::Metal:
-        return "shaders/metal";
-    default:
-        return "shaders/dxbc";
-    }
-}
-
 [[nodiscard]] std::vector<std::uint8_t> ReadFileBytes(const char* path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
@@ -98,7 +80,7 @@ bgfx::ShaderHandle ShaderLoader::Load(const char* name) {
     char resolvedPath[512]{};
     for (const std::string& root : ShaderSearchRoots(exeDir)) {
         char path[512]{};
-        bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.empty() ? "." : root.c_str(), ShaderProfileDirectory(), name);
+        bx::snprintf(path, sizeof(path), "%s/%s/%s.bin", root.empty() ? "." : root.c_str(), ShaderProfileDirectoryForRenderer(bgfx::getRendererType()), name);
         bytes = ReadFileBytes(path);
         if (!bytes.empty()) {
             bx::strCopy(resolvedPath, sizeof(resolvedPath), path);
@@ -128,6 +110,15 @@ bgfx::ProgramHandle ShaderLoader::LoadProgram(const char* vertexShader, const ch
     }
 
     return bgfx::createProgram(vertex, fragment, true);
+}
+
+bgfx::ProgramHandle ShaderLoader::LoadComputeProgram(const char* computeShader) {
+    bgfx::ShaderHandle compute = Load(computeShader);
+    if (!bgfx::isValid(compute)) {
+        return BGFX_INVALID_HANDLE;
+    }
+
+    return bgfx::createProgram(compute, true);
 }
 
 } // namespace kb::render

@@ -1,6 +1,7 @@
 #include "scene/SceneMeshSubmitter.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/ViewIdPolicy.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 
 #include <algorithm>
@@ -101,6 +102,12 @@ void Normalize(float& x, float& y, float& z) noexcept {
         return 1.0F;
     case RenderLightKind::Spot:
         return 2.0F;
+    case RenderLightKind::AreaRect:
+        return 3.0F;
+    case RenderLightKind::AreaDisk:
+        return 4.0F;
+    case RenderLightKind::Tube:
+        return 5.0F;
     }
     return 1.0F;
 }
@@ -229,6 +236,12 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
         return 1U;
     case SceneRenderShadowFilter::Pcf3x3:
         return 9U;
+    case SceneRenderShadowFilter::Evsm:
+        return 4U;
+    case SceneRenderShadowFilter::Msm:
+        return 4U;
+    case SceneRenderShadowFilter::Pcss:
+        return 16U;
     }
     return 9U;
 }
@@ -241,6 +254,8 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
         return 1.0F;
     case SceneRenderEnvironmentMode::Hemisphere:
         return 2.0F;
+    case SceneRenderEnvironmentMode::ImageBased:
+        return 3.0F;
     }
     return 1.0F;
 }
@@ -253,8 +268,48 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
         return 1U;
     case SceneRenderEnvironmentMode::Hemisphere:
         return 2U;
+    case SceneRenderEnvironmentMode::ImageBased:
+        return 4U;
     }
     return 1U;
+}
+
+[[nodiscard]] std::uint32_t ClusterCount(SceneRenderLightingConfig config) noexcept {
+    if (config.lightingPath != SceneRenderLightingPath::ClusteredForwardPlus) {
+        return 0U;
+    }
+    return static_cast<std::uint32_t>(config.clusterDimensions[0]) *
+        static_cast<std::uint32_t>(config.clusterDimensions[1]) *
+        static_cast<std::uint32_t>(config.clusterDimensions[2]);
+}
+
+void AccumulateAdvancedLightStats(const LightRenderProxyDesc& light, SceneRenderSubmitStats& stats, SceneRenderLightingConfig config) noexcept {
+    if (light.kind == RenderLightKind::AreaRect || light.kind == RenderLightKind::AreaDisk || light.kind == RenderLightKind::Tube) {
+        ++stats.submittedAreaLightCount;
+    }
+    if (config.volumetricLightingEnabled && light.volumetricScattering > 0.0F) {
+        ++stats.submittedVolumetricLightCount;
+    }
+    if (config.contactShadowsEnabled && light.contactShadowLength > 0.0F) {
+        ++stats.contactShadowLightCount;
+    }
+}
+
+void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig config) noexcept {
+    stats.lightingPath = static_cast<std::uint32_t>(config.lightingPath) + 1U;
+    stats.lightClusterCount = ClusterCount(config);
+    stats.globalIlluminationMode = static_cast<std::uint32_t>(config.globalIllumination) + 1U;
+    const std::uint32_t probeCount = std::min<std::uint32_t>(config.ibl.reflectionProbeCount, kMaxSceneReflectionProbes);
+    stats.reflectionProbeCount = probeCount;
+    for (std::uint32_t probeIndex = 0U; probeIndex < probeCount; ++probeIndex) {
+        const SceneRenderReflectionProbe& probe = config.ibl.reflectionProbes[probeIndex];
+        if (probe.shape != SceneRenderReflectionProbeShape::Infinite) {
+            ++stats.localReflectionProbeCount;
+        }
+        if (probe.parallaxCorrection || config.ibl.parallaxCorrection) {
+            ++stats.parallaxCorrectedProbeCount;
+        }
+    }
 }
 
 [[nodiscard]] PackedSceneLighting BuildSceneLighting(const RenderScene& renderScene, SceneRenderSubmitStats& stats, SceneRenderLightingConfig config, const SceneRenderCamera* camera) noexcept {
@@ -289,6 +344,7 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
     stats.submittedEnvironmentLightingCount = config.environmentMode == SceneRenderEnvironmentMode::Disabled ? 0U : 1U;
     stats.environmentLightingMode = static_cast<std::uint32_t>(config.environmentMode) + 1U;
     stats.environmentLightingSampleCount = EnvironmentSampleCount(config.environmentMode);
+    FillIblStats(stats, config);
     stats.sceneLightCount = static_cast<std::uint32_t>(renderScene.LightProxies().size());
     stats.forwardLightCapacity = capacity;
     std::array<LightCandidate, kMaxSceneForwardLights> selected{};
@@ -301,6 +357,7 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
             continue;
         }
         ++validLightCount;
+        AccumulateAdvancedLightStats(proxy.desc, stats, config);
         InsertSelectedLight(selected, selectedCount, capacity, LightCandidate{
             .light = &proxy.desc,
             .entityId = entityId,
@@ -519,7 +576,8 @@ bool SceneMeshSubmitter::Initialize() {
     fallbackWhiteTexture_ = CreateFallbackWhiteTexture();
     fallbackNormalTexture_ = CreateFallbackTexture(0xFFFF'8080U);
     fallbackBlackTexture_ = CreateFallbackTexture(0xFF00'0000U);
-    if (!bgfx::isValid(albedoSampler_) ||
+    if (!gpuDrivenCullingPass_.Initialize() ||
+        !bgfx::isValid(albedoSampler_) ||
         !bgfx::isValid(shadowSampler_) ||
         !bgfx::isValid(normalSampler_) ||
         !bgfx::isValid(metallicRoughnessSampler_) ||
@@ -551,6 +609,8 @@ bool SceneMeshSubmitter::Initialize() {
 }
 
 void SceneMeshSubmitter::Shutdown() {
+    gpuDrivenFrameResources_.Shutdown();
+    gpuDrivenCullingPass_.Shutdown();
     if (bgfx::isValid(fallbackBlackTexture_)) {
         bgfx::destroy(fallbackBlackTexture_);
         fallbackBlackTexture_ = BGFX_INVALID_HANDLE;
@@ -672,7 +732,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     SceneRenderDiagnostics* diagnostics,
     SceneRenderDrawBudget drawBudget,
     SceneRenderLightingConfig lightingConfig,
-    std::span<const std::uint64_t> selectedEntityIds) noexcept {
+    std::span<const std::uint64_t> selectedEntityIds,
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport) noexcept {
     drawGroupsScratch.reserve(renderScene.MeshProxyCount());
     renderScene.BuildDrawGroups(drawGroupsScratch);
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
@@ -684,7 +745,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
+        .maxDroppedInstances = drawBudget.maxDroppedInstances,
         .selectedEntityIds = selectedEntityIds,
+        .gpuDrivenSupport = gpuDrivenSupport,
     }, pipelineScratch);
     pipelineScratch.stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(drawGroupsScratch.capacity());
     pipelineScratch.stats.meshDrawGroupInstanceScratchCapacity = DrawGroupInstanceCapacity(drawGroupsScratch);
@@ -696,9 +759,18 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     pipelineScratch.stats.skippedForwardLightCount = lightingStats.skippedForwardLightCount;
     pipelineScratch.stats.invalidLightCount = lightingStats.invalidLightCount;
     pipelineScratch.stats.forwardLightCapacity = lightingStats.forwardLightCapacity;
+    pipelineScratch.stats.lightingPath = lightingStats.lightingPath;
+    pipelineScratch.stats.lightClusterCount = lightingStats.lightClusterCount;
+    pipelineScratch.stats.submittedAreaLightCount = lightingStats.submittedAreaLightCount;
+    pipelineScratch.stats.submittedVolumetricLightCount = lightingStats.submittedVolumetricLightCount;
+    pipelineScratch.stats.contactShadowLightCount = lightingStats.contactShadowLightCount;
     pipelineScratch.stats.submittedEnvironmentLightingCount = lightingStats.submittedEnvironmentLightingCount;
     pipelineScratch.stats.environmentLightingMode = lightingStats.environmentLightingMode;
     pipelineScratch.stats.environmentLightingSampleCount = lightingStats.environmentLightingSampleCount;
+    pipelineScratch.stats.reflectionProbeCount = lightingStats.reflectionProbeCount;
+    pipelineScratch.stats.localReflectionProbeCount = lightingStats.localReflectionProbeCount;
+    pipelineScratch.stats.parallaxCorrectedProbeCount = lightingStats.parallaxCorrectedProbeCount;
+    pipelineScratch.stats.globalIlluminationMode = lightingStats.globalIlluminationMode;
     if (pass == MeshPassType::ShadowDepth) {
         pipelineScratch.stats.shadowCasterCount = pipelineScratch.stats.visibleMeshCount;
     }
@@ -723,7 +795,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     SceneRenderDrawBudget drawBudget,
     SceneRenderLightingConfig lightingConfig,
     const SceneRenderShadowMapBinding* shadowMap,
-    std::span<const std::uint64_t> selectedEntityIds) const {
+    std::span<const std::uint64_t> selectedEntityIds,
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -743,7 +816,9 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .diagnostics = diagnostics,
         .maxDrawCommands = drawBudget.maxDrawCommands,
         .maxVisibleInstances = drawBudget.maxVisibleInstances,
+        .maxDroppedInstances = drawBudget.maxDroppedInstances,
         .selectedEntityIds = selectedEntityIds,
+        .gpuDrivenSupport = gpuDrivenSupport,
     }, pipelineScratch_);
     stats = pipelineScratch_.stats;
     stats.sceneLightCount = lightingStats.sceneLightCount;
@@ -751,9 +826,18 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     stats.skippedForwardLightCount = lightingStats.skippedForwardLightCount;
     stats.invalidLightCount = lightingStats.invalidLightCount;
     stats.forwardLightCapacity = lightingStats.forwardLightCapacity;
+    stats.lightingPath = lightingStats.lightingPath;
+    stats.lightClusterCount = lightingStats.lightClusterCount;
+    stats.submittedAreaLightCount = lightingStats.submittedAreaLightCount;
+    stats.submittedVolumetricLightCount = lightingStats.submittedVolumetricLightCount;
+    stats.contactShadowLightCount = lightingStats.contactShadowLightCount;
     stats.submittedEnvironmentLightingCount = lightingStats.submittedEnvironmentLightingCount;
     stats.environmentLightingMode = lightingStats.environmentLightingMode;
     stats.environmentLightingSampleCount = lightingStats.environmentLightingSampleCount;
+    stats.reflectionProbeCount = lightingStats.reflectionProbeCount;
+    stats.localReflectionProbeCount = lightingStats.localReflectionProbeCount;
+    stats.parallaxCorrectedProbeCount = lightingStats.parallaxCorrectedProbeCount;
+    stats.globalIlluminationMode = lightingStats.globalIlluminationMode;
     if (pass == MeshPassType::ShadowDepth) {
         stats.shadowCasterCount = stats.visibleMeshCount;
         stats.shadowMapSize = lightingConfig.shadowMapSize;
@@ -762,6 +846,17 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(drawGroupsScratch_.capacity());
     stats.meshDrawGroupInstanceScratchCapacity = DrawGroupInstanceCapacity(drawGroupsScratch_);
     stats.meshDrawGroupLookupCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupLookupScratchCapacity());
+    if (stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::ComputeCulling ||
+        stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::IndirectDrawSubmit ||
+        stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::MeshletSubmit) {
+        const SceneGpuDrivenFrameBatch gpuDrivenBatch = gpuDrivenFrameResources_.Upload(pipelineScratch_.gpuDrivenInputRecords);
+        stats += gpuDrivenCullingPass_.Submit(SceneGpuDrivenCullingPassDesc{
+            .viewId = ViewId::GpuCompute,
+            .batch = gpuDrivenBatch,
+            .camera = camera,
+            .featureState = stats.gpuDrivenFeatureState,
+        });
+    }
     for (const MeshDrawCommand& command : pipelineScratch_.commands) {
         const std::uint32_t instanceCount = static_cast<std::uint32_t>(command.instances.size());
         const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());

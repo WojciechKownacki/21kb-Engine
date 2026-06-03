@@ -9,7 +9,7 @@
 namespace kb::editor {
 
 void DockPanelFramePainter::Paint(HDC dc, const RECT& rect, DockPanelKind kind, const EditorTheme& theme) const {
-    if (kind == DockPanelKind::Scene) {
+    if (kind == DockPanelKind::Scene || kind == DockPanelKind::Game) {
         PaintTransparentContentFrame(dc, rect, theme);
         return;
     }

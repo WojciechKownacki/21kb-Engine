@@ -34,12 +34,29 @@ void RunMaterialHandlesAreGenerationalTest() {
     desc.normalScale = 0.8F;
     desc.occlusionStrength = 0.65F;
     desc.emissiveStrength = 2.0F;
+    desc.clearcoatFactor = 0.8F;
+    desc.clearcoatRoughnessFactor = 0.2F;
+    desc.sheenColor[0] = 0.9F;
+    desc.sheenColor[1] = 0.8F;
+    desc.sheenColor[2] = 0.7F;
+    desc.sheenRoughnessFactor = 0.45F;
+    desc.transmissionFactor = 0.3F;
+    desc.thicknessFactor = 0.12F;
+    desc.attenuationColor[0] = 0.6F;
+    desc.subsurfaceFactor = 0.25F;
+    desc.anisotropyStrength = 0.5F;
+    desc.anisotropyRotation = 0.125F;
+    desc.decalBlendMode = RenderMaterialDecalBlendMode::Pbr;
+    desc.layerBlendMode = RenderMaterialLayerBlendMode::Multiply;
     desc.alphaMode = RenderMaterialAlphaMode::Mask;
     desc.doubleSided = true;
     desc.normalTextureAssetId = 101U;
     desc.metallicRoughnessTextureAssetId = 102U;
     desc.occlusionTextureAssetId = 103U;
     desc.emissiveTextureAssetId = 104U;
+    desc.clearcoatTextureAssetId = 105U;
+    desc.transmissionTextureAssetId = 106U;
+    desc.layerMaskTextureAssetId = 107U;
 
     const RenderMaterialHandle first = registry.RegisterMaterial(desc);
     Require(first.IsValid(), "RenderResourceRegistry did not allocate a material handle");
@@ -53,12 +70,26 @@ void RunMaterialHandlesAreGenerationalTest() {
     Require(NearlyEqual(material->normalScale, 0.8F), "RenderResourceRegistry did not preserve material normal scale");
     Require(NearlyEqual(material->occlusionStrength, 0.65F), "RenderResourceRegistry did not preserve material occlusion strength");
     Require(NearlyEqual(material->emissiveStrength, 2.0F), "RenderResourceRegistry did not preserve material emissive strength");
+    Require(NearlyEqual(material->clearcoatFactor, 0.8F), "RenderResourceRegistry did not preserve material clearcoat factor");
+    Require(NearlyEqual(material->clearcoatRoughnessFactor, 0.2F), "RenderResourceRegistry did not preserve material clearcoat roughness");
+    Require(NearlyEqual(material->sheenColor[1], 0.8F), "RenderResourceRegistry did not preserve material sheen color");
+    Require(NearlyEqual(material->transmissionFactor, 0.3F), "RenderResourceRegistry did not preserve material transmission factor");
+    Require(NearlyEqual(material->thicknessFactor, 0.12F), "RenderResourceRegistry did not preserve material thickness factor");
+    Require(NearlyEqual(material->attenuationColor[0], 0.6F), "RenderResourceRegistry did not preserve material attenuation color");
+    Require(NearlyEqual(material->subsurfaceFactor, 0.25F), "RenderResourceRegistry did not preserve material subsurface factor");
+    Require(NearlyEqual(material->anisotropyStrength, 0.5F), "RenderResourceRegistry did not preserve material anisotropy strength");
+    Require(NearlyEqual(material->anisotropyRotation, 0.125F), "RenderResourceRegistry did not preserve material anisotropy rotation");
+    Require(material->decalBlendMode == RenderMaterialDecalBlendMode::Pbr, "RenderResourceRegistry did not preserve material decal mode");
+    Require(material->layerBlendMode == RenderMaterialLayerBlendMode::Multiply, "RenderResourceRegistry did not preserve material layer mode");
     Require(material->alphaMode == RenderMaterialAlphaMode::Mask, "RenderResourceRegistry did not preserve material alpha mode");
     Require(material->doubleSided, "RenderResourceRegistry did not preserve material double sided state");
     Require(material->normalTextureAssetId == 101U, "RenderResourceRegistry did not preserve material normal texture asset id");
     Require(material->metallicRoughnessTextureAssetId == 102U, "RenderResourceRegistry did not preserve material metallic-roughness texture asset id");
     Require(material->occlusionTextureAssetId == 103U, "RenderResourceRegistry did not preserve material occlusion texture asset id");
     Require(material->emissiveTextureAssetId == 104U, "RenderResourceRegistry did not preserve material emissive texture asset id");
+    Require(material->clearcoatTextureAssetId == 105U, "RenderResourceRegistry did not preserve material clearcoat texture asset id");
+    Require(material->transmissionTextureAssetId == 106U, "RenderResourceRegistry did not preserve material transmission texture asset id");
+    Require(material->layerMaskTextureAssetId == 107U, "RenderResourceRegistry did not preserve material layer mask texture asset id");
 
     registry.DestroyMaterial(first);
     Require(registry.FindMaterial(first) == nullptr, "Destroyed material handle should stop resolving immediately");
@@ -228,6 +259,10 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     Require(asset->bounds.IsValid() && asset->desc.bounds.IsValid(), "OBJ importer did not compute mesh bounds");
     Require(NearlyEqual(asset->bounds.center[0], 0.5F) && NearlyEqual(asset->bounds.center[1], 0.5F), "OBJ importer computed the wrong mesh bounds center");
     Require(asset->sections[0].bounds.IsValid() && asset->sections[1].bounds.IsValid(), "OBJ importer did not compute section bounds");
+    Require(asset->meshlets.size() == asset->sections.size(), "OBJ importer did not build meshlet metadata per section");
+    Require(asset->lods.size() == 1U, "OBJ importer did not build base LOD metadata");
+    Require(asset->desc.gpuDriven.meshletCount == asset->meshlets.size(), "OBJ importer did not expose meshlets through RenderMeshDesc");
+    Require(asset->desc.gpuDriven.lodCount == asset->lods.size(), "OBJ importer did not expose LODs through RenderMeshDesc");
     Require(asset->materialSlots[asset->sections[0].materialSlot].defaultMaterialAssetId == 101U, "OBJ importer did not bind first material slot");
     Require(asset->materialSlots[asset->sections[1].materialSlot].defaultMaterialAssetId == 102U, "OBJ importer did not bind second material slot");
 }
@@ -658,6 +693,20 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
             << "occlusionStrength 0.55\n"
             << "emissiveStrength 2.5\n"
             << "alphaCutoff 0.4\n"
+            << "clearcoatFactor 0.8\n"
+            << "clearcoatRoughnessFactor 0.2\n"
+            << "sheenColor 0.9 0.8 0.7\n"
+            << "sheenRoughnessFactor 0.45\n"
+            << "transmissionFactor 0.3\n"
+            << "thicknessFactor 0.12\n"
+            << "attenuationColor 0.6 0.7 0.8\n"
+            << "attenuationDistance 15.0\n"
+            << "subsurfaceColor 0.5 0.4 0.3\n"
+            << "subsurfaceFactor 0.25\n"
+            << "anisotropyStrength 0.5\n"
+            << "anisotropyRotation 0.125\n"
+            << "decalBlendMode PBR\n"
+            << "layerBlendMode MULTIPLY\n"
             << "alphaMode MASK\n"
             << "doubleSided true\n"
             << "albedoTextureAssetId 77\n"
@@ -665,11 +714,17 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
             << "metallicRoughnessTextureAssetId 79\n"
             << "occlusionTextureAssetId 80\n"
             << "emissiveTextureAssetId 81\n"
+            << "clearcoatTextureAssetId 82\n"
+            << "transmissionTextureAssetId 83\n"
+            << "layerMaskTextureAssetId 84\n"
             << "baseColorTexture Textures/albedo.kbtex\n"
             << "normalTexture Textures/normal.kbtex\n"
             << "metallicRoughnessTexture Textures/mr.kbtex\n"
             << "occlusionTexture Textures/ao.kbtex\n"
-            << "emissiveTexture Textures/emissive.kbtex\n";
+            << "emissiveTexture Textures/emissive.kbtex\n"
+            << "clearcoatTexture Textures/clearcoat.kbtex\n"
+            << "transmissionTexture Textures/transmission.kbtex\n"
+            << "layerMaskTexture Textures/layer-mask.kbtex\n";
     }
 
     kb::assets::AssetManager manager;
@@ -691,6 +746,20 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     Require(NearlyEqual(asset->desc.occlusionStrength, 0.55F), "Loaded material did not preserve occlusion strength");
     Require(NearlyEqual(asset->desc.emissiveStrength, 2.5F), "Loaded material did not preserve emissive strength");
     Require(NearlyEqual(asset->desc.alphaCutoff, 0.4F), "Loaded material did not preserve alpha cutoff");
+    Require(NearlyEqual(asset->desc.clearcoatFactor, 0.8F), "Loaded material did not preserve clearcoat factor");
+    Require(NearlyEqual(asset->desc.clearcoatRoughnessFactor, 0.2F), "Loaded material did not preserve clearcoat roughness");
+    Require(NearlyEqual(asset->desc.sheenColor[1], 0.8F), "Loaded material did not preserve sheen color");
+    Require(NearlyEqual(asset->desc.sheenRoughnessFactor, 0.45F), "Loaded material did not preserve sheen roughness");
+    Require(NearlyEqual(asset->desc.transmissionFactor, 0.3F), "Loaded material did not preserve transmission factor");
+    Require(NearlyEqual(asset->desc.thicknessFactor, 0.12F), "Loaded material did not preserve thickness factor");
+    Require(NearlyEqual(asset->desc.attenuationColor[2], 0.8F), "Loaded material did not preserve attenuation color");
+    Require(NearlyEqual(asset->desc.attenuationDistance, 15.0F), "Loaded material did not preserve attenuation distance");
+    Require(NearlyEqual(asset->desc.subsurfaceColor[0], 0.5F), "Loaded material did not preserve subsurface color");
+    Require(NearlyEqual(asset->desc.subsurfaceFactor, 0.25F), "Loaded material did not preserve subsurface factor");
+    Require(NearlyEqual(asset->desc.anisotropyStrength, 0.5F), "Loaded material did not preserve anisotropy strength");
+    Require(NearlyEqual(asset->desc.anisotropyRotation, 0.125F), "Loaded material did not preserve anisotropy rotation");
+    Require(asset->desc.decalBlendMode == RenderMaterialDecalBlendMode::Pbr, "Loaded material did not preserve decal blend mode");
+    Require(asset->desc.layerBlendMode == RenderMaterialLayerBlendMode::Multiply, "Loaded material did not preserve layer blend mode");
     Require(asset->desc.alphaMode == RenderMaterialAlphaMode::Mask, "Loaded material did not preserve alpha mode");
     Require(asset->desc.doubleSided, "Loaded material did not preserve double sided state");
     Require(asset->desc.albedoTextureAssetId == 77U, "Loaded material did not preserve albedo texture asset id");
@@ -698,11 +767,17 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     Require(asset->desc.metallicRoughnessTextureAssetId == 79U, "Loaded material did not preserve metallic-roughness texture asset id");
     Require(asset->desc.occlusionTextureAssetId == 80U, "Loaded material did not preserve occlusion texture asset id");
     Require(asset->desc.emissiveTextureAssetId == 81U, "Loaded material did not preserve emissive texture asset id");
+    Require(asset->desc.clearcoatTextureAssetId == 82U, "Loaded material did not preserve clearcoat texture asset id");
+    Require(asset->desc.transmissionTextureAssetId == 83U, "Loaded material did not preserve transmission texture asset id");
+    Require(asset->desc.layerMaskTextureAssetId == 84U, "Loaded material did not preserve layer mask texture asset id");
     Require(asset->albedoTexturePath == "Textures/albedo.kbtex", "Loaded material did not preserve albedo texture path");
     Require(asset->normalTexturePath == "Textures/normal.kbtex", "Loaded material did not preserve normal texture path");
     Require(asset->metallicRoughnessTexturePath == "Textures/mr.kbtex", "Loaded material did not preserve metallic-roughness texture path");
     Require(asset->occlusionTexturePath == "Textures/ao.kbtex", "Loaded material did not preserve occlusion texture path");
     Require(asset->emissiveTexturePath == "Textures/emissive.kbtex", "Loaded material did not preserve emissive texture path");
+    Require(asset->clearcoatTexturePath == "Textures/clearcoat.kbtex", "Loaded material did not preserve clearcoat texture path");
+    Require(asset->transmissionTexturePath == "Textures/transmission.kbtex", "Loaded material did not preserve transmission texture path");
+    Require(asset->layerMaskTexturePath == "Textures/layer-mask.kbtex", "Loaded material did not preserve layer mask texture path");
 
     std::filesystem::remove_all(root, error);
 }

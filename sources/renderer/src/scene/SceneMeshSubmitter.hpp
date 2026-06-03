@@ -3,6 +3,7 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneGpuDrivenCullingPass.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
@@ -28,7 +29,8 @@ public:
         SceneRenderDrawBudget drawBudget = {},
         SceneRenderLightingConfig lightingConfig = {},
         const SceneRenderShadowMapBinding* shadowMap = nullptr,
-        std::span<const std::uint64_t> selectedEntityIds = {}) const;
+        std::span<const std::uint64_t> selectedEntityIds = {},
+        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -40,7 +42,8 @@ public:
         SceneRenderDiagnostics* diagnostics = nullptr,
         SceneRenderDrawBudget drawBudget = {},
         SceneRenderLightingConfig lightingConfig = {},
-        std::span<const std::uint64_t> selectedEntityIds = {}) noexcept;
+        std::span<const std::uint64_t> selectedEntityIds = {},
+        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
@@ -71,6 +74,8 @@ private:
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackBlackTexture_ = BGFX_INVALID_HANDLE;
+    SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
+    mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
     mutable std::vector<SceneRenderDrawGroup> drawGroupsScratch_;
     mutable MeshPipelineBuildResult pipelineScratch_;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
@@ -9,6 +10,7 @@
 #include "kb/render/frame/RenderFrameState.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/post/PostProcessChain.hpp"
+#include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/post/ScenePostProcessRenderer.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -22,7 +24,9 @@
 #include "kb/render/shadow/ShadowMapResource.hpp"
 
 #include <cstdint>
+#include <array>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -157,6 +161,7 @@ public:
     [[nodiscard]] std::uint32_t BackbufferWidth() const noexcept;
     [[nodiscard]] std::uint32_t BackbufferHeight() const noexcept;
     [[nodiscard]] void* NativeWindowHandle() const noexcept;
+    [[nodiscard]] const RendererCapabilityReport& CapabilityReport() const noexcept;
     [[nodiscard]] std::uint32_t LastCompletedFrame() const noexcept;
     [[nodiscard]] RenderResourceRegistry* SceneResources() noexcept;
     [[nodiscard]] const RenderResourceRegistry* SceneResources() const noexcept;
@@ -164,6 +169,7 @@ public:
     [[nodiscard]] const SceneRenderResourceMap* SceneResourceMap() const noexcept;
     [[nodiscard]] SceneRenderSubmitStats LastSceneSubmitStats() const noexcept;
     [[nodiscard]] std::span<const SceneRenderPassSubmitStats> LastScenePassSubmitStats() const noexcept;
+    [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
@@ -171,6 +177,18 @@ public:
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
     void SetDefaultSceneLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
+    void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
+    void SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept;
+    [[nodiscard]] ScenePostProcessSettings DefaultPostProcessSettings() const noexcept;
+    [[nodiscard]] bool ConfigurePostProcessChain(const PostProcessChainDesc& desc);
+    [[nodiscard]] bool AddPostProcessPass(PostProcessPass pass);
+    [[nodiscard]] bool InsertPostProcessPass(std::uint32_t index, PostProcessPass pass);
+    [[nodiscard]] bool RemovePostProcessPass(PostProcessPassKind kind) noexcept;
+    [[nodiscard]] bool SetPostProcessPass(PostProcessPass pass);
+    [[nodiscard]] bool SetPostProcessPassEnabled(PostProcessPassKind kind, bool enabled) noexcept;
+    [[nodiscard]] std::optional<PostProcessPass> FindPostProcessPass(PostProcessPassKind kind) const noexcept;
+    [[nodiscard]] std::span<const PostProcessPass> PostProcessPasses() const noexcept;
     void SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept;
     [[nodiscard]] std::uint64_t RuntimeAssetDiscoveryIntervalFrames() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
@@ -180,6 +198,14 @@ private:
     [[nodiscard]] bool SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan);
     [[nodiscard]] RenderScene& RenderSceneFor(const kb::scene::Scene& scene);
     void ApplyRuntimeSceneResourceReserve();
+    struct TemporalViewportState {
+        RenderViewportId viewportId{};
+        std::uint32_t viewportIndex = 0;
+        RenderExtent extent{};
+        std::array<float, 16> previousViewProjection{};
+        bool hasHistory = false;
+    };
+    [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
     std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
     RenderSceneStore renderSceneStore_;
@@ -195,16 +221,21 @@ private:
     PostProcessChain postProcessChain_;
     SceneRenderSubmitStats lastSceneSubmitStats_{};
     std::vector<SceneRenderPassSubmitStats> lastScenePassSubmitStats_;
+    std::vector<SceneRenderExposureSubmitStats> lastSceneExposureStats_;
     SceneRenderDiagnostics lastSceneDiagnostics_{};
     RuntimeRenderResourceCache runtimeResourceCache_;
     RuntimeFrameResourceReferences frameReferences_;
     RuntimeRenderAssetDiscovery runtimeAssetDiscovery_;
     RuntimeMaterialResolver runtimeMaterialResolver_;
+    SceneExposureMeter sceneExposureMeter_;
     RuntimeSceneResourceReserveDesc runtimeSceneResourceReserveDesc_{};
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
+    ScenePostProcessSettings defaultPostProcessSettings_{};
+    bool gpuDrivenRuntimeDispatchEnabled_ = true;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;
     std::uint32_t lastCompletedFrame_ = 0;
+    std::vector<TemporalViewportState> temporalViewportStates_;
     DisplayConfig displayConfig_{};
     bool frameActive_ = false;
 };

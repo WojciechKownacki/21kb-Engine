@@ -14,6 +14,7 @@ namespace {
     return SceneRenderDrawBudget{
         .maxDrawCommands = requested.maxDrawCommands != 0U ? requested.maxDrawCommands : fallback.maxDrawCommands,
         .maxVisibleInstances = requested.maxVisibleInstances != 0U ? requested.maxVisibleInstances : fallback.maxVisibleInstances,
+        .maxDroppedInstances = requested.maxDroppedInstances != 0U ? requested.maxDroppedInstances : fallback.maxDroppedInstances,
     };
 }
 
@@ -21,6 +22,8 @@ namespace {
     constexpr SceneRenderLightingConfig defaultConfig{};
     return SceneRenderLightingConfig{
         .maxForwardLights = requested.maxForwardLights != defaultConfig.maxForwardLights ? requested.maxForwardLights : fallback.maxForwardLights,
+        .lightingPath = requested.lightingPath != defaultConfig.lightingPath ? requested.lightingPath : fallback.lightingPath,
+        .clusterDimensions = requested.clusterDimensions != defaultConfig.clusterDimensions ? requested.clusterDimensions : fallback.clusterDimensions,
         .ambientColor = requested.ambientColor != defaultConfig.ambientColor ? requested.ambientColor : fallback.ambientColor,
         .ambientIntensity = requested.ambientIntensity != defaultConfig.ambientIntensity ? requested.ambientIntensity : fallback.ambientIntensity,
         .environmentMode = requested.environmentMode != defaultConfig.environmentMode ? requested.environmentMode : fallback.environmentMode,
@@ -28,12 +31,20 @@ namespace {
         .environmentGroundColor = requested.environmentGroundColor != defaultConfig.environmentGroundColor ? requested.environmentGroundColor : fallback.environmentGroundColor,
         .environmentDiffuseIntensity = requested.environmentDiffuseIntensity != defaultConfig.environmentDiffuseIntensity ? requested.environmentDiffuseIntensity : fallback.environmentDiffuseIntensity,
         .environmentSpecularIntensity = requested.environmentSpecularIntensity != defaultConfig.environmentSpecularIntensity ? requested.environmentSpecularIntensity : fallback.environmentSpecularIntensity,
+        .ibl = requested.ibl.HasEnvironment() || requested.ibl.reflectionProbeCount != 0U ? requested.ibl : fallback.ibl,
+        .globalIllumination = requested.globalIllumination != defaultConfig.globalIllumination ? requested.globalIllumination : fallback.globalIllumination,
         .shadowMapSize = requested.shadowMapSize != defaultConfig.shadowMapSize ? requested.shadowMapSize : fallback.shadowMapSize,
+        .shadowCascadeCount = requested.shadowCascadeCount != defaultConfig.shadowCascadeCount ? requested.shadowCascadeCount : fallback.shadowCascadeCount,
+        .shadowAtlasSize = requested.shadowAtlasSize != defaultConfig.shadowAtlasSize ? requested.shadowAtlasSize : fallback.shadowAtlasSize,
         .shadowDistance = requested.shadowDistance != defaultConfig.shadowDistance ? requested.shadowDistance : fallback.shadowDistance,
         .shadowDepthBias = requested.shadowDepthBias != defaultConfig.shadowDepthBias ? requested.shadowDepthBias : fallback.shadowDepthBias,
         .shadowStrength = requested.shadowStrength != defaultConfig.shadowStrength ? requested.shadowStrength : fallback.shadowStrength,
         .shadowFilter = requested.shadowFilter != defaultConfig.shadowFilter ? requested.shadowFilter : fallback.shadowFilter,
         .shadowsEnabled = requested.shadowsEnabled != defaultConfig.shadowsEnabled ? requested.shadowsEnabled : fallback.shadowsEnabled,
+        .stableShadowCascades = requested.stableShadowCascades != defaultConfig.stableShadowCascades ? requested.stableShadowCascades : fallback.stableShadowCascades,
+        .perLightShadowCaching = requested.perLightShadowCaching != defaultConfig.perLightShadowCaching ? requested.perLightShadowCaching : fallback.perLightShadowCaching,
+        .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
+        .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
     };
 }
 
@@ -93,7 +104,8 @@ void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const
             &lastDiagnostics_,
             effectiveDrawBudget,
             effectiveLightingConfig,
-            selectedEntityIds);
+            selectedEntityIds,
+            gpuDrivenRuntimeSupport_);
         return;
     }
 
@@ -107,7 +119,7 @@ void SceneRenderer::SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const
     bgfx::touch(viewId);
 
     if (meshSubmitter_ != nullptr) {
-        lastSubmitStats_ = meshSubmitter_->Submit(viewId, renderScene, resources_, resourceMap_, pass, camera, &lastDiagnostics_, effectiveDrawBudget, effectiveLightingConfig, shadowMap, selectedEntityIds);
+        lastSubmitStats_ = meshSubmitter_->Submit(viewId, renderScene, resources_, resourceMap_, pass, camera, &lastDiagnostics_, effectiveDrawBudget, effectiveLightingConfig, shadowMap, selectedEntityIds, gpuDrivenRuntimeSupport_);
     }
 }
 
@@ -125,6 +137,14 @@ void SceneRenderer::SetDefaultLightingConfig(SceneRenderLightingConfig lightingC
 
 SceneRenderLightingConfig SceneRenderer::DefaultLightingConfig() const noexcept {
     return defaultLightingConfig_;
+}
+
+void SceneRenderer::SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport support) noexcept {
+    gpuDrivenRuntimeSupport_ = support;
+}
+
+SceneGpuDrivenFeatureSupport SceneRenderer::GpuDrivenRuntimeSupport() const noexcept {
+    return gpuDrivenRuntimeSupport_;
 }
 
 void SceneRenderer::TickFrame() noexcept {
@@ -167,7 +187,9 @@ SceneRenderSubmitStats SceneRenderer::ValidateSceneResources(const RenderScene& 
         nullptr,
         nullptr,
         defaultDrawBudget_,
-        defaultLightingConfig_);
+        defaultLightingConfig_,
+        {},
+        gpuDrivenRuntimeSupport_);
 }
 
 SceneRenderDiagnostics SceneRenderer::ValidateSceneDiagnostics(const RenderScene& renderScene) const {
@@ -186,7 +208,9 @@ SceneRenderDiagnostics SceneRenderer::ValidateSceneDiagnostics(const RenderScene
         nullptr,
         &diagnostics,
         defaultDrawBudget_,
-        defaultLightingConfig_));
+        defaultLightingConfig_,
+        {},
+        gpuDrivenRuntimeSupport_));
     return diagnostics;
 }
 

@@ -57,7 +57,10 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
     }
     const std::optional<RECT> assetContent = EditorPanelContentResolver::Resolve(DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    const std::optional<EditorResolvedPanelContent> sceneContent = EditorPanelContentResolver::ResolvePanel(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    std::optional<EditorResolvedPanelContent> sceneContent = EditorPanelContentResolver::ResolvePanel(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (!sceneContent.has_value()) {
+        sceneContent = EditorPanelContentResolver::ResolvePanel(DockPanelKind::Game, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    }
     const bool inAssetPanel = assetContent.has_value() && PointInRect(*assetContent, x, y);
     const bool inHierarchyPanel = hierarchyContent.has_value() && PointInRect(*hierarchyContent, x, y);
 
@@ -73,7 +76,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return 0;
         }
-        if (PointInRect(sceneToolbar.cameraButton, x, y)) {
+        const DockPanel* viewportPanel = dockModel_.Queries().FindPanel(sceneContent->panelId);
+        if (viewportPanel != nullptr && viewportPanel->kind == DockPanelKind::Scene && PointInRect(sceneToolbar.cameraButton, x, y)) {
             sceneContext_.ViewportPreview(sceneContent->panelId).CycleCameraMode();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return 0;

@@ -2,11 +2,13 @@ add_library(kb_renderer STATIC
     include/kb/render/BgfxContext.hpp
     include/kb/render/DisplayConfig.hpp
     include/kb/render/Renderer.hpp
+    include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
     include/kb/render/SceneDepthPolicy.hpp
     include/kb/render/SceneFramebuffer.hpp
     include/kb/render/SceneRenderTarget.hpp
     include/kb/render/SceneRenderTargetFormat.hpp
+    include/kb/render/ShaderManifest.hpp
     include/kb/render/ShaderLoader.hpp
     include/kb/render/frame/FinalCompositePass.hpp
     include/kb/render/frame/FullscreenTexturePass.hpp
@@ -27,6 +29,7 @@ add_library(kb_renderer STATIC
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
+    include/kb/render/post/SceneExposureMeter.hpp
     include/kb/render/post/SceneDisplayCompositeRenderer.hpp
     include/kb/render/post/ScenePostProcessRenderer.hpp
     include/kb/render/post/ScenePostProcessTargets.hpp
@@ -44,6 +47,10 @@ add_library(kb_renderer STATIC
     include/kb/render/runtime/RuntimeRenderResourceCache.hpp
     include/kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp
     include/kb/render/scene/EcsRenderSceneSynchronizer.hpp
+    include/kb/render/scene/SceneGpuDrivenCullingPass.hpp
+    include/kb/render/scene/SceneGpuDrivenFeatureState.hpp
+    include/kb/render/scene/SceneGpuDrivenFrameResources.hpp
+    include/kb/render/scene/SceneGpuDrivenParityValidator.hpp
     include/kb/render/scene/MeshPipeline.hpp
     include/kb/render/scene/RenderInstanceBuffer.hpp
     include/kb/render/scene/RenderProxyId.hpp
@@ -59,9 +66,11 @@ add_library(kb_renderer STATIC
     src/BgfxContext.cpp
     src/DisplayConfig.cpp
     src/Renderer.cpp
+    src/RendererCapabilityReport.cpp
     src/SceneFramebuffer.cpp
     src/SceneRenderTarget.cpp
     src/SceneRenderTargetFormat.cpp
+    src/ShaderManifest.cpp
     src/ShaderLoader.cpp
     src/frame/EditorRenderPassSubmitter.cpp
     src/frame/FinalCompositePass.cpp
@@ -75,6 +84,7 @@ add_library(kb_renderer STATIC
     src/overlay/SelectionOutlineCompositePass.cpp
     src/post/PostProcessChain.cpp
     src/post/PostProcessRenderTarget.cpp
+    src/post/SceneExposureMeter.cpp
     src/post/SceneDisplayCompositeRenderer.cpp
     src/post/ScenePostProcessRenderer.cpp
     src/post/ScenePostProcessTargets.cpp
@@ -91,6 +101,8 @@ add_library(kb_renderer STATIC
     src/scene/EcsRenderSceneSynchronizer.cpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
+    src/scene/SceneGpuDrivenCullingPass.cpp
+    src/scene/SceneGpuDrivenFrameResources.cpp
     src/scene/MeshPipeline.cpp
     src/scene/RenderInstanceBuffer.cpp
     src/scene/RenderScene.cpp
@@ -109,6 +121,57 @@ add_library(kb_renderer STATIC
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/overdrawoptimizer.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vcacheoptimizer.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/vfetchoptimizer.cpp
+)
+
+set(KB_RENDERER_SHADER_PROFILES
+    dxbc
+    dxil
+    spirv
+    glsl
+    essl
+    metal
+)
+
+set(KB_RENDERER_SHADER_MANIFEST
+    cs_hzb_downsample.sc
+    cs_hzb_seed.sc
+    cs_instance_cull.sc
+    cs_instance_cull_clear.sc
+    cs_instance_cull_finalize.sc
+    cs_levg_meshlet_clear.sc
+    cs_levg_meshlet_cull.sc
+    cs_levg_meshlet_finalize.sc
+    cs_massive_fill.sc
+    fs_editor_gizmo.sc
+    fs_editor_gizmo_resolve.sc
+    fs_editor_grid.sc
+    fs_editor_selection_outline.sc
+    fs_editor_viewport_grid.sc
+    fs_leui_rect.sc
+    fs_lit.sc
+    fs_mesh.sc
+    fs_mesh_instanced.sc
+    fs_mesh_selection_instanced.sc
+    fs_mesh_shadow_instanced.sc
+    fs_post_bloom_blur.sc
+    fs_post_bloom_combine.sc
+    fs_post_bloom_prefilter.sc
+    fs_post_exposure_luminance.sc
+    fs_post_motion_vectors.sc
+    fs_post_taa_resolve.sc
+    fs_present_tex.sc
+    vs_editor_gizmo.sc
+    vs_editor_grid.sc
+    vs_editor_selection_outline.sc
+    vs_editor_viewport_grid.sc
+    vs_leui_rect.sc
+    vs_lit.sc
+    vs_lit_trs.sc
+    vs_lit_trs_gpu_cull.sc
+    vs_mesh.sc
+    vs_mesh_instanced.sc
+    vs_mesh_shadow_instanced.sc
+    vs_present.sc
 )
 
 if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
@@ -145,6 +208,9 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_prefilter.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_exposure_luminance.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc
@@ -156,10 +222,25 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         OUT_FILES_VAR KB_RENDERER_GENERATED_FRAGMENT_SHADERS
     )
 
+    bgfx_compile_shaders(
+        TYPE COMPUTE
+        SHADERS
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_clear.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/cs_instance_cull_finalize.sc
+        VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
+        OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
+        INCLUDE_DIRS
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}
+            ${KB_RENDERER_BGFX_SHADER_INCLUDE_DIR}
+        OUT_FILES_VAR KB_RENDERER_GENERATED_COMPUTE_SHADERS
+    )
+
     add_custom_target(kb_renderer_generated_shaders
         DEPENDS
             ${KB_RENDERER_GENERATED_VERTEX_SHADERS}
             ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
+            ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
     )
 
     add_custom_target(kb_renderer_shaders ALL
@@ -185,7 +266,19 @@ else()
         VERBATIM
     )
 endif()
-add_dependencies(kb_renderer kb_renderer_shaders)
+
+add_custom_target(kb_renderer_shader_manifest ALL
+    COMMAND ${CMAKE_COMMAND}
+        "-DKB_SHADER_ROOT=${CMAKE_BINARY_DIR}/shaders"
+        "-DKB_SHADER_PROFILES=$<JOIN:${KB_RENDERER_SHADER_PROFILES},$<SEMICOLON>>"
+        "-DKB_SHADER_MANIFEST=$<JOIN:${KB_RENDERER_SHADER_MANIFEST},$<SEMICOLON>>"
+        -P "${CMAKE_SOURCE_DIR}/CMake/ValidateBgfxShaderManifest.cmake"
+    DEPENDS kb_renderer_shaders
+    COMMENT "Validate bgfx shader manifest variants"
+    VERBATIM
+)
+
+add_dependencies(kb_renderer kb_renderer_shader_manifest)
 
 target_include_directories(kb_renderer
     PUBLIC
@@ -224,13 +317,16 @@ if(BUILD_TESTING)
         tests/PostProcessChainTests.cpp
         tests/RenderFramePipelineTests.cpp
         tests/RenderResourceRegistryTests.cpp
+        tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
         tests/MeshPipelineTests.cpp
         tests/SceneDisplayCompositeTests.cpp
+        tests/SceneExposureMeterTests.cpp
         tests/SceneDepthPolicyTests.cpp
         tests/RenderSceneSyncTests.cpp
         tests/SceneRenderTargetFormatTests.cpp
         tests/SceneRenderExtractorTests.cpp
+        tests/ShaderManifestTests.cpp
     )
 
     target_link_libraries(kb_renderer_tests

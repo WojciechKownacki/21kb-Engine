@@ -19,6 +19,14 @@ struct RenderMaterialAssetData {
     std::string metallicRoughnessTexturePath;
     std::string occlusionTexturePath;
     std::string emissiveTexturePath;
+    std::string clearcoatTexturePath;
+    std::string clearcoatRoughnessTexturePath;
+    std::string sheenColorTexturePath;
+    std::string transmissionTexturePath;
+    std::string thicknessTexturePath;
+    std::string anisotropyTexturePath;
+    std::string decalTexturePath;
+    std::string layerMaskTexturePath;
 };
 
 class RenderMaterialAssetLoader final : public kb::assets::IAssetLoader {

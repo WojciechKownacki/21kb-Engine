@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/RendererCapabilityReport.hpp"
 
 #include <bgfx/bgfx.h>
 #include <cstdint>
@@ -31,6 +32,7 @@ public:
     [[nodiscard]] std::uint32_t Width() const noexcept;
     [[nodiscard]] std::uint32_t Height() const noexcept;
     [[nodiscard]] void* NativeWindowHandle() const noexcept;
+    [[nodiscard]] const RendererCapabilityReport& CapabilityReport() const noexcept;
 
 private:
     [[nodiscard]] bool InitializeImpl(std::uint32_t width, std::uint32_t height, void* nwh, void* ndt, const DisplayConfig& config, bgfx::RendererType::Enum preferredBackend);
@@ -41,6 +43,7 @@ private:
     std::uint32_t resetFlags_ = 0;
     void* nativeWindowHandle_ = nullptr;
     void* nativeDisplayHandle_ = nullptr;
+    RendererCapabilityReport capabilityReport_{};
     std::unique_ptr<BgfxEngineCallback> callback_;
 };
 

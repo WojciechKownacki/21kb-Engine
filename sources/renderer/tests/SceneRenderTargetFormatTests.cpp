@@ -4,6 +4,7 @@
 #include "kb/render/SceneRenderTargetFormat.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
+#include "kb/render/resources/NativeWindowFramebuffer.hpp"
 
 #include <string_view>
 
@@ -88,10 +89,48 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
         .bloomTexture = bgfx::TextureHandle{4U},
         .pingFrameBuffer = bgfx::FrameBufferHandle{5U},
         .pingTexture = bgfx::TextureHandle{6U},
+        .motionVectorFrameBuffer = bgfx::FrameBufferHandle{11U},
+        .motionVectorTexture = bgfx::TextureHandle{12U},
+        .temporalHistoryFrameBuffer = bgfx::FrameBufferHandle{13U},
+        .temporalHistoryTexture = bgfx::TextureHandle{14U},
+        .previousTemporalHistoryTexture = bgfx::TextureHandle{16U},
+        .temporalHistoryFrameBuffers = {{
+            bgfx::FrameBufferHandle{13U},
+            bgfx::FrameBufferHandle{15U},
+        }},
+        .temporalHistoryTextures = {{
+            bgfx::TextureHandle{14U},
+            bgfx::TextureHandle{16U},
+        }},
         .combineFrameBuffer = bgfx::FrameBufferHandle{7U},
         .combineTexture = bgfx::TextureHandle{8U},
         .finalFrameBuffer = bgfx::FrameBufferHandle{9U},
         .finalTexture = bgfx::TextureHandle{10U},
+        .bloomMipFrameBuffers = {{
+            bgfx::FrameBufferHandle{3U},
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+        }},
+        .pingMipFrameBuffers = {{
+            bgfx::FrameBufferHandle{5U},
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+            BGFX_INVALID_HANDLE,
+        }},
+        .bloomMipExtents = {{
+            RenderExtent{320U, 200U},
+            RenderExtent{},
+            RenderExtent{},
+            RenderExtent{},
+            RenderExtent{},
+            RenderExtent{},
+        }},
+        .bloomMipCount = 1U,
         .extent = RenderExtent{320U, 200U},
         .enabled = true,
     };
@@ -110,6 +149,31 @@ void DefaultPostProcessTargetsBindingIsDisabledAndInvalid() {
     Require(!bgfx::isValid(binding.finalTexture), "Default final texture should be invalid");
 }
 
+void NativeWindowFramebufferDescDefaultsToColorOnlyPresentation() {
+    Require(NativeWindowFramebufferDesc{
+        .nativeWindow = reinterpret_cast<void*>(0x1),
+        .width = 128U,
+        .height = 64U,
+    }.IsValid(), "NativeWindowFramebufferDesc rejected default color-only presentation");
+
+    const NativeWindowFramebufferDesc desc{
+        .nativeWindow = reinterpret_cast<void*>(0x1),
+        .width = 128U,
+        .height = 64U,
+    };
+    Require(desc.colorFormat == bgfx::TextureFormat::BGRA8, "Native presentation should default to BGRA8 color");
+    Require(desc.depthFormat == bgfx::TextureFormat::Count, "Native presentation should not allocate depth by default");
+
+    Require(!NativeWindowFramebufferDesc{.width = 128U, .height = 64U}.IsValid(), "Native presentation accepted a null window");
+    Require(!NativeWindowFramebufferDesc{.nativeWindow = reinterpret_cast<void*>(0x1), .width = 0U, .height = 64U}.IsValid(), "Native presentation accepted a zero width");
+    Require(!NativeWindowFramebufferDesc{
+        .nativeWindow = reinterpret_cast<void*>(0x1),
+        .width = 128U,
+        .height = 64U,
+        .colorFormat = bgfx::TextureFormat::Count,
+    }.IsValid(), "Native presentation accepted an invalid color format");
+}
+
 } // namespace
 
 void RunSceneRenderTargetFormatTests() {
@@ -121,6 +185,7 @@ void RunSceneRenderTargetFormatTests() {
     RenderTargetDescSupportsSceneFallbackFormats();
     SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled();
     DefaultPostProcessTargetsBindingIsDisabledAndInvalid();
+    NativeWindowFramebufferDescDefaultsToColorOnlyPresentation();
 }
 
 } // namespace kb::render::tests

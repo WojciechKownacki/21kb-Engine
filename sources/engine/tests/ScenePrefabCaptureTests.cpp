@@ -141,6 +141,11 @@ void RunPrefabAssetRoundTripTest() {
                 .kind = kb::scene::LightKind::Spot,
                 .intensity = 6.0F,
                 .range = 12.0F,
+                .areaWidth = 2.0F,
+                .areaHeight = 0.5F,
+                .contactShadowLength = 0.3F,
+                .volumetricScattering = 0.2F,
+                .castsShadow = false,
             },
         },
     });
@@ -170,6 +175,9 @@ void RunPrefabAssetRoundTripTest() {
     const kb::scene::LightComponent* light = target.Components().Lights().TryGet(instance.ObjectAt(childNode).Entity());
     kb::tests::Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 101 && !meshRenderer->castsShadow, "Loaded prefab mesh renderer was not preserved");
     kb::tests::Require(light != nullptr && light->kind == kb::scene::LightKind::Spot && kb::tests::NearlyEqual(light->intensity, 6.0F), "Loaded prefab light was not preserved");
+    kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->areaWidth, 2.0F) && kb::tests::NearlyEqual(light->areaHeight, 0.5F), "Loaded prefab light area size was not preserved");
+    kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->contactShadowLength, 0.3F) && kb::tests::NearlyEqual(light->volumetricScattering, 0.2F), "Loaded prefab light production controls were not preserved");
+    kb::tests::Require(light != nullptr && !light->castsShadow, "Loaded prefab light shadow flag was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);
     const kb::scene::TransformComponent childTransform = target.Transforms().Get(instance.ObjectAt(childNode));

@@ -1,5 +1,7 @@
 #include "kb/render/frame/RenderFramePipeline.hpp"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace kb::render {
@@ -34,6 +36,21 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
         .id = RenderGraphResource::SelectionMask,
         .target = Target(RenderTargetRole::SelectionMask, RenderTargetFormat::R8, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::ExposureReadback,
+        .target = Target(RenderTargetRole::PostProcessColor, RenderTargetFormat::Rgba8, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::MotionVectors,
+        .target = Target(RenderTargetRole::PostProcessColor, RenderTargetFormat::Rgba16F, extent, true, true),
+        .lifetime = RenderGraphResourceLifetime::Transient,
+    }));
+    static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
+        .id = RenderGraphResource::TemporalHistory,
+        .target = Target(RenderTargetRole::PostProcessColor, RenderTargetFormat::Rgba16F, extent, true, true),
         .lifetime = RenderGraphResourceLifetime::Transient,
     }));
     static_cast<void>(graph.AddResource(RenderGraphResourceDesc{
@@ -83,8 +100,17 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     case RenderPassKind::EditorSelectionMask:
         pass.Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::SelectionMask);
         break;
+    case RenderPassKind::PostProcessExposureReadback:
+        pass.Reads(RenderGraphResource::SceneColor).Writes(RenderGraphResource::ExposureReadback);
+        break;
+    case RenderPassKind::PostProcessMotionVectors:
+        pass.Reads(RenderGraphResource::SceneDepth).Writes(RenderGraphResource::MotionVectors);
+        break;
+    case RenderPassKind::PostProcessTaaResolve:
+        pass.Reads(RenderGraphResource::SceneColor).Reads(RenderGraphResource::MotionVectors).Writes(RenderGraphResource::TemporalHistory);
+        break;
     case RenderPassKind::PostProcessBloomPrefilter:
-        pass.Reads(RenderGraphResource::SceneColor).Writes(RenderGraphResource::BloomPrefilter);
+        pass.Reads(RenderGraphResource::TemporalHistory).Writes(RenderGraphResource::BloomPrefilter);
         break;
     case RenderPassKind::PostProcessBloomBlurH:
         pass.Reads(RenderGraphResource::BloomPrefilter).Writes(RenderGraphResource::BloomPing);
@@ -99,7 +125,7 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
         pass.Reads(RenderGraphResource::BloomCombine).Writes(RenderGraphResource::PostProcessFinal);
         break;
     case RenderPassKind::EditorSceneOverlays:
-        pass.Reads(RenderGraphResource::SceneDepth).Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::PostProcessFinal);
+        pass.Reads(RenderGraphResource::FinalOutput).Writes(RenderGraphResource::FinalOutput);
         break;
     case RenderPassKind::FinalComposite:
         pass.Reads(RenderGraphResource::PostProcessFinal).Writes(RenderGraphResource::FinalOutput);
@@ -117,6 +143,23 @@ void CopyGraph(RenderPassGraph& graph, RenderViewportPlan& plan) {
 
     const std::span<const std::uint16_t> viewOrder = graph.ViewOrder();
     plan.viewOrder.assign(viewOrder.begin(), viewOrder.end());
+    if (plan.viewport.viewportIndex == 0U &&
+        std::ranges::find(plan.viewOrder, ViewId::GpuCompute) == plan.viewOrder.end()) {
+        const auto opaque = std::ranges::find(plan.viewOrder, plan.viewIds.opaqueScene);
+        if (opaque != plan.viewOrder.end()) {
+            plan.viewOrder.insert(opaque, ViewId::GpuCompute);
+        }
+    }
+    const auto blurV = std::ranges::find(plan.viewOrder, plan.viewIds.postProcessBloomBlurV);
+    if (blurV != plan.viewOrder.end()) {
+        auto insertAt = std::next(blurV);
+        for (std::size_t mip = 0; mip < RenderViewportViewIds::kBloomPyramidExtraMipCount; ++mip) {
+            insertAt = plan.viewOrder.insert(insertAt, plan.viewIds.postProcessBloomDownsampleViews[mip]);
+            insertAt = plan.viewOrder.insert(std::next(insertAt), plan.viewIds.postProcessBloomMipBlurHViews[mip]);
+            insertAt = plan.viewOrder.insert(std::next(insertAt), plan.viewIds.postProcessBloomMipBlurVViews[mip]);
+            insertAt = std::next(insertAt);
+        }
+    }
     plan.graphValidation = graph.ValidateRequiredPasses();
     plan.graphCompile = graph.Compile();
 }

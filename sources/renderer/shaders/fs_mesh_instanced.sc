@@ -43,6 +43,22 @@ vec3 FresnelSchlick(float cosTheta, vec3 f0)
     return f0 + (vec3(1.0, 1.0, 1.0) - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 f0, float roughness)
+{
+    vec3 roughF0 = max(vec3_splat(1.0 - roughness), f0);
+    return f0 + (roughF0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+float DiffuseBurley(float nDotV, float nDotL, float lDotH, float roughness)
+{
+    float energyBias = mix(0.0, 0.5, roughness);
+    float energyFactor = mix(1.0, 1.0 / 1.51, roughness);
+    float fd90 = energyBias + 2.0 * lDotH * lDotH * roughness;
+    float lightScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotL, 0.0, 1.0), 5.0);
+    float viewScatter = 1.0 + (fd90 - 1.0) * pow(clamp(1.0 - nDotV, 0.0, 1.0), 5.0);
+    return lightScatter * viewScatter * energyFactor;
+}
+
 vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos, vec3 albedo, float metallic, float roughness, float occlusion)
 {
     vec4 dirKind = u_lightDirKind[lightIndex];
@@ -78,12 +94,13 @@ vec3 EvaluateSceneLight(int lightIndex, vec3 normal, vec3 viewDir, vec3 worldPos
     float nDotV = max(dot(normal, viewDir), 0.0001);
     float nDotH = max(dot(normal, halfVector), 0.0);
     float hDotV = max(dot(halfVector, viewDir), 0.0);
+    float lDotH = max(dot(lightVector, halfVector), 0.0);
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
     vec3 fresnel = FresnelSchlick(hDotV, f0);
     float distribution = DistributionGgx(nDotH, roughness);
     float geometry = GeometrySchlickGgx(nDotV, roughness) * GeometrySchlickGgx(nDotL, roughness);
     vec3 specular = (distribution * geometry * fresnel) / max(4.0 * nDotV * nDotL, 0.0001);
-    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * 0.31830989 * occlusion;
+    vec3 diffuse = (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * albedo * (0.31830989 * DiffuseBurley(nDotV, nDotL, lDotH, roughness)) * occlusion;
     vec3 radiance = colorIntensity.rgb * (colorIntensity.a * attenuation);
     return (diffuse + specular) * radiance * nDotL;
 }
@@ -102,11 +119,13 @@ vec3 EvaluateEnvironment(vec3 normal, vec3 viewDir, vec3 albedo, float metallic,
         return vec3(0.0, 0.0, 0.0);
     }
 
-    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (1.0 - metallic) * occlusion * u_environmentParams.y;
+    float nDotV = max(dot(normal, viewDir), 0.0);
     vec3 f0 = mix(vec3(0.04, 0.04, 0.04), albedo, metallic);
-    vec3 fresnel = FresnelSchlick(max(dot(normal, viewDir), 0.0), f0);
+    vec3 fresnel = FresnelSchlickRoughness(nDotV, f0, roughness);
+    vec3 diffuseEnv = EnvironmentColor(normal) * albedo * (vec3(1.0, 1.0, 1.0) - fresnel) * (1.0 - metallic) * occlusion * u_environmentParams.y;
     vec3 reflectionDir = reflect(-viewDir, normal);
-    vec3 specularEnv = EnvironmentColor(reflectionDir) * fresnel * (1.0 - roughness) * u_environmentParams.z;
+    float specularEnergy = mix(1.0, 0.18, roughness * roughness);
+    vec3 specularEnv = EnvironmentColor(reflectionDir) * fresnel * specularEnergy * u_environmentParams.z;
     return diffuseEnv + specularEnv;
 }
 

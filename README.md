@@ -41,6 +41,12 @@ Implemented foundations:
   regions,
 - third-party dependency area with license documentation.
 
+Renderer runtime stats currently distinguish GPU-driven CPU candidates from
+actual GPU dispatch execution. `SceneRenderSubmitStats` exposes candidate
+counts, selected GPU-driven feature state, counter source, dispatch/submit
+counts and fallback reasons so runtime callers can tell whether a frame used
+CPU validation, real GPU counters, or a lower-quality fallback path.
+
 Vendored third-party libraries currently include:
 
 - bgfx,

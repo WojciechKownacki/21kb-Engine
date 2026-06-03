@@ -5,6 +5,7 @@
 #include "kb/render/frame/RenderFrameState.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 
+#include <algorithm>
 #include <array>
 #include <span>
 
@@ -35,7 +36,7 @@ void RenderPassGraphValidatesRequiredPasses() {
     RenderPassGraph graph = RenderFramePipeline{}.BuildViewportGraph(RenderViewportViewIdAllocator::ForViewportIndex(0U));
     const RenderPassGraphValidationResult result = graph.ValidateRequiredPasses();
     Require(result.Succeeded(), RenderPassGraphValidationStatusName(result.status));
-    Require(graph.Resources().size() == 9U, "RenderPassGraph did not declare the viewport graph resources");
+    Require(graph.Resources().size() == 12U, "RenderPassGraph did not declare the viewport graph resources");
     Require(graph.FindResource(RenderGraphResource::SceneColor) != nullptr, "RenderPassGraph did not declare SceneColor");
     Require(graph.FindResource(RenderGraphResource::ShadowMap) != nullptr, "RenderPassGraph did not declare ShadowMap");
     Require(graph.FindResource(RenderGraphResource::FinalOutput) != nullptr, "RenderPassGraph did not declare FinalOutput");
@@ -48,8 +49,18 @@ void RenderPassGraphValidatesRequiredPasses() {
     Require(compile.Succeeded(), RenderPassGraphValidationStatusName(compile.validation.status));
     Require(compile.resourceUsages.size() == graph.Resources().size(), "RenderPassGraph compile did not emit usage for every resource");
     Require(compile.externalResourceCount == 4U, "RenderPassGraph compile reported wrong external resource count");
-    Require(compile.transientResourceCount == 5U, "RenderPassGraph compile reported wrong transient resource count");
+    Require(compile.transientResourceCount == 8U, "RenderPassGraph compile reported wrong transient resource count");
     Require(compile.estimatedTransientBytes > 0U, "RenderPassGraph compile did not estimate transient memory");
+    Require(compile.estimatedAliasedTransientBytes > 0U, "RenderPassGraph compile did not estimate aliased transient memory");
+    Require(compile.estimatedAliasedTransientBytes <= compile.estimatedTransientBytes, "RenderPassGraph aliased memory estimate exceeded unaliased estimate");
+    Require(compile.transientAliasingSavingsBytes == compile.estimatedTransientBytes - compile.estimatedAliasedTransientBytes, "RenderPassGraph reported inconsistent aliasing savings");
+    Require(!compile.barriers.empty(), "RenderPassGraph compile did not emit resource barriers");
+    Require(!compile.aliases.empty(), "RenderPassGraph compile did not assign transient alias slots");
+    Require(compile.passProfiles.size() == RenderPassKindCount, "RenderPassGraph compile did not profile every enabled bgfx/logical pass");
+    const auto finalOutputBarrier = std::ranges::find_if(compile.barriers, [](const RenderGraphResourceBarrier& barrier) {
+        return barrier.resource == RenderGraphResource::FinalOutput;
+    });
+    Require(finalOutputBarrier != compile.barriers.end(), "RenderPassGraph compile did not emit FinalOutput ordering barrier");
 }
 
 void RenderPassGraphValidatorReportsMissingDisabledAndInvalidPasses() {
@@ -132,9 +143,17 @@ void PrimaryViewportIdsUseCanonicalRuntimeViews() {
     Require(ids.opaqueScene == ViewId::Scene3D, "Primary opaque scene view id is not Scene3D");
     Require(ids.transparentScene == ViewId::TransparentScene, "Primary transparent scene view id is not canonical");
     Require(ids.selectionMask == ViewId::EditorSelectionMask, "Primary selection mask view id is not canonical");
+    Require(ids.postProcessExposureReadback == ViewId::PostProcessExposureReadback, "Primary exposure readback view id is not canonical");
+    Require(ids.postProcessMotionVectors == ViewId::PostProcessMotionVectors, "Primary motion-vector view id is not canonical");
+    Require(ids.postProcessTaaResolve == ViewId::PostProcessTaaResolve, "Primary TAA resolve view id is not canonical");
     Require(ids.postProcessBloomPrefilter == ViewId::PostProcessBloomPrefilter, "Primary bloom prefilter view id is not canonical");
     Require(ids.postProcessBloomBlurH == ViewId::PostProcessBloomBlurH, "Primary bloom blur H view id is not canonical");
     Require(ids.postProcessBloomBlurV == ViewId::PostProcessBloomBlurV, "Primary bloom blur V view id is not canonical");
+    for (std::size_t mip = 0; mip < RenderViewportViewIds::kBloomPyramidExtraMipCount; ++mip) {
+        Require(ids.postProcessBloomDownsampleViews[mip] == ViewId::PostProcessBloomDownsampleStart + mip, "Primary bloom downsample mip view id is not canonical");
+        Require(ids.postProcessBloomMipBlurHViews[mip] == ViewId::PostProcessBloomMipBlurHStart + mip, "Primary bloom mip blur H view id is not canonical");
+        Require(ids.postProcessBloomMipBlurVViews[mip] == ViewId::PostProcessBloomMipBlurVStart + mip, "Primary bloom mip blur V view id is not canonical");
+    }
     Require(ids.postProcessHdrCombine == ViewId::PostProcessHdrCombine, "Primary HDR combine view id is not canonical");
     Require(ids.postProcessHdrFinalize == ViewId::PostProcessHdrFinalize, "Primary HDR finalize view id is not canonical");
     Require(ids.sceneOverlays == ViewId::Overlay, "Primary overlay view id is not canonical");
@@ -150,11 +169,12 @@ void DetachedViewportIdsAreContiguousAndBounded() {
     Require(first.shadowDepth == ViewId::DetachedViewportStart, "First detached viewport shadow view id is wrong");
     Require(first.opaqueScene == ViewId::DetachedViewportStart + 1U, "First detached viewport scene view id is wrong");
     Require(first.transparentScene == ViewId::DetachedViewportStart + 2U, "First detached viewport transparent scene view id is wrong");
-    Require(first.editorUiComposite == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport stride is wrong");
+    Require(first.editorUiComposite == ViewId::DetachedViewportStart + 14U, "First detached viewport editor UI view id is wrong");
+    Require(first.postProcessBloomMipBlurVViews.back() == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport stride is wrong");
     Require(second.shadowDepth == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride, "Second detached viewport shadow view id is wrong");
     Require(second.opaqueScene == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride + 1U, "Second detached viewport scene view id is wrong");
-    Require(RenderViewportViewIdAllocator::ForViewportIndex(20U).IsValid(), "Last supported detached viewport should be valid");
-    Require(!RenderViewportViewIdAllocator::ForViewportIndex(21U).IsValid(), "Out-of-range detached viewport should be invalid");
+    Require(RenderViewportViewIdAllocator::ForViewportIndex(7U).IsValid(), "Last supported detached viewport should be valid");
+    Require(!RenderViewportViewIdAllocator::ForViewportIndex(8U).IsValid(), "Out-of-range detached viewport should be invalid");
 }
 
 void FramePipelineBuildsCanonicalPassOrder() {
@@ -176,13 +196,16 @@ void FramePipelineBuildsCanonicalPassOrder() {
         RenderPassKind::OpaqueScene,
         RenderPassKind::TransparentScene,
         RenderPassKind::EditorSelectionMask,
+        RenderPassKind::PostProcessExposureReadback,
+        RenderPassKind::PostProcessMotionVectors,
+        RenderPassKind::PostProcessTaaResolve,
         RenderPassKind::PostProcessBloomPrefilter,
         RenderPassKind::PostProcessBloomBlurH,
         RenderPassKind::PostProcessBloomBlurV,
         RenderPassKind::PostProcessHdrCombine,
         RenderPassKind::PostProcessHdrFinalize,
-        RenderPassKind::EditorSceneOverlays,
         RenderPassKind::FinalComposite,
+        RenderPassKind::EditorSceneOverlays,
         RenderPassKind::EditorUiComposite,
     };
 
@@ -201,18 +224,37 @@ void FramePipelineBuildsCanonicalPassOrder() {
     Require(selectionMask != nullptr && selectionMask->meshPass.value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask pass did not carry SelectionId mesh pass metadata");
     Require(finalComposite != nullptr && !finalComposite->meshPass.has_value(), "FinalComposite pass unexpectedly carried mesh pass metadata");
 
-    constexpr std::array<std::uint16_t, RenderPassKindCount - 1U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, RenderPassKindCount + (RenderViewportViewIds::kBloomPyramidExtraMipCount * 3U)> expectedViewOrder{
         ViewId::ShadowDepth,
+        ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::TransparentScene,
         ViewId::EditorSelectionMask,
+        ViewId::PostProcessExposureReadback,
+        ViewId::PostProcessMotionVectors,
+        ViewId::PostProcessTaaResolve,
         ViewId::PostProcessBloomPrefilter,
         ViewId::PostProcessBloomBlurH,
         ViewId::PostProcessBloomBlurV,
+        ViewId::PostProcessBloomDownsampleStart,
+        ViewId::PostProcessBloomMipBlurHStart,
+        ViewId::PostProcessBloomMipBlurVStart,
+        ViewId::PostProcessBloomDownsampleStart + 1U,
+        ViewId::PostProcessBloomMipBlurHStart + 1U,
+        ViewId::PostProcessBloomMipBlurVStart + 1U,
+        ViewId::PostProcessBloomDownsampleStart + 2U,
+        ViewId::PostProcessBloomMipBlurHStart + 2U,
+        ViewId::PostProcessBloomMipBlurVStart + 2U,
+        ViewId::PostProcessBloomDownsampleStart + 3U,
+        ViewId::PostProcessBloomMipBlurHStart + 3U,
+        ViewId::PostProcessBloomMipBlurVStart + 3U,
+        ViewId::PostProcessBloomDownsampleStart + 4U,
+        ViewId::PostProcessBloomMipBlurHStart + 4U,
+        ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
-        ViewId::Overlay,
         ViewId::FinalComposite,
+        ViewId::Overlay,
         ViewId::EditorUi,
     };
     Require(viewport.viewOrder.size() == expectedViewOrder.size(), "RenderFramePipeline view order count is wrong");
@@ -259,18 +301,37 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 24U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 61U> expectedViewOrder{
         ViewId::ShadowDepth,
+        ViewId::GpuCompute,
         ViewId::Scene3D,
         ViewId::TransparentScene,
         ViewId::EditorSelectionMask,
+        ViewId::PostProcessExposureReadback,
+        ViewId::PostProcessMotionVectors,
+        ViewId::PostProcessTaaResolve,
         ViewId::PostProcessBloomPrefilter,
         ViewId::PostProcessBloomBlurH,
         ViewId::PostProcessBloomBlurV,
+        ViewId::PostProcessBloomDownsampleStart,
+        ViewId::PostProcessBloomMipBlurHStart,
+        ViewId::PostProcessBloomMipBlurVStart,
+        ViewId::PostProcessBloomDownsampleStart + 1U,
+        ViewId::PostProcessBloomMipBlurHStart + 1U,
+        ViewId::PostProcessBloomMipBlurVStart + 1U,
+        ViewId::PostProcessBloomDownsampleStart + 2U,
+        ViewId::PostProcessBloomMipBlurHStart + 2U,
+        ViewId::PostProcessBloomMipBlurVStart + 2U,
+        ViewId::PostProcessBloomDownsampleStart + 3U,
+        ViewId::PostProcessBloomMipBlurHStart + 3U,
+        ViewId::PostProcessBloomMipBlurVStart + 3U,
+        ViewId::PostProcessBloomDownsampleStart + 4U,
+        ViewId::PostProcessBloomMipBlurHStart + 4U,
+        ViewId::PostProcessBloomMipBlurVStart + 4U,
         ViewId::PostProcessHdrCombine,
         ViewId::PostProcessHdrFinalize,
-        ViewId::Overlay,
         ViewId::FinalComposite,
+        ViewId::Overlay,
         ViewId::EditorUi,
         ViewId::DetachedViewportStart,
         ViewId::DetachedViewportStart + 1U,
@@ -282,8 +343,26 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 7U,
         ViewId::DetachedViewportStart + 8U,
         ViewId::DetachedViewportStart + 9U,
+        ViewId::DetachedViewportStart + 15U,
+        ViewId::DetachedViewportStart + 20U,
+        ViewId::DetachedViewportStart + 25U,
+        ViewId::DetachedViewportStart + 16U,
+        ViewId::DetachedViewportStart + 21U,
+        ViewId::DetachedViewportStart + 26U,
+        ViewId::DetachedViewportStart + 17U,
+        ViewId::DetachedViewportStart + 22U,
+        ViewId::DetachedViewportStart + 27U,
+        ViewId::DetachedViewportStart + 18U,
+        ViewId::DetachedViewportStart + 23U,
+        ViewId::DetachedViewportStart + 28U,
+        ViewId::DetachedViewportStart + 19U,
+        ViewId::DetachedViewportStart + 24U,
+        ViewId::DetachedViewportStart + 29U,
         ViewId::DetachedViewportStart + 10U,
         ViewId::DetachedViewportStart + 11U,
+        ViewId::DetachedViewportStart + 13U,
+        ViewId::DetachedViewportStart + 12U,
+        ViewId::DetachedViewportStart + 14U,
     };
 
     const std::span<const std::uint16_t> viewOrder = state.ViewOrder();

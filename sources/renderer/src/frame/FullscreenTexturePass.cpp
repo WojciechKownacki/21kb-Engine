@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <vector>
 
 namespace kb::render {
@@ -43,6 +44,8 @@ struct PosTexVertex {
 
 [[nodiscard]] float TonemapOperatorValue(FullscreenTextureTonemapOperator tonemap) noexcept {
     switch (tonemap) {
+    case FullscreenTextureTonemapOperator::None:
+        return -1.0F;
     case FullscreenTextureTonemapOperator::Aces:
         return 0.0F;
     case FullscreenTextureTonemapOperator::AgxApprox:
@@ -93,8 +96,21 @@ FullscreenTexturePass::~FullscreenTexturePass() {
     Shutdown();
 }
 
+float ResolveFullscreenTextureExposureStops(const FullscreenTextureOutputTransform& transform) noexcept {
+    if (!transform.autoExposure.enabled) {
+        return transform.exposureStops;
+    }
+
+    const float luminance = std::max(transform.autoExposure.meteredAverageLuminance, 0.0001F);
+    const float middleGray = std::max(transform.autoExposure.middleGray, 0.0001F);
+    const float minStops = std::min(transform.autoExposure.minExposureStops, transform.autoExposure.maxExposureStops);
+    const float maxStops = std::max(transform.autoExposure.minExposureStops, transform.autoExposure.maxExposureStops);
+    const float autoStops = std::log2(middleGray / luminance) + transform.autoExposure.biasStops;
+    return std::clamp(autoStops, minStops, maxStops);
+}
+
 bool FullscreenTexturePassDesc::IsValid() const noexcept {
-    return bgfx::isValid(sourceTexture) && extent.IsValid();
+    return bgfx::isValid(sourceTexture) && extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid());
 }
 
 bool FullscreenTexturePass::Initialize() {
@@ -162,12 +178,17 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
     }
 
     const std::array<float, 16> identity = IdentityMatrix();
-    const std::uint16_t width = ClampToViewExtent(desc.extent.width);
-    const std::uint16_t height = ClampToViewExtent(desc.extent.height);
+    const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
+        ? desc.outputRect
+        : RenderViewportRect{.extent = desc.extent};
+    const std::uint16_t x = ClampToViewExtent(outputRect.x);
+    const std::uint16_t y = ClampToViewExtent(outputRect.y);
+    const std::uint16_t width = ClampToViewExtent(outputRect.extent.width);
+    const std::uint16_t height = ClampToViewExtent(outputRect.extent.height);
 
     bgfx::setViewName(desc.viewId, desc.viewName == nullptr ? "KB Fullscreen Texture" : desc.viewName);
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
-    bgfx::setViewRect(desc.viewId, 0, 0, width, height);
+    bgfx::setViewRect(desc.viewId, x, y, width, height);
     bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
     bgfx::setViewClear(desc.viewId, desc.clearTarget ? BGFX_CLEAR_COLOR : BGFX_CLEAR_NONE, desc.clearRgba);
     bgfx::touch(desc.viewId);
@@ -180,7 +201,7 @@ bool FullscreenTexturePass::Submit(const FullscreenTexturePassDesc& desc) const 
     const float gamma = std::max(desc.outputTransform.gamma, 0.001F);
     constexpr float kLutSize = 16.0F;
     const float tonemapParams[4] = {
-        desc.outputTransform.exposureStops,
+        ResolveFullscreenTextureExposureStops(desc.outputTransform),
         1.0F / gamma,
         TonemapOperatorValue(desc.outputTransform.tonemap),
         0.0F,

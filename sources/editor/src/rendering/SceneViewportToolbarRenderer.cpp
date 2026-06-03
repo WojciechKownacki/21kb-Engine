@@ -37,13 +37,17 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
 }
 
 void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state) {
+    Paint(dc, content, theme, state, EditorViewportCameraModeLabel(state.CameraMode()));
+}
+
+void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state, const char* cameraLabel) {
     const SceneViewportToolbarRects rects = Resolve(content);
     GdiDrawing::FillRectColor(dc, rects.toolbar, GdiDrawing::ToColorRef(theme.toolbar));
 
     const EditorViewportProfile profile = state.Profile();
     DrawButton(dc, rects.profileButton, profile.label.data(), theme);
     DrawButton(dc, rects.fitButton, EditorViewportFitModeLabel(state.FitMode()), theme);
-    DrawButton(dc, rects.cameraButton, EditorViewportCameraModeLabel(state.CameraMode()), theme);
+    DrawButton(dc, rects.cameraButton, cameraLabel == nullptr ? "" : cameraLabel, theme);
 
     char resolution[96]{};
     if (profile.width == 0U || profile.height == 0U) {

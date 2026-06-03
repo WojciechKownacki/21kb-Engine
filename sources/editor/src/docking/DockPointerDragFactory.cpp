@@ -6,12 +6,14 @@
 
 namespace kb::editor {
 
-DockPointerDrag DockPointerDragFactory::FromDockHit(HWND window, const DockLayout& layout, const DockHit& hit) noexcept {
+DockPointerDrag DockPointerDragFactory::FromDockHit(HWND window, const DockLayout& layout, const DockHit& hit, int x, int y) noexcept {
     return DockPointerDrag{
         .kind = hit.kind,
         .panelId = hit.panelId,
         .offsetX = 18,
         .offsetY = 14,
+        .startX = x,
+        .startY = y,
         .splitterNodeId = hit.splitterNodeId,
         .sourceLeafId = hit.leafId,
         .sourceTabIndex = SourceTabIndexForHit(layout, hit),
@@ -32,6 +34,8 @@ DockPointerDrag DockPointerDragFactory::FromFloatingWindow(HWND window, std::uin
         .panelId = panelId,
         .offsetX = screen.x - frame.left,
         .offsetY = screen.y - frame.top,
+        .startX = x,
+        .startY = y,
         .sourceLeafId = 0,
         .sourceTabIndex = 0,
         .sourceStrip = FloatingWindowControlLayout::StripDragRect(metrics, frame.right - frame.left),

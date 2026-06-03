@@ -448,6 +448,38 @@ void ComputeAssetBounds(RenderMeshAssetData& asset) noexcept {
     }
 }
 
+void BuildGpuDrivenMetadata(RenderMeshAssetData& asset) {
+    asset.meshlets.clear();
+    asset.lods.clear();
+    const std::uint32_t vertexCount = static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
+    if (vertexCount == 0U || asset.sections.empty()) {
+        return;
+    }
+
+    asset.meshlets.reserve(asset.sections.size());
+    for (std::uint32_t sectionIndex = 0U; sectionIndex < asset.sections.size(); ++sectionIndex) {
+        const RenderMeshSectionDesc& section = asset.sections[sectionIndex];
+        asset.meshlets.push_back(RenderMeshletDesc{
+            .indexStart = section.indexStart,
+            .indexCount = section.indexCount,
+            .vertexStart = 0U,
+            .vertexCount = vertexCount,
+            .sectionIndex = sectionIndex,
+            .bounds = section.bounds.IsValid() ? section.bounds : asset.bounds,
+            .cone = { 0.0F, 0.0F, 1.0F, 1.0F },
+            .lodLevel = section.lodLevel,
+        });
+    }
+
+    asset.lods.push_back(RenderMeshLodDesc{
+        .firstSection = 0U,
+        .sectionCount = static_cast<std::uint32_t>(asset.sections.size()),
+        .firstMeshlet = 0U,
+        .meshletCount = static_cast<std::uint32_t>(asset.meshlets.size()),
+        .minScreenCoverage = 0.0F,
+    });
+}
+
 [[nodiscard]] std::uint32_t MeshAssetVertexCount(const RenderMeshAssetData& asset) noexcept {
     return static_cast<std::uint32_t>(asset.tangentVertices.empty() ? asset.vertices.size() : asset.tangentVertices.size());
 }
@@ -531,6 +563,7 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
     }
     CompactIndices(asset);
     ComputeAssetBounds(asset);
+    BuildGpuDrivenMetadata(asset);
     asset.RefreshDesc();
     return true;
 }
@@ -834,6 +867,12 @@ RenderMeshDesc& RenderMeshAssetData::RefreshDesc() noexcept {
         .materialSlots = materialSlots.empty() ? nullptr : materialSlots.data(),
         .materialSlotCount = static_cast<std::uint32_t>(materialSlots.size()),
         .bounds = bounds,
+        .gpuDriven = RenderGpuDrivenMeshDesc{
+            .meshlets = meshlets.empty() ? nullptr : meshlets.data(),
+            .meshletCount = static_cast<std::uint32_t>(meshlets.size()),
+            .lods = lods.empty() ? nullptr : lods.data(),
+            .lodCount = static_cast<std::uint32_t>(lods.size()),
+        },
     };
     return desc;
 }

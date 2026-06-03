@@ -28,6 +28,7 @@ bool FinalCompositePass::Submit(const FinalCompositePassDesc& desc) const {
         .hdrColor = desc.postProcessColor,
         .frameBuffer = desc.frameBuffer,
         .extent = desc.extent,
+        .outputRect = desc.outputRect,
         .outputTransform = desc.outputTransform,
         .clearRgba = desc.clearRgba,
         .clearTarget = desc.clearTarget,
