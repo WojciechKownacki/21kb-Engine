@@ -19,7 +19,7 @@ jobs:
         include:
           - name: Windows MSVC
             os: windows-2025
-            generator: "Visual Studio 18 2026"
+            generator: "Visual Studio 17 2022"
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
@@ -56,7 +56,7 @@ jobs:
             "-DKB_BUILD_RENDERER=${{ matrix.build_renderer }}",
             "-DKB_ENABLE_SANITIZERS=${{ matrix.sanitizer }}"
           )
-          if ("${{ matrix.generator }}" -ne "Visual Studio 18 2026") {
+          if (-not "${{ matrix.generator }}".StartsWith("Visual Studio")) {
             $configureArgs += "-DCMAKE_BUILD_TYPE=Debug"
           }
           cmake @configureArgs
