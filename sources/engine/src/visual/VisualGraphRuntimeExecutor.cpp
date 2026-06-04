@@ -44,6 +44,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteCustomEvent
     std::string_view eventName,
     std::span<const VisualGraphCustomEventArgument> arguments,
     VisualGraphRuntimeExecutionContext& context) const {
+    context.BeginExecutionPass();
     const VisualGraphIrFunction* function = FindCustomEventFunction(artifact, eventName);
     if (function == nullptr) {
         return {};
@@ -58,6 +59,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteCustomEvent
 VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteFunction(const VisualGraphIrFunction* function, VisualGraphRuntimeExecutionContext& context) const {
     VisualGraphRuntimeExecutionResult result{};
     if (function == nullptr) {
+        context.BeginExecutionPass();
         return result;
     }
     result.executed = true;
@@ -119,7 +121,8 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
             context.EmitEvent(instruction->symbol);
         } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence) {
             const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
-            if (binding == nullptr) {
+            if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
+            } else if (binding == nullptr) {
                 AddRuntimeError(result, instruction->sourceNodeId, "visual graph runtime missing binding for node " + std::to_string(instruction->sourceNodeId) + " " + instruction->symbol);
             } else {
                 AppendErrors(result, ValidateBindingSignature(*instruction, *binding));
@@ -159,6 +162,19 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
 
 const VisualGraphRuntimeBinding* VisualGraphRuntimeExecutor::FindBinding(const VisualGraphIrInstruction& instruction) const noexcept {
     return bindings_.Find(instruction.opcode, instruction.symbol);
+}
+
+bool VisualGraphRuntimeExecutor::TryExecuteBuiltInInstruction(const VisualGraphIrInstruction& instruction, VisualGraphRuntimeExecutionContext& context) {
+    if (instruction.opcode == VisualGraphIrOpcode::GetProperty && instruction.symbol == "DeltaSeconds") {
+        const float deltaSeconds = context.ReadFloat(0U, "deltaSeconds");
+        for (const VisualGraphIrOutput& output : instruction.outputs) {
+            if (output.name == "value" && output.type == VisualGraphValueType::Float) {
+                context.Store(instruction.sourceNodeId, output.name, VisualGraphRuntimeValue{deltaSeconds});
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ValidateBindingSignature(const VisualGraphIrInstruction& instruction, const VisualGraphRuntimeBinding& binding) {
