@@ -97,6 +97,17 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
+    include/engine/script/LuaScriptBackend.hpp
+    include/engine/script/NativeScriptBackend.hpp
+    include/engine/script/PucLuaScriptRuntime.hpp
+    include/engine/script/ScriptBackend.hpp
+    include/engine/script/ScriptEvent.hpp
+    include/engine/script/ScriptExecutionContext.hpp
+    include/engine/script/ScriptLifecycle.hpp
+    include/engine/script/ScriptRuntime.hpp
+    include/engine/script/ScriptRuntimeSceneSystem.hpp
+    include/engine/script/ScriptValue.hpp
+    include/engine/script/VisualGraphScriptBackend.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
     include/engine/visual/VisualGraphBehaviourInstanceRegistry.hpp
@@ -393,6 +404,15 @@ add_library(kb_engine STATIC
     src/scene/transform/QuatMath.cpp
     src/scene/transform/TransformMath.cpp
     src/scene/transform/Vec3Math.cpp
+    src/script/LuaScriptBackend.cpp
+    src/script/NativeScriptBackend.cpp
+    src/script/PucLuaScriptRuntime.cpp
+    src/script/ScriptExecutionContext.cpp
+    src/script/ScriptLifecycle.cpp
+    src/script/ScriptRuntime.cpp
+    src/script/ScriptRuntimeSceneSystem.cpp
+    src/script/ScriptValue.cpp
+    src/script/VisualGraphScriptBackend.cpp
     src/private/scene/components/SceneComponentAccess.hpp
     src/private/assets/AssetDiscoveryService.hpp
     src/private/assets/AssetFileOperations.hpp
@@ -665,6 +685,7 @@ target_include_directories(kb_engine
 target_link_libraries(kb_engine
     PRIVATE
         flecs::flecs_static
+        kb_lua
 )
 
 kb_apply_quality_gates(kb_engine)
@@ -693,6 +714,7 @@ if(BUILD_TESTING)
         tests/SceneSystemTestSuites.hpp
         tests/SceneSystemTests.cpp
         tests/SceneSystemTransformSyncTests.cpp
+        tests/ScriptRuntimeTests.cpp
         tests/SystemLifecycleTests.cpp
         tests/TestSuites.hpp
         tests/TestSupport.hpp
