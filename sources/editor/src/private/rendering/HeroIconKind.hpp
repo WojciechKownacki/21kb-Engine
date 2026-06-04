@@ -6,7 +6,11 @@ namespace kb::editor {
 
 enum class HeroIconKind : std::uint8_t {
     Minus,
+    Play,
+    Pause,
+    Resume,
     Stop,
+    TransportStop,
     XMark,
     Cube,
     Folder,
