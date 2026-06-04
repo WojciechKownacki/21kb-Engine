@@ -7,6 +7,7 @@ namespace kb::scene {
 SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComponentRegistry& components) noexcept
     : transforms_(world, components.TransformComponentId())
     , visibility_(world, components.VisibilityComponentId())
+    , behaviours_(world, components.BehaviourComponentId())
     , cameras_(world, components.CameraComponentId())
     , meshRenderers_(world, components.MeshRendererComponentId())
     , lights_(world, components.LightComponentId()) {}
@@ -30,6 +31,14 @@ const SceneVisibilityComponentStore& SceneComponentStorage::Visibility() const n
 
 SceneVisibilityComponentStore& SceneComponentStorage::Visibility() noexcept {
     return visibility_;
+}
+
+const SceneBehaviourComponentStore& SceneComponentStorage::Behaviours() const noexcept {
+    return behaviours_;
+}
+
+SceneBehaviourComponentStore& SceneComponentStorage::Behaviours() noexcept {
+    return behaviours_;
 }
 
 const SceneCameraComponentStore& SceneComponentStorage::Cameras() const noexcept {
