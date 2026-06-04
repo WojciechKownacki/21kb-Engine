@@ -5,6 +5,7 @@
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
+#include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "project/EditorProjectPaths.hpp"
@@ -13,13 +14,6 @@
 #include <utility>
 
 namespace kb::editor {
-namespace {
-
-[[nodiscard]] bool SameVirtualPath(const std::filesystem::path& left, const std::filesystem::path& right) {
-    return kb::assets::NormalizeAssetPath(left) == kb::assets::NormalizeAssetPath(right);
-}
-
-} // namespace
 
 EditorSceneContext::EditorSceneContext() {
     std::filesystem::create_directories(EditorProjectPaths::PrefabsRoot());
@@ -134,59 +128,7 @@ bool EditorSceneContext::BeginAssetFolderRename(const std::filesystem::path& vir
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const std::string value{ assetBrowser_.TextEditValue() };
-    if (value.empty()) {
-        assetBrowser_.CancelTextEdit();
-        return false;
-    }
-
-    bool committed = false;
-    switch (assetBrowser_.TextEditMode()) {
-    case EditorAssetTextEditMode::NewFolder: {
-        const std::filesystem::path parent = assetBrowser_.TextEditTargetFolder().empty() ? assetBrowser_.SelectedFolder() : assetBrowser_.TextEditTargetFolder();
-        const std::optional<std::filesystem::path> folder = manager.CreateUniqueFolder(parent, value);
-        committed = folder.has_value();
-        if (folder.has_value()) {
-            static_cast<void>(scene_.Assets().Discover());
-            static_cast<void>(assetBrowser_.SelectContentFolder(*folder, manager));
-        }
-        break;
-    }
-    case EditorAssetTextEditMode::RenameAsset: {
-        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetBrowser_.TextEditTargetAsset());
-        if (metadata != nullptr) {
-            const std::filesystem::path renamedVirtualPath = metadata->virtualPath.parent_path() / (value + metadata->virtualPath.extension().string());
-            committed = manager.RenameAsset(metadata->id, value);
-            if (committed) {
-                if (const kb::assets::AssetMetadata* renamed = manager.Registry().FindByPath(renamedVirtualPath); renamed != nullptr) {
-                    static_cast<void>(assetBrowser_.SelectAsset(renamed->id, manager));
-                }
-            }
-        }
-        break;
-    }
-    case EditorAssetTextEditMode::RenameFolder: {
-        const std::filesystem::path oldFolder = assetBrowser_.TextEditTargetFolder();
-        const std::filesystem::path renamedFolder = oldFolder.parent_path() / value;
-        const bool renamedOpenFolder = SameVirtualPath(oldFolder, assetBrowser_.SelectedFolder());
-        committed = manager.RenameFolder(oldFolder, value);
-        if (committed) {
-            if (renamedOpenFolder) {
-                static_cast<void>(assetBrowser_.SelectFolder(renamedFolder, manager));
-            } else {
-                static_cast<void>(assetBrowser_.SelectContentFolder(renamedFolder, manager));
-            }
-        }
-        break;
-    }
-    case EditorAssetTextEditMode::None:
-    default:
-        break;
-    }
-
-    assetBrowser_.CancelTextEdit();
-    return committed;
+    return EditorSceneAssetBrowserCommands::CommitTextEdit(scene_, assetBrowser_);
 }
 
 void EditorSceneContext::CancelAssetTextEdit() noexcept {
@@ -194,21 +136,7 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
 }
 
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
-    const kb::assets::AssetId selected = assetBrowser_.SelectedAsset();
-    const std::filesystem::path selectedContentFolder = assetBrowser_.SelectedContentFolder();
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const bool deletingAsset = selected.IsValid();
-    const bool deletingContentFolder = !selectedContentFolder.empty();
-    const std::filesystem::path folderToDelete = deletingContentFolder ? selectedContentFolder : assetBrowser_.SelectedFolder();
-    const bool deleted = deletingAsset ? manager.DeleteAsset(selected) : manager.DeleteFolder(folderToDelete);
-    if (deleted) {
-        assetBrowser_.ClearSelection();
-        if (!deletingAsset && !deletingContentFolder) {
-            static_cast<void>(assetBrowser_.SelectFolder(assetBrowser_.SelectedFolder().parent_path(), manager));
-        }
-        static_cast<void>(scene_.Assets().Discover());
-    }
-    return deleted;
+    return EditorSceneAssetBrowserCommands::DeleteSelected(scene_, assetBrowser_);
 }
 
 bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
@@ -223,60 +151,19 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const bool deleted = manager.DeleteAsset(id);
-    if (deleted) {
-        assetBrowser_.ClearSelection();
-        static_cast<void>(scene_.Assets().Discover());
-    }
-    return deleted;
+    return EditorSceneAssetBrowserCommands::DeleteAsset(scene_, assetBrowser_, id);
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const bool deleted = manager.DeleteFolder(virtualFolder);
-    if (deleted) {
-        if (SameVirtualPath(assetBrowser_.SelectedFolder(), virtualFolder)) {
-            static_cast<void>(assetBrowser_.SelectFolder(virtualFolder.parent_path(), manager));
-        } else if (SameVirtualPath(assetBrowser_.SelectedContentFolder(), virtualFolder)) {
-            assetBrowser_.ClearSelection();
-        }
-        static_cast<void>(scene_.Assets().Discover());
-    }
-    return deleted;
+    return EditorSceneAssetBrowserCommands::DeleteFolder(scene_, assetBrowser_, virtualFolder);
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const kb::assets::AssetMoveResult moved = manager.MoveAssetIntoFolder(id, destinationVirtualFolder);
-    if (!moved.succeeded) {
-        return false;
-    }
-
-    static_cast<void>(scene_.Assets().Discover());
-    if (const kb::assets::AssetMetadata* movedMetadata = manager.Registry().FindByPath(moved.virtualPath); movedMetadata != nullptr) {
-        static_cast<void>(assetBrowser_.SelectAsset(movedMetadata->id, manager));
-    }
-    return true;
+    return EditorSceneAssetBrowserCommands::MoveAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
 }
 
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    kb::assets::AssetManager& manager = scene_.Assets().Manager();
-    const bool movedOpenFolder = SameVirtualPath(assetBrowser_.SelectedFolder(), sourceVirtualFolder);
-    const kb::assets::AssetMoveResult moved = manager.MoveFolderIntoFolder(sourceVirtualFolder, destinationVirtualFolder);
-    if (!moved.succeeded) {
-        return false;
-    }
-
-    static_cast<void>(scene_.Assets().Discover());
-    if (!moved.virtualPath.empty()) {
-        if (movedOpenFolder) {
-            static_cast<void>(assetBrowser_.SelectFolder(moved.virtualPath, manager));
-        } else {
-            static_cast<void>(assetBrowser_.SelectContentFolder(moved.virtualPath, manager));
-        }
-    }
-    return true;
+    return EditorSceneAssetBrowserCommands::MoveFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
