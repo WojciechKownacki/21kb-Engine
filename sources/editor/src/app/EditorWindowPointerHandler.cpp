@@ -5,8 +5,8 @@
 #include "app/EditorPointerDragSourceResolver.hpp"
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/EditorWindowToolbarPointerHandler.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
-#include "rendering/EditorToolbarRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyContentResolver.hpp"
 
@@ -27,15 +27,6 @@ bool CommitPendingNewAssetFolder(EditorSceneContext& sceneContext) {
 
 bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-}
-
-[[nodiscard]] RECT ToRect(const DockRect& rect) noexcept {
-    return RECT{
-        .left = rect.x,
-        .top = rect.y,
-        .right = rect.x + rect.width,
-        .bottom = rect.y + rect.height,
-    };
 }
 
 } // namespace
@@ -71,74 +62,8 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
     if (committedNewFolder) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
-    if (messageWindow == mainWindow_) {
-        RECT client{};
-        if (GetClientRect(mainWindow_, &client) != 0) {
-            const DockLayout layout = dockModel_.Queries().BuildLayout(
-                client.right - client.left,
-                client.bottom - client.top,
-                metrics_.menuHeight,
-                metrics_.toolbarHeight,
-                metrics_.tabStripHeight,
-                metrics_.tabMinWidth,
-                metrics_.tabWidth,
-                metrics_.splitterSize,
-                metrics_.panelPadding);
-            const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction_.OpenMenu());
-            if (const EditorMenuCommand hitMenu = EditorToolbarRenderer::HitTestMenu(menu, x, y); hitMenu != EditorMenuCommand::None) {
-                static_cast<void>(shellInteraction_.SetHoveredMenu(hitMenu));
-                static_cast<void>(shellInteraction_.SetOpenMenu(hitMenu));
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return 0;
-            }
-            if (shellInteraction_.OpenMenu() != EditorMenuCommand::None) {
-                if (EditorToolbarRenderer::HitTestMenuRow(menu, x, y).has_value()) {
-                    shellInteraction_.CloseMenu();
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return 0;
-                }
-                shellInteraction_.CloseMenu();
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            }
-            const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout.toolbar));
-            const EditorTransportCommand transport = EditorToolbarRenderer::HitTestTransport(toolbar, x, y);
-            const bool transportEnabled =
-                (transport == EditorTransportCommand::Play && playMode_.Mode() == EditorPlayMode::Stopped) ||
-                (transport == EditorTransportCommand::Pause && (playMode_.IsPlaying() || playMode_.IsPaused())) ||
-                (transport == EditorTransportCommand::Stop && (playMode_.IsPlaying() || playMode_.IsPaused()));
-            if (transportEnabled) {
-                static_cast<void>(shellInteraction_.SetPressedTransport(transport));
-            }
-            if (transport == EditorTransportCommand::Play) {
-                if (playMode_.Mode() != EditorPlayMode::Stopped) {
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return 0;
-                }
-                playMode_.Play();
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return 0;
-            }
-            if (transport == EditorTransportCommand::Stop) {
-                if (!transportEnabled) {
-                    return 0;
-                }
-                playMode_.Stop();
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return 0;
-            }
-            if (transport == EditorTransportCommand::Pause) {
-                if (!transportEnabled) {
-                    return 0;
-                }
-                if (playMode_.IsPaused()) {
-                    playMode_.Resume();
-                } else {
-                    playMode_.Pause();
-                }
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return 0;
-            }
-        }
+    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, playMode_, shellInteraction_, metrics_)) {
+        return 0;
     }
     const std::optional<RECT> assetContent = EditorPanelContentResolver::Resolve(DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
@@ -159,17 +84,6 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
         const SceneViewportToolbarRects sceneToolbar = SceneViewportToolbarRenderer::Resolve(sceneContent->content);
         if (PointInRect(sceneToolbar.profileButton, x, y)) {
             sceneContext_.ViewportPreview(sceneContent->panelId).CycleProfile();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return 0;
-        }
-        if (PointInRect(sceneToolbar.fitButton, x, y)) {
-            sceneContext_.ViewportPreview(sceneContent->panelId).CycleFitMode();
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            return 0;
-        }
-        const DockPanel* viewportPanel = dockModel_.Queries().FindPanel(sceneContent->panelId);
-        if (viewportPanel != nullptr && viewportPanel->kind == DockPanelKind::Scene && PointInRect(sceneToolbar.cameraButton, x, y)) {
-            sceneContext_.ViewportPreview(sceneContent->panelId).CycleCameraMode();
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return 0;
         }
@@ -231,42 +145,18 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWind
 }
 
 LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, LPARAM lparam) {
-    if (messageWindow == mainWindow_) {
-        RECT client{};
-        if (GetClientRect(mainWindow_, &client) != 0) {
-            const DockLayout layout = dockModel_.Queries().BuildLayout(
-                client.right - client.left,
-                client.bottom - client.top,
-                metrics_.menuHeight,
-                metrics_.toolbarHeight,
-                metrics_.tabStripHeight,
-                metrics_.tabMinWidth,
-                metrics_.tabWidth,
-                metrics_.splitterSize,
-                metrics_.panelPadding);
-            const int x = GET_X_LPARAM(lparam);
-            const int y = GET_Y_LPARAM(lparam);
-            const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction_.OpenMenu());
-            bool changed = false;
-            changed = shellInteraction_.SetHoveredMenu(EditorToolbarRenderer::HitTestMenu(menu, x, y)) || changed;
-            changed = shellInteraction_.SetHoveredMenuRow(EditorToolbarRenderer::HitTestMenuRow(menu, x, y)) || changed;
-            changed = shellInteraction_.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(EditorToolbarRenderer::ResolveToolbar(ToRect(layout.toolbar)), x, y)) || changed;
-            if (changed) {
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-            }
-        }
-    } else {
-        shellInteraction_.ClearMenuHover();
-        shellInteraction_.ClearTransportHover();
-    }
-    if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+    const int x = GET_X_LPARAM(lparam);
+    const int y = GET_Y_LPARAM(lparam);
+    static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
+
+    if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
-    if (EditorPointerDragInteraction::Move(messageWindow, mainWindow_, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), pointerDrag_)) {
+    if (EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
         return 0;
     }
-    dockController_.HandlePointerMove(messageWindow, GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+    dockController_.HandlePointerMove(messageWindow, x, y);
     return 0;
 }
 

@@ -1,0 +1,63 @@
+#include "renderer/RendererRuntimeResourceStatsBuilder.hpp"
+
+#include "renderer/RendererSceneLightingConfigResolver.hpp"
+
+namespace kb::render {
+
+Renderer::RuntimeSceneResourceStats RendererRuntimeResourceStatsBuilder::Build(const RendererRuntimeResourceStatsBuildDesc& desc) noexcept {
+    return Renderer::RuntimeSceneResourceStats{
+        .cachedMeshCount = desc.cacheStats.meshCount,
+        .cachedMaterialCount = desc.cacheStats.materialCount,
+        .cachedTextureCount = desc.cacheStats.textureCount,
+        .cachedMeshCapacity = desc.cacheStats.meshCapacity,
+        .cachedMaterialCapacity = desc.cacheStats.materialCapacity,
+        .cachedTextureCapacity = desc.cacheStats.textureCapacity,
+        .referencedMeshAssetCount = desc.referenceStats.meshCount,
+        .referencedMaterialAssetCount = desc.referenceStats.materialCount,
+        .referencedTextureAssetCount = desc.referenceStats.textureCount,
+        .unresolvedMaterialTexturePathCount = desc.unresolvedMaterialTexturePathCount,
+        .referencedMeshAssetCapacity = desc.referenceStats.meshCapacity,
+        .referencedMaterialAssetCapacity = desc.referenceStats.materialCapacity,
+        .referencedTextureAssetCapacity = desc.referenceStats.textureCapacity,
+        .scenePassSubmitStatsCapacity = desc.scenePassSubmitStatsCapacity,
+        .registeredRuntimeAssetLoaderSceneCount = desc.discoveryStats.registeredSceneCount,
+        .runtimeAssetDiscoverySceneCount = desc.discoveryStats.discoverySceneCount,
+        .runtimeAssetDiscoverySceneCapacity = desc.discoveryStats.discoverySceneCapacity,
+        .renderSceneCount = desc.storeStats.sceneCount,
+        .renderSceneCapacity = desc.storeStats.sceneCapacity,
+        .renderSceneMeshProxyCount = desc.storeStats.renderSceneStats.meshProxyCount,
+        .renderSceneCameraProxyCount = desc.storeStats.renderSceneStats.cameraProxyCount,
+        .renderSceneLightProxyCount = desc.storeStats.renderSceneStats.lightProxyCount,
+        .renderSceneMeshProxyCapacity = desc.storeStats.renderSceneStats.meshProxyCapacity,
+        .renderSceneCameraProxyCapacity = desc.storeStats.renderSceneStats.cameraProxyCapacity,
+        .renderSceneLightProxyCapacity = desc.storeStats.renderSceneStats.lightProxyCapacity,
+        .renderSceneDrawGroupLookupCapacity = desc.storeStats.renderSceneStats.drawGroupLookupCapacity,
+        .meshResourceSlotCapacity = desc.resourceStats.meshSlotCapacity,
+        .materialResourceSlotCapacity = desc.resourceStats.materialSlotCapacity,
+        .textureResourceSlotCapacity = desc.resourceStats.textureSlotCapacity,
+        .meshBindingCapacity = desc.resourceMapStats.meshBindingCapacity,
+        .materialBindingCapacity = desc.resourceMapStats.materialBindingCapacity,
+        .textureBindingCapacity = desc.resourceMapStats.textureBindingCapacity,
+        .shadowMapSize = desc.shadowMapSize,
+        .shadowMapAllocationBytes = desc.shadowMapAllocationBytes,
+        .shadowMapAllocated = desc.shadowMapAllocated,
+        .syncMeshSeenCount = desc.syncStats.meshSeenCount,
+        .syncCameraSeenCount = desc.syncStats.cameraSeenCount,
+        .syncLightSeenCount = desc.syncStats.lightSeenCount,
+        .syncMeshSeenCapacity = desc.syncStats.meshSeenCapacity,
+        .syncCameraSeenCapacity = desc.syncStats.cameraSeenCapacity,
+        .syncLightSeenCapacity = desc.syncStats.lightSeenCapacity,
+        .syncTransformCacheCount = desc.syncStats.transformCacheCount,
+        .syncTransformResolvingCount = desc.syncStats.transformResolvingCount,
+        .syncTransformCacheCapacity = desc.syncStats.transformCacheCapacity,
+        .syncTransformResolvingCapacity = desc.syncStats.transformResolvingCapacity,
+        .defaultForwardLightCapacity = desc.defaultLightingConfig.maxForwardLights,
+        .defaultEnvironmentLightingMode = static_cast<std::uint32_t>(desc.defaultLightingConfig.environmentMode) + 1U,
+        .defaultEnvironmentLightingSampleCount = RendererSceneLightingConfigResolver::EnvironmentSampleCount(desc.defaultLightingConfig.environmentMode),
+        .defaultShadowFilterSampleCount = RendererSceneLightingConfigResolver::ShadowFilterSampleCount(desc.defaultLightingConfig.shadowFilter),
+        .retentionFrames = desc.retentionFrames,
+        .assetDiscoveryIntervalFrames = desc.assetDiscoveryIntervalFrames,
+    };
+}
+
+} // namespace kb::render

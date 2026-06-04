@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/EditorSurfacePainter.hpp"
+#include "rendering/EditorToolbarLayout.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -12,8 +13,6 @@
 #include <gdiplus.h>
 #pragma warning(pop)
 
-#include <algorithm>
-#include <array>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -21,38 +20,9 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kTransportButtonSize = 36;
-constexpr int kTransportButtonGap = 6;
 constexpr int kTransportIconInset = 7;
-constexpr int kTransportVisualOffsetY = 4;
 constexpr int kToolbarButtonRadius = 8;
-constexpr int kMenuLeftInset = 10;
-constexpr int kMenuTopInset = 2;
-constexpr int kMenuItemHeightPad = 3;
-constexpr int kDropdownTopGap = 4;
-constexpr int kDropdownWidth = 230;
-constexpr int kDropdownRowHeight = 30;
 constexpr int kDropdownRadius = 7;
-
-struct MenuDescriptor {
-    EditorMenuCommand command;
-    std::string_view label;
-    int width;
-};
-
-constexpr std::array<MenuDescriptor, 4> kMenus{{
-    { EditorMenuCommand::File, "File", 54 },
-    { EditorMenuCommand::Edit, "Edit", 54 },
-    { EditorMenuCommand::Options, "Options", 82 },
-    { EditorMenuCommand::Help, "Help", 58 },
-}};
-
-constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
-    { "New Scene", "Open...", "Save", "Exit" },
-    { "Undo", "Redo", "Duplicate", "Preferences" },
-    { "Renderer", "Layout", "Project Settings", "Editor Settings" },
-    { "Documentation", "Report Issue", "Release Notes", "About" },
-}};
 
 [[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int numerator, int denominator) noexcept {
     const int inv = denominator - numerator;
@@ -83,53 +53,6 @@ constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
 [[nodiscard]] RECT OffsetRectCopy(RECT rect, int dx, int dy) noexcept {
     OffsetRect(&rect, dx, dy);
     return rect;
-}
-
-[[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
-    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-}
-
-[[nodiscard]] RECT ButtonRect(const RECT& toolbar, int left, int size) noexcept {
-    const int toolbarHeight = static_cast<int>(toolbar.bottom - toolbar.top);
-    const int top = toolbar.top + std::max(0, (toolbarHeight - size) / 2) + kTransportVisualOffsetY;
-    return RECT{
-        .left = toolbar.left + left,
-        .top = top,
-        .right = toolbar.left + left + size,
-        .bottom = top + size,
-    };
-}
-
-[[nodiscard]] int MenuIndex(EditorMenuCommand menu) noexcept {
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return 0;
-    case EditorMenuCommand::Edit:
-        return 1;
-    case EditorMenuCommand::Options:
-        return 2;
-    case EditorMenuCommand::Help:
-        return 3;
-    case EditorMenuCommand::None:
-    default:
-        return -1;
-    }
-}
-
-[[nodiscard]] RECT MenuRectByCommand(const EditorMenuRects& rects, EditorMenuCommand menu) noexcept {
-    switch (menu) {
-    case EditorMenuCommand::File:
-        return rects.file;
-    case EditorMenuCommand::Edit:
-        return rects.edit;
-    case EditorMenuCommand::Options:
-        return rects.options;
-    case EditorMenuCommand::Help:
-        return rects.help;
-    case EditorMenuCommand::None:
-    default:
-        return RECT{};
-    }
 }
 
 void DrawMenuText(HDC dc, const RECT& rect, std::string_view label, COLORREF text) {
@@ -192,101 +115,23 @@ void FillRoundedAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, floa
 } // namespace
 
 EditorMenuRects EditorToolbarRenderer::ResolveMenu(const RECT& rect, EditorMenuCommand openMenu) noexcept {
-    EditorMenuRects menu{};
-    menu.menuBar = rect;
-    int left = rect.left + kMenuLeftInset;
-    for (const MenuDescriptor& descriptor : kMenus) {
-        RECT item{
-            .left = left,
-            .top = rect.top + kMenuTopInset,
-            .right = left + descriptor.width,
-            .bottom = rect.bottom - kMenuItemHeightPad,
-        };
-        switch (descriptor.command) {
-        case EditorMenuCommand::File:
-            menu.file = item;
-            break;
-        case EditorMenuCommand::Edit:
-            menu.edit = item;
-            break;
-        case EditorMenuCommand::Options:
-            menu.options = item;
-            break;
-        case EditorMenuCommand::Help:
-            menu.help = item;
-            break;
-        case EditorMenuCommand::None:
-        default:
-            break;
-        }
-        left += descriptor.width;
-    }
-
-    const RECT anchor = MenuRectByCommand(menu, openMenu);
-    if (openMenu != EditorMenuCommand::None) {
-        const int dropX = std::min(std::max(rect.left + 4, anchor.left), std::max(rect.left + 4, rect.right - kDropdownWidth - 4));
-        const int dropY = rect.bottom + kDropdownTopGap;
-        menu.dropdown = RECT{ dropX, dropY, dropX + kDropdownWidth, dropY + (kDropdownRowHeight * 4) };
-        for (int i = 0; i < 4; ++i) {
-            menu.dropdownRows[static_cast<std::size_t>(i)] = RECT{
-                menu.dropdown.left,
-                menu.dropdown.top + (i * kDropdownRowHeight),
-                menu.dropdown.right,
-                menu.dropdown.top + ((i + 1) * kDropdownRowHeight),
-            };
-        }
-    }
-    return menu;
+    return EditorToolbarLayout::ResolveMenu(rect, openMenu);
 }
 
 EditorToolbarRects EditorToolbarRenderer::ResolveToolbar(const RECT& rect) noexcept {
-    EditorToolbarRects toolbar{};
-    toolbar.toolbar = rect;
-    const int totalWidth = kTransportButtonSize * 3 + kTransportButtonGap * 2;
-    const int toolbarWidth = static_cast<int>(rect.right - rect.left);
-    const int left = rect.left + std::max(0, (toolbarWidth - totalWidth) / 2);
-    toolbar.playButton = ButtonRect(rect, left - rect.left, kTransportButtonSize);
-    toolbar.pauseButton = ButtonRect(rect, left - rect.left + kTransportButtonSize + kTransportButtonGap, kTransportButtonSize);
-    toolbar.stopButton = ButtonRect(rect, left - rect.left + (kTransportButtonSize + kTransportButtonGap) * 2, kTransportButtonSize);
-    return toolbar;
+    return EditorToolbarLayout::ResolveToolbar(rect);
 }
 
 EditorMenuCommand EditorToolbarRenderer::HitTestMenu(const EditorMenuRects& rects, int x, int y) noexcept {
-    if (PointInRect(rects.file, x, y)) {
-        return EditorMenuCommand::File;
-    }
-    if (PointInRect(rects.edit, x, y)) {
-        return EditorMenuCommand::Edit;
-    }
-    if (PointInRect(rects.options, x, y)) {
-        return EditorMenuCommand::Options;
-    }
-    if (PointInRect(rects.help, x, y)) {
-        return EditorMenuCommand::Help;
-    }
-    return EditorMenuCommand::None;
+    return EditorToolbarLayout::HitTestMenu(rects, x, y);
 }
 
 std::optional<int> EditorToolbarRenderer::HitTestMenuRow(const EditorMenuRects& rects, int x, int y) noexcept {
-    for (std::size_t i = 0; i < rects.dropdownRows.size(); ++i) {
-        if (PointInRect(rects.dropdownRows[i], x, y)) {
-            return static_cast<int>(i);
-        }
-    }
-    return std::nullopt;
+    return EditorToolbarLayout::HitTestMenuRow(rects, x, y);
 }
 
 EditorTransportCommand EditorToolbarRenderer::HitTestTransport(const EditorToolbarRects& rects, int x, int y) noexcept {
-    if (PointInRect(rects.playButton, x, y)) {
-        return EditorTransportCommand::Play;
-    }
-    if (PointInRect(rects.pauseButton, x, y)) {
-        return EditorTransportCommand::Pause;
-    }
-    if (PointInRect(rects.stopButton, x, y)) {
-        return EditorTransportCommand::Stop;
-    }
-    return EditorTransportCommand::None;
+    return EditorToolbarLayout::HitTestTransport(rects, x, y);
 }
 
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
@@ -298,8 +143,8 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     const COLORREF hoverFill = RGB(34, 39, 48);
     const COLORREF activeFill = RGB(42, 47, 56);
 
-    for (const MenuDescriptor& descriptor : kMenus) {
-        const RECT item = MenuRectByCommand(menu, descriptor.command);
+    for (const EditorMenuDescriptor& descriptor : EditorToolbarLayout::MenuDescriptors()) {
+        const RECT item = EditorToolbarLayout::MenuRectByCommand(menu, descriptor.command);
         const bool open = interaction.OpenMenu() == descriptor.command;
         const bool hovered = interaction.HoveredMenu() == descriptor.command;
         if (open || hovered) {
@@ -315,7 +160,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         return;
     }
 
-    const int index = MenuIndex(interaction.OpenMenu());
+    const int index = EditorToolbarLayout::MenuIndex(interaction.OpenMenu());
     if (index < 0) {
         return;
     }
@@ -336,7 +181,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         if (row > 0) {
             GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 8, rowRect.top, rowRect.right - 8, rowRect.top + 1 }, RGB(34, 39, 48));
         }
-        DrawMenuText(dc, RECT{ rowRect.left + 34, rowRect.top, rowRect.right - 8, rowRect.bottom }, kDropdownRows[static_cast<std::size_t>(index)][static_cast<std::size_t>(row)], textPrimary);
+        DrawMenuText(dc, RECT{ rowRect.left + 34, rowRect.top, rowRect.right - 8, rowRect.bottom }, EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row), textPrimary);
     }
 }
 

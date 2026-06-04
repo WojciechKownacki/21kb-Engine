@@ -34,6 +34,7 @@ add_executable(kb_editor
     src/app/EditorPrefabAssetProjectFilesDropHandler.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
+    src/app/EditorWindowToolbarPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
@@ -239,6 +240,7 @@ add_executable(kb_editor
     src/private/app/EditorWindowMessageRouter.hpp
     src/private/app/EditorWindowPointerMessageDispatcher.hpp
     src/private/app/EditorWindowPointerHandler.hpp
+    src/private/app/EditorWindowToolbarPointerHandler.hpp
     src/private/app/EditorWindowInvalidator.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
@@ -270,6 +272,7 @@ add_executable(kb_editor
     src/private/rendering/EditorSurfacePainter.hpp
     src/private/rendering/EditorSceneBgfxViewport.hpp
     src/private/rendering/EditorTabIndicatorPainter.hpp
+    src/private/rendering/EditorToolbarLayout.hpp
     src/private/rendering/FloatingEditorWindowRenderer.hpp
     src/private/rendering/FloatingWindowBackBufferPainter.hpp
     src/private/rendering/FloatingWindowControlRenderer.hpp
@@ -318,6 +321,7 @@ add_executable(kb_editor
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
+    src/private/rendering/ScenePanelContentRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
     src/private/rendering/SvgGraphicsPathBuilder.hpp
@@ -344,6 +348,7 @@ add_executable(kb_editor
     src/private/scene/EditorHierarchySearchMatcher.hpp
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
+    src/private/scene/EditorSceneAssetBrowserCommands.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorScenePrefabActions.hpp
@@ -372,9 +377,17 @@ add_executable(kb_editor
     src/rendering/EditorPanelContentResolver.cpp
     src/rendering/EditorRenderBackendSettings.cpp
     src/rendering/EditorSceneBgfxViewport.cpp
+    src/rendering/EditorSceneViewportGeometry.cpp
+    src/rendering/EditorSceneViewportHostSurfaceStore.cpp
+    src/rendering/EditorSceneViewportPendingSubmissionBuilder.cpp
+    src/rendering/EditorSceneViewportPendingPresentBatchBuilder.cpp
+    src/rendering/EditorSceneViewportPendingPaintSubmitter.cpp
+    src/rendering/EditorSceneViewportRegionBuilder.cpp
+    src/rendering/EditorSceneViewportSessionStore.cpp
     src/rendering/EditorSurfacePainter.cpp
     src/rendering/EditorSurfaceStyle.cpp
     src/rendering/EditorTabIndicatorPainter.cpp
+    src/rendering/EditorToolbarLayout.cpp
     src/rendering/EditorToolbarRenderer.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowBackBufferPainter.cpp
@@ -414,6 +427,7 @@ add_executable(kb_editor
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
+    src/rendering/ScenePanelContentRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
     src/rendering/SvgPathArcMath.cpp
@@ -438,6 +452,7 @@ add_executable(kb_editor
     src/scene/EditorHierarchySearchMatcher.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
+    src/scene/EditorSceneAssetBrowserCommands.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorScenePrefabActions.cpp

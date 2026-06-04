@@ -2,6 +2,7 @@
 
 #include "kb/render/resources/RenderHandles.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/resources/detail/RenderResourceSlotPool.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -61,27 +62,6 @@ public:
     [[nodiscard]] RenderResourceRegistryStats Stats() const noexcept;
 
 private:
-    struct MeshSlot {
-        RenderMeshResource resource{};
-        std::uint32_t generation = 1;
-        bool occupied = false;
-        bool pendingDestroy = false;
-    };
-
-    struct MaterialSlot {
-        RenderMaterialResource resource{};
-        std::uint32_t generation = 1;
-        bool occupied = false;
-        bool pendingDestroy = false;
-    };
-
-    struct TextureSlot {
-        RenderTextureResource resource{};
-        std::uint32_t generation = 1;
-        bool occupied = false;
-        bool pendingDestroy = false;
-    };
-
     enum class DeferredDestroyKind : std::uint8_t {
         Mesh,
         Material,
@@ -94,21 +74,12 @@ private:
         std::uint64_t releaseFrame = 0;
     };
 
-    [[nodiscard]] std::uint32_t AllocateMeshSlot();
-    [[nodiscard]] std::uint32_t AllocateMaterialSlot();
-    [[nodiscard]] std::uint32_t AllocateTextureSlot();
-
     void QueueDestroy(DeferredDestroyKind kind, std::uint32_t slot) noexcept;
     void ReleaseDeferred(const DeferredDestroyEntry& entry) noexcept;
-    void ReleaseMeshResource(RenderMeshResource& resource) noexcept;
-    void ReleaseTextureResource(RenderTextureResource& resource) noexcept;
 
-    std::vector<MeshSlot> meshes_;
-    std::vector<MaterialSlot> materials_;
-    std::vector<TextureSlot> textures_;
-    std::vector<std::uint32_t> freeMeshSlots_;
-    std::vector<std::uint32_t> freeMaterialSlots_;
-    std::vector<std::uint32_t> freeTextureSlots_;
+    detail::RenderResourceSlotPool<RenderMeshResource> meshes_;
+    detail::RenderResourceSlotPool<RenderMaterialResource> materials_;
+    detail::RenderResourceSlotPool<RenderTextureResource> textures_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;
     std::uint64_t frameNumber_ = 0;
 };
