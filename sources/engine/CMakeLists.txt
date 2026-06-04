@@ -109,6 +109,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptRuntime.hpp
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
+    include/engine/script/ScriptRuntimeHost.hpp
     include/engine/script/ScriptRuntimeSceneSystem.hpp
     include/engine/script/ScriptSceneComponentApi.hpp
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
@@ -419,6 +420,7 @@ add_library(kb_engine STATIC
     src/script/ScriptLifecycle.cpp
     src/script/ScriptRuntime.cpp
     src/script/ScriptRuntimeAssetPreparer.cpp
+    src/script/ScriptRuntimeHost.cpp
     src/script/ScriptRuntimeSceneSystem.cpp
     src/script/ScriptSceneComponentApi.cpp
     src/script/ScriptSceneVisualGraphBindings.cpp
