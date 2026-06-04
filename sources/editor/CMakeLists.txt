@@ -18,6 +18,7 @@ add_executable(kb_editor
     src/app/EditorAssetBrowserPrimaryClickHandler.cpp
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
     src/app/EditorAssetFolderProjectFilesDropHandler.cpp
+    src/app/EditorBehaviourAssetHierarchyDropHandler.cpp
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
@@ -221,6 +222,7 @@ add_executable(kb_editor
     src/private/app/EditorAssetBrowserPrimaryClickHandler.hpp
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
+    src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp

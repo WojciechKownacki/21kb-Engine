@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserHitTester.hpp"
+#include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
@@ -76,6 +77,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetPath = ResolveAssetPath(*metadata, manager);
             drag.assetLabel = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
+            drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             return;
         }
 
