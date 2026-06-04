@@ -1,0 +1,138 @@
+#include "rendering/EditorSceneBgfxViewport.hpp"
+
+#if defined(_WIN32)
+#include "rendering/EditorSceneViewportGeometry.hpp"
+
+#include <algorithm>
+#include <memory>
+
+namespace kb::editor {
+namespace {
+
+[[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
+    return EditorSceneViewportGeometry::RectWidth(rect);
+}
+
+[[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
+    return EditorSceneViewportGeometry::RectHeight(rect);
+}
+
+} // namespace
+
+void EditorSceneBgfxViewport::HostSurfaceStore::Clear() noexcept {
+    hostSurfaces_.clear();
+}
+
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Ensure(HWND host) {
+    if (host == nullptr) {
+        return nullptr;
+    }
+    if (HostSurface* existing = Find(host); existing != nullptr) {
+        return existing;
+    }
+
+    std::unique_ptr<HostSurface> surface = std::make_unique<HostSurface>();
+    surface->host = host;
+    hostSurfaces_.push_back(std::move(surface));
+    return hostSurfaces_.back().get();
+}
+
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Find(HWND host) noexcept {
+    if (host == nullptr) {
+        return nullptr;
+    }
+
+    const auto iter = std::ranges::find_if(hostSurfaces_, [host](const std::unique_ptr<HostSurface>& surface) {
+        return surface != nullptr && surface->host == host;
+    });
+    return iter == hostSurfaces_.end() ? nullptr : iter->get();
+}
+
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::FindByWindow(HWND window) noexcept {
+    if (window == nullptr) {
+        return nullptr;
+    }
+
+    const auto iter = std::ranges::find_if(hostSurfaces_, [window](const std::unique_ptr<HostSurface>& surface) {
+        return surface != nullptr && surface->window == window;
+    });
+    return iter == hostSurfaces_.end() ? nullptr : iter->get();
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->host == host) {
+            surface->presentedInCurrentPaint = false;
+        }
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexcept {
+    if (surface.window != nullptr && IsWindow(surface.window) != 0) {
+        ShowWindow(surface.window, SW_HIDE);
+    }
+    surface.presentedInCurrentPaint = false;
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::HideUnpresentedForHost(HWND host) noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->host == host && !surface->presentedInCurrentPaint) {
+            Hide(*surface);
+        }
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexcept {
+    HostSurface* surface = FindByWindow(window);
+    if (surface == nullptr) {
+        return;
+    }
+    surface->presentTarget.Shutdown();
+    surface->window = nullptr;
+    surface->rect = {};
+    surface->presentedInCurrentPaint = false;
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::ShutdownPresentTargets() noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr) {
+            surface->presentTarget.Shutdown();
+        }
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface == nullptr) {
+            continue;
+        }
+        if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+            const HWND window = surface->window;
+            surface->window = nullptr;
+            DestroyWindow(window);
+        } else {
+            surface->window = nullptr;
+        }
+        surface->rect = {};
+        surface->presentedInCurrentPaint = false;
+    }
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr && surface->presentedInCurrentPaint && surface->window != nullptr && IsWindow(surface->window) != 0) {
+            SetWindowPos(
+                surface->window,
+                HWND_TOP,
+                surface->rect.left,
+                surface->rect.top,
+                static_cast<int>(RectWidth(surface->rect)),
+                static_cast<int>(RectHeight(surface->rect)),
+                SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_SHOWWINDOW);
+        }
+    }
+}
+
+} // namespace kb::editor
+
+#endif

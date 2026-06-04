@@ -71,6 +71,8 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept;
 
 private:
+    class Submitter;
+
     void DestroyPrograms() noexcept;
 
     bgfx::ProgramHandle prefilterProgram_ = BGFX_INVALID_HANDLE;
