@@ -12,6 +12,7 @@ public:
 
     static void ForEachTransform(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
     static void ForEachMutableTransform(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);
+    static void ForEachBehaviour(const Scene& scene, BehaviourVisitor visitor, void* context = nullptr);
     static void ForEachCamera(const Scene& scene, CameraVisitor visitor, void* context = nullptr);
     static void ForEachMeshRenderer(const Scene& scene, MeshRendererVisitor visitor, void* context = nullptr);
     static void ForEachVisibleMeshRenderer(const Scene& scene, MeshRendererVisitor visitor, void* context = nullptr);

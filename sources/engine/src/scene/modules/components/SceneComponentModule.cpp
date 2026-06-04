@@ -13,6 +13,10 @@ SceneVisibilityComponentQueries SceneComponentQueries::Visibility() const noexce
     return SceneVisibilityComponentQueries{ scene_ };
 }
 
+SceneBehaviourComponentQueries SceneComponentQueries::Behaviours() const noexcept {
+    return SceneBehaviourComponentQueries{ scene_ };
+}
+
 SceneCameraComponentQueries SceneComponentQueries::Cameras() const noexcept {
     return SceneCameraComponentQueries{ scene_ };
 }
@@ -31,6 +35,10 @@ SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
 
 SceneVisibilityComponents SceneComponents::Visibility() const noexcept {
     return SceneVisibilityComponents{ scene_ };
+}
+
+SceneBehaviourComponents SceneComponents::Behaviours() const noexcept {
+    return SceneBehaviourComponents{ scene_ };
 }
 
 SceneCameraComponents SceneComponents::Cameras() const noexcept {
