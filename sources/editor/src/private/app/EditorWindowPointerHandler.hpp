@@ -3,7 +3,10 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
+#include "app/EditorShellInteractionState.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -25,6 +28,9 @@ public:
         EditorDockController& dockController,
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
+        EditorRenderBackendSettings& renderBackendSettings,
+        EditorPlayModeState& playMode,
+        EditorShellInteractionState& shellInteraction,
         EditorPointerDragState& pointerDrag,
         const EditorMetrics& metrics) noexcept;
 
@@ -44,6 +50,9 @@ private:
     EditorDockController& dockController_;
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
+    EditorRenderBackendSettings& renderBackendSettings_;
+    EditorPlayModeState& playMode_;
+    EditorShellInteractionState& shellInteraction_;
     EditorPointerDragState& pointerDrag_;
     const EditorMetrics& metrics_;
 #endif

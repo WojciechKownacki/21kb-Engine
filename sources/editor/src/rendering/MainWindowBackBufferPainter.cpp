@@ -18,6 +18,8 @@ struct MainWindowPaintContext {
     const EditorSceneContext* sceneContext = nullptr;
     const DockDropPreview* preview = nullptr;
     const EditorPointerDragState* drag = nullptr;
+    const EditorPlayModeState* playMode = nullptr;
+    const EditorShellInteractionState* shellInteraction = nullptr;
     EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
 
@@ -25,7 +27,18 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    DockWorkspaceRenderer{}.Paint(paint.dc, paint.width, paint.height, *paintContext->dockModel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, nullptr, *paintContext->sceneViewport);
+    DockWorkspaceRenderer{}.Paint(
+        paint.dc,
+        paint.width,
+        paint.height,
+        *paintContext->dockModel,
+        *paintContext->theme,
+        *paintContext->metrics,
+        *paintContext->sceneContext,
+        nullptr,
+        *paintContext->playMode,
+        *paintContext->shellInteraction,
+        *paintContext->sceneViewport);
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
 }
 
@@ -36,7 +49,8 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 } // namespace
 
-void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, EditorSceneBgfxViewport& sceneViewport) {
+void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
+    static_cast<void>(renderBackendSettings);
     MainWindowPaintContext context{
         .dockModel = &dockModel,
         .theme = &theme,
@@ -44,6 +58,8 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         .sceneContext = &sceneContext,
         .preview = preview,
         .drag = &drag,
+        .playMode = &playMode,
+        .shellInteraction = &shellInteraction,
         .sceneViewport = &sceneViewport,
     };
     sceneViewport.BeginPaintLayout();

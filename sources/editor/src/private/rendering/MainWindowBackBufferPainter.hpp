@@ -1,8 +1,11 @@
 #pragma once
 
+#include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
+#include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -17,7 +20,7 @@ namespace kb::editor {
 class MainWindowBackBufferPainter {
 public:
 #if defined(_WIN32)
-    static void Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, EditorSceneBgfxViewport& sceneViewport);
+    static void Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport);
 #endif
 };
 

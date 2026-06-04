@@ -7,6 +7,7 @@
 #include "kb/render/post/ScenePostProcessTargets.hpp"
 #include "kb/render/resources/NativeWindowFramebuffer.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <bgfx/bgfx.h>
@@ -52,7 +53,8 @@ public:
 
     EditorSceneBgfxViewport() = default;
 
-    void Configure(HINSTANCE instance, HWND parent) noexcept;
+    void Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept;
+    [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
@@ -133,6 +135,8 @@ private:
 
     HINSTANCE instance_ = nullptr;
     HWND defaultParent_ = nullptr;
+    EditorRenderBackendSettings* backendSettings_ = nullptr;
+    std::uint64_t rendererBackendGeneration_ = 0;
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     bool windowClassRegistered_ = false;

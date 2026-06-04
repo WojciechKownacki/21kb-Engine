@@ -3,8 +3,11 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
+#include "app/EditorShellInteractionState.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -26,10 +29,13 @@ struct EditorWindowMessageContext {
     EditorTheme& theme;
     EditorMetrics& metrics;
     EditorGdiRenderer& renderer;
+    EditorRenderBackendSettings& renderBackendSettings;
     EditorSceneBgfxViewport& sceneViewport;
     EditorFloatingWindowManager& floatingWindows;
     EditorDockController& dockController;
     EditorHierarchySelectionController& hierarchySelection;
+    EditorPlayModeState& playMode;
+    EditorShellInteractionState& shellInteraction;
     EditorPointerDragState& pointerDrag;
 #endif
 };
