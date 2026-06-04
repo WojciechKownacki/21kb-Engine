@@ -18,8 +18,10 @@ namespace kb::visual {
 
 struct VisualGraphBehaviourEmittedEvent {
     kb::scene::SceneEntity sender{};
+    kb::scene::SceneEntity target{};
     kb::assets::AssetId assetId{};
     std::string name;
+    std::vector<VisualGraphEventArgument> arguments;
 };
 
 struct VisualGraphBehaviourLifecycleResult {

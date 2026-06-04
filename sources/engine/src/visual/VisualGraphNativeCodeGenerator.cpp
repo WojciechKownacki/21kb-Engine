@@ -203,6 +203,46 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
     return "StoreVoid";
 }
 
+[[nodiscard]] std::string ResultReadFunctionFor(VisualGraphValueType type) {
+    switch (type) {
+    case VisualGraphValueType::Bool:
+        return "ReadBool";
+    case VisualGraphValueType::Int:
+        return "ReadInt";
+    case VisualGraphValueType::Float:
+        return "ReadFloat";
+    case VisualGraphValueType::String:
+        return "ReadString";
+    case VisualGraphValueType::Entity:
+        return "ReadEntity";
+    case VisualGraphValueType::Component:
+        return "ReadComponent";
+    case VisualGraphValueType::Void:
+        break;
+    }
+    return "ReadVoid";
+}
+
+[[nodiscard]] std::string NativeEventValueTypeFor(VisualGraphValueType type) {
+    switch (type) {
+    case VisualGraphValueType::Bool:
+        return "VisualGraphNativeValueType::Bool";
+    case VisualGraphValueType::Int:
+        return "VisualGraphNativeValueType::Int";
+    case VisualGraphValueType::Float:
+        return "VisualGraphNativeValueType::Float";
+    case VisualGraphValueType::String:
+        return "VisualGraphNativeValueType::String";
+    case VisualGraphValueType::Entity:
+        return "VisualGraphNativeValueType::Entity";
+    case VisualGraphValueType::Component:
+        return "VisualGraphNativeValueType::Component";
+    case VisualGraphValueType::Void:
+        break;
+    }
+    return "VisualGraphNativeValueType::Void";
+}
+
 [[nodiscard]] std::string CppStringLiteral(std::string_view text) {
     std::string output;
     output.reserve(text.size() + 2U);
@@ -210,8 +250,22 @@ void WriteFunctionDecl(std::ostringstream& stream, const VisualGraphIrFunction& 
     for (const char ch : text) {
         if (ch == '\\' || ch == '"') {
             output.push_back('\\');
+            output.push_back(ch);
+            continue;
         }
-        output.push_back(ch);
+        if (ch == '\n') {
+            output += "\\n";
+            continue;
+        }
+        if (ch == '\r') {
+            output += "\\r";
+            continue;
+        }
+        if (ch == '\t') {
+            output += "\\t";
+            continue;
+        }
+        output.push_back(static_cast<unsigned char>(ch) < 0x20U ? '?' : ch);
     }
     output.push_back('"');
     return output;
@@ -221,7 +275,7 @@ void ValidateNativeBinding(
     const VisualGraphIrInstruction& instruction,
     const VisualGraphNativeBinding& binding,
     std::vector<std::string>& errors) {
-    if (binding.statement.empty() && binding.outputs.size() > 1U) {
+    if (!binding.callScriptFunction && binding.statement.empty() && binding.outputs.size() > 1U) {
         errors.push_back("binding '" + binding.symbol + "' has multiple outputs and requires an explicit statement");
     }
 
@@ -230,6 +284,57 @@ void ValidateNativeBinding(
 
 [[nodiscard]] std::string ReadInputExpression(const VisualGraphIrInput& input) {
     return "context." + ReadFunctionFor(input.type) + "(" + std::to_string(input.sourceNodeId) + "U, " + CppStringLiteral(input.sourcePin) + ")";
+}
+
+[[nodiscard]] bool IsEventPayloadInput(const VisualGraphIrInput& input) noexcept {
+    return input.type != VisualGraphValueType::Void && input.name != "exec" && !(input.name == "target" && input.type == VisualGraphValueType::Entity);
+}
+
+[[nodiscard]] const VisualGraphIrInput* FindEventTargetInput(const VisualGraphIrInstruction& instruction) noexcept {
+    for (const VisualGraphIrInput& input : instruction.inputs) {
+        if (input.name == "target" && input.type == VisualGraphValueType::Entity) {
+            return &input;
+        }
+    }
+    return nullptr;
+}
+
+void WriteEmitEventCall(std::ostringstream& stream, const VisualGraphIrInstruction& instruction) {
+    const std::string symbol = CppStringLiteral(instruction.symbol);
+    const VisualGraphIrInput* targetInput = FindEventTargetInput(instruction);
+    std::size_t payloadCount = 0U;
+    for (const VisualGraphIrInput& input : instruction.inputs) {
+        if (IsEventPayloadInput(input)) {
+            ++payloadCount;
+        }
+    }
+
+    if (payloadCount == 0U) {
+        if (targetInput == nullptr) {
+            stream << "    context.EmitEvent(" << symbol << ");\n";
+        } else {
+            stream << "    context.EmitEventTo(" << ReadInputExpression(*targetInput) << ", " << symbol << ");\n";
+        }
+        return;
+    }
+
+    const std::string argumentsName = "eventArguments_" + std::to_string(instruction.sourceNodeId);
+    stream << "    const VisualGraphNativeEventArgument " << argumentsName << "[] = {\n";
+    for (const VisualGraphIrInput& input : instruction.inputs) {
+        if (!IsEventPayloadInput(input)) {
+            continue;
+        }
+        stream << "        VisualGraphNativeEventArgument{"
+               << CppStringLiteral(input.name) << ", "
+               << NativeEventValueTypeFor(input.type) << ", "
+               << ReadInputExpression(input) << "},\n";
+    }
+    stream << "    };\n";
+    if (targetInput == nullptr) {
+        stream << "    context.EmitEvent(" << symbol << ", std::span<const VisualGraphNativeEventArgument>{" << argumentsName << "});\n";
+    } else {
+        stream << "    context.EmitEventTo(" << ReadInputExpression(*targetInput) << ", " << symbol << ", std::span<const VisualGraphNativeEventArgument>{" << argumentsName << "});\n";
+    }
 }
 
 [[nodiscard]] bool RequiresNativeBinding(VisualGraphIrOpcode opcode) noexcept {
@@ -256,7 +361,60 @@ void WriteNativeFunctionArguments(std::ostringstream& stream, const VisualGraphI
     }
 }
 
+void WriteScriptFunctionArgumentsArray(std::ostringstream& stream, const VisualGraphIrInstruction& instruction, const VisualGraphNativeBinding& binding, std::string_view argumentsName) {
+    stream << "    const VisualGraphNativeEventArgument " << argumentsName << "[] = {\n";
+    for (const VisualGraphPinSignature& input : binding.inputs) {
+        const VisualGraphIrInput* irInput = FindInput(instruction, input.name);
+        if (irInput == nullptr) {
+            continue;
+        }
+        stream << "        VisualGraphNativeEventArgument{"
+               << CppStringLiteral(input.name) << ", "
+               << NativeEventValueTypeFor(input.type) << ", "
+               << ReadInputExpression(*irInput) << "},\n";
+    }
+    stream << "    };\n";
+}
+
+[[nodiscard]] std::string ScriptFunctionNameFromBinding(const VisualGraphNativeBinding& binding) {
+    static constexpr std::string_view kPrefix = "Function.";
+    if (binding.symbol.starts_with(kPrefix)) {
+        return std::string{binding.symbol.substr(kPrefix.size())};
+    }
+    return binding.symbol;
+}
+
+void WriteScriptFunctionBindingCall(std::ostringstream& stream, const VisualGraphIrInstruction& instruction, const VisualGraphNativeBinding& binding) {
+    const std::string argumentsName = "functionArguments_" + std::to_string(instruction.sourceNodeId);
+    const std::string functionName = CppStringLiteral(ScriptFunctionNameFromBinding(binding));
+    if (binding.inputs.empty()) {
+        if (binding.outputs.empty()) {
+            stream << "    context.CallFunction(" << functionName << ", std::span<const VisualGraphNativeEventArgument>{});\n";
+            return;
+        }
+        stream << "    const VisualGraphNativeFunctionResult functionResult_" << instruction.sourceNodeId << " = context.CallFunction(" << functionName
+               << ", std::span<const VisualGraphNativeEventArgument>{});\n";
+    } else {
+        WriteScriptFunctionArgumentsArray(stream, instruction, binding, argumentsName);
+        if (binding.outputs.empty()) {
+            stream << "    context.CallFunction(" << functionName << ", std::span<const VisualGraphNativeEventArgument>{" << argumentsName << "});\n";
+            return;
+        }
+        stream << "    const VisualGraphNativeFunctionResult functionResult_" << instruction.sourceNodeId << " = context.CallFunction(" << functionName
+               << ", std::span<const VisualGraphNativeEventArgument>{" << argumentsName << "});\n";
+    }
+
+    for (const VisualGraphPinSignature& output : binding.outputs) {
+        stream << "    context." << StoreFunctionFor(output.type) << "(" << instruction.sourceNodeId << "U, " << CppStringLiteral(output.name) << ", functionResult_"
+               << instruction.sourceNodeId << "." << ResultReadFunctionFor(output.type) << "(" << CppStringLiteral(output.name) << "));\n";
+    }
+}
+
 void WriteNativeBindingCall(std::ostringstream& stream, const VisualGraphIrInstruction& instruction, const VisualGraphNativeBinding& binding) {
+    if (binding.callScriptFunction) {
+        WriteScriptFunctionBindingCall(stream, instruction, binding);
+        return;
+    }
     if (!binding.statement.empty()) {
         stream << "    " << binding.statement << "\n";
         return;
@@ -316,7 +474,7 @@ void WriteInstructionOperation(
         stream << "    context.CallNative(" << symbol << ");\n";
         break;
     case VisualGraphIrOpcode::EmitEvent:
-        stream << "    context.EmitEvent(" << symbol << ");\n";
+        WriteEmitEventCall(stream, instruction);
         break;
     case VisualGraphIrOpcode::GetComponent:
         stream << "    context.RequireComponent(" << symbol << ");\n";
@@ -438,12 +596,42 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     std::ostringstream header;
     header << "#pragma once\n\n";
     header << "#include <cstdint>\n";
+    header << "#include <span>\n";
     header << "#include <string_view>\n\n";
+    header << "#include <variant>\n\n";
     WriteNamespaceOpen(header, desc.namespaceName);
+    header << "enum class VisualGraphNativeValueType : std::uint8_t {\n";
+    header << "    Void,\n";
+    header << "    Bool,\n";
+    header << "    Int,\n";
+    header << "    Float,\n";
+    header << "    String,\n";
+    header << "    Entity,\n";
+    header << "    Component,\n";
+    header << "};\n\n";
+    header << "using VisualGraphNativeEventValue = std::variant<std::monostate, bool, int, float, std::string_view, std::uint64_t>;\n\n";
+    header << "struct VisualGraphNativeEventArgument {\n";
+    header << "    std::string_view name;\n";
+    header << "    VisualGraphNativeValueType type = VisualGraphNativeValueType::Void;\n";
+    header << "    VisualGraphNativeEventValue value;\n";
+    header << "};\n\n";
+    header << "class VisualGraphNativeFunctionResult {\n";
+    header << "public:\n";
+    header << "    bool ReadBool(std::string_view name) const;\n";
+    header << "    int ReadInt(std::string_view name) const;\n";
+    header << "    float ReadFloat(std::string_view name) const;\n";
+    header << "    std::string_view ReadString(std::string_view name) const;\n";
+    header << "    std::uint64_t ReadEntity(std::string_view name) const;\n";
+    header << "    std::uint64_t ReadComponent(std::string_view name) const;\n";
+    header << "};\n\n";
     header << "class VisualGraphNativeExecutionContext {\n";
     header << "public:\n";
     header << "    void CallNative(std::string_view name);\n";
+    header << "    VisualGraphNativeFunctionResult CallFunction(std::string_view name, std::span<const VisualGraphNativeEventArgument> arguments);\n";
     header << "    void EmitEvent(std::string_view name);\n";
+    header << "    void EmitEvent(std::string_view name, std::span<const VisualGraphNativeEventArgument> arguments);\n";
+    header << "    void EmitEventTo(std::uint64_t targetEntity, std::string_view name);\n";
+    header << "    void EmitEventTo(std::uint64_t targetEntity, std::string_view name, std::span<const VisualGraphNativeEventArgument> arguments);\n";
     header << "    void RequireComponent(std::string_view name);\n";
     header << "    void Trace(std::string_view opcode, std::string_view symbol);\n";
     header << "    bool ReadBool(std::uint32_t sourceNodeId, std::string_view sourcePin);\n";
@@ -458,6 +646,33 @@ VisualGraphNativeCode VisualGraphNativeCodeGenerator::Generate(const VisualGraph
     header << "    void StoreString(std::uint32_t sourceNodeId, std::string_view sourcePin, std::string_view value);\n";
     header << "    void StoreEntity(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint64_t value);\n";
     header << "    void StoreComponent(std::uint32_t sourceNodeId, std::string_view sourcePin, std::uint64_t value);\n";
+    header << "    bool SelfHasComponent(std::string_view component);\n";
+    header << "    bool SelfGetPropertyBool(std::string_view component, std::string_view property);\n";
+    header << "    int SelfGetPropertyInt(std::string_view component, std::string_view property);\n";
+    header << "    float SelfGetPropertyFloat(std::string_view component, std::string_view property);\n";
+    header << "    std::string_view SelfGetPropertyString(std::string_view component, std::string_view property);\n";
+    header << "    std::uint64_t SelfGetPropertyEntity(std::string_view component, std::string_view property);\n";
+    header << "    std::uint64_t SelfGetPropertyComponent(std::string_view component, std::string_view property);\n";
+    header << "    bool SelfSetPropertyBool(std::string_view component, std::string_view property, bool value);\n";
+    header << "    bool SelfSetPropertyInt(std::string_view component, std::string_view property, int value);\n";
+    header << "    bool SelfSetPropertyFloat(std::string_view component, std::string_view property, float value);\n";
+    header << "    bool SelfSetPropertyString(std::string_view component, std::string_view property, std::string_view value);\n";
+    header << "    bool SelfSetPropertyEntity(std::string_view component, std::string_view property, std::uint64_t value);\n";
+    header << "    bool SelfSetPropertyComponent(std::string_view component, std::string_view property, std::uint64_t value);\n";
+    header << "    bool SharedHas(std::string_view key);\n";
+    header << "    bool SharedRemove(std::string_view key);\n";
+    header << "    bool SharedGetBool(std::string_view key);\n";
+    header << "    int SharedGetInt(std::string_view key);\n";
+    header << "    float SharedGetFloat(std::string_view key);\n";
+    header << "    std::string_view SharedGetString(std::string_view key);\n";
+    header << "    std::uint64_t SharedGetEntity(std::string_view key);\n";
+    header << "    std::uint64_t SharedGetComponent(std::string_view key);\n";
+    header << "    bool SharedSetBool(std::string_view key, bool value);\n";
+    header << "    bool SharedSetInt(std::string_view key, int value);\n";
+    header << "    bool SharedSetFloat(std::string_view key, float value);\n";
+    header << "    bool SharedSetString(std::string_view key, std::string_view value);\n";
+    header << "    bool SharedSetEntity(std::string_view key, std::uint64_t value);\n";
+    header << "    bool SharedSetComponent(std::string_view key, std::uint64_t value);\n";
     header << "    bool IsNodeEvaluated(std::uint32_t sourceNodeId);\n";
     header << "    void MarkNodeEvaluated(std::uint32_t sourceNodeId);\n";
     header << "};\n\n";

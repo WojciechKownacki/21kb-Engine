@@ -6,6 +6,41 @@
 #include <utility>
 
 namespace kb::script {
+namespace {
+
+[[nodiscard]] ScriptValue ToScriptValue(const kb::visual::VisualGraphRuntimeValue& value) {
+    switch (value.Type()) {
+    case kb::visual::VisualGraphValueType::Bool:
+        return ScriptValue{value.AsBool()};
+    case kb::visual::VisualGraphValueType::Int:
+        return ScriptValue{value.AsInt()};
+    case kb::visual::VisualGraphValueType::Float:
+        return ScriptValue{value.AsFloat()};
+    case kb::visual::VisualGraphValueType::String:
+        return ScriptValue{value.AsString()};
+    case kb::visual::VisualGraphValueType::Entity:
+        return ScriptValue{value.AsUInt64(), ScriptValueType::Entity};
+    case kb::visual::VisualGraphValueType::Component:
+        return ScriptValue{value.AsUInt64(), ScriptValueType::Component};
+    case kb::visual::VisualGraphValueType::Void:
+        break;
+    }
+    return ScriptValue{};
+}
+
+[[nodiscard]] std::vector<ScriptEventArgument> ToScriptArguments(const std::vector<kb::visual::VisualGraphEventArgument>& arguments) {
+    std::vector<ScriptEventArgument> result;
+    result.reserve(arguments.size());
+    for (const kb::visual::VisualGraphEventArgument& argument : arguments) {
+        result.push_back(ScriptEventArgument{
+            .name = argument.name,
+            .value = ToScriptValue(argument.value),
+        });
+    }
+    return result;
+}
+
+} // namespace
 
 VisualGraphScriptBackend::VisualGraphScriptBackend(
     const kb::visual::VisualGraphRuntimeRegistry& artifacts,
@@ -63,8 +98,12 @@ void VisualGraphScriptBackend::AppendEmittedEvents(
     ScriptExecutionContext& scriptContext,
     kb::scene::SceneEntity sender,
     kb::assets::AssetId assetId) const {
-    for (const std::string& eventName : graphContext.EmittedEvents()) {
-        scriptContext.Emit(eventName);
+    for (const kb::visual::VisualGraphEmittedEvent& event : graphContext.EmittedEventRecords()) {
+        if (event.target.IsValid()) {
+            scriptContext.EmitTo(event.target, event.name, ToScriptArguments(event.arguments));
+        } else {
+            scriptContext.Emit(event.name, ToScriptArguments(event.arguments));
+        }
     }
     static_cast<void>(sender);
     static_cast<void>(assetId);
