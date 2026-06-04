@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CTest)
+include(FetchContent)
 
 option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${WIN32})
 option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
@@ -57,6 +58,53 @@ set(FLECS_STATIC ON CACHE BOOL "Build Flecs as a static library" FORCE)
 set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
+
+FetchContent_Declare(
+    kb_lua
+    URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
+    URL_HASH SHA256=4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+)
+FetchContent_GetProperties(kb_lua)
+if(NOT kb_lua_POPULATED)
+    FetchContent_Populate(kb_lua)
+    add_library(kb_lua STATIC
+        ${kb_lua_SOURCE_DIR}/src/lapi.c
+        ${kb_lua_SOURCE_DIR}/src/lauxlib.c
+        ${kb_lua_SOURCE_DIR}/src/lbaselib.c
+        ${kb_lua_SOURCE_DIR}/src/lcode.c
+        ${kb_lua_SOURCE_DIR}/src/lcorolib.c
+        ${kb_lua_SOURCE_DIR}/src/lctype.c
+        ${kb_lua_SOURCE_DIR}/src/ldblib.c
+        ${kb_lua_SOURCE_DIR}/src/ldebug.c
+        ${kb_lua_SOURCE_DIR}/src/ldo.c
+        ${kb_lua_SOURCE_DIR}/src/ldump.c
+        ${kb_lua_SOURCE_DIR}/src/lfunc.c
+        ${kb_lua_SOURCE_DIR}/src/lgc.c
+        ${kb_lua_SOURCE_DIR}/src/linit.c
+        ${kb_lua_SOURCE_DIR}/src/llex.c
+        ${kb_lua_SOURCE_DIR}/src/lmathlib.c
+        ${kb_lua_SOURCE_DIR}/src/lmem.c
+        ${kb_lua_SOURCE_DIR}/src/lobject.c
+        ${kb_lua_SOURCE_DIR}/src/lopcodes.c
+        ${kb_lua_SOURCE_DIR}/src/lparser.c
+        ${kb_lua_SOURCE_DIR}/src/lstate.c
+        ${kb_lua_SOURCE_DIR}/src/lstring.c
+        ${kb_lua_SOURCE_DIR}/src/lstrlib.c
+        ${kb_lua_SOURCE_DIR}/src/ltable.c
+        ${kb_lua_SOURCE_DIR}/src/ltablib.c
+        ${kb_lua_SOURCE_DIR}/src/ltm.c
+        ${kb_lua_SOURCE_DIR}/src/lundump.c
+        ${kb_lua_SOURCE_DIR}/src/lutf8lib.c
+        ${kb_lua_SOURCE_DIR}/src/lvm.c
+        ${kb_lua_SOURCE_DIR}/src/lzio.c
+    )
+    target_include_directories(kb_lua PUBLIC ${kb_lua_SOURCE_DIR}/src)
+    if(WIN32)
+        target_compile_definitions(kb_lua PRIVATE LUA_USE_WINDOWS)
+    elseif(UNIX)
+        target_compile_definitions(kb_lua PRIVATE LUA_USE_POSIX)
+    endif()
+endif()
 
 add_subdirectory(sources/engine engine)
 

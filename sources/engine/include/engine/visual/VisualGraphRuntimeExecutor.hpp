@@ -58,6 +58,7 @@ private:
         bool followExecution) const;
 
     [[nodiscard]] const VisualGraphRuntimeBinding* FindBinding(const VisualGraphIrInstruction& instruction) const noexcept;
+    [[nodiscard]] static bool TryExecuteBuiltInInstruction(const VisualGraphIrInstruction& instruction, VisualGraphRuntimeExecutionContext& context);
     [[nodiscard]] static VisualGraphRuntimeExecutionResult ValidateBindingSignature(const VisualGraphIrInstruction& instruction, const VisualGraphRuntimeBinding& binding);
     [[nodiscard]] static VisualGraphRuntimeExecutionResult ValidateProducedOutputs(
         const VisualGraphIrInstruction& instruction,
