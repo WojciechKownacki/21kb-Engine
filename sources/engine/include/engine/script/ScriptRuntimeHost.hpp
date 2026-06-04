@@ -9,6 +9,7 @@
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
+#include "engine/visual/VisualGraphNodeCatalog.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
@@ -39,6 +40,7 @@ public:
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept;
 
     [[nodiscard]] bool InstallSceneSystem();
+    [[nodiscard]] kb::visual::VisualGraphNodeCatalog CreateVisualGraphNodeCatalog() const;
 
     [[nodiscard]] ScriptRuntime& Runtime() noexcept;
     [[nodiscard]] const ScriptRuntime& Runtime() const noexcept;
