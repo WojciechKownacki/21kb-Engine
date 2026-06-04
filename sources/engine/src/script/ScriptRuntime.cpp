@@ -3,10 +3,18 @@
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace kb::script {
 namespace {
+
+struct BehaviourDispatchRecord {
+    kb::scene::SceneEntity entity{};
+    kb::scene::BehaviourComponent behaviour{};
+};
 
 struct DispatchContext {
     kb::scene::Scene* scene = nullptr;
@@ -16,6 +24,26 @@ struct DispatchContext {
     float deltaSeconds = 0.0F;
     ScriptRuntimeExecutionResult* result = nullptr;
 };
+
+[[nodiscard]] bool ComesBefore(const BehaviourDispatchRecord& lhs, const BehaviourDispatchRecord& rhs) noexcept {
+    const auto lhsGroup = static_cast<std::uint8_t>(lhs.behaviour.tickGroup);
+    const auto rhsGroup = static_cast<std::uint8_t>(rhs.behaviour.tickGroup);
+    if (lhsGroup != rhsGroup) {
+        return lhsGroup < rhsGroup;
+    }
+    if (lhs.behaviour.executionOrder != rhs.behaviour.executionOrder) {
+        return lhs.behaviour.executionOrder < rhs.behaviour.executionOrder;
+    }
+    return lhs.entity.Id() < rhs.entity.Id();
+}
+
+void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
+    auto& records = *static_cast<std::vector<BehaviourDispatchRecord>*>(rawContext);
+    records.push_back(BehaviourDispatchRecord{
+        .entity = entity,
+        .behaviour = behaviour,
+    });
+}
 
 void AppendDiagnostics(std::vector<ScriptDiagnostic>& target, std::vector<ScriptDiagnostic> source) {
     target.reserve(target.size() + source.size());
@@ -40,8 +68,7 @@ void AddMissingBackendDiagnostic(DispatchContext& dispatch, kb::scene::SceneEnti
     });
 }
 
-void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
-    auto& dispatch = *static_cast<DispatchContext*>(rawContext);
+void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, DispatchContext& dispatch) {
     ++dispatch.result->visitedBehaviours;
     if (!behaviour.enabled) {
         return;
@@ -73,6 +100,15 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
     }
     AppendEvents(dispatch.result->emittedEvents, std::move(emittedEvents));
     AppendDiagnostics(dispatch.result->diagnostics, backendResult.diagnostics);
+}
+
+void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) {
+    std::vector<BehaviourDispatchRecord> behaviours;
+    scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
+    std::ranges::sort(behaviours, &ComesBefore);
+    for (const BehaviourDispatchRecord& record : behaviours) {
+        DispatchBehaviour(record.entity, record.behaviour, context);
+    }
 }
 
 } // namespace
@@ -108,7 +144,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycle(kb::scene::Scene& s
         .deltaSeconds = deltaSeconds,
         .result = &result,
     };
-    scene.Components().Behaviours().ForEach(&DispatchBehaviour, &context);
+    DispatchSceneBehaviours(scene, context);
     return result;
 }
 
@@ -128,7 +164,7 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
         .deltaSeconds = deltaSeconds,
         .result = &result,
     };
-    scene.Components().Behaviours().ForEach(&DispatchBehaviour, &context);
+    DispatchSceneBehaviours(scene, context);
     return result;
 }
 

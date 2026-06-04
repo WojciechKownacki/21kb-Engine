@@ -16,6 +16,7 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
@@ -130,6 +131,56 @@ void RunNativeScriptRuntimeDispatchTest() {
     kb::tests::Require(receivedDelta == 0.125F, "Native script runtime did not pass delta seconds");
     kb::tests::Require(result.emittedEvents.size() == 1U && result.emittedEvents[0].name == "NativeMoved", "Native script runtime did not collect emitted events");
     kb::tests::Require(result.emittedEvents[0].arguments.size() == 1U, "Native script runtime did not preserve event payload");
+}
+
+void RunScriptRuntimeExecutionOrderTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId kFirstAsset{ 1101U };
+    constexpr kb::assets::AssetId kSecondAsset{ 1102U };
+    constexpr kb::assets::AssetId kThirdAsset{ 1103U };
+
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second" });
+    const kb::scene::SceneObject third = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Third" });
+    scene.Components().Behaviours().Set(first.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kFirstAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Camera,
+        .executionOrder = -100,
+    });
+    scene.Components().Behaviours().Set(second.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kSecondAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
+        .executionOrder = 50,
+    });
+    scene.Components().Behaviours().Set(third.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = kThirdAsset.value,
+        .backend = kb::scene::BehaviourBackend::Native,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
+        .executionOrder = -10,
+    });
+
+    std::vector<int> order;
+    auto nativeBackend = std::make_unique<kb::script::NativeScriptBackend>();
+    kb::script::NativeScriptBackend* native = nativeBackend.get();
+    kb::tests::Require(native->RegisterLifecycle(kFirstAsset, kb::script::ScriptLifecycleEvent::Tick, [&order](kb::script::ScriptExecutionContext&) { order.push_back(1); }),
+        "Script execution order first callback registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kSecondAsset, kb::script::ScriptLifecycleEvent::Tick, [&order](kb::script::ScriptExecutionContext&) { order.push_back(2); }),
+        "Script execution order second callback registration failed");
+    kb::tests::Require(native->RegisterLifecycle(kThirdAsset, kb::script::ScriptLifecycleEvent::Tick, [&order](kb::script::ScriptExecutionContext&) { order.push_back(3); }),
+        "Script execution order third callback registration failed");
+
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::move(nativeBackend)), "Script execution order native backend registration failed");
+    const kb::script::ScriptRuntimeExecutionResult result = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.0F);
+
+    kb::tests::Require(result.Succeeded(), "Script execution order dispatch produced diagnostics");
+    kb::tests::Require(order.size() == 3U, "Script execution order did not execute all behaviours");
+    kb::tests::Require(order[0] == 3 && order[1] == 2 && order[2] == 1, "Script execution order did not sort by group and execution order");
 }
 
 void RunLuaScriptRuntimeDispatchTest() {
@@ -536,6 +587,144 @@ edge exec 1 then 2 exec
     kb::tests::Require(sawGraphEvent, "Script scene system did not emit graph Tick event");
 }
 
+void RunScriptRuntimeHostBackendRegistrationTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+
+    kb::tests::Require(host.Succeeded(), "Script runtime host produced diagnostics during setup");
+    kb::tests::Require(host.Runtime().FindBackend(kb::scene::BehaviourBackend::Native) != nullptr, "Script runtime host did not register Native backend");
+    kb::tests::Require(host.Runtime().FindBackend(kb::scene::BehaviourBackend::Lua) != nullptr, "Script runtime host did not register Lua backend");
+    kb::tests::Require(host.Runtime().FindBackend(kb::scene::BehaviourBackend::VisualGraph) != nullptr, "Script runtime host did not register VisualGraph backend");
+    kb::tests::Require(
+        host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::GetComponent, "Self.HasComponent") != nullptr,
+        "Script runtime host did not register VisualGraph scene component bindings");
+}
+
+void RunScriptRuntimeHostSceneSystemTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "HostProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "HostLua.lua", R"(
+function Tick(self, dt)
+    self:SetProperty("Transform", "localPosition.x", 2.75)
+end
+)");
+    WriteTextFile(assetsRoot / "Logic" / "HostGraph.kbgraph", R"(kbgraph 1
+name HostGraph
+node 1 Event Tick
+pin 1 Output then Void
+node 2 GetProperty VisibilityComponentName
+pin 2 Output value String
+node 3 GetProperty VisibilityPropertyName
+pin 3 Output value String
+node 4 GetProperty VisibilityValue
+pin 4 Output value Bool
+node 5 SetProperty Self.SetProperty.Bool
+pin 5 Input exec Void
+pin 5 Input component String
+pin 5 Input property String
+pin 5 Input value Bool
+pin 5 Output then Void
+pin 5 Output succeeded Bool
+edge exec 1 then 5 exec
+edge data 2 value 5 component
+edge data 3 value 5 property
+edge data 4 value 5 value
+)");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script runtime host project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Script runtime host asset discovery failed");
+
+    const kb::assets::AssetMetadata* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/HostLua.lua");
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/HostGraph.kbgraph");
+    kb::tests::Require(luaMetadata != nullptr && graphMetadata != nullptr, "Script runtime host asset metadata was not discovered");
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script runtime host setup failed");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "VisibilityComponentName",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "Visibility" } });
+                           },
+                       }),
+        "Script runtime host test visibility component binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "VisibilityPropertyName",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::String } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ std::string{ "visible" } });
+                           },
+                       }),
+        "Script runtime host test visibility property binding did not register");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Register(kb::visual::VisualGraphRuntimeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "VisibilityValue",
+                           .outputs = { kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::Bool } },
+                           .callback = [](kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) {
+                               context.Store(instruction.sourceNodeId, "value", kb::visual::VisualGraphRuntimeValue{ false });
+                           },
+                       }),
+        "Script runtime host test visibility value binding did not register");
+
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Host Lua" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Host Graph" });
+    const std::optional<kb::scene::BehaviourComponent> luaBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*luaMetadata);
+    const std::optional<kb::scene::BehaviourComponent> graphBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*graphMetadata);
+    kb::tests::Require(luaBehaviour.has_value() && graphBehaviour.has_value(), "Script runtime host could not create behaviour components");
+    scene.Components().Behaviours().Set(luaObject.Entity(), *luaBehaviour);
+    scene.Components().Behaviours().Set(graphObject.Entity(), *graphBehaviour);
+
+    kb::tests::Require(host.InstallSceneSystem(), "Script runtime host did not install scene system");
+    static_cast<void>(scene.Runtime().Update(0.125F));
+
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(luaObject.Entity()).localPosition.x, 2.75F), "Script runtime host did not execute Lua behaviour");
+    kb::tests::Require(!scene.Components().Visibility().Get(graphObject.Entity()).visible, "Script runtime host did not execute VisualGraph behaviour");
+    kb::tests::Require(host.LuaRuntime().HasScript(luaMetadata->id), "Script runtime host did not prepare Lua asset");
+    kb::tests::Require(host.VisualGraphs().Contains(graphMetadata->id), "Script runtime host did not prepare VisualGraph asset");
+}
+
+void RunScriptRuntimeHostNativeDescriptorBindingTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "HostNativeProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "HostNative.native", R"(
+name Host Native
+symbol HostNative
+)");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script runtime host native project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Script runtime host native asset discovery failed");
+
+    const kb::assets::AssetMetadata* nativeMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/HostNative.native");
+    kb::tests::Require(nativeMetadata != nullptr, "Script runtime host native metadata was not discovered");
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script runtime host native setup failed");
+    kb::tests::Require(host.NativeBackend().RegisterLifecycleSymbol("HostNative", kb::script::ScriptLifecycleEvent::Tick, [](kb::script::ScriptExecutionContext& context) {
+                           kb::scene::TransformComponent transform = context.GetScene().Transforms().Get(context.Self());
+                           transform.localPosition.x = 6.0F;
+                           context.GetScene().Transforms().Set(context.Self(), transform);
+                       }),
+        "Script runtime host native symbol callback registration failed");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Host Native" });
+    const std::optional<kb::scene::BehaviourComponent> nativeBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*nativeMetadata);
+    kb::tests::Require(nativeBehaviour.has_value(), "Script runtime host could not create native behaviour component");
+    scene.Components().Behaviours().Set(object.Entity(), *nativeBehaviour);
+
+    kb::tests::Require(host.InstallSceneSystem(), "Script runtime host did not install native scene system");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(object.Entity()).localPosition.x, 6.0F), "Script runtime host did not bind native descriptor symbol");
+}
+
 void RunScriptSceneComponentApiTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Api Object" });
@@ -596,6 +785,37 @@ void RunScriptSceneComponentApiTest() {
         "visible",
         kb::script::ScriptValue{ 1 });
     kb::tests::Require(!badType.succeeded && !badType.error.empty(), "Script component API accepted wrong value type");
+
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = 999U,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::ScriptSceneComponentMutationResult setTickGroup = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Behaviour",
+        "tickGroup",
+        kb::script::ScriptValue{ static_cast<int>(kb::scene::BehaviourTickGroup::Camera) });
+    kb::tests::Require(setTickGroup.succeeded, "Script component API did not set Behaviour.tickGroup");
+    const kb::script::ScriptSceneComponentMutationResult setExecutionOrder = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Behaviour",
+        "executionOrder",
+        kb::script::ScriptValue{ -25 });
+    kb::tests::Require(setExecutionOrder.succeeded, "Script component API did not set Behaviour.executionOrder");
+    const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(object.Entity());
+    kb::tests::Require(
+        behaviour != nullptr && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Camera && behaviour->executionOrder == -25,
+        "Script component API did not mutate Behaviour scheduling fields");
+    const kb::script::ScriptSceneComponentMutationResult badTickGroup = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Behaviour",
+        "tickGroup",
+        kb::script::ScriptValue{ 99 });
+    kb::tests::Require(!badTickGroup.succeeded, "Script component API accepted invalid Behaviour.tickGroup");
 }
 
 void RunVisualGraphSceneComponentBindingTest() {
@@ -741,6 +961,7 @@ namespace kb::tests {
 
 void RunScriptRuntimeTests() {
     RunNativeScriptRuntimeDispatchTest();
+    RunScriptRuntimeExecutionOrderTest();
     RunLuaScriptRuntimeDispatchTest();
     RunPucLuaScriptRuntimeDispatchTest();
     RunCrossBackendEventDispatchTest();
@@ -748,6 +969,9 @@ void RunScriptRuntimeTests() {
     RunVisualGraphScriptBackendDispatchTest();
     RunScriptRuntimeAssetPreparerEndToEndTest();
     RunScriptRuntimeSceneSystemAssetPreparationTest();
+    RunScriptRuntimeHostBackendRegistrationTest();
+    RunScriptRuntimeHostSceneSystemTest();
+    RunScriptRuntimeHostNativeDescriptorBindingTest();
     RunScriptSceneComponentApiTest();
     RunVisualGraphSceneComponentBindingTest();
 }

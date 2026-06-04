@@ -5,6 +5,7 @@
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
+#include "engine/script/NativeScriptBackend.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
@@ -44,6 +45,7 @@ public:
         kb::visual::VisualGraphRuntimeRegistry& visualGraphs) noexcept;
 
     void SetVisualGraphSettings(ScriptRuntimeVisualGraphPrepareSettings settings);
+    void SetNativeBackend(NativeScriptBackend& nativeBackend) noexcept;
 
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareAsset(kb::assets::AssetId assetId);
     [[nodiscard]] ScriptRuntimeAssetPrepareResult PrepareBehaviour(const kb::scene::BehaviourComponent& behaviour);
@@ -64,6 +66,7 @@ private:
     kb::assets::AssetManager& assets_;
     ILuaScriptAssetStore& luaScripts_;
     kb::visual::VisualGraphRuntimeRegistry& visualGraphs_;
+    NativeScriptBackend* nativeBackend_ = nullptr;
     ScriptRuntimeVisualGraphPrepareSettings visualGraphSettings_{};
 };
 

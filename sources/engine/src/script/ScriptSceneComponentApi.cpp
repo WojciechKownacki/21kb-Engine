@@ -28,6 +28,7 @@ enum class FieldKind {
     Int,
     UInt32,
     Float,
+    BehaviourTickGroup,
     CameraProjection,
     LightKind,
 };
@@ -66,6 +67,8 @@ template <typename Component>
         return ScriptValue{ static_cast<int>(ReadField<Component, std::uint32_t>(component, field.offset)) };
     case FieldKind::Float:
         return ScriptValue{ ReadField<Component, float>(component, field.offset) };
+    case FieldKind::BehaviourTickGroup:
+        return ScriptValue{ static_cast<int>(ReadField<Component, kb::scene::BehaviourTickGroup>(component, field.offset)) };
     case FieldKind::CameraProjection:
         return ScriptValue{ static_cast<int>(ReadField<Component, kb::scene::CameraProjection>(component, field.offset)) };
     case FieldKind::LightKind:
@@ -105,6 +108,12 @@ template <typename Component>
             return true;
         }
         return false;
+    case FieldKind::BehaviourTickGroup:
+        if (value.Type() != ScriptValueType::Int || value.AsInt() < 0 || value.AsInt() > static_cast<int>(kb::scene::BehaviourTickGroup::Presentation)) {
+            return false;
+        }
+        WriteField<Component, kb::scene::BehaviourTickGroup>(component, field.offset) = static_cast<kb::scene::BehaviourTickGroup>(value.AsInt());
+        return true;
     case FieldKind::CameraProjection:
         if (value.Type() != ScriptValueType::Int) {
             return false;
@@ -182,8 +191,10 @@ constexpr std::array<FieldBinding, 3> kMeshRendererFields{
     KB_FIELD(kb::scene::MeshRendererComponent, receivesShadow, FieldKind::Bool),
 };
 
-constexpr std::array<FieldBinding, 1> kBehaviourFields{
+constexpr std::array<FieldBinding, 3> kBehaviourFields{
     KB_FIELD(kb::scene::BehaviourComponent, enabled, FieldKind::Bool),
+    KB_FIELD(kb::scene::BehaviourComponent, tickGroup, FieldKind::BehaviourTickGroup),
+    KB_FIELD(kb::scene::BehaviourComponent, executionOrder, FieldKind::Int),
 };
 
 #undef KB_NESTED_FIELD
