@@ -3,9 +3,12 @@
 #include "docking/EditorDockController.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
+#include "app/EditorShellInteractionState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -30,10 +33,13 @@ struct EditorApplicationState {
     EditorTheme theme = MakeEditorDarkTheme();
     EditorMetrics metrics;
     EditorGdiRenderer renderer;
+    EditorRenderBackendSettings renderBackendSettings;
     EditorSceneBgfxViewport sceneViewport;
     EditorFloatingWindowManager floatingWindows;
     EditorDockController dockController;
     EditorHierarchySelectionController hierarchySelection;
+    EditorPlayModeState playMode;
+    EditorShellInteractionState shellInteraction;
     EditorPointerDragState pointerDrag;
     bool running = false;
 #endif
