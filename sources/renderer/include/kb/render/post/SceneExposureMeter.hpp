@@ -8,10 +8,12 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
-#include <vector>
 
 namespace kb::render {
+
+class SceneExposureGpuReadback;
 
 struct SceneExposureHistogram {
     static constexpr std::uint32_t kBinCount = 64U;
@@ -68,6 +70,14 @@ public:
     [[nodiscard]] static SceneExposureHistogram BuildGpuHistogramReadbackHistogram(std::span<const std::uint8_t> rgba8Pixels) noexcept;
     [[nodiscard]] static float MeterAverageLuminance(const SceneExposureHistogram& histogram, SceneExposureMeteringDesc desc = {}) noexcept;
 
+    SceneExposureMeter();
+    ~SceneExposureMeter();
+
+    SceneExposureMeter(const SceneExposureMeter&) = delete;
+    SceneExposureMeter& operator=(const SceneExposureMeter&) = delete;
+    SceneExposureMeter(SceneExposureMeter&&) = delete;
+    SceneExposureMeter& operator=(SceneExposureMeter&&) = delete;
+
     [[nodiscard]] bool InitializeGpuResources();
     void ShutdownGpuResources() noexcept;
     [[nodiscard]] bool IsGpuInitialized() const noexcept;
@@ -79,23 +89,7 @@ public:
     [[nodiscard]] bool HasHistory() const noexcept;
 
 private:
-    void DestroyGpuResources() noexcept;
-    [[nodiscard]] bool ConsumeHdrReadback(std::uint32_t completedFrame) noexcept;
-    [[nodiscard]] bool CreateHdrReadbackTarget() noexcept;
-
-    bgfx::ProgramHandle hdrLuminanceProgram_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle hdrSourceSampler_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle hdrExposureParams_ = BGFX_INVALID_HANDLE;
-    bgfx::VertexLayout fullscreenLayout_{};
-    bgfx::VertexBufferHandle fullscreenVertexBuffer_ = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle hdrReadbackRenderTexture_ = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle hdrReadbackTexture_ = BGFX_INVALID_HANDLE;
-    bgfx::FrameBufferHandle hdrReadbackFrameBuffer_ = BGFX_INVALID_HANDLE;
-    std::vector<std::uint8_t> hdrReadbackBytes_{};
-    std::uint32_t hdrReadbackReadyFrame_ = 0;
-    float latestHdrAverageLuminance_ = 0.18F;
-    bool hdrReadbackPending_ = false;
-    bool latestHdrSampleValid_ = false;
+    std::unique_ptr<SceneExposureGpuReadback> gpuReadback_;
     float adaptedAverageLuminance_ = 0.18F;
     bool hasHistory_ = false;
 };

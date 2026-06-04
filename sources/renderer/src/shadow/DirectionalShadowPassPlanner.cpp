@@ -4,6 +4,8 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "DirectionalShadowLightSelector.hpp"
+#include "ShadowCasterBoundsCollector.hpp"
 
 #include <bx/math.h>
 
@@ -13,11 +15,6 @@
 
 namespace kb::render {
 namespace {
-
-struct SelectedShadowLight {
-    const LightRenderProxyDesc* light = nullptr;
-    std::uint64_t entityId = 0;
-};
 
 struct Basis {
     float zx = 0.0F;
@@ -77,62 +74,6 @@ void SnapShadowViewToTexel(
     view[13] += snappedY - lightCenter[1];
 }
 
-[[nodiscard]] RenderBoundsSphere TransformBoundsForShadow(const RenderBoundsSphere& localBounds, const std::array<float, 16>& model) noexcept {
-    if (!localBounds.IsValid()) {
-        return RenderBoundsSphere{
-            .center = { model[12], model[13], model[14] },
-            .radius = 1.0F,
-        };
-    }
-
-    const float sx = std::sqrt(model[0] * model[0] + model[1] * model[1] + model[2] * model[2]);
-    const float sy = std::sqrt(model[4] * model[4] + model[5] * model[5] + model[6] * model[6]);
-    const float sz = std::sqrt(model[8] * model[8] + model[9] * model[9] + model[10] * model[10]);
-    return RenderBoundsSphere{
-        .center = {
-            model[0] * localBounds.center[0] + model[4] * localBounds.center[1] + model[8] * localBounds.center[2] + model[12],
-            model[1] * localBounds.center[0] + model[5] * localBounds.center[1] + model[9] * localBounds.center[2] + model[13],
-            model[2] * localBounds.center[0] + model[6] * localBounds.center[1] + model[10] * localBounds.center[2] + model[14],
-        },
-        .radius = localBounds.radius * std::max(std::max(sx, sy), sz),
-    };
-}
-
-[[nodiscard]] RenderBoundsSphere MergeBounds(RenderBoundsSphere lhs, const RenderBoundsSphere& rhs) noexcept {
-    if (!lhs.IsValid()) {
-        return rhs;
-    }
-    if (!rhs.IsValid()) {
-        return lhs;
-    }
-
-    const float dx = rhs.center[0] - lhs.center[0];
-    const float dy = rhs.center[1] - lhs.center[1];
-    const float dz = rhs.center[2] - lhs.center[2];
-    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-    if (distance + rhs.radius <= lhs.radius) {
-        return lhs;
-    }
-    if (distance + lhs.radius <= rhs.radius) {
-        return rhs;
-    }
-
-    const float mergedRadius = (distance + lhs.radius + rhs.radius) * 0.5F;
-    const float centerShift = distance > 0.0001F ? (mergedRadius - lhs.radius) / distance : 0.0F;
-    return RenderBoundsSphere{
-        .center = {
-            lhs.center[0] + dx * centerShift,
-            lhs.center[1] + dy * centerShift,
-            lhs.center[2] + dz * centerShift,
-        },
-        .radius = mergedRadius,
-    };
-}
-
-[[nodiscard]] float MaxLightChannel(const LightRenderProxyDesc& light) noexcept {
-    return std::max(std::max(light.color[0], light.color[1]), light.color[2]);
-}
-
 [[nodiscard]] float ShadowFilterModeValue(SceneRenderShadowFilter filter) noexcept {
     switch (filter) {
     case SceneRenderShadowFilter::Hard:
@@ -147,26 +88,6 @@ void SnapShadowViewToTexel(
         return 6.0F;
     }
     return 3.0F;
-}
-
-[[nodiscard]] SelectedShadowLight SelectShadowDirectionalLight(const RenderScene& renderScene) noexcept {
-    SelectedShadowLight selected{};
-    std::uint64_t selectedEntityId = 0U;
-    float selectedScore = 0.0F;
-    for (const auto& [entityId, proxy] : renderScene.LightProxies()) {
-        const LightRenderProxyDesc& light = proxy.desc;
-        if (!light.visible || !light.castsShadow || light.kind != RenderLightKind::Directional || light.intensity <= 0.0F || MaxLightChannel(light) <= 0.0F) {
-            continue;
-        }
-        const float score = light.intensity * MaxLightChannel(light);
-        if (selected.light == nullptr || score > selectedScore || (score == selectedScore && entityId < selectedEntityId)) {
-            selected.light = &light;
-            selected.entityId = entityId;
-            selectedEntityId = entityId;
-            selectedScore = score;
-        }
-    }
-    return selected;
 }
 
 [[nodiscard]] Basis LightBasisFromQuat(const std::array<float, 4>& q) noexcept {
@@ -217,42 +138,28 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
         return setup;
     }
 
-    const SelectedShadowLight selectedLight = SelectShadowDirectionalLight(renderScene);
+    const DirectionalShadowLightSelection selectedLight = DirectionalShadowLightSelector::Select(renderScene);
     if (selectedLight.light == nullptr) {
         return setup;
     }
     setup.lightEntityId = selectedLight.entityId;
     const LightRenderProxyDesc& light = *selectedLight.light;
 
-    RenderBoundsSphere casterBounds{};
-    for (const auto& [entityId, proxy] : renderScene.MeshProxies()) {
-        static_cast<void>(entityId);
-        const MeshRenderProxyDesc& mesh = proxy.desc;
-        if (!mesh.visible || !mesh.castsShadow) {
-            continue;
-        }
-
-        RenderBoundsSphere localBounds{};
-        const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(mesh.meshAssetId);
-        if (const RenderMeshResource* meshResource = resources.FindMesh(meshHandle); meshResource != nullptr) {
-            localBounds = meshResource->bounds;
-        }
-        casterBounds = MergeBounds(casterBounds, TransformBoundsForShadow(localBounds, mesh.model));
-        ++setup.casterCount;
-    }
-    if (setup.casterCount == 0U || !casterBounds.IsValid()) {
+    const ShadowCasterBounds casterBounds = ShadowCasterBoundsCollector::Collect(renderScene, resources, resourceMap);
+    setup.casterCount = casterBounds.casterCount;
+    if (setup.casterCount == 0U || !casterBounds.bounds.IsValid()) {
         return setup;
     }
 
     Basis basis = LightBasisFromQuat(light.rotation);
     Normalize3(basis.zx, basis.zy, basis.zz);
-    const float radius = std::max(casterBounds.radius, 1.0F);
+    const float radius = std::max(casterBounds.bounds.radius, 1.0F);
     const float shadowDistance = std::max(lightingConfig.shadowDistance, radius * 2.0F);
-    const bx::Vec3 center{ casterBounds.center[0], casterBounds.center[1], casterBounds.center[2] };
+    const bx::Vec3 center{ casterBounds.bounds.center[0], casterBounds.bounds.center[1], casterBounds.bounds.center[2] };
     const bx::Vec3 eye{
-        casterBounds.center[0] - basis.zx * shadowDistance,
-        casterBounds.center[1] - basis.zy * shadowDistance,
-        casterBounds.center[2] - basis.zz * shadowDistance,
+        casterBounds.bounds.center[0] - basis.zx * shadowDistance,
+        casterBounds.bounds.center[1] - basis.zy * shadowDistance,
+        casterBounds.bounds.center[2] - basis.zz * shadowDistance,
     };
     const float upX = std::abs(basis.zy) > 0.95F ? 1.0F : 0.0F;
     const float upY = std::abs(basis.zy) > 0.95F ? 0.0F : 1.0F;
@@ -261,7 +168,7 @@ DirectionalShadowSetup DirectionalShadowPassPlanner::Build(
     bx::mtxLookAt(setup.camera.view.data(), eye, center, up);
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
     const float orthoHeight = std::max(radius * 2.0F, 1.0F);
-    SnapShadowViewToTexel(setup.camera.view, casterBounds.center, orthoHeight, lightingConfig.shadowMapSize);
+    SnapShadowViewToTexel(setup.camera.view, casterBounds.bounds.center, orthoHeight, lightingConfig.shadowMapSize);
     SceneDepthPolicy::MakeOrthographic(
         setup.camera.projection.data(),
         orthoHeight,

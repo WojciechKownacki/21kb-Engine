@@ -29,25 +29,17 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
     rects.toolbar = content;
     rects.toolbar.bottom = rects.toolbar.top + Height;
     rects.profileButton = ButtonRect(rects.toolbar, 8, 104);
-    rects.fitButton = ButtonRect(rects.toolbar, 118, 64);
-    rects.cameraButton = ButtonRect(rects.toolbar, 188, 112);
     rects.renderArea = content;
     rects.renderArea.top = rects.toolbar.bottom;
     return rects;
 }
 
 void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state) {
-    Paint(dc, content, theme, state, EditorViewportCameraModeLabel(state.CameraMode()));
-}
-
-void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state, const char* cameraLabel) {
     const SceneViewportToolbarRects rects = Resolve(content);
     GdiDrawing::FillRectColor(dc, rects.toolbar, GdiDrawing::ToColorRef(theme.toolbar));
 
     const EditorViewportProfile profile = state.Profile();
     DrawButton(dc, rects.profileButton, profile.label.data(), theme);
-    DrawButton(dc, rects.fitButton, EditorViewportFitModeLabel(state.FitMode()), theme);
-    DrawButton(dc, rects.cameraButton, cameraLabel == nullptr ? "" : cameraLabel, theme);
 
     char resolution[96]{};
     if (profile.width == 0U || profile.height == 0U) {
@@ -56,7 +48,7 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
         std::snprintf(resolution, sizeof(resolution), "Render: %ux%u", profile.width, profile.height);
     }
     RECT textRect = rects.toolbar;
-    textRect.left = rects.cameraButton.right + 12;
+    textRect.left = rects.profileButton.right + 12;
     textRect.right -= 8;
     GdiDrawing::DrawTabText(dc, textRect, resolution, GdiDrawing::ToColorRef(theme.textDisabled));
 }

@@ -46,6 +46,10 @@ struct RuntimeRenderResourceEnsureContext {
     std::uint64_t currentFrame = 0;
 };
 
+using RuntimeMeshResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMeshResource, RuntimeAssetKeyHash>;
+using RuntimeMaterialResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMaterialResource, RuntimeAssetKeyHash>;
+using RuntimeTextureResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeTextureResource, RuntimeAssetKeyHash>;
+
 class RuntimeRenderResourceCache {
 public:
     void Reserve(const RuntimeRenderResourceCacheReserveDesc& desc);
@@ -62,14 +66,10 @@ public:
     [[nodiscard]] RuntimeRenderResourceCacheStats Stats() const noexcept;
 
 private:
-    using MeshMap = std::unordered_map<RuntimeAssetKey, RuntimeMeshResource, RuntimeAssetKeyHash>;
-    using MaterialMap = std::unordered_map<RuntimeAssetKey, RuntimeMaterialResource, RuntimeAssetKeyHash>;
-    using TextureMap = std::unordered_map<RuntimeAssetKey, RuntimeTextureResource, RuntimeAssetKeyHash>;
-
-    MeshMap meshes_;
-    MaterialMap materials_;
-    MaterialMap embeddedMaterials_;
-    TextureMap textures_;
+    RuntimeMeshResourceMap meshes_;
+    RuntimeMaterialResourceMap materials_;
+    RuntimeMaterialResourceMap embeddedMaterials_;
+    RuntimeTextureResourceMap textures_;
 
     void EnsureMeshResources(const RuntimeRenderResourceEnsureContext& context);
     void EnsureMaterialResources(const RuntimeRenderResourceEnsureContext& context);

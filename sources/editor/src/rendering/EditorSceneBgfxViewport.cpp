@@ -4,6 +4,8 @@
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
+#include "rendering/EditorSceneViewportGeometry.hpp"
+#include "rendering/EditorSceneViewportRegionBuilder.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -11,7 +13,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <cmath>
 #include <span>
 #include <vector>
 
@@ -24,64 +25,19 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
-    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
+    return EditorSceneViewportGeometry::RectWidth(rect);
 }
 
 [[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
-    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
+    return EditorSceneViewportGeometry::RectHeight(rect);
 }
 
 [[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
-    const std::uint32_t boundsWidth = RectWidth(bounds);
-    const std::uint32_t boundsHeight = RectHeight(bounds);
-    if (boundsWidth == 0U || boundsHeight == 0U || renderWidth == 0U || renderHeight == 0U) {
-        return bounds;
-    }
-
-    double scale = 1.0;
-    const double scaleX = static_cast<double>(boundsWidth) / static_cast<double>(renderWidth);
-    const double scaleY = static_cast<double>(boundsHeight) / static_cast<double>(renderHeight);
-    switch (fitMode) {
-    case EditorViewportFitMode::Fit:
-        scale = std::min(scaleX, scaleY);
-        break;
-    case EditorViewportFitMode::OneToOne:
-        scale = 1.0;
-        break;
-    case EditorViewportFitMode::Fill:
-        scale = std::max(scaleX, scaleY);
-        break;
-    }
-
-    const LONG width = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderWidth) * scale)));
-    const LONG height = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderHeight) * scale)));
-    const LONG centerX = bounds.left + static_cast<LONG>(boundsWidth / 2U);
-    const LONG centerY = bounds.top + static_cast<LONG>(boundsHeight / 2U);
-    return RECT{
-        .left = centerX - width / 2,
-        .top = centerY - height / 2,
-        .right = centerX - width / 2 + width,
-        .bottom = centerY - height / 2 + height,
-    };
+    return EditorSceneViewportGeometry::CenteredRectFor(bounds, renderWidth, renderHeight, fitMode);
 }
 
 [[nodiscard]] RECT ClipRectToClient(HWND parent, const RECT& rect) noexcept {
-    if (parent == nullptr) {
-        return {};
-    }
-    RECT client{};
-    if (GetClientRect(parent, &client) == 0) {
-        return {};
-    }
-    RECT clipped{};
-    if (IntersectRect(&clipped, &rect, &client) == 0) {
-        return {};
-    }
-    return clipped;
-}
-
-[[nodiscard]] bool SameRect(const RECT& lhs, const RECT& rhs) noexcept {
-    return lhs.left == rhs.left && lhs.top == rhs.top && lhs.right == rhs.right && lhs.bottom == rhs.bottom;
+    return EditorSceneViewportGeometry::ClipRectToClient(parent, rect);
 }
 
 } // namespace
@@ -133,8 +89,8 @@ const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
 void EditorSceneBgfxViewport::Shutdown() {
     ShutdownGpuResources();
 
-    sessions_.clear();
-    hostSurfaces_.clear();
+    sessionStore_.Clear();
+    hostSurfaceStore_.Clear();
 
     if (windowClassRegistered_ && instance_ != nullptr) {
         UnregisterClassW(kSceneViewportClassName, instance_);
@@ -147,7 +103,6 @@ void EditorSceneBgfxViewport::Shutdown() {
     rendererBackendGeneration_ = 0;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
-    nextViewportIndex_ = 0;
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -158,16 +113,8 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
-    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
-        if (session != nullptr && session->host == parent) {
-            session->presentedInCurrentPaint = false;
-        }
-    }
-    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->host == parent) {
-            surface->presentedInCurrentPaint = false;
-        }
-    }
+    sessionStore_.MarkHostNotPresented(parent);
+    hostSurfaceStore_.MarkHostNotPresented(parent);
 }
 
 void EditorSceneBgfxViewport::EndPaintLayout() {
@@ -175,11 +122,7 @@ void EditorSceneBgfxViewport::EndPaintLayout() {
         FailRender("Scene render/present failed");
     }
 
-    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->host == paintParent_ && !surface->presentedInCurrentPaint) {
-            HideHostSurface(*surface);
-        }
-    }
+    hostSurfaceStore_.HideUnpresentedForHost(paintParent_);
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     paintParent_ = nullptr;
@@ -217,93 +160,27 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
 }
 
 void EditorSceneBgfxViewport::Hide() noexcept {
-    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
-        if (session != nullptr) {
-            session->presentedInCurrentPaint = false;
-        }
-    }
+    sessionStore_.MarkAllNotPresented();
 }
 
 EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::EnsureSession(HWND host, std::uint64_t key) {
-    if (host == nullptr) {
-        return nullptr;
-    }
-
-    if (ViewportSession* existing = key == 0U ? FindSession(host, key) : FindSessionByKey(key); existing != nullptr) {
-        existing->host = host;
-        return existing;
-    }
-
-    const std::uint32_t viewportIndex = nextViewportIndex_;
-    if (viewportIndex > kMaxEditorViewportIndex) {
-        return nullptr;
-    }
-    ++nextViewportIndex_;
-
-    std::unique_ptr<ViewportSession> session = std::make_unique<ViewportSession>();
-    session->host = host;
-    session->key = key;
-    session->viewportIndex = viewportIndex;
-    sessions_.push_back(std::move(session));
-    return sessions_.back().get();
+    return sessionStore_.Ensure(host, key, kMaxEditorViewportIndex);
 }
 
 EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::FindSession(HWND host, std::uint64_t key) noexcept {
-    if (host == nullptr) {
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::find_if(sessions_, [host, key](const std::unique_ptr<ViewportSession>& session) {
-        return session != nullptr && session->host == host && session->key == key;
-    });
-    return iter == sessions_.end() ? nullptr : iter->get();
+    return sessionStore_.Find(host, key);
 }
 
 EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::FindSessionByKey(std::uint64_t key) noexcept {
-    if (key == 0U) {
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::find_if(sessions_, [key](const std::unique_ptr<ViewportSession>& session) {
-        return session != nullptr && session->key == key;
-    });
-    return iter == sessions_.end() ? nullptr : iter->get();
+    return sessionStore_.FindByKey(key);
 }
 
 EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::EnsureHostSurface(HWND host) {
-    if (host == nullptr) {
-        return nullptr;
-    }
-    if (HostSurface* existing = FindHostSurface(host); existing != nullptr) {
-        return existing;
-    }
-
-    std::unique_ptr<HostSurface> surface = std::make_unique<HostSurface>();
-    surface->host = host;
-    hostSurfaces_.push_back(std::move(surface));
-    return hostSurfaces_.back().get();
+    return hostSurfaceStore_.Ensure(host);
 }
 
 EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::FindHostSurface(HWND host) noexcept {
-    if (host == nullptr) {
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::find_if(hostSurfaces_, [host](const std::unique_ptr<HostSurface>& surface) {
-        return surface != nullptr && surface->host == host;
-    });
-    return iter == hostSurfaces_.end() ? nullptr : iter->get();
-}
-
-EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::FindHostSurfaceByWindow(HWND window) noexcept {
-    if (window == nullptr) {
-        return nullptr;
-    }
-
-    const auto iter = std::ranges::find_if(hostSurfaces_, [window](const std::unique_ptr<HostSurface>& surface) {
-        return surface != nullptr && surface->window == window;
-    });
-    return iter == hostSurfaces_.end() ? nullptr : iter->get();
+    return hostSurfaceStore_.Find(host);
 }
 
 bool EditorSceneBgfxViewport::EnsureWindowClass() {
@@ -357,7 +234,7 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent*> presents) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent* const> presents) {
     if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
         return false;
     }
@@ -393,25 +270,16 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
         static_cast<int>(RectHeight(rect)),
         SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW);
 
-    HRGN combinedRegion = CreateRectRgn(0, 0, 0, 0);
+    std::vector<RECT> presentRects;
+    presentRects.reserve(presents.size());
+    for (const PendingPresent* present : presents) {
+        if (present != nullptr) {
+            presentRects.push_back(present->destination);
+        }
+    }
+    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, presentRects);
     if (combinedRegion == nullptr) {
         return false;
-    }
-    for (const PendingPresent* present : presents) {
-        if (present == nullptr) {
-            continue;
-        }
-        const int left = static_cast<int>(present->destination.left - rect.left);
-        const int top = static_cast<int>(present->destination.top - rect.top);
-        const int right = static_cast<int>(present->destination.right - rect.left);
-        const int bottom = static_cast<int>(present->destination.bottom - rect.top);
-        HRGN presentRegion = CreateRectRgn(left, top, right, bottom);
-        if (presentRegion == nullptr) {
-            DeleteObject(combinedRegion);
-            return false;
-        }
-        CombineRgn(combinedRegion, combinedRegion, presentRegion, RGN_OR);
-        DeleteObject(presentRegion);
     }
     if (SetWindowRgn(surface.window, combinedRegion, FALSE) == 0) {
         DeleteObject(combinedRegion);
@@ -467,10 +335,7 @@ bool EditorSceneBgfxViewport::EnsurePresentTarget(HostSurface& surface, std::uin
 }
 
 void EditorSceneBgfxViewport::HideHostSurface(HostSurface& surface) noexcept {
-    if (surface.window != nullptr && IsWindow(surface.window) != 0) {
-        ShowWindow(surface.window, SW_HIDE);
-    }
-    surface.presentedInCurrentPaint = false;
+    hostSurfaceStore_.Hide(surface);
 }
 
 void EditorSceneBgfxViewport::HideSession(HWND host, std::uint64_t key) noexcept {
@@ -489,31 +354,13 @@ void EditorSceneBgfxViewport::ReleaseWindow(HWND window) noexcept {
         return;
     }
 
-    HostSurface* surface = FindHostSurfaceByWindow(window);
-    if (surface != nullptr) {
-        surface->presentTarget.Shutdown();
-        surface->window = nullptr;
-        surface->rect = {};
-        surface->presentedInCurrentPaint = false;
-    }
+    hostSurfaceStore_.ReleaseWindow(window);
 }
 
 void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
     ShutdownSessionFramebuffers();
     renderer_.Shutdown();
-    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr) {
-            if (surface->window != nullptr && IsWindow(surface->window) != 0) {
-                const HWND window = surface->window;
-                surface->window = nullptr;
-                DestroyWindow(window);
-            } else {
-                surface->window = nullptr;
-            }
-            surface->rect = {};
-            surface->presentedInCurrentPaint = false;
-        }
-    }
+    hostSurfaceStore_.DestroyWindows();
     if (contextWindow_ != nullptr && IsWindow(contextWindow_) != 0) {
         const HWND window = contextWindow_;
         contextWindow_ = nullptr;
@@ -524,17 +371,8 @@ void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
 }
 
 void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
-    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
-        if (session != nullptr) {
-            session->sceneTarget.Shutdown();
-            session->postProcessTargets.Shutdown();
-        }
-    }
-    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr) {
-            surface->presentTarget.Shutdown();
-        }
-    }
+    sessionStore_.ShutdownFramebuffers();
+    hostSurfaceStore_.ShutdownPresentTargets();
 }
 
 bool EditorSceneBgfxViewport::SubmitPendingPaint() {
@@ -543,74 +381,8 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
         return true;
     }
 
-    for (PendingPresent& present : pendingPresents_) {
-        if (present.host == nullptr) {
-            continue;
-        }
-
-        std::vector<const PendingPresent*> hostPresents;
-        RECT surfaceRect = present.destination;
-        for (const PendingPresent& candidate : pendingPresents_) {
-            if (candidate.host != present.host) {
-                continue;
-            }
-            hostPresents.push_back(&candidate);
-            UnionRect(&surfaceRect, &surfaceRect, &candidate.destination);
-        }
-
-        HostSurface* surface = EnsureHostSurface(present.host);
-        if (surface == nullptr) {
-            return false;
-        }
-        if (surface->presentedInCurrentPaint) {
-            continue;
-        }
-        if (!EnsureHostSurfaceWindow(*surface, surfaceRect, hostPresents)) {
-            return false;
-        }
-        if (!EnsurePresentTarget(*surface, RectWidth(surfaceRect), RectHeight(surfaceRect))) {
-            return false;
-        }
-        surface->presentedInCurrentPaint = true;
-
-        for (const PendingPresent* hostPresent : hostPresents) {
-            if (hostPresent == nullptr) {
-                continue;
-            }
-            render::Renderer::SceneFrameSubmission submission{};
-            if (!BuildSubmission(*hostPresent, *surface, submission)) {
-                return false;
-            }
-            pendingSubmissions_.push_back(submission);
-        }
-    }
-
-    if (pendingSubmissions_.empty()) {
-        return true;
-    }
-    if (!renderer_.BeginFrame()) {
-        return false;
-    }
-
-    const bool submitted = renderer_.SubmitScenes(pendingSubmissions_);
-    renderer_.EndFrame();
-    if (!submitted) {
-        return false;
-    }
-
-    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->presentedInCurrentPaint && surface->window != nullptr && IsWindow(surface->window) != 0) {
-            SetWindowPos(
-                surface->window,
-                HWND_TOP,
-                surface->rect.left,
-                surface->rect.top,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_SHOWWINDOW);
-        }
-    }
-    return true;
+    PendingPaintSubmitter submitter(*this);
+    return submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
@@ -655,64 +427,6 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
         .outputWidth = outputWidth,
         .outputHeight = outputHeight,
     });
-    return true;
-}
-
-bool EditorSceneBgfxViewport::BuildSubmission(const PendingPresent& present, const HostSurface& surface, render::Renderer::SceneFrameSubmission& submission) {
-    if (present.session == nullptr || present.scene == nullptr || present.renderWidth == 0U || present.renderHeight == 0U ||
-        present.outputWidth == 0U || present.outputHeight == 0U || !surface.presentTarget.IsValid()) {
-        return false;
-    }
-
-    ViewportSession& session = *present.session;
-    if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
-            .extent = render::RenderExtent{present.renderWidth, present.renderHeight},
-            .colorPolicy = render::SceneColorFormatPolicy::Auto,
-        })) {
-        return false;
-    }
-    if (!session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
-            .extent = render::RenderExtent{present.renderWidth, present.renderHeight},
-            .colorPolicy = render::SceneColorFormatPolicy::Auto,
-        })) {
-        return false;
-    }
-
-    session.selectedEntityIds = present.settings.selectedEntityIds;
-    const render::RenderViewportRect outputRect{
-        .x = static_cast<std::uint32_t>(std::max<LONG>(0, present.destination.left - surface.rect.left)),
-        .y = static_cast<std::uint32_t>(std::max<LONG>(0, present.destination.top - surface.rect.top)),
-        .extent = render::RenderExtent{present.outputWidth, present.outputHeight},
-    };
-    submission = render::Renderer::SceneFrameSubmission{
-        .scene = present.scene,
-        .desc = render::RenderSceneSubmitDesc{
-        .target = render::RenderSceneTargetBinding{
-            .frameBuffer = session.sceneTarget.FrameBuffer(),
-            .colorTexture = session.sceneTarget.ColorTexture(),
-            .depthTexture = session.sceneTarget.DepthTexture(),
-            .viewport = render::RenderViewportDesc{
-                .id = render::RenderViewportId{ session.viewportIndex + 1U },
-                .extent = render::RenderExtent{ present.renderWidth, present.renderHeight },
-                .viewportIndex = session.viewportIndex,
-            },
-        },
-        .postProcess = session.postProcessTargets.Binding(),
-        .finalComposite = render::RenderFinalCompositeTargetBinding{
-            .frameBuffer = surface.presentTarget.FrameBuffer(),
-            .extent = render::RenderExtent{ present.outputWidth, present.outputHeight },
-            .outputRect = outputRect,
-            .enabled = true,
-            .clearTarget = true,
-        },
-        .cameraOverride = present.settings.cameraOverride,
-        .selectedEntityIds = session.selectedEntityIds[0] == 0U
-            ? std::span<const std::uint64_t>{}
-            : std::span<const std::uint64_t>{session.selectedEntityIds.data(), session.selectedEntityIds.size()},
-        .clearRgba = kSceneClearRgba,
-        .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
-        },
-    };
     return true;
 }
 

@@ -41,6 +41,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderResourceRegistry.hpp
     include/kb/render/resources/RenderResources.hpp
     include/kb/render/resources/RenderTextureAssetLoader.hpp
+    include/kb/render/resources/detail/RenderResourceSlotPool.hpp
     include/kb/render/runtime/RuntimeFrameResourceReferences.hpp
     include/kb/render/runtime/RuntimeMaterialResolver.hpp
     include/kb/render/runtime/RuntimeRenderAssetDiscovery.hpp
@@ -67,6 +68,30 @@ add_library(kb_renderer STATIC
     src/DisplayConfig.cpp
     src/Renderer.cpp
     src/RendererCapabilityReport.cpp
+    src/renderer/RendererExposureSubmitter.cpp
+    src/renderer/RendererExposureSubmitter.hpp
+    src/renderer/RendererEditorOverlaySubmitter.cpp
+    src/renderer/RendererEditorOverlaySubmitter.hpp
+    src/renderer/RendererFinalCompositeSubmitter.cpp
+    src/renderer/RendererFinalCompositeSubmitter.hpp
+    src/renderer/RendererMeshPassSubmitter.cpp
+    src/renderer/RendererMeshPassSubmitter.hpp
+    src/renderer/RendererMatrixMath.cpp
+    src/renderer/RendererMatrixMath.hpp
+    src/renderer/RendererPostProcessSubmitter.cpp
+    src/renderer/RendererPostProcessSubmitter.hpp
+    src/renderer/RendererRuntimeResourceStatsBuilder.cpp
+    src/renderer/RendererRuntimeResourceStatsBuilder.hpp
+    src/renderer/RendererSceneLightingConfigResolver.cpp
+    src/renderer/RendererSceneLightingConfigResolver.hpp
+    src/renderer/RendererShadowSubmitter.cpp
+    src/renderer/RendererShadowSubmitter.hpp
+    src/renderer/RendererTemporalJitter.cpp
+    src/renderer/RendererTemporalJitter.hpp
+    src/renderer/RendererViewConfigurator.cpp
+    src/renderer/RendererViewConfigurator.hpp
+    src/renderer/RendererViewportPassResolver.cpp
+    src/renderer/RendererViewportPassResolver.hpp
     src/SceneFramebuffer.cpp
     src/SceneRenderTarget.cpp
     src/SceneRenderTargetFormat.cpp
@@ -78,26 +103,76 @@ add_library(kb_renderer STATIC
     src/frame/RenderFramePipeline.cpp
     src/frame/RenderFrameState.cpp
     src/frame/RenderPassGraph.cpp
+    src/frame/RenderPassGraphCompiler.cpp
+    src/frame/RenderPassGraphCompiler.hpp
+    src/frame/RenderPassGraphValidator.cpp
+    src/frame/RenderPassGraphValidator.hpp
     src/frame/RenderPassKind.cpp
     src/overlay/SceneGizmoPass.cpp
     src/overlay/SceneGridPass.cpp
     src/overlay/SelectionOutlineCompositePass.cpp
     src/post/PostProcessChain.cpp
     src/post/PostProcessRenderTarget.cpp
+    src/post/SceneExposureGpuReadback.cpp
+    src/post/SceneExposureGpuReadback.hpp
     src/post/SceneExposureMeter.cpp
+    src/post/SceneExposureHistogramBuilder.cpp
+    src/post/SceneExposureHistogramBuilder.hpp
     src/post/SceneDisplayCompositeRenderer.cpp
     src/post/ScenePostProcessRenderer.cpp
+    src/post/ScenePostProcessSubmitter.cpp
     src/post/ScenePostProcessTargets.cpp
     src/resources/NativeWindowFramebuffer.cpp
     src/resources/RenderMaterialAssetLoader.cpp
+    src/resources/RenderMaterialAssetFieldParser.cpp
+    src/resources/RenderMaterialAssetFieldParser.hpp
+    src/resources/RenderMaterialAssetParser.cpp
+    src/resources/RenderMaterialAssetParser.hpp
+    src/resources/RenderMaterialTextureFieldParser.cpp
+    src/resources/RenderMaterialTextureFieldParser.hpp
+    src/resources/RenderMaterialResourceBuilder.cpp
+    src/resources/RenderMaterialResourceBuilder.hpp
+    src/resources/RenderMeshDescGeometry.cpp
+    src/resources/RenderMeshDescGeometry.hpp
+    src/resources/RenderMeshDescValidator.cpp
+    src/resources/RenderMeshDescValidator.hpp
+    src/resources/RenderMeshAssetFinalizer.cpp
+    src/resources/RenderMeshAssetFinalizer.hpp
     src/resources/RenderMeshAssetBuilder.cpp
+    src/resources/RenderMeshGltfImporter.cpp
+    src/resources/RenderMeshGltfImporter.hpp
+    src/resources/RenderMeshGltfMaterialImporter.cpp
+    src/resources/RenderMeshGltfMaterialImporter.hpp
+    src/resources/RenderMeshGltfTransforms.cpp
+    src/resources/RenderMeshGltfTransforms.hpp
     src/resources/RenderMeshAssetLoader.cpp
+    src/resources/RenderMeshObjImporter.cpp
+    src/resources/RenderMeshObjImporter.hpp
+    src/resources/RenderMeshObjMaterialResolver.cpp
+    src/resources/RenderMeshObjMaterialResolver.hpp
+    src/resources/RenderMeshResourceBuilder.cpp
+    src/resources/RenderMeshResourceBuilder.hpp
     src/resources/RenderResourceRegistry.cpp
+    src/resources/RenderResourceReleaser.cpp
+    src/resources/RenderResourceReleaser.hpp
+    src/resources/RenderStaticMeshVertexFormat.cpp
     src/resources/RenderTextureAssetLoader.cpp
+    src/resources/RenderTextureResourceBuilder.cpp
+    src/resources/RenderTextureResourceBuilder.hpp
     src/runtime/RuntimeFrameResourceReferences.cpp
     src/runtime/RuntimeMaterialResolver.cpp
+    src/runtime/RuntimeMaterialResourceEnsurer.cpp
+    src/runtime/RuntimeMaterialResourceEnsurer.hpp
+    src/runtime/RuntimeMeshResourceEnsurer.cpp
+    src/runtime/RuntimeMeshResourceEnsurer.hpp
     src/runtime/RuntimeRenderAssetDiscovery.cpp
     src/runtime/RuntimeRenderResourceCache.cpp
+    src/runtime/RuntimeRenderResourceLifecycle.cpp
+    src/runtime/RuntimeRenderResourceLifecycle.hpp
+    src/runtime/RuntimeRenderResourcePruner.cpp
+    src/runtime/RuntimeRenderResourcePruner.hpp
+    src/runtime/RuntimeTextureResourceEnsurer.cpp
+    src/runtime/RuntimeTextureResourceEnsurer.hpp
     src/scene/EcsRenderSceneSynchronizer.cpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
@@ -106,15 +181,43 @@ add_library(kb_renderer STATIC
     src/scene/MeshPipeline.cpp
     src/scene/RenderInstanceBuffer.cpp
     src/scene/RenderScene.cpp
+    src/scene/RenderSceneProxyConverters.cpp
+    src/scene/RenderSceneProxyConverters.hpp
+    src/scene/RenderSceneProxyDirtyTracker.cpp
+    src/scene/RenderSceneProxyDirtyTracker.hpp
     src/scene/SceneRenderResourceMap.cpp
     src/scene/SceneMeshSubmitter.cpp
     src/scene/SceneMeshSubmitter.hpp
+    src/scene/lighting/SceneForwardLightSelector.cpp
+    src/scene/lighting/SceneForwardLightSelector.hpp
+    src/scene/lighting/SceneLightingPacker.cpp
+    src/scene/lighting/SceneLightingPacker.hpp
+    src/scene/pipeline/MeshPipelineCommandBuilder.cpp
+    src/scene/pipeline/MeshPipelineCommandBuilder.hpp
+    src/scene/pipeline/MeshPipelineGpuDrivenRecorder.cpp
+    src/scene/pipeline/MeshPipelineGpuDrivenRecorder.hpp
+    src/scene/pipeline/MeshPipelinePassPolicy.cpp
+    src/scene/pipeline/MeshPipelinePassPolicy.hpp
+    src/scene/pipeline/MeshPipelineResourceResolver.cpp
+    src/scene/pipeline/MeshPipelineResourceResolver.hpp
+    src/scene/pipeline/MeshPipelineVisibility.cpp
+    src/scene/pipeline/MeshPipelineVisibility.hpp
+    src/scene/submit/SceneMeshDrawCommandSubmitter.cpp
+    src/scene/submit/SceneMeshDrawCommandSubmitter.hpp
+    src/scene/submit/SceneMeshMaterialBindingResolver.cpp
+    src/scene/submit/SceneMeshMaterialBindingResolver.hpp
+    src/scene/submit/SceneMeshPassResources.cpp
+    src/scene/submit/SceneMeshPassResources.hpp
     src/scene/SceneRenderExtractor.cpp
     src/scene/SceneRenderer.cpp
     src/scene/RenderSceneStore.cpp
     src/scene/SceneTransformMatrices.cpp
     src/scene/SceneTransformMatrices.hpp
     src/shadow/DirectionalShadowPassPlanner.cpp
+    src/shadow/DirectionalShadowLightSelector.cpp
+    src/shadow/DirectionalShadowLightSelector.hpp
+    src/shadow/ShadowCasterBoundsCollector.cpp
+    src/shadow/ShadowCasterBoundsCollector.hpp
     src/shadow/ShadowMapResource.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/allocator.cpp
     ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty/meshoptimizer/src/indexgenerator.cpp
