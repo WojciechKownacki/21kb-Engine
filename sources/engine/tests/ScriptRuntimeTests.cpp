@@ -9,6 +9,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
@@ -16,6 +17,7 @@
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/ScriptSceneComponentApi.hpp"
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphCompiler.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
@@ -176,7 +178,9 @@ void RunPucLuaScriptRuntimeDispatchTest() {
     constexpr kb::assets::AssetId kLuaAsset{3101U};
     const kb::script::PucLuaLoadResult loaded = luaRuntime.LoadScript(kLuaAsset, R"(
 function Tick(self, dt)
-    Emit("LuaTicked", { entity = self.entity, delta = dt })
+    local wrote = self:SetProperty("Transform", "localPosition.x", 4.5)
+    local x = self:GetProperty("Transform", "localPosition.x")
+    Emit("LuaTicked", { entity = self.entity, delta = dt, x = x, hasTransform = self:HasComponent("Transform"), wrote = wrote })
 end
 
 function DoorOpened(self, event)
@@ -202,7 +206,8 @@ end
     kb::tests::Require(tick.Succeeded(), "PUC Lua runtime Tick produced diagnostics");
     kb::tests::Require(tick.executedBehaviours == 1U, "PUC Lua runtime did not execute Tick");
     kb::tests::Require(tick.emittedEvents.size() == 1U && tick.emittedEvents[0].name == "LuaTicked", "PUC Lua runtime did not emit Tick event");
-    kb::tests::Require(tick.emittedEvents[0].arguments.size() == 2U, "PUC Lua runtime did not preserve Tick payload");
+    kb::tests::Require(tick.emittedEvents[0].arguments.size() == 5U, "PUC Lua runtime did not preserve Tick payload");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(object.Entity()).localPosition.x, 4.5F), "PUC Lua self:SetProperty did not mutate Transform");
 
     const kb::script::ScriptEvent doorOpened{
         .name = "DoorOpened",
@@ -530,6 +535,68 @@ edge exec 1 then 2 exec
     kb::tests::Require(sawGraphEvent, "Script scene system did not emit graph Tick event");
 }
 
+void RunScriptSceneComponentApiTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Script Api Object" });
+    scene.Components().Cameras().Set(object.Entity(), kb::scene::CameraComponent{});
+
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Transform"), "Script component API did not see Transform");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Visibility"), "Script component API did not see Visibility");
+    kb::tests::Require(kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Camera"), "Script component API did not see Camera");
+    kb::tests::Require(!kb::script::ScriptSceneComponentApi::HasComponent(scene, object.Entity(), "Light"), "Script component API reported missing Light as present");
+
+    const kb::script::ScriptSceneComponentMutationResult setX = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Transform",
+        "localPosition.x",
+        kb::script::ScriptValue{ 12.5F });
+    kb::tests::Require(setX.succeeded, "Script component API did not set Transform.localPosition.x");
+    const kb::script::ScriptSceneComponentPropertyResult getX = kb::script::ScriptSceneComponentApi::GetProperty(
+        scene,
+        object.Entity(),
+        "Transform",
+        "localPosition.x");
+    kb::tests::Require(getX.succeeded && kb::tests::NearlyEqual(getX.value.AsFloat(), 12.5F), "Script component API did not read Transform.localPosition.x");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(object.Entity()).localPosition.x, 12.5F), "Script component API did not mutate Transform storage");
+
+    const kb::script::ScriptSceneComponentMutationResult setVisible = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Visibility",
+        "visible",
+        kb::script::ScriptValue{ false });
+    kb::tests::Require(setVisible.succeeded, "Script component API did not set Visibility.visible");
+    const kb::script::ScriptSceneComponentPropertyResult getVisible = kb::script::ScriptSceneComponentApi::GetProperty(
+        scene,
+        object.Entity(),
+        "Visibility",
+        "visible");
+    kb::tests::Require(getVisible.succeeded && !getVisible.value.AsBool(true), "Script component API did not read Visibility.visible");
+
+    const kb::script::ScriptSceneComponentMutationResult setFov = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Camera",
+        "verticalFovDegrees",
+        kb::script::ScriptValue{ 80 });
+    kb::tests::Require(setFov.succeeded, "Script component API did not accept int-to-float camera write");
+    const kb::script::ScriptSceneComponentPropertyResult getFov = kb::script::ScriptSceneComponentApi::GetProperty(
+        scene,
+        object.Entity(),
+        "Camera",
+        "verticalFovDegrees");
+    kb::tests::Require(getFov.succeeded && kb::tests::NearlyEqual(getFov.value.AsFloat(), 80.0F), "Script component API did not read Camera.verticalFovDegrees");
+
+    const kb::script::ScriptSceneComponentMutationResult badType = kb::script::ScriptSceneComponentApi::SetProperty(
+        scene,
+        object.Entity(),
+        "Visibility",
+        "visible",
+        kb::script::ScriptValue{ 1 });
+    kb::tests::Require(!badType.succeeded && !badType.error.empty(), "Script component API accepted wrong value type");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -543,6 +610,7 @@ void RunScriptRuntimeTests() {
     RunVisualGraphScriptBackendDispatchTest();
     RunScriptRuntimeAssetPreparerEndToEndTest();
     RunScriptRuntimeSceneSystemAssetPreparationTest();
+    RunScriptSceneComponentApiTest();
 }
 
 } // namespace kb::tests
