@@ -598,6 +598,10 @@ void RunScriptRuntimeHostBackendRegistrationTest() {
     kb::tests::Require(
         host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::GetComponent, "Self.HasComponent") != nullptr,
         "Script runtime host did not register VisualGraph scene component bindings");
+    const kb::visual::VisualGraphNodeCatalog catalog = host.CreateVisualGraphNodeCatalog();
+    kb::tests::Require(
+        catalog.Find("RuntimeBinding:SetProperty:Self.SetProperty.Bool") != nullptr,
+        "Script runtime host visual graph catalog did not expose scene property bindings");
 }
 
 void RunScriptRuntimeHostSceneSystemTest() {
