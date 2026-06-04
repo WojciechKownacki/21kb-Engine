@@ -3,6 +3,7 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
@@ -25,6 +26,8 @@ public:
     [[nodiscard]] SceneTransformComponentStore& Transforms() noexcept;
     [[nodiscard]] const SceneVisibilityComponentStore& Visibility() const noexcept;
     [[nodiscard]] SceneVisibilityComponentStore& Visibility() noexcept;
+    [[nodiscard]] const SceneBehaviourComponentStore& Behaviours() const noexcept;
+    [[nodiscard]] SceneBehaviourComponentStore& Behaviours() noexcept;
     [[nodiscard]] const SceneCameraComponentStore& Cameras() const noexcept;
     [[nodiscard]] SceneCameraComponentStore& Cameras() noexcept;
     [[nodiscard]] const SceneMeshRendererComponentStore& MeshRenderers() const noexcept;
@@ -35,6 +38,7 @@ public:
 private:
     SceneTransformComponentStore transforms_;
     SceneVisibilityComponentStore visibility_;
+    SceneBehaviourComponentStore behaviours_;
     SceneCameraComponentStore cameras_;
     SceneMeshRendererComponentStore meshRenderers_;
     SceneLightComponentStore lights_;
