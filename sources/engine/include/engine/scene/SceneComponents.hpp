@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
@@ -15,6 +16,7 @@ public:
     explicit SceneComponents(Scene& scene) noexcept;
 
     [[nodiscard]] SceneVisibilityComponents Visibility() const noexcept;
+    [[nodiscard]] SceneBehaviourComponents Behaviours() const noexcept;
     [[nodiscard]] SceneCameraComponents Cameras() const noexcept;
     [[nodiscard]] SceneMeshRendererComponents MeshRenderers() const noexcept;
     [[nodiscard]] SceneLightComponents Lights() const noexcept;
