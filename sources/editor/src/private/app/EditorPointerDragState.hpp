@@ -23,6 +23,7 @@ struct EditorPointerDragState {
     std::filesystem::path assetFolderPath{};
     std::string assetLabel{};
     bool assetInstantiatesPrefab = false;
+    bool assetAddsBehaviour = false;
     bool dragging = false;
     int startX = 0;
     int startY = 0;
@@ -45,6 +46,7 @@ struct EditorPointerDragState {
         assetFolderPath.clear();
         assetLabel.clear();
         assetInstantiatesPrefab = false;
+        assetAddsBehaviour = false;
         dragging = false;
         startX = 0;
         startY = 0;

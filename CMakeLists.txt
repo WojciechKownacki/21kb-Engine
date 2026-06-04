@@ -64,9 +64,8 @@ FetchContent_Declare(
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
     URL_HASH SHA256=4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
 )
-FetchContent_GetProperties(kb_lua)
-if(NOT kb_lua_POPULATED)
-    FetchContent_Populate(kb_lua)
+FetchContent_MakeAvailable(kb_lua)
+if(NOT TARGET kb_lua)
     add_library(kb_lua STATIC
         ${kb_lua_SOURCE_DIR}/src/lapi.c
         ${kb_lua_SOURCE_DIR}/src/lauxlib.c

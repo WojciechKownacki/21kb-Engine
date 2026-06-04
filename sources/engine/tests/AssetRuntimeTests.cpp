@@ -4,10 +4,14 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObject.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/script/ScriptAsset.hpp"
+#include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/visual/VisualGraphTypes.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -204,6 +208,52 @@ void RunScenePrefabRuntimeAssetTest() {
     kb::tests::Require(copyInstance.ObjectCount() == 1, "Runtime-loaded duplicate GUID prefab did not instantiate");
 }
 
+void RunScriptAssetPipelineTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "ScriptProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "Player.lua", "function Tick(self, dt)\nend\n");
+    WriteTextFile(assetsRoot / "Logic" / "Door.native", "name DoorController\nsymbol gameplay.DoorController\n");
+    WriteTextFile(assetsRoot / "Logic" / "Enemy.kbgraph", R"(kbgraph 1
+name EnemyController
+node 1 Event Tick
+pin 1 Output then Void
+)");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script asset project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 3U, "Script asset discovery did not find Lua, native and visual graph assets");
+
+    const kb::assets::AssetMetadata* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Player.lua");
+    const kb::assets::AssetMetadata* nativeMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Door.native");
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Enemy.kbgraph");
+    kb::tests::Require(luaMetadata != nullptr && luaMetadata->type == "LuaScript", "Lua script asset metadata was not classified");
+    kb::tests::Require(nativeMetadata != nullptr && nativeMetadata->type == "NativeBehaviour", "Native behaviour asset metadata was not classified");
+    kb::tests::Require(graphMetadata != nullptr && graphMetadata->type == "VisualGraph", "Visual graph asset metadata was not classified");
+
+    const kb::assets::AssetHandle<kb::script::LuaScriptAsset> luaAsset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(luaMetadata->id);
+    kb::tests::Require(luaAsset.IsLoaded() && luaAsset->source.find("Tick") != std::string::npos, "Lua script asset did not load source content");
+
+    const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> nativeAsset = scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeMetadata->id);
+    kb::tests::Require(nativeAsset.IsLoaded() && nativeAsset->symbol == "gameplay.DoorController", "Native behaviour descriptor did not load symbol");
+
+    const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> graphAsset = scene.Assets().Manager().Load<kb::visual::VisualGraphAsset>(graphMetadata->id);
+    kb::tests::Require(graphAsset.IsLoaded() && graphAsset->name == "EnemyController", "Visual graph asset did not load through scene-registered loader");
+
+    const std::optional<kb::scene::BehaviourComponent> luaBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*luaMetadata);
+    const std::optional<kb::scene::BehaviourComponent> nativeBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*nativeMetadata);
+    const std::optional<kb::scene::BehaviourComponent> graphBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*graphMetadata);
+    kb::tests::Require(luaBehaviour.has_value() && luaBehaviour->backend == kb::scene::BehaviourBackend::Lua, "Lua asset did not map to Lua behaviour");
+    kb::tests::Require(nativeBehaviour.has_value() && nativeBehaviour->backend == kb::scene::BehaviourBackend::Native, "Native descriptor did not map to native behaviour");
+    kb::tests::Require(graphBehaviour.has_value() && graphBehaviour->backend == kb::scene::BehaviourBackend::VisualGraph, "Visual graph did not map to visual graph behaviour");
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Scripted" });
+    scene.Components().Behaviours().Set(object.Entity(), *luaBehaviour);
+    const kb::scene::BehaviourComponent* attached = scene.Components().Behaviours().TryGet(object.Entity());
+    kb::tests::Require(attached != nullptr && attached->behaviourAssetId == luaMetadata->id.value, "Script behaviour component was not attached to the entity");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -212,6 +262,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunScenePrefabRuntimeAssetTest();
+    RunScriptAssetPipelineTest();
 }
 
 } // namespace kb::tests
