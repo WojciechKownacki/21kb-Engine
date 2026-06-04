@@ -9,7 +9,11 @@ public:
     HeroIconAssets() = delete;
 
     [[nodiscard]] static HeroIconGlyph Minus() noexcept;
+    [[nodiscard]] static HeroIconGlyph Play() noexcept;
+    [[nodiscard]] static HeroIconGlyph Pause() noexcept;
+    [[nodiscard]] static HeroIconGlyph Resume() noexcept;
     [[nodiscard]] static HeroIconGlyph Stop() noexcept;
+    [[nodiscard]] static HeroIconGlyph TransportStop() noexcept;
     [[nodiscard]] static HeroIconGlyph XMark() noexcept;
     [[nodiscard]] static HeroIconGlyph Cube() noexcept;
     [[nodiscard]] static HeroIconGlyph Folder() noexcept;

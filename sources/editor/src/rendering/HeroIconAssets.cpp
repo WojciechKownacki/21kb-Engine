@@ -8,8 +8,26 @@ namespace {
 static constexpr std::array<HeroIconPath, 1> kMinus{
     HeroIconPath{ "M5 12h14", false },
 };
+// Source: LuizEngine `icons::lucide::kPlay` / lucide.dev play, MIT.
+static constexpr std::array<HeroIconPath, 1> kPlay{
+    HeroIconPath{ "M6 3L20 12L6 21V3Z", true },
+};
+// Source: LuizEngine `icons::lucide::kPause` / lucide.dev pause, MIT.
+static constexpr std::array<HeroIconPath, 2> kPause{
+    HeroIconPath{ "M6 4H10V20H6V4Z", true },
+    HeroIconPath{ "M14 4H18V20H14V4Z", true },
+};
+// Source: LuizEngine `icons::lucide::kResume` / lucide.dev step-forward, MIT.
+static constexpr std::array<HeroIconPath, 2> kResume{
+    HeroIconPath{ "M5 4L15 12L5 20V4Z", true },
+    HeroIconPath{ "M19 5V19", false },
+};
 static constexpr std::array<HeroIconPath, 1> kStop{
     HeroIconPath{ "M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z", false },
+};
+// Source: LuizEngine `icons::lucide::kStop` / lucide.dev square, MIT.
+static constexpr std::array<HeroIconPath, 1> kTransportStop{
+    HeroIconPath{ "M7 5H17A2 2 0 0 1 19 7V17A2 2 0 0 1 17 19H7A2 2 0 0 1 5 17V7A2 2 0 0 1 7 5Z", true },
 };
 static constexpr std::array<HeroIconPath, 1> kXMark{
     HeroIconPath{ "M6 18 18 6M6 6l12 12", false },
@@ -50,8 +68,24 @@ HeroIconGlyph HeroIconAssets::Minus() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kMinus } };
 }
 
+HeroIconGlyph HeroIconAssets::Play() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPlay }, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Pause() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kPause }, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Resume() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kResume }, .strokeWidth = 2.0F };
+}
+
 HeroIconGlyph HeroIconAssets::Stop() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kStop } };
+}
+
+HeroIconGlyph HeroIconAssets::TransportStop() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kTransportStop }, .strokeWidth = 0.0F };
 }
 
 HeroIconGlyph HeroIconAssets::XMark() noexcept {

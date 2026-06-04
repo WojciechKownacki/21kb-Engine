@@ -2,8 +2,8 @@
 
 #if defined(_WIN32)
 #include "engine/scene/Scene.hpp"
-#include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
+#include "rendering/EditorBgfxBackendSelector.hpp"
 
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -117,9 +117,17 @@ EditorSceneBgfxViewport::~EditorSceneBgfxViewport() {
     Shutdown();
 }
 
-void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent) noexcept {
+void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept {
     instance_ = instance;
     defaultParent_ = parent;
+    backendSettings_ = backendSettings;
+}
+
+const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
+    if (!renderer_.IsInitialized()) {
+        return "Not initialized";
+    }
+    return renderer_.CapabilityReport().selectedBackendName;
 }
 
 void EditorSceneBgfxViewport::Shutdown() {
@@ -135,6 +143,8 @@ void EditorSceneBgfxViewport::Shutdown() {
 
     paintParent_ = nullptr;
     contextWindow_ = nullptr;
+    backendSettings_ = nullptr;
+    rendererBackendGeneration_ = 0;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     nextViewportIndex_ = 0;
@@ -414,7 +424,11 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
 
 bool EditorSceneBgfxViewport::EnsureRenderer() {
     if (renderer_.IsInitialized()) {
-        return true;
+        const std::uint64_t requestedGeneration = backendSettings_ == nullptr ? 0U : backendSettings_->Generation();
+        if (rendererBackendGeneration_ == requestedGeneration) {
+            return true;
+        }
+        ShutdownGpuResources();
     }
     if (!EnsureContextWindow()) {
         return false;
@@ -427,13 +441,14 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     config.flushAfterRender = true;
     bgfx::RendererType::Enum supportedBackends[bgfx::RendererType::Count]{};
     const std::uint8_t supportedBackendCount = bgfx::getSupportedRenderers(static_cast<std::uint8_t>(bgfx::RendererType::Count), supportedBackends);
-    const bgfx::RendererType::Enum preferredBackend = render::ResolvePreferredRendererBackend(supportedBackends, supportedBackendCount);
+    const bgfx::RendererType::Enum preferredBackend = EditorBgfxBackendSelector::Resolve(supportedBackends, supportedBackendCount, backendSettings_);
     config.preferredBgfxRendererType = preferredBackend == bgfx::RendererType::Count ? -1 : static_cast<std::int32_t>(preferredBackend);
 
     if (!renderer_.Initialize(surface, &config)) {
         return false;
     }
 
+    rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->Generation();
     return true;
 }
 

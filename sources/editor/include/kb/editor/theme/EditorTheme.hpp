@@ -31,7 +31,7 @@ struct EditorTheme {
 };
 
 struct EditorMetrics {
-    int menuHeight = 40;
+    int menuHeight = 24;
     int toolbarHeight = 48;
     int floatingChromeHeight = 24;
     int floatingControlWidth = 34;

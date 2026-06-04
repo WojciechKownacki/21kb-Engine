@@ -14,10 +14,13 @@ LRESULT EditorApplicationMessageDispatcher::Dispatch(EditorApplicationState& sta
         state.theme,
         state.metrics,
         state.renderer,
+        state.renderBackendSettings,
         state.sceneViewport,
         state.floatingWindows,
         state.dockController,
         state.hierarchySelection,
+        state.playMode,
+        state.shellInteraction,
         state.pointerDrag,
     } }.Handle(messageWindow, message, wparam, lparam);
 }

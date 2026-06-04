@@ -1,6 +1,8 @@
 #pragma once
 
 #include "docking/EditorDockModel.hpp"
+#include "app/EditorPlayModeState.hpp"
+#include "app/EditorShellInteractionState.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -16,7 +18,7 @@ namespace kb::editor {
 class DockWorkspaceRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, EditorSceneBgfxViewport& sceneViewport) const;
+    void Paint(HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) const;
 #endif
 };
 

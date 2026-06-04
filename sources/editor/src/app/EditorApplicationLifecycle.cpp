@@ -28,7 +28,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     }
 
     EditorMainWindow::EnableDarkMode(state.window);
-    state.sceneViewport.Configure(state.instance, state.window);
+    state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 

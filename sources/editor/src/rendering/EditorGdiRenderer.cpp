@@ -6,8 +6,8 @@
 
 namespace kb::editor {
 
-void EditorGdiRenderer::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, EditorSceneBgfxViewport& sceneViewport) const {
-    MainWindowBackBufferPainter::Paint(window, dockModel, theme, metrics, sceneContext, preview, drag, sceneViewport);
+void EditorGdiRenderer::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) const {
+    MainWindowBackBufferPainter::Paint(window, dockModel, theme, metrics, sceneContext, preview, drag, renderBackendSettings, playMode, shellInteraction, sceneViewport);
 }
 
 void EditorGdiRenderer::PaintFloating(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) const {

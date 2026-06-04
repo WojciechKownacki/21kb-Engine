@@ -44,7 +44,7 @@ bool EditorApplication::Impl::Initialize() {
 }
 
 void EditorApplication::Impl::Run() {
-    EditorApplicationMessageLoop::Run(state.running);
+    EditorApplicationMessageLoop::Run(state);
 }
 
 void EditorApplication::Impl::Shutdown() {
