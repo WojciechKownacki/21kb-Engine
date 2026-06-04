@@ -25,14 +25,20 @@ void MergeResult(ScriptRuntimeExecutionResult& target, ScriptRuntimeExecutionRes
 ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime) noexcept
     : runtime_(runtime) {}
 
+ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime, ScriptRuntimeAssetPreparer& assetPreparer) noexcept
+    : runtime_(runtime)
+    , assetPreparer_(&assetPreparer) {}
+
 void ScriptRuntimeSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     lastResult_ = {};
+    PrepareScene(context.GetScene());
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Created, context.DeltaSeconds()));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Activated, context.DeltaSeconds()));
     MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Ready, context.DeltaSeconds()));
 }
 
 void ScriptRuntimeSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
+    PrepareScene(context.GetScene());
     lastResult_ = runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Tick, context.DeltaSeconds());
 }
 
@@ -44,6 +50,14 @@ void ScriptRuntimeSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context)
 
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::LastResult() const noexcept {
     return lastResult_;
+}
+
+const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResult() const noexcept {
+    return lastPrepareResult_;
+}
+
+void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
+    lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
 }
 
 } // namespace kb::script

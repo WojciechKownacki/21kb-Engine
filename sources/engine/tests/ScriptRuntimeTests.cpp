@@ -463,6 +463,73 @@ edge exec 1 then 2 exec
     kb::tests::Require(sawGraphEvent, "Prepared script asset runtime did not emit graph event");
 }
 
+void RunScriptRuntimeSceneSystemAssetPreparationTest() {
+    ResetTestRoot();
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::visual::VisualGraphRuntimeBindingRegistry visualBindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry visualInstances;
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Script scene system Lua backend registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(visualArtifacts, visualBindings, visualInstances)), "Script scene system visual backend registration failed");
+
+    const std::filesystem::path projectRoot = TestRoot() / "SceneSystemProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "SceneLua.lua", R"(
+function Tick(self, dt)
+    Emit("SceneSystemLuaTick")
+end
+)");
+    WriteTextFile(assetsRoot / "Logic" / "SceneGraph.kbgraph", R"(kbgraph 1
+name SceneGraph
+node 1 Event Tick
+pin 1 Output then Void
+node 2 EmitEvent SceneSystemGraphTick
+pin 2 Input exec Void
+pin 2 Output then Void
+edge exec 1 then 2 exec
+)");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script scene system asset preparation mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Script scene system asset preparation discovery failed");
+
+    const kb::assets::AssetMetadata* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/SceneLua.lua");
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/SceneGraph.kbgraph");
+    kb::tests::Require(luaMetadata != nullptr && graphMetadata != nullptr, "Script scene system asset metadata was not discovered");
+
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Scene Lua" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Scene Graph" });
+    const std::optional<kb::scene::BehaviourComponent> luaBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*luaMetadata);
+    const std::optional<kb::scene::BehaviourComponent> graphBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*graphMetadata);
+    kb::tests::Require(luaBehaviour.has_value() && graphBehaviour.has_value(), "Script scene system could not create behaviour components");
+    scene.Components().Behaviours().Set(luaObject.Entity(), *luaBehaviour);
+    scene.Components().Behaviours().Set(graphObject.Entity(), *graphBehaviour);
+
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+
+    auto system = std::make_unique<kb::script::ScriptRuntimeSceneSystem>(runtime, preparer);
+    kb::script::ScriptRuntimeSceneSystem* systemView = system.get();
+    scene.Runtime().AddSceneSystem(std::move(system));
+    kb::tests::Require(systemView->LastPrepareResult().Succeeded(), "Script scene system OnCreate asset preparation failed");
+    kb::tests::Require(systemView->LastPrepareResult().preparedAssets == 2U, "Script scene system did not prepare assets on create");
+
+    static_cast<void>(scene.Runtime().Update(0.25F));
+    const kb::script::ScriptRuntimeExecutionResult& tick = systemView->LastResult();
+    kb::tests::Require(tick.Succeeded(), "Script scene system prepared runtime Tick produced diagnostics");
+    kb::tests::Require(tick.executedBehaviours == 2U, "Script scene system did not execute prepared Lua and graph behaviours");
+
+    bool sawLuaEvent = false;
+    bool sawGraphEvent = false;
+    for (const kb::script::ScriptEvent& event : tick.emittedEvents) {
+        sawLuaEvent = sawLuaEvent || event.name == "SceneSystemLuaTick";
+        sawGraphEvent = sawGraphEvent || event.name == "SceneSystemGraphTick";
+    }
+    kb::tests::Require(sawLuaEvent, "Script scene system did not emit Lua Tick event");
+    kb::tests::Require(sawGraphEvent, "Script scene system did not emit graph Tick event");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -475,6 +542,7 @@ void RunScriptRuntimeTests() {
     RunScriptRuntimeSceneSystemTest();
     RunVisualGraphScriptBackendDispatchTest();
     RunScriptRuntimeAssetPreparerEndToEndTest();
+    RunScriptRuntimeSceneSystemAssetPreparationTest();
 }
 
 } // namespace kb::tests
