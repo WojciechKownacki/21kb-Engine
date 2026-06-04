@@ -8,16 +8,20 @@ std::size_t NativeScriptBackend::LifecycleKeyHasher::operator()(LifecycleKey key
     return static_cast<std::size_t>(key.assetId ^ (static_cast<std::uint64_t>(key.event) + 0x9e3779b97f4a7c15ULL + (key.assetId << 6U) + (key.assetId >> 2U)));
 }
 
+std::size_t NativeScriptBackend::SymbolLifecycleKeyHasher::operator()(const SymbolLifecycleKey& key) const noexcept {
+    std::size_t hash = std::hash<std::string>{}(key.symbol);
+    hash ^= static_cast<std::size_t>(key.event) + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    return hash;
+}
+
+std::size_t NativeScriptBackend::SymbolEventKeyHasher::operator()(const SymbolEventKey& key) const noexcept {
+    std::size_t hash = std::hash<std::string>{}(key.symbol);
+    hash ^= std::hash<std::string>{}(key.eventName) + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    return hash;
+}
+
 std::string NativeScriptBackend::EventKey(kb::assets::AssetId assetId, std::string_view eventName) {
     return std::to_string(assetId.value) + ":" + std::string{eventName};
-}
-
-std::string NativeScriptBackend::SymbolLifecycleKey(std::string_view symbol, ScriptLifecycleEvent event) {
-    return std::string{symbol} + ":" + std::to_string(static_cast<int>(event));
-}
-
-std::string NativeScriptBackend::SymbolEventKey(std::string_view symbol, std::string_view eventName) {
-    return std::string{symbol} + ":" + std::string{eventName};
 }
 
 kb::scene::BehaviourBackend NativeScriptBackend::Backend() const noexcept {
@@ -36,7 +40,7 @@ bool NativeScriptBackend::RegisterLifecycleSymbol(std::string symbol, ScriptLife
     if (symbol.empty() || callback == nullptr) {
         return false;
     }
-    symbolLifecycleCallbacks_[SymbolLifecycleKey(symbol, event)] = std::move(callback);
+    symbolLifecycleCallbacks_[SymbolLifecycleKey{ .symbol = std::move(symbol), .event = event }] = std::move(callback);
     return true;
 }
 
@@ -52,7 +56,7 @@ bool NativeScriptBackend::RegisterEventSymbol(std::string symbol, std::string ev
     if (symbol.empty() || eventName.empty() || callback == nullptr) {
         return false;
     }
-    symbolEventCallbacks_[SymbolEventKey(symbol, eventName)] = std::move(callback);
+    symbolEventCallbacks_[SymbolEventKey{ .symbol = std::move(symbol), .eventName = std::move(eventName) }] = std::move(callback);
     return true;
 }
 
@@ -62,6 +66,40 @@ bool NativeScriptBackend::BindAssetSymbol(kb::assets::AssetId assetId, std::stri
     }
     assetSymbols_[assetId.value] = std::move(symbol);
     return true;
+}
+
+void NativeScriptBackend::UnregisterSymbolCallbacks(std::string_view symbol) noexcept {
+    if (symbol.empty()) {
+        return;
+    }
+    for (auto iter = symbolLifecycleCallbacks_.begin(); iter != symbolLifecycleCallbacks_.end();) {
+        if (iter->first.symbol == symbol) {
+            iter = symbolLifecycleCallbacks_.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
+    for (auto iter = symbolEventCallbacks_.begin(); iter != symbolEventCallbacks_.end();) {
+        if (iter->first.symbol == symbol) {
+            iter = symbolEventCallbacks_.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
+}
+
+void NativeScriptBackend::UnregisterSymbol(std::string_view symbol) noexcept {
+    UnregisterSymbolCallbacks(symbol);
+    if (symbol.empty()) {
+        return;
+    }
+    for (auto iter = assetSymbols_.begin(); iter != assetSymbols_.end();) {
+        if (iter->second == symbol) {
+            iter = assetSymbols_.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
 }
 
 void NativeScriptBackend::Clear() noexcept {
@@ -81,7 +119,7 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteLifecycle(const kb::sce
         if (symbolIter == assetSymbols_.end()) {
             return result;
         }
-        const auto symbolCallback = symbolLifecycleCallbacks_.find(SymbolLifecycleKey(symbolIter->second, context.Lifecycle()));
+        const auto symbolCallback = symbolLifecycleCallbacks_.find(SymbolLifecycleKey{ .symbol = symbolIter->second, .event = context.Lifecycle() });
         if (symbolCallback == symbolLifecycleCallbacks_.end()) {
             return result;
         }
@@ -103,7 +141,7 @@ ScriptBackendExecutionResult NativeScriptBackend::ExecuteEvent(const kb::scene::
         if (symbolIter == assetSymbols_.end()) {
             return result;
         }
-        const auto symbolCallback = symbolEventCallbacks_.find(SymbolEventKey(symbolIter->second, event.name));
+        const auto symbolCallback = symbolEventCallbacks_.find(SymbolEventKey{ .symbol = symbolIter->second, .eventName = event.name });
         if (symbolCallback == symbolEventCallbacks_.end()) {
             return result;
         }

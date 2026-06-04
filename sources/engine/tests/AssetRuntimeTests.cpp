@@ -11,6 +11,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/script/ScriptAsset.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
 
 #include <filesystem>
@@ -213,8 +214,14 @@ void RunScriptAssetPipelineTest() {
 
     const std::filesystem::path projectRoot = TestRoot() / "ScriptProject";
     const std::filesystem::path assetsRoot = projectRoot / "Assets";
-    WriteTextFile(assetsRoot / "Logic" / "Player.lua", "function Tick(self, dt)\nend\n");
-    WriteTextFile(assetsRoot / "Logic" / "Door.native", "name DoorController\nsymbol gameplay.DoorController\n");
+    WriteTextFile(assetsRoot / "Logic" / "Player.lua",
+        "-- @import Shared.Math\n"
+        "-- @imported Shared.Wrong\n"
+        "-- @expose speed Float = 5.5\n"
+        "-- @expose lives Int = 3abc\n"
+        "-- @exposed ignored Float = 1.0\n"
+        "function Tick(self, dt)\nend\n");
+    WriteTextFile(assetsRoot / "Logic" / "Door.native", "name DoorController\nsymbol gameplay.DoorController\napi = function Inventory.AddItem itemId:Int -> total:Int\n");
     WriteTextFile(assetsRoot / "Logic" / "Enemy.kbgraph", R"(kbgraph 1
 name EnemyController
 node 1 Event Tick
@@ -234,9 +241,27 @@ pin 1 Output then Void
 
     const kb::assets::AssetHandle<kb::script::LuaScriptAsset> luaAsset = scene.Assets().Manager().Load<kb::script::LuaScriptAsset>(luaMetadata->id);
     kb::tests::Require(luaAsset.IsLoaded() && luaAsset->source.find("Tick") != std::string::npos, "Lua script asset did not load source content");
+    kb::tests::Require(luaAsset->imports.size() == 1U && luaAsset->imports[0] == "Shared.Math", "Lua script asset did not parse import metadata");
+    kb::tests::Require(luaAsset->exposedVariables.size() == 2U &&
+            luaAsset->exposedVariables[0].name == "speed" &&
+            luaAsset->exposedVariables[0].type == kb::script::ScriptValueType::Float,
+        "Lua script asset did not parse typed exposed variables");
+    kb::tests::Require(luaAsset->exposedVariableDefaults.size() == 2U &&
+            luaAsset->exposedVariableHasDefault.size() == 2U &&
+            luaAsset->exposedVariableHasDefault[0] != 0U &&
+            kb::tests::NearlyEqual(luaAsset->exposedVariableDefaults[0].AsFloat(), 5.5F),
+        "Lua script asset did not parse exposed variable default value");
+    kb::tests::Require(luaAsset->exposedVariables[1].name == "lives" &&
+            luaAsset->exposedVariableDefaults.size() == 2U &&
+            luaAsset->exposedVariableHasDefault.size() == 2U &&
+            luaAsset->exposedVariableHasDefault[1] == 0U &&
+            luaAsset->exposedVariableDefaults[1].AsInt() == 0,
+        "Lua script asset accepted an invalid exposed variable default");
 
     const kb::assets::AssetHandle<kb::script::NativeBehaviourDescriptor> nativeAsset = scene.Assets().Manager().Load<kb::script::NativeBehaviourDescriptor>(nativeMetadata->id);
     kb::tests::Require(nativeAsset.IsLoaded() && nativeAsset->symbol == "gameplay.DoorController", "Native behaviour descriptor did not load symbol");
+    kb::tests::Require(nativeAsset->apiDeclarations.size() == 1U && nativeAsset->apiDeclarations[0].name == "Inventory.AddItem",
+        "Native behaviour descriptor did not parse API declarations");
 
     const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> graphAsset = scene.Assets().Manager().Load<kb::visual::VisualGraphAsset>(graphMetadata->id);
     kb::tests::Require(graphAsset.IsLoaded() && graphAsset->name == "EnemyController", "Visual graph asset did not load through scene-registered loader");
@@ -249,9 +274,21 @@ pin 1 Output then Void
     kb::tests::Require(graphBehaviour.has_value() && graphBehaviour->backend == kb::scene::BehaviourBackend::VisualGraph, "Visual graph did not map to visual graph behaviour");
 
     const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Scripted" });
-    scene.Components().Behaviours().Set(object.Entity(), *luaBehaviour);
+    const kb::script::ScriptBehaviourBindingResult bound = kb::script::ScriptBehaviourBindingService::AttachMetadata(
+        scene,
+        object.Entity(),
+        *luaMetadata,
+        kb::script::ScriptBehaviourBindingOptions{
+            .enabled = true,
+            .tickGroup = kb::scene::BehaviourTickGroup::Input,
+            .executionOrder = -10,
+            .prepareRuntimeAsset = false,
+        });
+    kb::tests::Require(bound.Succeeded(), "Script behaviour binding service did not attach a Lua asset");
     const kb::scene::BehaviourComponent* attached = scene.Components().Behaviours().TryGet(object.Entity());
     kb::tests::Require(attached != nullptr && attached->behaviourAssetId == luaMetadata->id.value, "Script behaviour component was not attached to the entity");
+    kb::tests::Require(attached->backend == kb::scene::BehaviourBackend::Lua && attached->tickGroup == kb::scene::BehaviourTickGroup::Input && attached->executionOrder == -10,
+        "Script behaviour binding service did not preserve component settings");
 }
 
 } // namespace

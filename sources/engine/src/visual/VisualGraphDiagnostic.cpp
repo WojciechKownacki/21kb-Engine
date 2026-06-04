@@ -69,10 +69,14 @@ const char* ToString(VisualGraphDiagnosticStage stage) noexcept {
         return "Validation";
     case VisualGraphDiagnosticStage::Compile:
         return "Compile";
+    case VisualGraphDiagnosticStage::ApiNameValidation:
+        return "ApiNameValidation";
     case VisualGraphDiagnosticStage::NativeCodegen:
         return "NativeCodegen";
     case VisualGraphDiagnosticStage::GeneratedCodeWrite:
         return "GeneratedCodeWrite";
+    case VisualGraphDiagnosticStage::NativeBuild:
+        return "NativeBuild";
     case VisualGraphDiagnosticStage::Runtime:
         return "Runtime";
     }
