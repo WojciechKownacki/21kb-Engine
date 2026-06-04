@@ -11,6 +11,9 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     EditorTheme& theme,
     EditorMetrics& metrics,
     EditorGdiRenderer& renderer,
+    EditorRenderBackendSettings& renderBackendSettings,
+    EditorPlayModeState& playMode,
+    EditorShellInteractionState& shellInteraction,
     EditorSceneBgfxViewport& sceneViewport,
     EditorFloatingWindowManager& floatingWindows,
     EditorDockController& dockController,
@@ -21,6 +24,9 @@ EditorPaintDispatcher::EditorPaintDispatcher(
     , theme_(theme)
     , metrics_(metrics)
     , renderer_(renderer)
+    , renderBackendSettings_(renderBackendSettings)
+    , playMode_(playMode)
+    , shellInteraction_(shellInteraction)
     , sceneViewport_(sceneViewport)
     , floatingWindows_(floatingWindows)
     , dockController_(dockController)
@@ -28,7 +34,7 @@ EditorPaintDispatcher::EditorPaintDispatcher(
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
-        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), pointerDrag_, sceneViewport_);
+        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
         return;
     }
 

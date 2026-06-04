@@ -25,6 +25,8 @@ add_executable(kb_editor
     src/app/EditorWindowLifecycleHandler.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
+    src/app/EditorPlayModeState.cpp
+    src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
     src/app/EditorPointerDragSourceResolver.cpp
     src/app/EditorPointerDropHandler.cpp
@@ -223,6 +225,8 @@ add_executable(kb_editor
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorPaintDispatcher.hpp
+    src/private/app/EditorPlayModeState.hpp
+    src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp
     src/private/app/EditorPointerDragSourceResolver.hpp
@@ -258,8 +262,10 @@ add_executable(kb_editor
     src/private/rendering/DockWorkspaceRenderer.hpp
     src/private/rendering/DockWorkspaceTabStripRenderer.hpp
     src/private/rendering/EditorDragOverlayRenderer.hpp
+    src/private/rendering/EditorBgfxBackendSelector.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
     src/private/rendering/EditorPanelContentResolver.hpp
+    src/private/rendering/EditorRenderBackendSettings.hpp
     src/private/rendering/EditorSurfaceKind.hpp
     src/private/rendering/EditorSurfacePainter.hpp
     src/private/rendering/EditorSceneBgfxViewport.hpp
@@ -361,8 +367,10 @@ add_executable(kb_editor
     src/rendering/DockWorkspaceRenderer.cpp
     src/rendering/DockWorkspaceTabStripRenderer.cpp
     src/rendering/EditorDragOverlayRenderer.cpp
+    src/rendering/EditorBgfxBackendSelector.cpp
     src/rendering/EditorGdiRenderer.cpp
     src/rendering/EditorPanelContentResolver.cpp
+    src/rendering/EditorRenderBackendSettings.cpp
     src/rendering/EditorSceneBgfxViewport.cpp
     src/rendering/EditorSurfacePainter.cpp
     src/rendering/EditorSurfaceStyle.cpp
@@ -564,6 +572,9 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorViewportPreviewState.cpp
+        src/app/EditorPlayModeState.cpp
+        src/app/EditorShellInteractionState.cpp
+        src/rendering/EditorRenderBackendSettings.cpp
     )
 
     target_include_directories(kb_editor_tests

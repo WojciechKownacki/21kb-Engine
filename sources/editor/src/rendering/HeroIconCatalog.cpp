@@ -8,8 +8,16 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
     switch (icon) {
     case HeroIconKind::Minus:
         return HeroIconAssets::Minus();
+    case HeroIconKind::Play:
+        return HeroIconAssets::Play();
+    case HeroIconKind::Pause:
+        return HeroIconAssets::Pause();
+    case HeroIconKind::Resume:
+        return HeroIconAssets::Resume();
     case HeroIconKind::Stop:
         return HeroIconAssets::Stop();
+    case HeroIconKind::TransportStop:
+        return HeroIconAssets::TransportStop();
     case HeroIconKind::XMark:
         return HeroIconAssets::XMark();
     case HeroIconKind::Cube:
