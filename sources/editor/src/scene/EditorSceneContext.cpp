@@ -2,6 +2,8 @@
 
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/script/ScriptBehaviourAsset.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
@@ -217,6 +219,26 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
         return false;
     }
     SelectEntity(*root);
+    return true;
+}
+
+bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity) {
+    if (!assetId.IsValid() || !entity.IsValid() || !scene_.Entities().IsAlive(entity)) {
+        return false;
+    }
+
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr) {
+        return false;
+    }
+
+    const std::optional<kb::scene::BehaviourComponent> behaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*metadata);
+    if (!behaviour.has_value()) {
+        return false;
+    }
+
+    scene_.Components().Behaviours().Set(entity, *behaviour);
+    SelectEntity(entity);
     return true;
 }
 

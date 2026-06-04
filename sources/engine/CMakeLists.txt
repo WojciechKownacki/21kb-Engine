@@ -100,7 +100,10 @@ add_library(kb_engine STATIC
     include/engine/script/LuaScriptBackend.hpp
     include/engine/script/NativeScriptBackend.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
+    include/engine/script/ScriptAsset.hpp
+    include/engine/script/ScriptAssetLoader.hpp
     include/engine/script/ScriptBackend.hpp
+    include/engine/script/ScriptBehaviourAsset.hpp
     include/engine/script/ScriptEvent.hpp
     include/engine/script/ScriptExecutionContext.hpp
     include/engine/script/ScriptLifecycle.hpp
@@ -407,6 +410,8 @@ add_library(kb_engine STATIC
     src/script/LuaScriptBackend.cpp
     src/script/NativeScriptBackend.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/ScriptAssetLoader.cpp
+    src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptExecutionContext.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptRuntime.cpp

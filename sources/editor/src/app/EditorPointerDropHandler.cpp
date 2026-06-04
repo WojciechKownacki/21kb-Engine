@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
+#include "app/EditorBehaviourAssetHierarchyDropHandler.hpp"
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
@@ -25,6 +26,7 @@ bool EditorPointerDropHandler::Drop(
             || EditorHierarchyEntityHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entity);
     case EditorPointerDragKind::PrefabAsset:
         return EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId)
+            || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath));
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);
