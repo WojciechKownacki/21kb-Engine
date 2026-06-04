@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -11,15 +12,21 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/script/ScriptRuntime.hpp"
+#include "engine/script/ScriptRuntimeAssetPreparer.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphCompiler.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -59,6 +66,28 @@ public:
         return kb::script::ScriptBackendExecutionResult{.executed = true};
     }
 };
+
+[[nodiscard]] std::filesystem::path TestRoot() {
+    return std::filesystem::temp_directory_path() / "21kb_engine_script_runtime_tests";
+}
+
+void ResetTestRoot() {
+    std::error_code error;
+    std::filesystem::remove_all(TestRoot(), error);
+    std::filesystem::create_directories(TestRoot(), error);
+    kb::tests::Require(!error, "Script runtime test root could not be prepared");
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    kb::tests::Require(!error, "Script runtime test directory could not be created");
+
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    kb::tests::Require(output.is_open(), "Script runtime test file could not be opened");
+    output << text;
+    kb::tests::Require(output.good(), "Script runtime test file could not be written");
+}
 
 void RunNativeScriptRuntimeDispatchTest() {
     kb::scene::Scene scene;
@@ -366,6 +395,74 @@ void RunVisualGraphScriptBackendDispatchTest() {
     kb::tests::Require(consumedDelta == 0.25F, "Visual graph script backend did not receive shared delta seconds");
 }
 
+void RunScriptRuntimeAssetPreparerEndToEndTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "Project";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    WriteTextFile(assetsRoot / "Logic" / "Player.lua", R"(
+function Tick(self, dt)
+    Emit("LuaAssetTicked", { entity = self.entity, delta = dt })
+end
+)");
+    WriteTextFile(assetsRoot / "Logic" / "Enemy.kbgraph", R"(kbgraph 1
+name EnemyGraph
+node 1 Event Tick
+pin 1 Output then Void
+node 2 EmitEvent GraphAssetTicked
+pin 2 Input exec Void
+pin 2 Output then Void
+edge exec 1 then 2 exec
+)");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script runtime asset preparer project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 2U, "Script runtime asset preparer discovery did not find Lua and graph assets");
+
+    const kb::assets::AssetMetadata* luaMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Player.lua");
+    const kb::assets::AssetMetadata* graphMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Logic/Enemy.kbgraph");
+    kb::tests::Require(luaMetadata != nullptr, "Script runtime asset preparer could not find Lua metadata");
+    kb::tests::Require(graphMetadata != nullptr, "Script runtime asset preparer could not find graph metadata");
+
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Asset Object" });
+    const kb::scene::SceneObject graphObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Graph Asset Object" });
+    const std::optional<kb::scene::BehaviourComponent> luaBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*luaMetadata);
+    const std::optional<kb::scene::BehaviourComponent> graphBehaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*graphMetadata);
+    kb::tests::Require(luaBehaviour.has_value(), "Script runtime asset preparer could not create Lua behaviour component");
+    kb::tests::Require(graphBehaviour.has_value(), "Script runtime asset preparer could not create graph behaviour component");
+    scene.Components().Behaviours().Set(luaObject.Entity(), *luaBehaviour);
+    scene.Components().Behaviours().Set(graphObject.Entity(), *graphBehaviour);
+
+    kb::script::PucLuaScriptRuntime luaRuntime;
+    kb::visual::VisualGraphRuntimeRegistry visualArtifacts;
+    kb::script::ScriptRuntimeAssetPreparer preparer{ scene.Assets().Manager(), luaRuntime, visualArtifacts };
+    const kb::script::ScriptRuntimeAssetPrepareResult prepared = preparer.PrepareSceneBehaviours(scene);
+    kb::tests::Require(prepared.Succeeded(), "Script runtime asset preparer produced diagnostics");
+    kb::tests::Require(prepared.visitedAssets == 2U, "Script runtime asset preparer did not visit both behaviour assets");
+    kb::tests::Require(prepared.preparedAssets == 2U, "Script runtime asset preparer did not prepare both behaviour assets");
+    kb::tests::Require(luaRuntime.HasScript(luaMetadata->id), "Script runtime asset preparer did not load Lua script into VM");
+    kb::tests::Require(visualArtifacts.Contains(graphMetadata->id), "Script runtime asset preparer did not compile graph into runtime registry");
+
+    kb::visual::VisualGraphRuntimeBindingRegistry visualBindings;
+    kb::visual::VisualGraphBehaviourInstanceRegistry visualInstances;
+    kb::script::ScriptRuntime runtime;
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::LuaScriptBackend>(luaRuntime)), "Script runtime asset preparer Lua backend registration failed");
+    kb::tests::Require(runtime.RegisterBackend(std::make_unique<kb::script::VisualGraphScriptBackend>(visualArtifacts, visualBindings, visualInstances)), "Script runtime asset preparer visual backend registration failed");
+
+    const kb::script::ScriptRuntimeExecutionResult tick = runtime.ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.5F);
+    kb::tests::Require(tick.Succeeded(), "Prepared script asset runtime Tick produced diagnostics");
+    kb::tests::Require(tick.executedBehaviours == 2U, "Prepared script asset runtime did not execute Lua and graph behaviours");
+
+    bool sawLuaEvent = false;
+    bool sawGraphEvent = false;
+    for (const kb::script::ScriptEvent& event : tick.emittedEvents) {
+        sawLuaEvent = sawLuaEvent || event.name == "LuaAssetTicked";
+        sawGraphEvent = sawGraphEvent || event.name == "GraphAssetTicked";
+    }
+    kb::tests::Require(sawLuaEvent, "Prepared script asset runtime did not emit Lua event");
+    kb::tests::Require(sawGraphEvent, "Prepared script asset runtime did not emit graph event");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -377,6 +474,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendEventDispatchTest();
     RunScriptRuntimeSceneSystemTest();
     RunVisualGraphScriptBackendDispatchTest();
+    RunScriptRuntimeAssetPreparerEndToEndTest();
 }
 
 } // namespace kb::tests
