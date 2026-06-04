@@ -2,7 +2,25 @@
 
 #include "engine/script/ScriptBackend.hpp"
 
+#include <string>
+#include <string_view>
+
 namespace kb::script {
+
+struct LuaScriptLoadResult {
+    bool succeeded = false;
+    std::string error;
+};
+
+class ILuaScriptAssetStore {
+public:
+    virtual ~ILuaScriptAssetStore() = default;
+
+    [[nodiscard]] virtual LuaScriptLoadResult LoadScript(kb::assets::AssetId assetId, std::string_view source, std::string_view chunkName = {}) = 0;
+    virtual void UnloadScript(kb::assets::AssetId assetId) noexcept = 0;
+    virtual void Clear() noexcept = 0;
+    [[nodiscard]] virtual bool HasScript(kb::assets::AssetId assetId) const noexcept = 0;
+};
 
 class ILuaScriptRuntime {
 public:

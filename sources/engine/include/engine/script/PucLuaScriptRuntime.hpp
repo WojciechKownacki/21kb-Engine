@@ -11,12 +11,9 @@ struct lua_State;
 
 namespace kb::script {
 
-struct PucLuaLoadResult {
-    bool succeeded = false;
-    std::string error;
-};
+using PucLuaLoadResult = LuaScriptLoadResult;
 
-class PucLuaScriptRuntime final : public ILuaScriptRuntime {
+class PucLuaScriptRuntime final : public ILuaScriptRuntime, public ILuaScriptAssetStore {
 public:
     PucLuaScriptRuntime();
     ~PucLuaScriptRuntime() override;
@@ -26,10 +23,10 @@ public:
     PucLuaScriptRuntime(PucLuaScriptRuntime&&) = delete;
     PucLuaScriptRuntime& operator=(PucLuaScriptRuntime&&) = delete;
 
-    [[nodiscard]] PucLuaLoadResult LoadScript(kb::assets::AssetId assetId, std::string_view source, std::string_view chunkName = {});
-    void UnloadScript(kb::assets::AssetId assetId) noexcept;
-    void Clear() noexcept;
-    [[nodiscard]] bool HasScript(kb::assets::AssetId assetId) const noexcept;
+    [[nodiscard]] PucLuaLoadResult LoadScript(kb::assets::AssetId assetId, std::string_view source, std::string_view chunkName = {}) override;
+    void UnloadScript(kb::assets::AssetId assetId) noexcept override;
+    void Clear() noexcept override;
+    [[nodiscard]] bool HasScript(kb::assets::AssetId assetId) const noexcept override;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(
         const kb::scene::BehaviourComponent& behaviour,
