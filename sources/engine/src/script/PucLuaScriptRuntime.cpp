@@ -1,5 +1,7 @@
 #include "engine/script/PucLuaScriptRuntime.hpp"
 
+#include "engine/script/ScriptSceneComponentApi.hpp"
+
 extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
@@ -96,6 +98,8 @@ void OpenSafeLibraries(lua_State* state) {
     return arguments;
 }
 
+void PushScriptValue(lua_State* state, const ScriptValue& value);
+
 int LuaEmit(lua_State* state) {
     ScriptExecutionContext* context = ContextFromUpvalue(state);
     if (context == nullptr) {
@@ -108,6 +112,55 @@ int LuaEmit(lua_State* state) {
     }
     context->Emit(eventName, std::move(arguments));
     return 0;
+}
+
+int LuaSelfHasComponent(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const char* componentName = luaL_checkstring(state, 2);
+    lua_pushboolean(state, ScriptSceneComponentApi::HasComponent(context->GetScene(), context->Self(), componentName) ? 1 : 0);
+    return 1;
+}
+
+int LuaSelfGetProperty(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* componentName = luaL_checkstring(state, 2);
+    const char* propertyName = luaL_checkstring(state, 3);
+    const ScriptSceneComponentPropertyResult result = ScriptSceneComponentApi::GetProperty(context->GetScene(), context->Self(), componentName, propertyName);
+    if (!result.succeeded) {
+        lua_pushnil(state);
+        lua_pushlstring(state, result.error.data(), result.error.size());
+        return 2;
+    }
+    PushScriptValue(state, result.value);
+    return 1;
+}
+
+int LuaSelfSetProperty(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const char* componentName = luaL_checkstring(state, 2);
+    const char* propertyName = luaL_checkstring(state, 3);
+    const ScriptValue value = ValueFromLua(state, 4);
+    const ScriptSceneComponentMutationResult result = ScriptSceneComponentApi::SetProperty(context->GetScene(), context->Self(), componentName, propertyName, value);
+    lua_pushboolean(state, result.succeeded ? 1 : 0);
+    if (!result.succeeded) {
+        lua_pushlstring(state, result.error.data(), result.error.size());
+        return 2;
+    }
+    return 1;
 }
 
 void PushScriptValue(lua_State* state, const ScriptValue& value) {
@@ -134,14 +187,23 @@ void PushScriptValue(lua_State* state, const ScriptValue& value) {
     }
 }
 
-void PushSelf(lua_State* state, const ScriptExecutionContext& context) {
-    lua_createtable(state, 0, 3);
+void PushSelf(lua_State* state, ScriptExecutionContext& context) {
+    lua_createtable(state, 0, 6);
     lua_pushinteger(state, static_cast<lua_Integer>(context.Self().Id()));
     lua_setfield(state, -2, "entity");
     lua_pushinteger(state, static_cast<lua_Integer>(context.Asset().value));
     lua_setfield(state, -2, "asset");
     lua_pushstring(state, "Lua");
     lua_setfield(state, -2, "backend");
+    lua_pushlightuserdata(state, &context);
+    lua_pushcclosure(state, &LuaSelfHasComponent, 1);
+    lua_setfield(state, -2, "HasComponent");
+    lua_pushlightuserdata(state, &context);
+    lua_pushcclosure(state, &LuaSelfGetProperty, 1);
+    lua_setfield(state, -2, "GetProperty");
+    lua_pushlightuserdata(state, &context);
+    lua_pushcclosure(state, &LuaSelfSetProperty, 1);
+    lua_setfield(state, -2, "SetProperty");
 }
 
 void PushEvent(lua_State* state, const ScriptEvent& event) {
