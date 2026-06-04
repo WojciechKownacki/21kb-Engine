@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
@@ -16,6 +17,9 @@ public:
 
     [[nodiscard]] static VisibilityComponent Visibility(const Scene& scene, SceneEntity entity);
     [[nodiscard]] static const VisibilityComponent* TryGetVisibility(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasBehaviour(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const BehaviourComponent* TryGetBehaviour(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasCamera(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const CameraComponent* TryGetCamera(const Scene& scene, SceneEntity entity) noexcept;

@@ -1,0 +1,80 @@
+#include "engine/visual/VisualGraphRuntimeExecutionContext.hpp"
+
+#include <utility>
+
+namespace kb::visual {
+
+void VisualGraphRuntimeExecutionContext::Store(std::uint32_t nodeId, std::string_view pin, VisualGraphRuntimeValue value) {
+    const std::string key = Key(nodeId, pin);
+    values_[key] = std::move(value);
+    writesInCurrentExecution_.insert(key);
+}
+
+const VisualGraphRuntimeValue* VisualGraphRuntimeExecutionContext::TryRead(std::uint32_t nodeId, std::string_view pin) const {
+    const auto iter = values_.find(Key(nodeId, pin));
+    return iter == values_.end() ? nullptr : &iter->second;
+}
+
+bool VisualGraphRuntimeExecutionContext::WasStoredInCurrentExecution(std::uint32_t nodeId, std::string_view pin) const {
+    return writesInCurrentExecution_.contains(Key(nodeId, pin));
+}
+
+bool VisualGraphRuntimeExecutionContext::ReadBool(std::uint32_t nodeId, std::string_view pin, bool fallback) const {
+    const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
+    return value == nullptr ? fallback : value->AsBool(fallback);
+}
+
+int VisualGraphRuntimeExecutionContext::ReadInt(std::uint32_t nodeId, std::string_view pin, int fallback) const {
+    const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
+    return value == nullptr ? fallback : value->AsInt(fallback);
+}
+
+float VisualGraphRuntimeExecutionContext::ReadFloat(std::uint32_t nodeId, std::string_view pin, float fallback) const {
+    const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
+    return value == nullptr ? fallback : value->AsFloat(fallback);
+}
+
+std::string VisualGraphRuntimeExecutionContext::ReadString(std::uint32_t nodeId, std::string_view pin) const {
+    const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
+    return value == nullptr ? std::string{} : value->AsString();
+}
+
+std::uint64_t VisualGraphRuntimeExecutionContext::ReadUInt64(std::uint32_t nodeId, std::string_view pin, std::uint64_t fallback) const {
+    const VisualGraphRuntimeValue* value = TryRead(nodeId, pin);
+    return value == nullptr ? fallback : value->AsUInt64(fallback);
+}
+
+void VisualGraphRuntimeExecutionContext::EmitEvent(std::string eventName) {
+    emittedEvents_.push_back(std::move(eventName));
+}
+
+void VisualGraphRuntimeExecutionContext::Trace(std::string message) {
+    traces_.push_back(std::move(message));
+}
+
+const std::vector<std::string>& VisualGraphRuntimeExecutionContext::EmittedEvents() const noexcept {
+    return emittedEvents_;
+}
+
+const std::vector<std::string>& VisualGraphRuntimeExecutionContext::Traces() const noexcept {
+    return traces_;
+}
+
+void VisualGraphRuntimeExecutionContext::BeginExecutionPass() {
+    writesInCurrentExecution_.clear();
+    emittedEvents_.clear();
+    traces_.clear();
+}
+
+void VisualGraphRuntimeExecutionContext::ClearFrameState() {
+    values_.clear();
+    writesInCurrentExecution_.clear();
+    emittedEvents_.clear();
+    traces_.clear();
+}
+
+std::string VisualGraphRuntimeExecutionContext::Key(std::uint32_t nodeId, std::string_view pin) {
+    return std::to_string(nodeId) + ":" + std::string{pin};
+}
+
+} // namespace kb::visual

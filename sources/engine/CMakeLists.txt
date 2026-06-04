@@ -62,6 +62,7 @@ add_library(kb_engine STATIC
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneAssets.hpp
+    include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
     include/engine/scene/SceneComponentQueries.hpp
     include/engine/scene/SceneComponentVisitors.hpp
@@ -72,6 +73,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneHistory.hpp
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
+    include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
     include/engine/scene/ScenePrefab.hpp
@@ -95,6 +97,29 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
+    include/engine/visual/VisualGraphAssetLoader.hpp
+    include/engine/visual/VisualGraphAssetWriter.hpp
+    include/engine/visual/VisualGraphBehaviourInstanceRegistry.hpp
+    include/engine/visual/VisualGraphBehaviourLifecycleRunner.hpp
+    include/engine/visual/VisualGraphBehaviourRuntime.hpp
+    include/engine/visual/VisualGraphBindingSignature.hpp
+    include/engine/visual/VisualGraphBuildPipeline.hpp
+    include/engine/visual/VisualGraphCompileService.hpp
+    include/engine/visual/VisualGraphCompiler.hpp
+    include/engine/visual/VisualGraphDiagnostic.hpp
+    include/engine/visual/VisualGraphDocument.hpp
+    include/engine/visual/VisualGraphGeneratedCodeWriter.hpp
+    include/engine/visual/VisualGraphNativeBindingRegistry.hpp
+    include/engine/visual/VisualGraphNativeCodeGenerator.hpp
+    include/engine/visual/VisualGraphNodeCatalog.hpp
+    include/engine/visual/VisualGraphNodeDefinitionRegistry.hpp
+    include/engine/visual/VisualGraphRuntimeRegistry.hpp
+    include/engine/visual/VisualGraphRuntimeBindingRegistry.hpp
+    include/engine/visual/VisualGraphRuntimeExecutionContext.hpp
+    include/engine/visual/VisualGraphRuntimeExecutor.hpp
+    include/engine/visual/VisualGraphRuntimeValue.hpp
+    include/engine/visual/VisualGraphTypes.hpp
+    include/engine/visual/VisualGraphValidator.hpp
     src/assets/AssetId.cpp
     src/assets/AssetDiscoveryService.cpp
     src/assets/AssetFileOperations.cpp
@@ -187,6 +212,7 @@ add_library(kb_engine STATIC
     src/ecs/SerializedWorldWriter.cpp
     src/scene/Scene.cpp
     src/scene/SceneCameraIterationService.cpp
+    src/scene/SceneBehaviourIterationService.cpp
     src/scene/SceneHierarchy.cpp
     src/scene/SceneLightIterationService.cpp
     src/scene/SceneMeshRendererIterationService.cpp
@@ -200,6 +226,9 @@ add_library(kb_engine STATIC
     src/scene/components/SceneComponentAccess.cpp
     src/scene/components/SceneComponentRegistry.cpp
     src/scene/components/SceneComponentStorage.cpp
+    src/scene/components/SceneBehaviourApi.cpp
+    src/scene/components/SceneBehaviourIteration.cpp
+    src/scene/components/SceneBehaviourStorage.cpp
     src/scene/components/SceneCameraIteration.cpp
     src/scene/components/SceneLightApi.cpp
     src/scene/components/SceneLightStorage.cpp
@@ -237,6 +266,7 @@ add_library(kb_engine STATIC
     src/scene/hierarchy/SceneHierarchyRootCollector.cpp
     src/scene/history/SceneHistoryStack.cpp
     src/scene/modules/components/SceneCameraModule.cpp
+    src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
     src/scene/modules/components/SceneComponentModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
@@ -377,6 +407,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneComponentRegistry.hpp
     src/private/scene/components/SceneComponentStorage.hpp
     src/private/scene/components/SceneComponentStorageAccess.hpp
+    src/private/scene/components/SceneBehaviourComponentStore.hpp
     src/private/scene/components/SceneMeshRendererIterationDispatcher.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
@@ -532,6 +563,31 @@ add_library(kb_engine STATIC
     src/render/postfx/PostProcessResourceEdgeBuilder.cpp
     src/render/postfx/PostProcessResourceRegistry.cpp
     src/render/postfx/PostProcessTopologicalSorter.cpp
+    src/private/visual/VisualGraphParser.hpp
+    src/visual/VisualGraphAssetLoader.cpp
+    src/visual/VisualGraphAssetWriter.cpp
+    src/visual/VisualGraphBehaviourInstanceRegistry.cpp
+    src/visual/VisualGraphBehaviourLifecycleRunner.cpp
+    src/visual/VisualGraphBehaviourRuntime.cpp
+    src/visual/VisualGraphBindingSignature.cpp
+    src/visual/VisualGraphBuildPipeline.cpp
+    src/visual/VisualGraphCompileService.cpp
+    src/visual/VisualGraphCompiler.cpp
+    src/visual/VisualGraphDiagnostic.cpp
+    src/visual/VisualGraphDocument.cpp
+    src/visual/VisualGraphGeneratedCodeWriter.cpp
+    src/visual/VisualGraphNativeBindingRegistry.cpp
+    src/visual/VisualGraphNativeCodeGenerator.cpp
+    src/visual/VisualGraphNodeCatalog.cpp
+    src/visual/VisualGraphNodeDefinitionRegistry.cpp
+    src/visual/VisualGraphParser.cpp
+    src/visual/VisualGraphRuntimeRegistry.cpp
+    src/visual/VisualGraphRuntimeBindingRegistry.cpp
+    src/visual/VisualGraphRuntimeExecutionContext.cpp
+    src/visual/VisualGraphRuntimeExecutor.cpp
+    src/visual/VisualGraphRuntimeValue.cpp
+    src/visual/VisualGraphTypes.cpp
+    src/visual/VisualGraphValidator.cpp
     src/private/ecs/ComponentRegistry.hpp
     src/private/ecs/component/ComponentStorageIteration.hpp
     src/private/ecs/component/ComponentStorageMutation.hpp
@@ -640,6 +696,7 @@ if(BUILD_TESTING)
         tests/SystemLifecycleTests.cpp
         tests/TestSuites.hpp
         tests/TestSupport.hpp
+        tests/VisualGraphTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

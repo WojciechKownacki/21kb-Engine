@@ -7,5 +7,6 @@ void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
+void RunVisualGraphTests();
 
 } // namespace kb::tests
