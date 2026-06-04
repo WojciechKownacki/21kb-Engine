@@ -98,14 +98,24 @@ add_library(kb_engine STATIC
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
     include/engine/script/LuaScriptBackend.hpp
+    include/engine/script/NativeScriptBuildPipeline.hpp
     include/engine/script/NativeScriptBackend.hpp
+    include/engine/script/NativeScriptPlugin.hpp
+    include/engine/script/NativeScriptPluginManager.hpp
+    include/engine/script/NativeScriptPluginRegistrar.hpp
     include/engine/script/PucLuaScriptRuntime.hpp
+    include/engine/script/ScriptApiNameCollector.hpp
+    include/engine/script/ScriptApiNameRegistry.hpp
+    include/engine/script/ScriptApiDeclarationParser.hpp
     include/engine/script/ScriptAsset.hpp
     include/engine/script/ScriptAssetLoader.hpp
     include/engine/script/ScriptBackend.hpp
     include/engine/script/ScriptBehaviourAsset.hpp
+    include/engine/script/ScriptBehaviourBindingService.hpp
     include/engine/script/ScriptEvent.hpp
     include/engine/script/ScriptExecutionContext.hpp
+    include/engine/script/ScriptFunctionRegistry.hpp
+    include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptRuntime.hpp
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
@@ -113,6 +123,8 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptRuntimeSceneSystem.hpp
     include/engine/script/ScriptSceneComponentApi.hpp
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
+    include/engine/script/ScriptSharedState.hpp
+    include/engine/script/ScriptSharedVisualGraphBindings.hpp
     include/engine/script/ScriptValue.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
@@ -122,12 +134,14 @@ add_library(kb_engine STATIC
     include/engine/visual/VisualGraphBehaviourRuntime.hpp
     include/engine/visual/VisualGraphBindingSignature.hpp
     include/engine/visual/VisualGraphBuildPipeline.hpp
+    include/engine/visual/VisualGraphCompileCoordinator.hpp
     include/engine/visual/VisualGraphCompileService.hpp
     include/engine/visual/VisualGraphCompiler.hpp
     include/engine/visual/VisualGraphDiagnostic.hpp
     include/engine/visual/VisualGraphDocument.hpp
     include/engine/visual/VisualGraphGeneratedCodeWriter.hpp
     include/engine/visual/VisualGraphNativeBindingRegistry.hpp
+    include/engine/visual/VisualGraphNativeBuildPipeline.hpp
     include/engine/visual/VisualGraphNativeCodeGenerator.hpp
     include/engine/visual/VisualGraphNodeCatalog.hpp
     include/engine/visual/VisualGraphNodeDefinitionRegistry.hpp
@@ -412,11 +426,20 @@ add_library(kb_engine STATIC
     src/scene/transform/TransformMath.cpp
     src/scene/transform/Vec3Math.cpp
     src/script/LuaScriptBackend.cpp
+    src/script/NativeScriptBuildPipeline.cpp
     src/script/NativeScriptBackend.cpp
+    src/script/NativeScriptPluginManager.cpp
+    src/script/NativeScriptPluginRegistrar.cpp
     src/script/PucLuaScriptRuntime.cpp
+    src/script/ScriptApiNameCollector.cpp
+    src/script/ScriptApiNameRegistry.cpp
+    src/script/ScriptApiDeclarationParser.cpp
     src/script/ScriptAssetLoader.cpp
     src/script/ScriptBehaviourAsset.cpp
+    src/script/ScriptBehaviourBindingService.cpp
     src/script/ScriptExecutionContext.cpp
+    src/script/ScriptFunctionRegistry.cpp
+    src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptRuntime.cpp
     src/script/ScriptRuntimeAssetPreparer.cpp
@@ -424,6 +447,8 @@ add_library(kb_engine STATIC
     src/script/ScriptRuntimeSceneSystem.cpp
     src/script/ScriptSceneComponentApi.cpp
     src/script/ScriptSceneVisualGraphBindings.cpp
+    src/script/ScriptSharedState.cpp
+    src/script/ScriptSharedVisualGraphBindings.cpp
     src/script/ScriptValue.cpp
     src/script/VisualGraphScriptBackend.cpp
     src/private/scene/components/SceneComponentAccess.hpp
@@ -604,12 +629,14 @@ add_library(kb_engine STATIC
     src/visual/VisualGraphBehaviourRuntime.cpp
     src/visual/VisualGraphBindingSignature.cpp
     src/visual/VisualGraphBuildPipeline.cpp
+    src/visual/VisualGraphCompileCoordinator.cpp
     src/visual/VisualGraphCompileService.cpp
     src/visual/VisualGraphCompiler.cpp
     src/visual/VisualGraphDiagnostic.cpp
     src/visual/VisualGraphDocument.cpp
     src/visual/VisualGraphGeneratedCodeWriter.cpp
     src/visual/VisualGraphNativeBindingRegistry.cpp
+    src/visual/VisualGraphNativeBuildPipeline.cpp
     src/visual/VisualGraphNativeCodeGenerator.cpp
     src/visual/VisualGraphNodeCatalog.cpp
     src/visual/VisualGraphNodeDefinitionRegistry.cpp
@@ -704,6 +731,17 @@ target_link_libraries(kb_engine
 kb_apply_quality_gates(kb_engine)
 
 if(BUILD_TESTING)
+    add_library(kb_native_script_test_plugin SHARED
+        tests/NativeScriptTestPlugin.cpp
+    )
+
+    target_link_libraries(kb_native_script_test_plugin
+        PRIVATE
+            kb_engine
+    )
+
+    kb_apply_quality_gates(kb_native_script_test_plugin)
+
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
         tests/AssetRuntimeTests.cpp
@@ -737,6 +775,12 @@ if(BUILD_TESTING)
     target_link_libraries(kb_engine_tests
         PRIVATE
             kb_engine
+    )
+
+    add_dependencies(kb_engine_tests kb_native_script_test_plugin)
+    target_compile_definitions(kb_engine_tests
+        PRIVATE
+            "KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH=\"$<TARGET_FILE:kb_native_script_test_plugin>\""
     )
 
     add_test(NAME kb_engine_tests COMMAND $<TARGET_FILE:kb_engine_tests>)

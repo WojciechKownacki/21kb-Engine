@@ -45,32 +45,63 @@ std::uint64_t VisualGraphRuntimeExecutionContext::ReadUInt64(std::uint32_t nodeI
 }
 
 void VisualGraphRuntimeExecutionContext::EmitEvent(std::string eventName) {
-    emittedEvents_.push_back(std::move(eventName));
+    EmitEvent(std::move(eventName), {});
+}
+
+void VisualGraphRuntimeExecutionContext::EmitEvent(std::string eventName, std::vector<VisualGraphEventArgument> arguments, kb::scene::SceneEntity target) {
+    if (eventName.empty()) {
+        return;
+    }
+    emittedEvents_.push_back(eventName);
+    emittedEventRecords_.push_back(VisualGraphEmittedEvent{
+        .name = std::move(eventName),
+        .target = target,
+        .arguments = std::move(arguments),
+    });
 }
 
 void VisualGraphRuntimeExecutionContext::Trace(std::string message) {
     traces_.push_back(std::move(message));
 }
 
+void VisualGraphRuntimeExecutionContext::ReportError(std::string message) {
+    if (message.empty()) {
+        return;
+    }
+    runtimeErrors_.push_back(std::move(message));
+}
+
 const std::vector<std::string>& VisualGraphRuntimeExecutionContext::EmittedEvents() const noexcept {
     return emittedEvents_;
+}
+
+const std::vector<VisualGraphEmittedEvent>& VisualGraphRuntimeExecutionContext::EmittedEventRecords() const noexcept {
+    return emittedEventRecords_;
 }
 
 const std::vector<std::string>& VisualGraphRuntimeExecutionContext::Traces() const noexcept {
     return traces_;
 }
 
+const std::vector<std::string>& VisualGraphRuntimeExecutionContext::RuntimeErrors() const noexcept {
+    return runtimeErrors_;
+}
+
 void VisualGraphRuntimeExecutionContext::BeginExecutionPass() {
     writesInCurrentExecution_.clear();
     emittedEvents_.clear();
+    emittedEventRecords_.clear();
     traces_.clear();
+    runtimeErrors_.clear();
 }
 
 void VisualGraphRuntimeExecutionContext::ClearFrameState() {
     values_.clear();
     writesInCurrentExecution_.clear();
     emittedEvents_.clear();
+    emittedEventRecords_.clear();
     traces_.clear();
+    runtimeErrors_.clear();
 }
 
 std::string VisualGraphRuntimeExecutionContext::Key(std::uint32_t nodeId, std::string_view pin) {

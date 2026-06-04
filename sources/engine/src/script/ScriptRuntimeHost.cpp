@@ -5,13 +5,29 @@
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
+#include "engine/script/ScriptSharedVisualGraphBindings.hpp"
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace kb::script {
 namespace {
+
+[[nodiscard]] std::vector<ScriptApiPin> ToApiPins(const std::vector<ScriptFunctionPin>& pins) {
+    std::vector<ScriptApiPin> apiPins;
+    apiPins.reserve(pins.size());
+    for (const ScriptFunctionPin& pin : pins) {
+        apiPins.push_back(ScriptApiPin{
+            .name = pin.name,
+            .type = pin.type,
+            .required = pin.required,
+        });
+    }
+    return apiPins;
+}
 
 class ScriptRuntimeHostSceneSystem final : public kb::scene::SceneSystem {
 public:
@@ -40,7 +56,10 @@ struct ScriptRuntimeHostState final {
     kb::visual::VisualGraphNativeBindingRegistry visualGraphNativeBindings;
     kb::visual::VisualGraphBehaviourInstanceRegistry visualGraphInstances;
     ScriptRuntime runtime;
+    ScriptApiNameRegistry apiNames;
+    std::unique_ptr<NativeScriptPluginManager> nativePlugins;
     ScriptRuntimeAssetPreparer assetPreparer;
+    ScriptRuntimeFrameSettings frameSettings;
     NativeScriptBackend* nativeBackend = nullptr;
     LuaScriptBackend* luaBackend = nullptr;
     VisualGraphScriptBackend* visualGraphBackend = nullptr;
@@ -50,7 +69,9 @@ namespace {
 
 ScriptRuntimeHostSceneSystem::ScriptRuntimeHostSceneSystem(std::shared_ptr<ScriptRuntimeHostState> state)
     : state_(std::move(state))
-    , system_(state_->runtime, state_->assetPreparer) {}
+    , system_(state_->runtime, state_->assetPreparer) {
+    system_.SetFrameSettings(state_->frameSettings);
+}
 
 void ScriptRuntimeHostSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     system_.OnCreate(context);
@@ -71,7 +92,9 @@ ScriptRuntimeHost::ScriptRuntimeHost(kb::scene::Scene& scene, ScriptRuntimeHostO
     if (options.visualGraphPrepareSettings.nativeBindings == nullptr) {
         options.visualGraphPrepareSettings.nativeBindings = &state_->visualGraphNativeBindings;
     }
+    state_->frameSettings = options.frameSettings;
     state_->assetPreparer.SetVisualGraphSettings(std::move(options.visualGraphPrepareSettings));
+    state_->assetPreparer.SetNativeSettings(std::move(options.nativePrepareSettings));
     RegisterDefaultBackends();
     if (options.installSceneSystem) {
         static_cast<void>(InstallSceneSystem());
@@ -115,6 +138,57 @@ const ScriptRuntime& ScriptRuntimeHost::Runtime() const noexcept {
     return state_->runtime;
 }
 
+ScriptSharedState& ScriptRuntimeHost::SharedState() noexcept {
+    return state_->runtime.SharedState();
+}
+
+const ScriptSharedState& ScriptRuntimeHost::SharedState() const noexcept {
+    return state_->runtime.SharedState();
+}
+
+ScriptFunctionRegistry& ScriptRuntimeHost::Functions() noexcept {
+    return state_->runtime.Functions();
+}
+
+const ScriptFunctionRegistry& ScriptRuntimeHost::Functions() const noexcept {
+    return state_->runtime.Functions();
+}
+
+ScriptApiNameRegistry& ScriptRuntimeHost::ApiNames() noexcept {
+    return state_->apiNames;
+}
+
+const ScriptApiNameRegistry& ScriptRuntimeHost::ApiNames() const noexcept {
+    return state_->apiNames;
+}
+
+bool ScriptRuntimeHost::RegisterFunction(ScriptFunctionDesc function) {
+    const std::string functionName = function.signature.name;
+    const std::string visualGraphSymbol = "Function." + functionName;
+    if (functionName.empty() ||
+        state_->runtime.Functions().FindSignature(functionName) != nullptr ||
+        state_->visualGraphRuntimeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr ||
+        state_->visualGraphNativeBindings.Find(kb::visual::VisualGraphIrOpcode::CallNative, visualGraphSymbol) != nullptr) {
+        return false;
+    }
+    const std::vector<ScriptApiPin> inputs = ToApiPins(function.signature.inputs);
+    const std::vector<ScriptApiPin> outputs = ToApiPins(function.signature.outputs);
+    if (!state_->runtime.Functions().Register(std::move(function))) {
+        return false;
+    }
+    static_cast<void>(state_->apiNames.RegisterFunction(functionName, inputs, outputs, "ScriptRuntimeHost", true));
+    const ScriptFunctionSignature* signature = state_->runtime.Functions().FindSignature(functionName);
+    if (signature == nullptr) {
+        return false;
+    }
+    return ScriptFunctionVisualGraphBindings::RegisterFunction(
+        state_->visualGraphRuntimeBindings,
+        state_->visualGraphNativeBindings,
+        state_->runtime.Functions(),
+        *signature,
+        state_->scene);
+}
+
 ScriptRuntimeAssetPreparer& ScriptRuntimeHost::AssetPreparer() noexcept {
     return state_->assetPreparer;
 }
@@ -137,6 +211,14 @@ NativeScriptBackend& ScriptRuntimeHost::NativeBackend() noexcept {
 
 const NativeScriptBackend& ScriptRuntimeHost::NativeBackend() const noexcept {
     return *state_->nativeBackend;
+}
+
+NativeScriptPluginManager& ScriptRuntimeHost::NativePlugins() noexcept {
+    return *state_->nativePlugins;
+}
+
+const NativeScriptPluginManager& ScriptRuntimeHost::NativePlugins() const noexcept {
+    return *state_->nativePlugins;
 }
 
 VisualGraphScriptBackend& ScriptRuntimeHost::VisualGraphBackend() noexcept {
@@ -185,6 +267,8 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     if (!state_->runtime.RegisterBackend(std::move(nativeBackend))) {
         AddDiagnostic("native script backend could not be registered");
     } else {
+        state_->nativePlugins = std::make_unique<NativeScriptPluginManager>(*state_->nativeBackend);
+        state_->assetPreparer.SetNativePluginManager(*state_->nativePlugins);
         state_->assetPreparer.SetNativeBackend(*state_->nativeBackend);
     }
 
@@ -196,6 +280,21 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
 
     if (!ScriptSceneVisualGraphBindings::Register(state_->visualGraphRuntimeBindings, state_->scene)) {
         AddDiagnostic("VisualGraph scene component runtime bindings could not be registered");
+    }
+    if (!ScriptSceneVisualGraphBindings::RegisterNative(state_->visualGraphNativeBindings)) {
+        AddDiagnostic("VisualGraph scene component native bindings could not be registered");
+    }
+    if (!ScriptSharedVisualGraphBindings::Register(state_->visualGraphRuntimeBindings, state_->runtime.SharedState())) {
+        AddDiagnostic("VisualGraph shared state runtime bindings could not be registered");
+    }
+    if (!ScriptSharedVisualGraphBindings::RegisterNative(state_->visualGraphNativeBindings)) {
+        AddDiagnostic("VisualGraph shared state native bindings could not be registered");
+    }
+    if (!ScriptFunctionVisualGraphBindings::Register(state_->visualGraphRuntimeBindings, state_->runtime.Functions(), state_->scene)) {
+        AddDiagnostic("VisualGraph script function runtime bindings could not be registered");
+    }
+    if (!ScriptFunctionVisualGraphBindings::RegisterNative(state_->visualGraphNativeBindings, state_->runtime.Functions())) {
+        AddDiagnostic("VisualGraph script function native bindings could not be registered");
     }
 
     auto visualGraphBackend = std::make_unique<VisualGraphScriptBackend>(state_->visualGraphs, state_->visualGraphRuntimeBindings, state_->visualGraphInstances);

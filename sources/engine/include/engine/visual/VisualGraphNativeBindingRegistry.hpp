@@ -16,6 +16,7 @@ struct VisualGraphNativeBinding {
     std::vector<VisualGraphPinSignature> inputs;
     std::vector<VisualGraphPinSignature> outputs;
     bool passContext = true;
+    bool callScriptFunction = false;
 };
 
 class VisualGraphNativeBindingRegistry final {

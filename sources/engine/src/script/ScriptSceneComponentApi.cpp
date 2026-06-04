@@ -142,6 +142,61 @@ constexpr std::array<std::string_view, 6> kComponentNames{
     "Behaviour",
 };
 
+constexpr std::array<ScriptSceneComponentPropertyDesc, 13> kTransformPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "localPosition.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localPosition.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localPosition.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localRotation.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localRotation.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localRotation.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localRotation.w", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localScale.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localScale.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "localScale.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "worldPosition.x", ScriptValueType::Float, false },
+    ScriptSceneComponentPropertyDesc{ "worldPosition.y", ScriptValueType::Float, false },
+    ScriptSceneComponentPropertyDesc{ "worldPosition.z", ScriptValueType::Float, false },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 1> kVisibilityPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "visible", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 6> kCameraPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "projection", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "verticalFovDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "orthographicHeight", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "nearClip", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "farClip", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "primary", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 11> kLightPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "kind", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "color.x", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "color.y", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "color.z", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "intensity", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "range", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "innerConeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "outerConeDegrees", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "contactShadowLength", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "volumetricScattering", ScriptValueType::Float },
+    ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kMeshRendererPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "materialSlotOverrideCount", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "castsShadow", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "receivesShadow", ScriptValueType::Bool },
+};
+
+constexpr std::array<ScriptSceneComponentPropertyDesc, 3> kBehaviourPropertyDescs{
+    ScriptSceneComponentPropertyDesc{ "enabled", ScriptValueType::Bool },
+    ScriptSceneComponentPropertyDesc{ "tickGroup", ScriptValueType::Int },
+    ScriptSceneComponentPropertyDesc{ "executionOrder", ScriptValueType::Int },
+};
+
 constexpr std::array<FieldBinding, 13> kTransformFields{
     KB_NESTED_FIELD(kb::scene::TransformComponent, localPosition, x, FieldKind::Float),
     KB_NESTED_FIELD(kb::scene::TransformComponent, localPosition, y, FieldKind::Float),
@@ -204,6 +259,15 @@ constexpr std::array<FieldBinding, 3> kBehaviourFields{
     for (const FieldBinding& field : fields) {
         if (field.name == name) {
             return &field;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] const ScriptSceneComponentPropertyDesc* FindPropertyDesc(std::span<const ScriptSceneComponentPropertyDesc> properties, std::string_view name) noexcept {
+    for (const ScriptSceneComponentPropertyDesc& property : properties) {
+        if (property.name == name) {
+            return &property;
         }
     }
     return nullptr;
@@ -314,6 +378,28 @@ std::span<const std::string_view> ScriptSceneComponentApi::ComponentNames() noex
     return kComponentNames;
 }
 
+std::span<const ScriptSceneComponentPropertyDesc> ScriptSceneComponentApi::ComponentProperties(std::string_view componentName) noexcept {
+    if (componentName == "Transform") {
+        return kTransformPropertyDescs;
+    }
+    if (componentName == "Visibility") {
+        return kVisibilityPropertyDescs;
+    }
+    if (componentName == "Camera") {
+        return kCameraPropertyDescs;
+    }
+    if (componentName == "Light") {
+        return kLightPropertyDescs;
+    }
+    if (componentName == "MeshRenderer") {
+        return kMeshRendererPropertyDescs;
+    }
+    if (componentName == "Behaviour") {
+        return kBehaviourPropertyDescs;
+    }
+    return {};
+}
+
 bool ScriptSceneComponentApi::HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept {
     return AccessComponent(scene, entity, componentName).immutable != nullptr;
 }
@@ -354,6 +440,10 @@ ScriptSceneComponentMutationResult ScriptSceneComponentApi::SetProperty(
     const FieldBinding* field = FindField(component.fields, propertyName);
     if (field == nullptr) {
         return ScriptSceneComponentMutationResult{ .error = "component property is not registered for scripts" };
+    }
+    const ScriptSceneComponentPropertyDesc* property = FindPropertyDesc(ComponentProperties(componentName), propertyName);
+    if (property != nullptr && !property->writable) {
+        return ScriptSceneComponentMutationResult{ .error = "component property is read-only for scripts" };
     }
 
     if (!WriteByComponent(componentName, component.mutableComponent, *field, value)) {

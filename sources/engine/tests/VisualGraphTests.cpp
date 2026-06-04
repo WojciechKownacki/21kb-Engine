@@ -8,6 +8,9 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/script/ScriptApiNameCollector.hpp"
+#include "engine/script/ScriptApiNameRegistry.hpp"
+#include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 #include "engine/visual/VisualGraphAssetWriter.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
@@ -16,6 +19,7 @@
 #include "engine/visual/VisualGraphBuildPipeline.hpp"
 #include "engine/visual/VisualGraphCompileService.hpp"
 #include "engine/visual/VisualGraphCompiler.hpp"
+#include "engine/visual/VisualGraphCompileCoordinator.hpp"
 #include "engine/visual/VisualGraphDocument.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphNativeCodeGenerator.hpp"
@@ -99,6 +103,20 @@ pin 2 Input door Entity
 pin 2 Output then Void
 edge exec 1 then 2 exec
 edge data 1 door 2 door
+)";
+}
+
+[[nodiscard]] std::string FunctionSignatureGraphText() {
+    return R"(kbgraph 1
+name InventoryCaller
+node 1 Event Tick
+pin 1 Output then Void
+node 2 CallNative Function.Inventory.AddItem
+pin 2 Input exec Void
+pin 2 Input itemId String
+pin 2 Output then Void
+pin 2 Output total Int
+edge exec 1 then 2 exec
 )";
 }
 
@@ -267,6 +285,37 @@ void RunVisualGraphCompilerAndCodegenTest() {
     kb::tests::Require(generated.header.find("void Ready") != std::string::npos, "Visual graph native codegen did not emit Ready");
     kb::tests::Require(generated.source.find("context.CallNative(\"MovePlayer\")") != std::string::npos, "Visual graph native codegen did not emit native call dispatch");
     kb::tests::Require(generated.source.find("context.EmitEvent(\"PlayerMoved\")") != std::string::npos, "Visual graph native codegen did not emit event dispatch");
+
+    kb::visual::VisualGraphAsset payloadGraph{};
+    payloadGraph.name = "PayloadEmitter";
+    payloadGraph.nodes = {
+        kb::visual::VisualGraphNode{.id = 1U, .kind = kb::visual::VisualGraphNodeKind::Event, .lifecycle = kb::visual::VisualGraphLifecycleEvent::Tick},
+        kb::visual::VisualGraphNode{.id = 2U, .kind = kb::visual::VisualGraphNodeKind::GetProperty, .symbol = "PayloadAmount"},
+        kb::visual::VisualGraphNode{.id = 3U, .kind = kb::visual::VisualGraphNodeKind::EmitEvent, .symbol = "PayloadReady"},
+    };
+    payloadGraph.pins = {
+        kb::visual::VisualGraphPin{.nodeId = 1U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "then", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 2U, .direction = kb::visual::VisualGraphPinDirection::Output, .name = "amount", .type = kb::visual::VisualGraphValueType::Float},
+        kb::visual::VisualGraphPin{.nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "exec", .type = kb::visual::VisualGraphValueType::Void},
+        kb::visual::VisualGraphPin{.nodeId = 3U, .direction = kb::visual::VisualGraphPinDirection::Input, .name = "amount", .type = kb::visual::VisualGraphValueType::Float},
+    };
+    payloadGraph.edges = {
+        kb::visual::VisualGraphEdge{.fromNode = 1U, .fromPin = "then", .toNode = 3U, .toPin = "exec"},
+        kb::visual::VisualGraphEdge{.fromNode = 2U, .fromPin = "amount", .toNode = 3U, .toPin = "amount", .kind = kb::visual::VisualGraphEdgeKind::Data},
+    };
+    const kb::visual::VisualGraphCompileResult payloadCompiled = kb::visual::VisualGraphCompiler::Compile(payloadGraph);
+    kb::tests::Require(payloadCompiled.Succeeded(), "Visual graph compiler rejected an event payload graph");
+    const kb::visual::VisualGraphNativeCode payloadGenerated = kb::visual::VisualGraphNativeCodeGenerator::Generate(payloadCompiled.module, kb::visual::VisualGraphNativeCodegenDesc{
+        .className = "PayloadEmitter",
+        .namespaceName = "kb::game",
+    });
+    kb::tests::Require(payloadGenerated.Succeeded(), "Visual graph native codegen rejected an event payload graph");
+    kb::tests::Require(payloadGenerated.header.find("std::span<const VisualGraphNativeEventArgument>") != std::string::npos,
+        "Visual graph native codegen did not expose typed event payloads");
+    kb::tests::Require(payloadGenerated.source.find("VisualGraphNativeEventArgument{\"amount\", VisualGraphNativeValueType::Float, context.ReadFloat(2U, \"amount\")}") != std::string::npos,
+        "Visual graph native codegen did not preserve typed event payload arguments");
+    kb::tests::Require(payloadGenerated.source.find("context.EmitEvent(\"PayloadReady\", std::span<const VisualGraphNativeEventArgument>{eventArguments_3})") != std::string::npos,
+        "Visual graph native codegen did not emit typed event payload dispatch");
 
     const kb::visual::VisualGraphNativeCode keywordClassGenerated = kb::visual::VisualGraphNativeCodeGenerator::Generate(compiled.module, kb::visual::VisualGraphNativeCodegenDesc{
         .className = "class",
@@ -520,6 +569,188 @@ void RunVisualGraphCompileServicePreparesRuntimeArtifactTest() {
         "Visual graph compile service diagnostic did not preserve stage");
 }
 
+void RunVisualGraphCompileCoordinatorTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "CoordinatorProject";
+    const std::filesystem::path assetsRoot = projectRoot / "Assets";
+    const std::filesystem::path generatedRoot = projectRoot / "Intermediate" / "GeneratedVisualScripts";
+    const std::filesystem::path nativeBuildMarker = projectRoot / "Intermediate" / "native_build.marker";
+    WriteTextFile(assetsRoot / "Logic" / "PlayerController.kbgraph", SampleGraphText());
+    WriteTextFile(assetsRoot / "Logic" / "ApiNames.lua", R"(-- @expose speed Float = 1.0
+function Tick(self, dt)
+    local Send = Emit
+    -- @apix event Collected.InvalidBoundary
+    SetShared("Collected.Score", 7)
+    Emit("Collected.Event")
+    Send("Collected.AliasEvent")
+    CallFunction("Collected.Function", { value = 1 })
+end
+)");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>()), "Visual graph coordinator loader registration failed");
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::script::LuaScriptAssetLoader>()), "Visual graph coordinator Lua loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Visual graph coordinator asset mount failed");
+    static_cast<void>(manager.DiscoverMountedAssets());
+
+    const kb::script::ScriptApiNameCollectionResult collectedApiNames = kb::script::ScriptApiNameCollector::CollectProjectAssets(manager);
+    kb::tests::Require(collectedApiNames.Succeeded(), "Visual graph coordinator API name collection produced diagnostics");
+    kb::tests::Require(collectedApiNames.names.Contains(kb::script::ScriptApiNameKind::ExposedVariable, "speed"),
+        "Lua API name collection did not register exposed variables");
+    kb::tests::Require(collectedApiNames.names.Contains(kb::script::ScriptApiNameKind::Event, "Collected.AliasEvent"),
+        "Lua API name collection did not register literal event calls through local aliases");
+    kb::tests::Require(!collectedApiNames.names.Contains(kb::script::ScriptApiNameKind::Event, "Collected.InvalidBoundary"),
+        "Lua API declaration parser accepted @apix as @api");
+
+    const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> graph = manager.Load<kb::visual::VisualGraphAsset>("/Game/Logic/PlayerController.kbgraph");
+    kb::tests::Require(graph.IsLoaded(), "Visual graph coordinator test asset did not load");
+
+    kb::visual::VisualGraphNativeBindingRegistry bindings;
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphNativeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+                           .symbol = "DeltaSeconds",
+                           .functionName = "NativeDeltaSeconds",
+                           .outputs = {
+                               kb::visual::VisualGraphNativePinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::Float },
+                           },
+                       }),
+        "Visual graph coordinator output binding registration failed");
+    kb::tests::Require(bindings.Register(kb::visual::VisualGraphNativeBinding{
+                           .opcode = kb::visual::VisualGraphIrOpcode::CallNative,
+                           .symbol = "MovePlayer",
+                           .functionName = "NativeMovePlayer",
+                           .inputs = {
+                               kb::visual::VisualGraphNativePinSignature{ .name = "delta", .type = kb::visual::VisualGraphValueType::Float },
+                           },
+                       }),
+        "Visual graph coordinator input binding registration failed");
+
+    kb::script::ScriptApiNameRegistry apiNames;
+    kb::tests::Require(apiNames.Register(kb::script::ScriptApiNameKind::Function, "Inventory.AddItem", "InventoryService"), "Script API name registry did not accept function name");
+    kb::visual::VisualGraphRuntimeRegistry runtimeRegistry;
+    const kb::visual::VisualGraphCompileCoordinatorResult compiled = kb::visual::VisualGraphCompileCoordinator::Compile(
+        manager,
+        kb::visual::VisualGraphCompileCoordinatorRequest{
+            .assetId = graph.Id(),
+            .build = kb::visual::VisualGraphBuildDesc{
+                .nativeCodegen = kb::visual::VisualGraphNativeCodegenDesc{
+                    .className = "PlayerController",
+                    .namespaceName = "kb::game",
+                    .bindings = &bindings,
+                },
+            },
+            .generatedCodeDirectory = generatedRoot,
+            .apiNames = &apiNames,
+            .writeGeneratedCode = false,
+            .nativeBuild = kb::visual::VisualGraphNativeBuildDesc{
+                .enabled = true,
+                .command = std::string{ "cmake -E touch \"" } + nativeBuildMarker.string() + "\"",
+                .workingDirectory = projectRoot,
+            },
+            .storeRuntimeArtifact = true,
+        },
+        runtimeRegistry);
+    kb::tests::Require(compiled.Succeeded(), "Visual graph compile coordinator rejected a valid request");
+    kb::tests::Require(compiled.runtimeArtifactStored, "Visual graph compile coordinator did not store the runtime artifact");
+    kb::tests::Require(compiled.nativeBuildSucceeded, "Visual graph compile coordinator did not report native build success");
+    kb::tests::Require(runtimeRegistry.Contains(graph.Id()), "Visual graph compile coordinator runtime registry is missing the artifact");
+    const kb::visual::VisualGraphRuntimeArtifact* artifact = runtimeRegistry.Find(graph.Id());
+    kb::tests::Require(artifact != nullptr, "Visual graph compile coordinator artifact was not queryable");
+    kb::tests::Require(std::filesystem::is_regular_file(artifact->generatedFiles.headerPath), "Visual graph compile coordinator did not write generated header");
+    kb::tests::Require(std::filesystem::is_regular_file(artifact->generatedFiles.sourcePath), "Visual graph compile coordinator did not write generated source");
+    kb::tests::Require(std::filesystem::is_regular_file(nativeBuildMarker), "Visual graph compile coordinator did not execute native build command");
+
+    kb::script::ScriptApiNameRegistry crossKindApiNames;
+    kb::tests::Require(crossKindApiNames.Register(kb::script::ScriptApiNameKind::Function, "Collected.Score", "FunctionApi"), "Script API cross-kind test name did not register");
+    kb::visual::VisualGraphRuntimeRegistry crossKindFailingRegistry;
+    const kb::visual::VisualGraphCompileCoordinatorResult crossKindFailed = kb::visual::VisualGraphCompileCoordinator::Compile(
+        manager,
+        kb::visual::VisualGraphCompileCoordinatorRequest{
+            .assetId = graph.Id(),
+            .apiNames = &crossKindApiNames,
+            .disallowCrossKindApiNameCollisions = true,
+            .writeGeneratedCode = false,
+            .storeRuntimeArtifact = true,
+        },
+        crossKindFailingRegistry);
+    kb::tests::Require(!crossKindFailed.Succeeded(), "Visual graph compile coordinator accepted collected cross-kind API name collision");
+    kb::tests::Require(!crossKindFailingRegistry.Contains(graph.Id()), "Visual graph compile coordinator stored artifact after collected API name collision");
+
+    WriteTextFile(assetsRoot / "Logic" / "ApiNamesConflict.lua", R"(
+function Tick(self, dt)
+    SetShared("Collected.Score", "invalid")
+end
+)");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    kb::visual::VisualGraphRuntimeRegistry sharedContractFailingRegistry;
+    const kb::visual::VisualGraphCompileCoordinatorResult sharedContractFailed = kb::visual::VisualGraphCompileCoordinator::Compile(
+        manager,
+        kb::visual::VisualGraphCompileCoordinatorRequest{
+            .assetId = graph.Id(),
+            .writeGeneratedCode = false,
+            .storeRuntimeArtifact = true,
+        },
+        sharedContractFailingRegistry);
+    kb::tests::Require(!sharedContractFailed.Succeeded(), "Visual graph compile coordinator accepted conflicting collected shared key contracts");
+    kb::tests::Require(!sharedContractFailed.diagnostics.empty() && sharedContractFailed.diagnostics[0].stage == kb::visual::VisualGraphDiagnosticStage::ApiNameValidation,
+        "Visual graph compile coordinator did not report shared key API contract diagnostics");
+    kb::tests::Require(!sharedContractFailingRegistry.Contains(graph.Id()), "Visual graph compile coordinator stored artifact after shared key API contract failure");
+
+    ResetTestRoot();
+    const std::filesystem::path signatureProjectRoot = TestRoot() / "SignatureProject";
+    const std::filesystem::path signatureAssetsRoot = signatureProjectRoot / "Assets";
+    WriteTextFile(signatureAssetsRoot / "Logic" / "PlayerController.kbgraph", SampleGraphText());
+    WriteTextFile(signatureAssetsRoot / "Logic" / "InventoryCaller.kbgraph", FunctionSignatureGraphText());
+    kb::assets::AssetManager signatureManager;
+    kb::tests::Require(signatureManager.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>()), "Visual graph signature loader registration failed");
+    kb::tests::Require(signatureManager.Mounts().Mount("Game", signatureAssetsRoot), "Visual graph signature asset mount failed");
+    static_cast<void>(signatureManager.DiscoverMountedAssets());
+    const kb::assets::AssetHandle<kb::visual::VisualGraphAsset> signatureGraph = signatureManager.Load<kb::visual::VisualGraphAsset>("/Game/Logic/PlayerController.kbgraph");
+    kb::tests::Require(signatureGraph.IsLoaded(), "Visual graph signature test asset did not load");
+    kb::script::ScriptApiNameRegistry signatureApiNames;
+    const std::vector<kb::script::ScriptApiPin> addItemInputs{
+        kb::script::ScriptApiPin{ .name = "itemId", .type = kb::script::ScriptValueType::Int },
+    };
+    const std::vector<kb::script::ScriptApiPin> addItemOutputs{
+        kb::script::ScriptApiPin{ .name = "total", .type = kb::script::ScriptValueType::Int, .required = false },
+    };
+    kb::tests::Require(signatureApiNames.RegisterFunction("Inventory.AddItem", addItemInputs, addItemOutputs, "InventoryService", true),
+        "Script API signature test function did not register");
+    kb::visual::VisualGraphRuntimeRegistry functionContractFailingRegistry;
+    const kb::visual::VisualGraphCompileCoordinatorResult functionContractFailed = kb::visual::VisualGraphCompileCoordinator::Compile(
+        signatureManager,
+        kb::visual::VisualGraphCompileCoordinatorRequest{
+            .assetId = signatureGraph.Id(),
+            .apiNames = &signatureApiNames,
+            .writeGeneratedCode = false,
+            .storeRuntimeArtifact = true,
+        },
+        functionContractFailingRegistry);
+    kb::tests::Require(!functionContractFailed.Succeeded(), "Visual graph compile coordinator accepted conflicting function API contracts");
+    kb::tests::Require(!functionContractFailingRegistry.Contains(signatureGraph.Id()), "Visual graph compile coordinator stored artifact after function API contract failure");
+
+    kb::script::ScriptApiNameRegistry duplicateApiNames;
+    kb::tests::Require(duplicateApiNames.RegisterFunction("Inventory.AddItem", addItemInputs, addItemOutputs, "InventoryServiceA", true),
+        "Script API duplicate provider test first name did not register");
+    kb::tests::Require(duplicateApiNames.RegisterFunction("Inventory.AddItem", addItemInputs, addItemOutputs, "InventoryServiceB", true),
+        "Script API duplicate provider test second name did not register");
+    kb::visual::VisualGraphRuntimeRegistry failingRegistry;
+    const kb::visual::VisualGraphCompileCoordinatorResult failed = kb::visual::VisualGraphCompileCoordinator::Compile(
+        signatureManager,
+        kb::visual::VisualGraphCompileCoordinatorRequest{
+            .assetId = signatureGraph.Id(),
+            .apiNames = &duplicateApiNames,
+            .collectProjectApiNames = false,
+            .writeGeneratedCode = false,
+            .storeRuntimeArtifact = true,
+        },
+        failingRegistry);
+    kb::tests::Require(!failed.Succeeded(), "Visual graph compile coordinator accepted duplicate function providers");
+    kb::tests::Require(!failed.diagnostics.empty() && failed.diagnostics[0].stage == kb::visual::VisualGraphDiagnosticStage::ApiNameValidation,
+        "Visual graph compile coordinator did not report API name validation diagnostics");
+    kb::tests::Require(!failingRegistry.Contains(signatureGraph.Id()), "Visual graph compile coordinator stored runtime artifact after API validation failure");
+}
+
 void RunVisualGraphRuntimeExecutorTest() {
     ResetTestRoot();
     const std::filesystem::path projectRoot = TestRoot() / "Project";
@@ -584,6 +815,11 @@ void RunVisualGraphRuntimeExecutorTest() {
     kb::tests::Require(executed.Succeeded(), "Visual graph runtime executor rejected a compiled Tick graph");
     kb::tests::Require(movedBy == 0.25F, "Visual graph runtime executor did not pass typed data input to native callback");
     kb::tests::Require(context.EmittedEvents().size() == 1U && context.EmittedEvents()[0] == "PlayerMoved", "Visual graph runtime executor did not emit graph events");
+    kb::tests::Require(context.EmittedEventRecords().size() == 1U && context.EmittedEventRecords()[0].arguments.empty(),
+        "Visual graph runtime executor did not expose graph event records");
+    kb::visual::VisualGraphRuntimeExecutionContext emptyEventContext;
+    emptyEventContext.EmitEvent("");
+    kb::tests::Require(emptyEventContext.EmittedEvents().empty() && emptyEventContext.EmittedEventRecords().empty(), "Visual graph runtime context accepted an empty event name");
 
     const kb::visual::VisualGraphRuntimeExecutionResult readyExecuted = executor.Execute(*artifact, kb::visual::VisualGraphLifecycleEvent::Ready, context);
     kb::tests::Require(!readyExecuted.Succeeded(), "Visual graph runtime executor accepted Ready without required native bindings");
@@ -1234,6 +1470,7 @@ void RunVisualGraphTests() {
     RunVisualGraphCustomEventEntryTest();
     RunVisualGraphCompilerAndCodegenTest();
     RunVisualGraphCompileServicePreparesRuntimeArtifactTest();
+    RunVisualGraphCompileCoordinatorTest();
     RunVisualGraphRuntimeExecutorTest();
     RunVisualGraphBehaviourLifecycleRunnerTest();
     RunVisualGraphCompilerRejectsInvalidEdgesTest();
