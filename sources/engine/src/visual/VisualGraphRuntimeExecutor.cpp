@@ -20,6 +20,15 @@ void AddRuntimeError(VisualGraphRuntimeExecutionResult& result, std::uint32_t no
     result.diagnostics.push_back(VisualGraphDiagnostics::Error(VisualGraphDiagnosticStage::Runtime, nodeId, std::string{pinName}, std::move(message)));
 }
 
+void AppendContextErrors(
+    VisualGraphRuntimeExecutionResult& result,
+    std::uint32_t nodeId,
+    const VisualGraphRuntimeExecutionContext& context) {
+    for (const std::string& error : context.RuntimeErrors()) {
+        AddRuntimeError(result, nodeId, error);
+    }
+}
+
 } // namespace
 
 VisualGraphRuntimeExecutor::VisualGraphRuntimeExecutor(const VisualGraphRuntimeBindingRegistry& bindings) noexcept
@@ -118,7 +127,7 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
         }
 
         if (instruction->opcode == VisualGraphIrOpcode::EmitEvent) {
-            context.EmitEvent(instruction->symbol);
+            context.EmitEvent(instruction->symbol, CollectEventArguments(*instruction, context), CollectEventTarget(*instruction, context));
         } else if (instruction->opcode != VisualGraphIrOpcode::Branch && instruction->opcode != VisualGraphIrOpcode::Sequence) {
             const VisualGraphRuntimeBinding* binding = FindBinding(*instruction);
             if (binding == nullptr && TryExecuteBuiltInInstruction(*instruction, context)) {
@@ -128,7 +137,10 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::ExecuteNode(
                 AppendErrors(result, ValidateBindingSignature(*instruction, *binding));
                 if (result.Succeeded()) {
                     binding->callback(context, *instruction);
-                    AppendErrors(result, ValidateProducedOutputs(*instruction, *binding, context));
+                    AppendContextErrors(result, instruction->sourceNodeId, context);
+                    if (result.Succeeded()) {
+                        AppendErrors(result, ValidateProducedOutputs(*instruction, *binding, context));
+                    }
                 }
             }
         }
@@ -250,6 +262,40 @@ VisualGraphRuntimeExecutionResult VisualGraphRuntimeExecutor::StoreCustomEventAr
         context.Store(function.eventNodeId, output.name, argument->value);
     }
     return result;
+}
+
+std::vector<VisualGraphEventArgument> VisualGraphRuntimeExecutor::CollectEventArguments(
+    const VisualGraphIrInstruction& instruction,
+    const VisualGraphRuntimeExecutionContext& context) {
+    std::vector<VisualGraphEventArgument> arguments;
+    for (const VisualGraphIrInput& input : instruction.inputs) {
+        if (input.type == VisualGraphValueType::Void || input.name == "exec") {
+            continue;
+        }
+        if (input.name == "target" && input.type == VisualGraphValueType::Entity) {
+            continue;
+        }
+        const VisualGraphRuntimeValue* value = context.TryRead(input.sourceNodeId, input.sourcePin);
+        if (value == nullptr) {
+            continue;
+        }
+        arguments.push_back(VisualGraphEventArgument{
+            .name = input.name,
+            .value = *value,
+        });
+    }
+    return arguments;
+}
+
+kb::scene::SceneEntity VisualGraphRuntimeExecutor::CollectEventTarget(
+    const VisualGraphIrInstruction& instruction,
+    const VisualGraphRuntimeExecutionContext& context) {
+    for (const VisualGraphIrInput& input : instruction.inputs) {
+        if (input.name == "target" && input.type == VisualGraphValueType::Entity) {
+            return kb::scene::SceneEntity{ context.ReadUInt64(input.sourceNodeId, input.sourcePin) };
+        }
+    }
+    return {};
 }
 
 VisualGraphRuntimeExecutor::InstructionMap VisualGraphRuntimeExecutor::BuildInstructionMap(const VisualGraphIrFunction& function) {

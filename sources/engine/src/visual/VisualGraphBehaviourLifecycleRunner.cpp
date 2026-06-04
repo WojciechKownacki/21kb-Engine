@@ -32,13 +32,15 @@ void AppendEmittedEvents(
     std::vector<VisualGraphBehaviourEmittedEvent>& target,
     kb::scene::SceneEntity sender,
     kb::assets::AssetId assetId,
-    const std::vector<std::string>& source) {
+    const std::vector<VisualGraphEmittedEvent>& source) {
     target.reserve(target.size() + source.size());
-    for (const std::string& eventName : source) {
+    for (const VisualGraphEmittedEvent& event : source) {
         target.push_back(VisualGraphBehaviourEmittedEvent{
             .sender = sender,
+            .target = event.target,
             .assetId = assetId,
-            .name = eventName,
+            .name = event.name,
+            .arguments = event.arguments,
         });
     }
 }
@@ -60,7 +62,7 @@ void ExecuteVisualGraphBehaviour(kb::scene::SceneEntity entity, const kb::scene:
     if (executed.runtime.executed && executed.Succeeded()) {
         ++context.result->executedBehaviours;
     }
-    AppendEmittedEvents(context.result->emittedEvents, entity, assetId, executionContext.EmittedEvents());
+    AppendEmittedEvents(context.result->emittedEvents, entity, assetId, executionContext.EmittedEventRecords());
     AppendDiagnostics(context.result->diagnostics, executed.diagnostics);
 }
 

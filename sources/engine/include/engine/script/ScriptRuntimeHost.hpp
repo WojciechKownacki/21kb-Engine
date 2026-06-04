@@ -4,8 +4,11 @@
 #include "engine/script/LuaScriptBackend.hpp"
 #include "engine/script/NativeScriptBackend.hpp"
 #include "engine/script/PucLuaScriptRuntime.hpp"
+#include "engine/script/ScriptApiNameRegistry.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntime.hpp"
 #include "engine/script/ScriptRuntimeAssetPreparer.hpp"
+#include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/VisualGraphScriptBackend.hpp"
 #include "engine/visual/VisualGraphBehaviourInstanceRegistry.hpp"
 #include "engine/visual/VisualGraphNativeBindingRegistry.hpp"
@@ -23,6 +26,8 @@ struct ScriptRuntimeHostState;
 
 struct ScriptRuntimeHostOptions {
     ScriptRuntimeVisualGraphPrepareSettings visualGraphPrepareSettings{};
+    ScriptRuntimeNativePrepareSettings nativePrepareSettings{};
+    ScriptRuntimeFrameSettings frameSettings{};
     bool installSceneSystem = false;
 };
 
@@ -44,12 +49,21 @@ public:
 
     [[nodiscard]] ScriptRuntime& Runtime() noexcept;
     [[nodiscard]] const ScriptRuntime& Runtime() const noexcept;
+    [[nodiscard]] ScriptSharedState& SharedState() noexcept;
+    [[nodiscard]] const ScriptSharedState& SharedState() const noexcept;
+    [[nodiscard]] ScriptFunctionRegistry& Functions() noexcept;
+    [[nodiscard]] const ScriptFunctionRegistry& Functions() const noexcept;
+    [[nodiscard]] ScriptApiNameRegistry& ApiNames() noexcept;
+    [[nodiscard]] const ScriptApiNameRegistry& ApiNames() const noexcept;
+    [[nodiscard]] bool RegisterFunction(ScriptFunctionDesc function);
     [[nodiscard]] ScriptRuntimeAssetPreparer& AssetPreparer() noexcept;
     [[nodiscard]] const ScriptRuntimeAssetPreparer& AssetPreparer() const noexcept;
     [[nodiscard]] PucLuaScriptRuntime& LuaRuntime() noexcept;
     [[nodiscard]] const PucLuaScriptRuntime& LuaRuntime() const noexcept;
     [[nodiscard]] NativeScriptBackend& NativeBackend() noexcept;
     [[nodiscard]] const NativeScriptBackend& NativeBackend() const noexcept;
+    [[nodiscard]] NativeScriptPluginManager& NativePlugins() noexcept;
+    [[nodiscard]] const NativeScriptPluginManager& NativePlugins() const noexcept;
     [[nodiscard]] VisualGraphScriptBackend& VisualGraphBackend() noexcept;
     [[nodiscard]] const VisualGraphScriptBackend& VisualGraphBackend() const noexcept;
     [[nodiscard]] kb::visual::VisualGraphRuntimeRegistry& VisualGraphs() noexcept;

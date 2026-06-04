@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
 #include "engine/visual/VisualGraphRuntimeBindingRegistry.hpp"
 #include "engine/visual/VisualGraphRuntimeRegistry.hpp"
 
@@ -11,10 +12,7 @@
 
 namespace kb::visual {
 
-struct VisualGraphCustomEventArgument {
-    std::string name;
-    VisualGraphRuntimeValue value;
-};
+using VisualGraphCustomEventArgument = VisualGraphEventArgument;
 
 struct VisualGraphRuntimeExecutionResult {
     bool executed = false;
@@ -70,6 +68,12 @@ private:
         const VisualGraphIrFunction& function,
         std::span<const VisualGraphCustomEventArgument> arguments,
         VisualGraphRuntimeExecutionContext& context);
+    [[nodiscard]] static std::vector<VisualGraphEventArgument> CollectEventArguments(
+        const VisualGraphIrInstruction& instruction,
+        const VisualGraphRuntimeExecutionContext& context);
+    [[nodiscard]] static kb::scene::SceneEntity CollectEventTarget(
+        const VisualGraphIrInstruction& instruction,
+        const VisualGraphRuntimeExecutionContext& context);
     [[nodiscard]] static InstructionMap BuildInstructionMap(const VisualGraphIrFunction& function);
 
     const VisualGraphRuntimeBindingRegistry& bindings_;

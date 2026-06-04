@@ -19,6 +19,8 @@ struct BehaviourDispatchRecord {
 struct DispatchContext {
     kb::scene::Scene* scene = nullptr;
     ScriptRuntime* runtime = nullptr;
+    ScriptSharedState* sharedState = nullptr;
+    ScriptFunctionRegistry* functions = nullptr;
     ScriptLifecycleEvent lifecycle = ScriptLifecycleEvent::Tick;
     const ScriptEvent* event = nullptr;
     float deltaSeconds = 0.0F;
@@ -68,9 +70,13 @@ void AddMissingBackendDiagnostic(DispatchContext& dispatch, kb::scene::SceneEnti
     });
 }
 
+[[nodiscard]] bool ShouldSkipDisabled(const kb::scene::BehaviourComponent& behaviour, const DispatchContext& dispatch) noexcept {
+    return !behaviour.enabled && dispatch.lifecycle != ScriptLifecycleEvent::Deactivated && dispatch.lifecycle != ScriptLifecycleEvent::Destroyed;
+}
+
 void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, DispatchContext& dispatch) {
     ++dispatch.result->visitedBehaviours;
-    if (!behaviour.enabled) {
+    if (ShouldSkipDisabled(behaviour, dispatch)) {
         return;
     }
 
@@ -90,6 +96,8 @@ void DispatchBehaviour(kb::scene::SceneEntity entity, const kb::scene::Behaviour
         dispatch.deltaSeconds,
         &emittedEvents,
         dispatch.event,
+        dispatch.sharedState,
+        dispatch.functions,
     };
 
     const ScriptBackendExecutionResult backendResult = dispatch.event == nullptr
@@ -107,6 +115,9 @@ void DispatchSceneBehaviours(kb::scene::Scene& scene, DispatchContext& context) 
     scene.Components().Behaviours().ForEach(&CollectBehaviour, &behaviours);
     std::ranges::sort(behaviours, &ComesBefore);
     for (const BehaviourDispatchRecord& record : behaviours) {
+        if (context.event != nullptr && context.event->target.IsValid() && record.entity != context.event->target) {
+            continue;
+        }
         DispatchBehaviour(record.entity, record.behaviour, context);
     }
 }
@@ -135,16 +146,67 @@ const IScriptBackend* ScriptRuntime::FindBackend(kb::scene::BehaviourBackend bac
     return index >= backends_.size() ? nullptr : backends_[index].get();
 }
 
+ScriptSharedState& ScriptRuntime::SharedState() noexcept {
+    return sharedState_;
+}
+
+const ScriptSharedState& ScriptRuntime::SharedState() const noexcept {
+    return sharedState_;
+}
+
+ScriptFunctionRegistry& ScriptRuntime::Functions() noexcept {
+    return functions_;
+}
+
+const ScriptFunctionRegistry& ScriptRuntime::Functions() const noexcept {
+    return functions_;
+}
+
 ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycle(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
     ScriptRuntimeExecutionResult result{};
     DispatchContext context{
         .scene = &scene,
         .runtime = this,
+        .sharedState = &sharedState_,
+        .functions = &functions_,
         .lifecycle = event,
         .deltaSeconds = deltaSeconds,
         .result = &result,
     };
     DispatchSceneBehaviours(scene, context);
+    return result;
+}
+
+ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleForBehaviour(
+    kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event,
+    float deltaSeconds) {
+    ScriptRuntimeExecutionResult result{};
+    DispatchContext context{
+        .scene = &scene,
+        .runtime = this,
+        .sharedState = &sharedState_,
+        .functions = &functions_,
+        .lifecycle = event,
+        .deltaSeconds = deltaSeconds,
+        .result = &result,
+    };
+    DispatchBehaviour(entity, behaviour, context);
+    return result;
+}
+
+ScriptRuntimeExecutionResult ScriptRuntime::ExecuteLifecycleForBehaviourAndDispatchEvents(
+    kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event,
+    float deltaSeconds,
+    ScriptRuntimeDispatchOptions options) {
+    ScriptRuntimeExecutionResult result = ExecuteLifecycleForBehaviour(scene, entity, behaviour, event, deltaSeconds);
+    const std::vector<ScriptEvent> emittedEvents = result.emittedEvents;
+    MergeResult(result, DrainEvents(scene, emittedEvents, deltaSeconds, options));
     return result;
 }
 
@@ -159,6 +221,8 @@ ScriptRuntimeExecutionResult ScriptRuntime::DispatchEvent(kb::scene::Scene& scen
     DispatchContext context{
         .scene = &scene,
         .runtime = this,
+        .sharedState = &sharedState_,
+        .functions = &functions_,
         .lifecycle = ScriptLifecycleEvent::Tick,
         .event = &event,
         .deltaSeconds = deltaSeconds,

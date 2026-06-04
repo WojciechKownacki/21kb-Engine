@@ -10,6 +10,12 @@
 
 namespace kb::script {
 
+struct ScriptSceneComponentPropertyDesc {
+    std::string_view name;
+    ScriptValueType type = ScriptValueType::Void;
+    bool writable = true;
+};
+
 struct ScriptSceneComponentPropertyResult {
     bool succeeded = false;
     ScriptValue value{};
@@ -26,6 +32,7 @@ public:
     ScriptSceneComponentApi() = delete;
 
     [[nodiscard]] static std::span<const std::string_view> ComponentNames() noexcept;
+    [[nodiscard]] static std::span<const ScriptSceneComponentPropertyDesc> ComponentProperties(std::string_view componentName) noexcept;
     [[nodiscard]] static bool HasComponent(kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::string_view componentName) noexcept;
     [[nodiscard]] static ScriptSceneComponentPropertyResult GetProperty(
         kb::scene::Scene& scene,

@@ -17,8 +17,10 @@ enum class VisualGraphDiagnosticStage : std::uint8_t {
     AssetLoad,
     Validation,
     Compile,
+    ApiNameValidation,
     NativeCodegen,
     GeneratedCodeWrite,
+    NativeBuild,
     Runtime,
 };
 

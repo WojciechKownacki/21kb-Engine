@@ -141,7 +141,13 @@ void VisualGraphNodeCatalog::RegisterNativeBindings(const VisualGraphNativeBindi
 
 void VisualGraphNodeCatalog::RegisterRuntimeBindings(const VisualGraphRuntimeBindingRegistry& bindings) {
     for (const VisualGraphRuntimeBinding& binding : bindings.Bindings()) {
-        static_cast<void>(Register(EntryFromRuntimeBinding(binding)));
+        VisualGraphNodeCatalogEntry entry = EntryFromRuntimeBinding(binding);
+        const auto nativeEquivalent = std::ranges::find_if(entries_, [&entry](const VisualGraphNodeCatalogEntry& existing) {
+            return existing.source == VisualGraphNodeCatalogSource::NativeBinding && existing.kind == entry.kind && existing.symbol == entry.symbol;
+        });
+        if (nativeEquivalent == entries_.end()) {
+            static_cast<void>(Register(std::move(entry)));
+        }
     }
 }
 
