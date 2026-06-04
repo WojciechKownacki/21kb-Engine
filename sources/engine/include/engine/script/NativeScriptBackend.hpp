@@ -19,7 +19,10 @@ public:
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept override;
 
     [[nodiscard]] bool RegisterLifecycle(kb::assets::AssetId assetId, ScriptLifecycleEvent event, NativeScriptLifecycleCallback callback);
+    [[nodiscard]] bool RegisterLifecycleSymbol(std::string symbol, ScriptLifecycleEvent event, NativeScriptLifecycleCallback callback);
     [[nodiscard]] bool RegisterEvent(kb::assets::AssetId assetId, std::string eventName, NativeScriptEventCallback callback);
+    [[nodiscard]] bool RegisterEventSymbol(std::string symbol, std::string eventName, NativeScriptEventCallback callback);
+    [[nodiscard]] bool BindAssetSymbol(kb::assets::AssetId assetId, std::string symbol);
     void Clear() noexcept;
 
     [[nodiscard]] ScriptBackendExecutionResult ExecuteLifecycle(const kb::scene::BehaviourComponent& behaviour, ScriptExecutionContext& context) override;
@@ -38,9 +41,14 @@ private:
     };
 
     [[nodiscard]] static std::string EventKey(kb::assets::AssetId assetId, std::string_view eventName);
+    [[nodiscard]] static std::string SymbolLifecycleKey(std::string_view symbol, ScriptLifecycleEvent event);
+    [[nodiscard]] static std::string SymbolEventKey(std::string_view symbol, std::string_view eventName);
 
     std::unordered_map<LifecycleKey, NativeScriptLifecycleCallback, LifecycleKeyHasher> lifecycleCallbacks_;
     std::unordered_map<std::string, NativeScriptEventCallback> eventCallbacks_;
+    std::unordered_map<std::string, NativeScriptLifecycleCallback> symbolLifecycleCallbacks_;
+    std::unordered_map<std::string, NativeScriptEventCallback> symbolEventCallbacks_;
+    std::unordered_map<std::uint64_t, std::string> assetSymbols_;
 };
 
 } // namespace kb::script

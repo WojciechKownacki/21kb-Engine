@@ -53,6 +53,10 @@ void ScriptRuntimeAssetPreparer::SetVisualGraphSettings(ScriptRuntimeVisualGraph
     visualGraphSettings_ = std::move(settings);
 }
 
+void ScriptRuntimeAssetPreparer::SetNativeBackend(NativeScriptBackend& nativeBackend) noexcept {
+    nativeBackend_ = &nativeBackend;
+}
+
 ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareAsset(kb::assets::AssetId assetId) {
     ScriptRuntimeAssetPrepareResult result{};
     ++result.visitedAssets;
@@ -135,6 +139,10 @@ ScriptRuntimeAssetPrepareResult ScriptRuntimeAssetPreparer::PrepareNativeBehavio
     const kb::assets::AssetHandle<NativeBehaviourDescriptor> descriptor = assets_.Load<NativeBehaviourDescriptor>(metadata.id);
     if (!descriptor.IsLoaded()) {
         AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, assets_.LastError().empty() ? "native behaviour descriptor could not be loaded" : assets_.LastError());
+        return result;
+    }
+    if (nativeBackend_ != nullptr && !nativeBackend_->BindAssetSymbol(metadata.id, descriptor->symbol)) {
+        AddDiagnostic(result, metadata.id, kb::scene::BehaviourBackend::Native, "native behaviour descriptor symbol could not be bound");
         return result;
     }
     ++result.preparedAssets;
