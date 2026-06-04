@@ -16,8 +16,6 @@ namespace kb::editor {
 struct SceneViewportToolbarRects {
     RECT toolbar{};
     RECT profileButton{};
-    RECT fitButton{};
-    RECT cameraButton{};
     RECT renderArea{};
 };
 
@@ -29,7 +27,6 @@ public:
 
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
-    static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state, const char* cameraLabel);
 };
 
 #endif
