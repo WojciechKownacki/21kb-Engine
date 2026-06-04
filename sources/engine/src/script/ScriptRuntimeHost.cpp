@@ -100,6 +100,13 @@ bool ScriptRuntimeHost::InstallSceneSystem() {
     return true;
 }
 
+kb::visual::VisualGraphNodeCatalog ScriptRuntimeHost::CreateVisualGraphNodeCatalog() const {
+    kb::visual::VisualGraphNodeCatalog catalog = kb::visual::VisualGraphNodeCatalog::CreateDefault();
+    catalog.RegisterNativeBindings(state_->visualGraphNativeBindings);
+    catalog.RegisterRuntimeBindings(state_->visualGraphRuntimeBindings);
+    return catalog;
+}
+
 ScriptRuntime& ScriptRuntimeHost::Runtime() noexcept {
     return state_->runtime;
 }
