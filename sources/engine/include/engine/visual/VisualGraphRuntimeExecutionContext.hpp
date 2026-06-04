@@ -2,6 +2,8 @@
 
 #include "engine/visual/VisualGraphRuntimeValue.hpp"
 
+#include "engine/scene/SceneEntity.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -10,6 +12,17 @@
 #include <vector>
 
 namespace kb::visual {
+
+struct VisualGraphEventArgument {
+    std::string name;
+    VisualGraphRuntimeValue value;
+};
+
+struct VisualGraphEmittedEvent {
+    std::string name;
+    kb::scene::SceneEntity target{};
+    std::vector<VisualGraphEventArgument> arguments;
+};
 
 class VisualGraphRuntimeExecutionContext final {
 public:
@@ -24,10 +37,14 @@ public:
     [[nodiscard]] std::uint64_t ReadUInt64(std::uint32_t nodeId, std::string_view pin, std::uint64_t fallback = 0U) const;
 
     void EmitEvent(std::string eventName);
+    void EmitEvent(std::string eventName, std::vector<VisualGraphEventArgument> arguments, kb::scene::SceneEntity target = {});
     void Trace(std::string message);
+    void ReportError(std::string message);
 
     [[nodiscard]] const std::vector<std::string>& EmittedEvents() const noexcept;
+    [[nodiscard]] const std::vector<VisualGraphEmittedEvent>& EmittedEventRecords() const noexcept;
     [[nodiscard]] const std::vector<std::string>& Traces() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& RuntimeErrors() const noexcept;
     void BeginExecutionPass();
     void ClearFrameState();
 
@@ -37,7 +54,9 @@ private:
     std::unordered_map<std::string, VisualGraphRuntimeValue> values_;
     std::unordered_set<std::string> writesInCurrentExecution_;
     std::vector<std::string> emittedEvents_;
+    std::vector<VisualGraphEmittedEvent> emittedEventRecords_;
     std::vector<std::string> traces_;
+    std::vector<std::string> runtimeErrors_;
 };
 
 } // namespace kb::visual

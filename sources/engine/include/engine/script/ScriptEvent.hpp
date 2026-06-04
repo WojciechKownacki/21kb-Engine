@@ -17,6 +17,7 @@ struct ScriptEventArgument {
 struct ScriptEvent {
     std::string name;
     kb::scene::SceneEntity sender{};
+    kb::scene::SceneEntity target{};
     kb::assets::AssetId senderAsset{};
     std::vector<ScriptEventArgument> arguments;
 };

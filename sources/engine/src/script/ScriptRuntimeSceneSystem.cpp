@@ -1,7 +1,11 @@
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
 
+#include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace kb::script {
@@ -20,7 +24,31 @@ void MergeResult(ScriptRuntimeExecutionResult& target, ScriptRuntimeExecutionRes
     }
 }
 
+struct RawBehaviourRecord {
+    kb::scene::SceneEntity entity{};
+    kb::scene::BehaviourComponent behaviour{};
+};
+
+struct BehaviourCollectContext {
+    std::vector<RawBehaviourRecord>* records = nullptr;
+};
+
+void CollectBehaviour(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* rawContext) {
+    auto& context = *static_cast<BehaviourCollectContext*>(rawContext);
+    context.records->push_back(RawBehaviourRecord{
+        .entity = entity,
+        .behaviour = behaviour,
+    });
+}
+
 } // namespace
+
+std::size_t ScriptRuntimeSceneSystem::BehaviourLifecycleKeyHasher::operator()(BehaviourLifecycleKey key) const noexcept {
+    std::uint64_t hash = key.entityId;
+    hash ^= key.assetId + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    hash ^= static_cast<std::uint64_t>(key.backend) + 0x9e3779b97f4a7c15ULL + (hash << 6U) + (hash >> 2U);
+    return static_cast<std::size_t>(hash);
+}
 
 ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime) noexcept
     : runtime_(runtime) {}
@@ -30,22 +58,65 @@ ScriptRuntimeSceneSystem::ScriptRuntimeSceneSystem(ScriptRuntime& runtime, Scrip
     , assetPreparer_(&assetPreparer) {}
 
 void ScriptRuntimeSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
-    lastResult_ = {};
-    PrepareScene(context.GetScene());
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Created, context.DeltaSeconds()));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Activated, context.DeltaSeconds()));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Ready, context.DeltaSeconds()));
+    static_cast<void>(ExecuteStartup(context.GetScene(), context.DeltaSeconds()));
 }
 
 void ScriptRuntimeSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
-    PrepareScene(context.GetScene());
-    lastResult_ = runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Tick, context.DeltaSeconds());
+    static_cast<void>(ExecuteFrame(context.GetScene(), context.DeltaSeconds()));
 }
 
 void ScriptRuntimeSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
+    static_cast<void>(ExecuteShutdown(context.GetScene(), context.DeltaSeconds()));
+}
+
+const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteStartup(kb::scene::Scene& scene, float deltaSeconds) {
     lastResult_ = {};
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Deactivated, context.DeltaSeconds()));
-    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(context.GetScene(), ScriptLifecycleEvent::Destroyed, context.DeltaSeconds()));
+    PrepareScene(scene);
+    SyncBehaviourLifecycles(scene, deltaSeconds);
+    return lastResult_;
+}
+
+const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteFrame(kb::scene::Scene& scene, float deltaSeconds) {
+    lastResult_ = {};
+    PrepareScene(scene);
+    const float clampedDeltaSeconds = std::max(deltaSeconds, 0.0F);
+    SyncBehaviourLifecycles(scene, clampedDeltaSeconds);
+    fixedAccumulatorSeconds_ += clampedDeltaSeconds;
+    std::size_t fixedSteps = 0U;
+    while (frameSettings_.fixedDeltaSeconds > 0.0F && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds && fixedSteps < frameSettings_.maxFixedStepsPerFrame) {
+        fixedAccumulatorSeconds_ -= frameSettings_.fixedDeltaSeconds;
+        ++fixedSteps;
+        MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::FixedTick, frameSettings_.fixedDeltaSeconds));
+    }
+    if (frameSettings_.fixedDeltaSeconds <= 0.0F || frameSettings_.maxFixedStepsPerFrame == 0U ||
+        (fixedSteps == frameSettings_.maxFixedStepsPerFrame && fixedAccumulatorSeconds_ >= frameSettings_.fixedDeltaSeconds)) {
+        fixedAccumulatorSeconds_ = 0.0F;
+    }
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::Tick, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::LateTick, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::BeforeRender, clampedDeltaSeconds));
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleAndDispatchEvents(scene, ScriptLifecycleEvent::AfterRender, clampedDeltaSeconds));
+    return lastResult_;
+}
+
+const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecuteShutdown(kb::scene::Scene& scene, float deltaSeconds) {
+    lastResult_ = {};
+    ShutdownTrackedBehaviours(scene, deltaSeconds);
+    return lastResult_;
+}
+
+const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::ExecutePhase(kb::scene::Scene& scene, ScriptLifecycleEvent event, float deltaSeconds) {
+    PrepareScene(scene);
+    lastResult_ = runtime_.ExecuteLifecycleAndDispatchEvents(scene, event, deltaSeconds);
+    return lastResult_;
+}
+
+void ScriptRuntimeSceneSystem::SetFrameSettings(ScriptRuntimeFrameSettings settings) noexcept {
+    frameSettings_ = settings;
+}
+
+ScriptRuntimeFrameSettings ScriptRuntimeSceneSystem::FrameSettings() const noexcept {
+    return frameSettings_;
 }
 
 const ScriptRuntimeExecutionResult& ScriptRuntimeSceneSystem::LastResult() const noexcept {
@@ -58,6 +129,126 @@ const ScriptRuntimeAssetPrepareResult& ScriptRuntimeSceneSystem::LastPrepareResu
 
 void ScriptRuntimeSceneSystem::PrepareScene(kb::scene::Scene& scene) {
     lastPrepareResult_ = assetPreparer_ == nullptr ? ScriptRuntimeAssetPrepareResult{} : assetPreparer_->PrepareSceneBehaviours(scene);
+}
+
+void ScriptRuntimeSceneSystem::SyncBehaviourLifecycles(kb::scene::Scene& scene, float deltaSeconds) {
+    const std::vector<BehaviourLifecycleRecord> currentRecords = CollectBehaviourRecords(scene);
+    std::unordered_set<BehaviourLifecycleKey, BehaviourLifecycleKeyHasher> seen;
+    seen.reserve(currentRecords.size());
+
+    for (const BehaviourLifecycleRecord& current : currentRecords) {
+        const BehaviourLifecycleKey key = MakeKey(current.entity, current.behaviour);
+        static_cast<void>(seen.insert(key));
+        BehaviourLifecycleRecord& tracked = lifecycleRecords_[key];
+        if (!tracked.entity.IsValid()) {
+            tracked = BehaviourLifecycleRecord{
+                .entity = current.entity,
+                .behaviour = current.behaviour,
+                .active = false,
+                .created = false,
+            };
+        }
+
+        if (current.behaviour.enabled) {
+            tracked.entity = current.entity;
+            tracked.behaviour = current.behaviour;
+            if (!tracked.created) {
+                ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Created, deltaSeconds);
+                tracked.created = true;
+            }
+            if (!tracked.active) {
+                ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Activated, deltaSeconds);
+                ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Ready, deltaSeconds);
+                tracked.active = true;
+            }
+            continue;
+        }
+
+        if (tracked.active) {
+            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Deactivated, deltaSeconds);
+            tracked.active = false;
+        }
+        tracked.entity = current.entity;
+        tracked.behaviour = current.behaviour;
+    }
+
+    std::vector<BehaviourLifecycleKey> removed;
+    for (const auto& [key, tracked] : lifecycleRecords_) {
+        if (seen.contains(key)) {
+            continue;
+        }
+        if (tracked.active) {
+            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Deactivated, deltaSeconds);
+        }
+        if (tracked.created) {
+            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Destroyed, deltaSeconds);
+        }
+        removed.push_back(key);
+    }
+    for (const BehaviourLifecycleKey& key : removed) {
+        static_cast<void>(lifecycleRecords_.erase(key));
+    }
+}
+
+void ScriptRuntimeSceneSystem::ShutdownTrackedBehaviours(kb::scene::Scene& scene, float deltaSeconds) {
+    SyncBehaviourLifecycles(scene, deltaSeconds);
+    for (const auto& [key, tracked] : lifecycleRecords_) {
+        (void)key;
+        if (tracked.active) {
+            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Deactivated, deltaSeconds);
+        }
+        if (tracked.created) {
+            ExecuteBehaviourPhase(scene, tracked.entity, tracked.behaviour, ScriptLifecycleEvent::Destroyed, deltaSeconds);
+        }
+    }
+    lifecycleRecords_.clear();
+}
+
+void ScriptRuntimeSceneSystem::ExecuteBehaviourPhase(
+    kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    const kb::scene::BehaviourComponent& behaviour,
+    ScriptLifecycleEvent event,
+    float deltaSeconds) {
+    MergeResult(lastResult_, runtime_.ExecuteLifecycleForBehaviourAndDispatchEvents(scene, entity, behaviour, event, deltaSeconds));
+}
+
+std::vector<ScriptRuntimeSceneSystem::BehaviourLifecycleRecord> ScriptRuntimeSceneSystem::CollectBehaviourRecords(kb::scene::Scene& scene) const {
+    std::vector<RawBehaviourRecord> rawRecords;
+    BehaviourCollectContext context{
+        .records = &rawRecords,
+    };
+    scene.Components().Behaviours().ForEach(&CollectBehaviour, &context);
+    std::vector<BehaviourLifecycleRecord> records;
+    records.reserve(rawRecords.size());
+    for (const RawBehaviourRecord& raw : rawRecords) {
+        records.push_back(BehaviourLifecycleRecord{
+            .entity = raw.entity,
+            .behaviour = raw.behaviour,
+            .active = raw.behaviour.enabled,
+            .created = false,
+        });
+    }
+    std::ranges::sort(records, [](const BehaviourLifecycleRecord& lhs, const BehaviourLifecycleRecord& rhs) {
+        const auto lhsGroup = static_cast<std::uint8_t>(lhs.behaviour.tickGroup);
+        const auto rhsGroup = static_cast<std::uint8_t>(rhs.behaviour.tickGroup);
+        if (lhsGroup != rhsGroup) {
+            return lhsGroup < rhsGroup;
+        }
+        if (lhs.behaviour.executionOrder != rhs.behaviour.executionOrder) {
+            return lhs.behaviour.executionOrder < rhs.behaviour.executionOrder;
+        }
+        return lhs.entity.Id() < rhs.entity.Id();
+    });
+    return records;
+}
+
+ScriptRuntimeSceneSystem::BehaviourLifecycleKey ScriptRuntimeSceneSystem::MakeKey(kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour) noexcept {
+    return BehaviourLifecycleKey{
+        .entityId = entity.Id(),
+        .assetId = behaviour.behaviourAssetId,
+        .backend = behaviour.backend,
+    };
 }
 
 } // namespace kb::script

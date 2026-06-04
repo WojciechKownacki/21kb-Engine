@@ -41,6 +41,14 @@ constexpr std::array kPropertyBindingTypes{
     kb::scene::Scene& scene,
     std::string symbol,
     kb::visual::VisualGraphValueType valueType);
+[[nodiscard]] kb::visual::VisualGraphNativeBinding NativeGetPropertyBinding(
+    std::string symbol,
+    std::string functionName,
+    kb::visual::VisualGraphValueType valueType);
+[[nodiscard]] kb::visual::VisualGraphNativeBinding NativeSetPropertyBinding(
+    std::string symbol,
+    std::string functionName,
+    kb::visual::VisualGraphValueType valueType);
 
 [[nodiscard]] kb::scene::SceneEntity ReadSelf(kb::visual::VisualGraphRuntimeExecutionContext& context, const kb::visual::VisualGraphIrInstruction& instruction) noexcept {
     for (const kb::visual::VisualGraphIrInput& input : instruction.inputs) {
@@ -111,6 +119,21 @@ void StoreOutput(
     };
 }
 
+[[nodiscard]] kb::visual::VisualGraphNativeBinding NativeHasComponentBinding() {
+    return kb::visual::VisualGraphNativeBinding{
+        .opcode = kb::visual::VisualGraphIrOpcode::GetComponent,
+        .symbol = "Self.HasComponent",
+        .functionName = "context.SelfHasComponent",
+        .inputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "component", .type = kb::visual::VisualGraphValueType::String },
+        },
+        .outputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "value", .type = kb::visual::VisualGraphValueType::Bool },
+        },
+        .passContext = false,
+    };
+}
+
 [[nodiscard]] kb::visual::VisualGraphRuntimeBinding GetPropertyBinding(kb::scene::Scene& scene) {
     return GetPropertyBinding(scene, "Self.GetProperty", kb::visual::VisualGraphValueType::Float);
 }
@@ -176,6 +199,45 @@ void StoreOutput(
     };
 }
 
+[[nodiscard]] kb::visual::VisualGraphNativeBinding NativeGetPropertyBinding(
+    std::string symbol,
+    std::string functionName,
+    kb::visual::VisualGraphValueType valueType) {
+    return kb::visual::VisualGraphNativeBinding{
+        .opcode = kb::visual::VisualGraphIrOpcode::GetProperty,
+        .symbol = std::move(symbol),
+        .functionName = std::move(functionName),
+        .inputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "component", .type = kb::visual::VisualGraphValueType::String },
+            kb::visual::VisualGraphPinSignature{ .name = "property", .type = kb::visual::VisualGraphValueType::String },
+        },
+        .outputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "value", .type = valueType },
+        },
+        .passContext = false,
+    };
+}
+
+[[nodiscard]] kb::visual::VisualGraphNativeBinding NativeSetPropertyBinding(
+    std::string symbol,
+    std::string functionName,
+    kb::visual::VisualGraphValueType valueType) {
+    return kb::visual::VisualGraphNativeBinding{
+        .opcode = kb::visual::VisualGraphIrOpcode::SetProperty,
+        .symbol = std::move(symbol),
+        .functionName = std::move(functionName),
+        .inputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "component", .type = kb::visual::VisualGraphValueType::String },
+            kb::visual::VisualGraphPinSignature{ .name = "property", .type = kb::visual::VisualGraphValueType::String },
+            kb::visual::VisualGraphPinSignature{ .name = "value", .type = valueType },
+        },
+        .outputs = {
+            kb::visual::VisualGraphPinSignature{ .name = "succeeded", .type = kb::visual::VisualGraphValueType::Bool },
+        },
+        .passContext = false,
+    };
+}
+
 } // namespace
 
 bool ScriptSceneVisualGraphBindings::Register(kb::visual::VisualGraphRuntimeBindingRegistry& registry, kb::scene::Scene& scene) {
@@ -186,6 +248,34 @@ bool ScriptSceneVisualGraphBindings::Register(kb::visual::VisualGraphRuntimeBind
     for (const PropertyBindingType& type : kPropertyBindingTypes) {
         registered = registry.Register(GetPropertyBinding(scene, TypedSymbol("Self.GetProperty", type.suffix), type.graphType)) && registered;
         registered = registry.Register(SetPropertyBinding(scene, TypedSymbol("Self.SetProperty", type.suffix), type.graphType)) && registered;
+    }
+    return registered;
+}
+
+bool ScriptSceneVisualGraphBindings::RegisterNative(kb::visual::VisualGraphNativeBindingRegistry& registry) {
+    bool registered = true;
+    registered = registry.Register(NativeHasComponentBinding()) && registered;
+    registered = registry.Register(NativeGetPropertyBinding(
+                     "Self.GetProperty",
+                     "context.SelfGetPropertyFloat",
+                     kb::visual::VisualGraphValueType::Float)) &&
+                 registered;
+    registered = registry.Register(NativeSetPropertyBinding(
+                     "Self.SetProperty",
+                     "context.SelfSetPropertyFloat",
+                     kb::visual::VisualGraphValueType::Float)) &&
+                 registered;
+    for (const PropertyBindingType& type : kPropertyBindingTypes) {
+        registered = registry.Register(NativeGetPropertyBinding(
+                         TypedSymbol("Self.GetProperty", type.suffix),
+                         "context.SelfGetProperty" + std::string{ type.suffix },
+                         type.graphType)) &&
+                     registered;
+        registered = registry.Register(NativeSetPropertyBinding(
+                         TypedSymbol("Self.SetProperty", type.suffix),
+                         "context.SelfSetProperty" + std::string{ type.suffix },
+                         type.graphType)) &&
+                     registered;
     }
     return registered;
 }
