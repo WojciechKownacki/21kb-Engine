@@ -27,6 +27,10 @@ public:
         return dc_;
     }
 
+    [[nodiscard]] RECT PaintRect() const noexcept {
+        return paintStruct_.rcPaint;
+    }
+
 private:
     HWND window_ = nullptr;
     PAINTSTRUCT paintStruct_{};

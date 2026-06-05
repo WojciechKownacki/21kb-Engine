@@ -19,6 +19,7 @@ public:
 
     static void Fill(HDC dc, const RECT& rect, const EditorTheme& theme, EditorSurfaceKind kind);
     static void Frame(HDC dc, const RECT& rect, const EditorTheme& theme, EditorSurfaceKind kind, COLORREF border);
+    static void RaisedFrame(HDC dc, const RECT& rect, const EditorTheme& theme, EditorSurfaceKind kind, COLORREF highlight, COLORREF shadow);
 };
 
 #endif

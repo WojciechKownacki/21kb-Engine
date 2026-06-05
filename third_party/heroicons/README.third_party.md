@@ -17,8 +17,12 @@ Vendored subset used by the Win32 editor:
 - `optimized/24/outline/eye.svg`
 - `optimized/24/outline/magnifying-glass.svg`
 - `optimized/24/outline/plus.svg`
+- `optimized/16/solid/adjustments-horizontal.svg`
+- `optimized/16/solid/command-line.svg`
 - `optimized/16/solid/eye.svg`
+- `optimized/16/solid/list-bullet.svg`
 - `optimized/24/solid/cube.svg`
+- `optimized/24/solid/folder.svg`
 
 The editor embeds the selected SVG path data in read-only code data and renders
 it as vector paths at runtime. The SVG files stay in `third_party` as the

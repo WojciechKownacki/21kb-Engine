@@ -20,6 +20,10 @@ enum class HeroIconKind : std::uint8_t {
     ChevronDown,
     Plus,
     EllipsisHorizontal,
+    ListBullet,
+    AdjustmentsHorizontal,
+    CommandLine,
+    Gamepad2,
 };
 
 } // namespace kb::editor

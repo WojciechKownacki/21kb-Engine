@@ -7,6 +7,7 @@
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -29,6 +30,7 @@ public:
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
         EditorRenderBackendSettings& renderBackendSettings,
+        EditorSceneBgfxViewport& sceneViewport,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
         EditorPointerDragState& pointerDrag,
@@ -37,7 +39,7 @@ public:
     LRESULT HandleLeftButtonDown(HWND messageWindow, LPARAM lparam);
     LRESULT HandleLeftButtonDoubleClick(HWND messageWindow, LPARAM lparam);
     LRESULT HandleRightButtonDown(HWND messageWindow, LPARAM lparam);
-    LRESULT HandleMouseMove(HWND messageWindow, LPARAM lparam);
+    LRESULT HandleMouseMove(HWND messageWindow, WPARAM wparam, LPARAM lparam);
     LRESULT HandleLeftButtonUp(HWND messageWindow, LPARAM lparam);
     LRESULT HandleSetCursor(HWND messageWindow, WPARAM wparam, LPARAM lparam);
 #endif
@@ -51,6 +53,7 @@ private:
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
     EditorRenderBackendSettings& renderBackendSettings_;
+    EditorSceneBgfxViewport& sceneViewport_;
     EditorPlayModeState& playMode_;
     EditorShellInteractionState& shellInteraction_;
     EditorPointerDragState& pointerDrag_;

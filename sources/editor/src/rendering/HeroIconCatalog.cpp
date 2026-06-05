@@ -36,6 +36,14 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::Plus();
     case HeroIconKind::EllipsisHorizontal:
         return HeroIconAssets::EllipsisHorizontal();
+    case HeroIconKind::ListBullet:
+        return HeroIconAssets::ListBullet();
+    case HeroIconKind::AdjustmentsHorizontal:
+        return HeroIconAssets::AdjustmentsHorizontal();
+    case HeroIconKind::CommandLine:
+        return HeroIconAssets::CommandLine();
+    case HeroIconKind::Gamepad2:
+        return HeroIconAssets::Gamepad2();
     default:
         return {};
     }
