@@ -12,6 +12,17 @@ namespace {
 
 using Draw = ProjectFilesPanelDrawing;
 
+[[nodiscard]] bool IsPrefabAsset(const EditorAssetItemRow& asset) {
+    return asset.metadata.type == "ScenePrefab" || asset.metadata.virtualPath.extension() == ".kbprefab";
+}
+
+[[nodiscard]] COLORREF AssetIconColor(const EditorAssetItemRow& asset, const EditorTheme& theme) {
+    if (IsPrefabAsset(asset)) {
+        return asset.selected ? RGB(106, 177, 255) : RGB(68, 145, 236);
+    }
+    return asset.selected ? Draw::Color(theme.accent) : Draw::Color(theme.textSecondary);
+}
+
 void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme) {
     RECT header{ layout.assetView.left + 10, layout.assetView.top + 4, layout.assetView.right - 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight };
     Draw::DrawLabel(dc, header, "Name", Draw::Color(theme.textSecondary));
@@ -46,7 +57,7 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
         GdiDrawing::FillRectAlpha(dc, row, Draw::Color(theme.accent), 78);
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::Cube, asset.selected ? Draw::Color(theme.accent) : Draw::Color(theme.textSecondary), 2);
+    HeroIconPainter::Draw(dc, icon, HeroIconKind::Cube, AssetIconColor(asset, theme), 2);
     RECT name{ icon.right + 8, row.top, row.left + 268, row.bottom };
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawEditField(dc, name, theme, state.TextEditValue());

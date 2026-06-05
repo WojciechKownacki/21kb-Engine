@@ -45,6 +45,7 @@ public:
     [[nodiscard]] static COLORREF RowTextSelected() noexcept;
     [[nodiscard]] static COLORREF RowTextHidden() noexcept;
     [[nodiscard]] static COLORREF CubeStroke() noexcept;
+    [[nodiscard]] static COLORREF PrefabCubeStroke() noexcept;
     [[nodiscard]] static COLORREF CubeFill() noexcept;
     [[nodiscard]] static COLORREF MutedText() noexcept;
 #endif

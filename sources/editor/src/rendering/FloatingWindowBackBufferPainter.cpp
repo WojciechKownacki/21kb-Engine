@@ -21,7 +21,7 @@ struct FloatingWindowPaintContext {
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<FloatingWindowPaintContext*>(context);
-    const bool viewportPanel = paintContext->panel->kind == DockPanelKind::Scene || paintContext->panel->kind == DockPanelKind::Game;
+    const bool viewportPanel = paintContext->panel->kind == DockPanelKind::Scene;
     if (viewportPanel) {
         RECT content = paint.client;
         content.top += paintContext->metrics->floatingChromeHeight;

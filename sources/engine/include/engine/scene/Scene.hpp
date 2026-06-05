@@ -43,6 +43,7 @@ public:
     [[nodiscard]] SceneAssets Assets() noexcept;
     [[nodiscard]] SceneAssets Assets() const noexcept;
     [[nodiscard]] ScenePrefabs Prefabs() noexcept;
+    [[nodiscard]] ScenePrefabs Prefabs() const noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
     [[nodiscard]] std::uint64_t Id() const noexcept;

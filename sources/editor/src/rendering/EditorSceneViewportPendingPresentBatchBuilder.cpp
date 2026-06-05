@@ -15,10 +15,12 @@ std::vector<EditorSceneBgfxViewport::PendingPresentBatch> EditorSceneBgfxViewpor
             continue;
         }
 
-        PendingPresentBatch* batch = FindBatch(batches, present.host);
+        const std::uint64_t viewportKey = present.session == nullptr ? present.settings.viewportKey : present.session->key;
+        PendingPresentBatch* batch = FindBatch(batches, present.host, viewportKey);
         if (batch == nullptr) {
             PendingPresentBatch created{};
             created.host = present.host;
+            created.viewportKey = viewportKey;
             created.surfaceRect = present.surfaceRect;
             batches.push_back(std::move(created));
             batch = &batches.back();
@@ -33,9 +35,10 @@ std::vector<EditorSceneBgfxViewport::PendingPresentBatch> EditorSceneBgfxViewpor
 
 EditorSceneBgfxViewport::PendingPresentBatch* EditorSceneBgfxViewport::PendingPresentBatchBuilder::FindBatch(
     std::vector<PendingPresentBatch>& batches,
-    HWND host) noexcept {
-    const auto iter = std::ranges::find_if(batches, [host](const PendingPresentBatch& batch) {
-        return batch.host == host;
+    HWND host,
+    std::uint64_t viewportKey) noexcept {
+    const auto iter = std::ranges::find_if(batches, [host, viewportKey](const PendingPresentBatch& batch) {
+        return batch.host == host && batch.viewportKey == viewportKey;
     });
     return iter == batches.end() ? nullptr : &*iter;
 }

@@ -53,16 +53,27 @@ void RunTabActivationPreservesOrderTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
     const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
-    const kb::editor::DockPanelLayout* gameLayout = FindPanelLayout(initialLayout, 3U);
-    kb::editor::tests::Require(sceneLayout != nullptr && gameLayout != nullptr, "Scene/Game tabs should exist in default layout");
-    kb::editor::tests::Require(sceneLayout->leafId == gameLayout->leafId, "Scene/Game tabs should share a leaf");
-    const std::vector<std::uint32_t> initialOrder = PanelOrderInLeaf(initialLayout, sceneLayout->leafId);
+    const kb::editor::DockPanelLayout* inspectorLayout = FindPanelLayout(initialLayout, 4U);
+    kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Scene and Inspector panels should exist in default layout");
+    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 80, 90, 380, 300 });
+    model.Commands().DockPanelTo(4U, kb::editor::DockDropPreview{
+                                      .zone = kb::editor::DockDropZone::Center,
+                                      .kind = kb::editor::DockDropPreviewKind::Glow,
+                                      .leafId = sceneLayout->leafId,
+                                      .rect = sceneLayout->content,
+                                  });
+    const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
+    sceneLayout = FindPanelLayout(dockedLayout, 2U);
+    inspectorLayout = FindPanelLayout(dockedLayout, 4U);
+    kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Inspector did not dock next to Scene");
+    kb::editor::tests::Require(sceneLayout->leafId == inspectorLayout->leafId, "Scene/Inspector tabs should share a leaf");
+    const std::vector<std::uint32_t> initialOrder = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
 
-    model.Commands().ActivatePanel(3U);
-    const kb::editor::DockLayout gameActiveLayout = BuildDefaultLayout(model);
-    kb::editor::tests::Require(PanelOrderInLeaf(gameActiveLayout, sceneLayout->leafId) == initialOrder, "Activating Game View reordered tabs");
-    const kb::editor::DockPanelLayout* activeGame = FindPanelLayout(gameActiveLayout, 3U);
-    kb::editor::tests::Require(activeGame != nullptr && activeGame->active, "Game View did not become active");
+    model.Commands().ActivatePanel(4U);
+    const kb::editor::DockLayout inspectorActiveLayout = BuildDefaultLayout(model);
+    kb::editor::tests::Require(PanelOrderInLeaf(inspectorActiveLayout, sceneLayout->leafId) == initialOrder, "Activating Inspector reordered tabs");
+    const kb::editor::DockPanelLayout* activeInspector = FindPanelLayout(inspectorActiveLayout, 4U);
+    kb::editor::tests::Require(activeInspector != nullptr && activeInspector->active, "Inspector did not become active");
 
     model.Commands().ActivatePanel(2U);
     const kb::editor::DockLayout sceneActiveLayout = BuildDefaultLayout(model);
@@ -75,11 +86,8 @@ void RunUndockAndDockSameFrameTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
     const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
-    const kb::editor::DockPanelLayout* gameLayout = FindPanelLayout(initialLayout, 3U);
     kb::editor::tests::Require(sceneLayout != nullptr, "Scene panel should start docked");
-    kb::editor::tests::Require(gameLayout != nullptr, "Game panel should start docked");
-    kb::editor::tests::Require(sceneLayout->leafId == gameLayout->leafId, "Scene and Game views should start as tabs in the same center leaf");
-    kb::editor::tests::Require(sceneLayout->active && !gameLayout->active, "Scene View should be the active default center tab");
+    kb::editor::tests::Require(sceneLayout->active, "Scene View should be the active default center panel");
 
     model.Commands().UndockPanel(2U, kb::editor::DockRect{ 200, 160, 640, 420 });
 
@@ -129,25 +137,36 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
     const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
-    const kb::editor::DockPanelLayout* gameLayout = FindPanelLayout(initialLayout, 3U);
-    kb::editor::tests::Require(sceneLayout != nullptr && gameLayout != nullptr, "Scene/Game tabs should exist in default layout");
-    kb::editor::tests::Require(sceneLayout->leafId == gameLayout->leafId, "Scene/Game tabs should share a leaf");
+    const kb::editor::DockPanelLayout* inspectorLayout = FindPanelLayout(initialLayout, 4U);
+    kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Scene and Inspector panels should exist in default layout");
+    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 80, 90, 380, 300 });
+    model.Commands().DockPanelTo(4U, kb::editor::DockDropPreview{
+                                      .zone = kb::editor::DockDropZone::Center,
+                                      .kind = kb::editor::DockDropPreviewKind::Glow,
+                                      .leafId = sceneLayout->leafId,
+                                      .rect = sceneLayout->content,
+                                  });
+    const kb::editor::DockLayout tabbedLayout = BuildDefaultLayout(model);
+    sceneLayout = FindPanelLayout(tabbedLayout, 2U);
+    inspectorLayout = FindPanelLayout(tabbedLayout, 4U);
+    kb::editor::tests::Require(sceneLayout != nullptr && inspectorLayout != nullptr, "Inspector did not dock next to Scene");
+    kb::editor::tests::Require(sceneLayout->leafId == inspectorLayout->leafId, "Scene/Inspector tabs should share a leaf");
 
     const std::optional<kb::editor::DockDropPreview> preview =
-        model.Queries().ResolveDropPreview(initialLayout, gameLayout->tab.x + 1, gameLayout->tab.y + 1);
+        model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
     kb::editor::tests::Require(preview->tabInsertionIndex == 1U, "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
-        preview->rect.width == 3 && preview->rect.height == gameLayout->tab.height,
+        preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
 
-    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 80, 90, 380, 300 });
-    model.Commands().DockPanelTo(4U, *preview);
+    model.Commands().UndockPanel(5U, kb::editor::DockRect{ 80, 90, 620, 300 });
+    model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
     kb::editor::tests::Require(order.size() >= 3U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 4U && order[2] == 3U, "Docked tab was not inserted at the resolved tab strip index");
+    kb::editor::tests::Require(order[0] == 2U && order[1] == 5U && order[2] == 4U, "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {

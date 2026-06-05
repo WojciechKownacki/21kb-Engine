@@ -15,6 +15,17 @@ using Frame = ProjectFilesAssetTileFrameRenderer;
 using Metrics = ProjectFilesAssetTileMetrics;
 using Text = ProjectFilesTileTextRenderer;
 
+[[nodiscard]] bool IsPrefabAsset(const EditorAssetItemRow& asset) {
+    return asset.metadata.type == "ScenePrefab" || asset.metadata.virtualPath.extension() == ".kbprefab";
+}
+
+[[nodiscard]] COLORREF AssetIconColor(const EditorAssetItemRow& asset) {
+    if (IsPrefabAsset(asset)) {
+        return asset.selected ? RGB(106, 177, 255) : RGB(68, 145, 236);
+    }
+    return asset.selected ? RGB(205, 211, 221) : RGB(174, 181, 193);
+}
+
 void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetFolderRow& folder, bool highlighted, const EditorAssetBrowserState& state) {
     Frame::Paint(dc, tile, theme, highlighted, highlighted && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
@@ -31,7 +42,7 @@ void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAsse
     Frame::Paint(dc, tile, theme, asset.selected, asset.selected && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
-    Draw::DrawIconWithShadow(dc, visual.icon, HeroIconKind::Cube, asset.selected ? RGB(205, 211, 221) : RGB(174, 181, 193), 2);
+    Draw::DrawIconWithShadow(dc, visual.icon, HeroIconKind::Cube, AssetIconColor(asset), 2);
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());
     } else {

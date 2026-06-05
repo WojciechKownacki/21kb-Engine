@@ -16,19 +16,19 @@ namespace {
 
 } // namespace
 
-bool EditorHierarchyEntityHierarchyDropHandler::Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+bool EditorHierarchyEntityHierarchyDropHandler::Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, std::span<const kb::scene::SceneEntity> entities) {
     const std::optional<RECT> hierarchy = EditorDropPanelResolver::Resolve(DockPanelKind::Hierarchy, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
-    if (!hierarchy.has_value()) {
+    if (!hierarchy.has_value() || entities.empty()) {
         return false;
     }
 
     const kb::scene::SceneEntity parent = EditorHierarchyRowPicker::EntityAtContentPoint(*hierarchy, x, y, sceneContext);
     if (parent.IsValid()) {
-        return sceneContext.ReparentEntity(entity, parent);
+        return sceneContext.ReparentEntities(entities, parent);
     }
 
     const HierarchyToolbarLayoutRects toolbar = HierarchyToolbarLayout::Resolve(*hierarchy);
-    return Contains(toolbar.listContent, x, y) && sceneContext.ReparentEntity(entity, {});
+    return Contains(toolbar.listContent, x, y) && sceneContext.ReparentEntities(entities, {});
 }
 
 } // namespace kb::editor

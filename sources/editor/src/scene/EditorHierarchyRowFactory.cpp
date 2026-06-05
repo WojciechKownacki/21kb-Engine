@@ -6,6 +6,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 
@@ -27,6 +28,7 @@ EditorHierarchyRow EditorHierarchyRowFactory::Make(
     const kb::ecs::EntityInspection inspection = scene.Runtime().EcsWorld().InspectEntity(entity);
     const kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(entity);
     const bool hasChildren = !children.empty();
+    const bool prefabRoot = scene.Prefabs().RootInstance(entity).IsValid();
 
     return EditorHierarchyRow{
         .entity = entity,
@@ -36,6 +38,7 @@ EditorHierarchyRow EditorHierarchyRowFactory::Make(
         .hasChildren = hasChildren,
         .expanded = hasChildren && !IsCollapsed(collapsedEntities, entity),
         .visible = visibility.visible,
+        .prefabRoot = prefabRoot,
     };
 }
 

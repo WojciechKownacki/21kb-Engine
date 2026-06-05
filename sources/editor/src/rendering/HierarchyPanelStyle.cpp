@@ -56,6 +56,10 @@ COLORREF HierarchyPanelStyle::CubeStroke() noexcept {
     return RGB(174, 184, 194);
 }
 
+COLORREF HierarchyPanelStyle::PrefabCubeStroke() noexcept {
+    return RGB(68, 145, 236);
+}
+
 COLORREF HierarchyPanelStyle::CubeFill() noexcept {
     return RGB(76, 85, 95);
 }

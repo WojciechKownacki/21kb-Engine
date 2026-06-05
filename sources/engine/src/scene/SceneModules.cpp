@@ -51,6 +51,10 @@ ScenePrefabs Scene::Prefabs() noexcept {
     return ScenePrefabs{ *this };
 }
 
+ScenePrefabs Scene::Prefabs() const noexcept {
+    return ScenePrefabs{ const_cast<Scene&>(*this) };
+}
+
 SceneRuntime Scene::Runtime() noexcept {
     return SceneRuntime{ *this };
 }

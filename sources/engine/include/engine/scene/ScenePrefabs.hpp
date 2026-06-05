@@ -5,6 +5,7 @@
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabInstanceHandle.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "engine/scene/SceneObject.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -39,6 +40,10 @@ public:
     [[nodiscard]] bool Save(ScenePrefabHandle handle, const std::filesystem::path& path) const;
     [[nodiscard]] ScenePrefabHandle Load(const std::filesystem::path& path);
     [[nodiscard]] bool IsInstance(ScenePrefabInstanceHandle handle) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle RootInstance(SceneObject object) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle RootInstance(SceneEntity entity) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneEntity entity, std::uint32_t& nodeIndex) const noexcept;
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle);

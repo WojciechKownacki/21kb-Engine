@@ -15,6 +15,10 @@ namespace {
 } // namespace
 
 bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, int y, EditorSceneContext& sceneContext) {
+    return SelectAtContentPoint(content, x, y, false, false, sceneContext);
+}
+
+bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, int y, bool additive, bool range, EditorSceneContext& sceneContext) {
     if (!Contains(content, x, y)) {
         return false;
     }
@@ -64,7 +68,7 @@ bool EditorHierarchyRowPicker::SelectAtContentPoint(const RECT& content, int x, 
         return true;
     }
 
-    [[maybe_unused]] const bool selected = sceneContext.SelectHierarchyRow(rowIndex);
+    [[maybe_unused]] const bool selected = sceneContext.SelectHierarchyRow(rowIndex, additive, range);
     return true;
 }
 

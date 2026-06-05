@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace kb::editor {
 
@@ -18,8 +19,10 @@ enum class EditorPointerDragKind {
 struct EditorPointerDragState {
     EditorPointerDragKind kind = EditorPointerDragKind::None;
     kb::scene::SceneEntity entity{};
+    std::vector<kb::scene::SceneEntity> entities{};
     kb::assets::AssetId assetId{};
     std::filesystem::path assetPath{};
+    std::filesystem::path assetVirtualPath{};
     std::filesystem::path assetFolderPath{};
     std::string assetLabel{};
     bool assetInstantiatesPrefab = false;
@@ -41,8 +44,10 @@ struct EditorPointerDragState {
     void Clear() {
         kind = EditorPointerDragKind::None;
         entity = {};
+        entities.clear();
         assetId = {};
         assetPath.clear();
+        assetVirtualPath.clear();
         assetFolderPath.clear();
         assetLabel.clear();
         assetInstantiatesPrefab = false;

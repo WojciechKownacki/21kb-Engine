@@ -16,6 +16,9 @@ namespace {
 [[nodiscard]] std::string Label(const EditorPointerDragState& drag, const EditorSceneContext& sceneContext) {
     switch (drag.kind) {
     case EditorPointerDragKind::HierarchyEntity:
+        if (drag.entities.size() > 1U) {
+            return std::to_string(drag.entities.size()) + " objects";
+        }
         return sceneContext.Scene().Entities().IsAlive(drag.entity) ? sceneContext.Scene().Entities().Name(drag.entity) : std::string{};
     case EditorPointerDragKind::PrefabAsset:
         return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetPath.filename().string();
@@ -25,6 +28,13 @@ namespace {
     default:
         return {};
     }
+}
+
+[[nodiscard]] COLORREF IconColor(const EditorPointerDragState& drag) noexcept {
+    if (drag.kind == EditorPointerDragKind::PrefabAsset && drag.assetInstantiatesPrefab) {
+        return HierarchyPanelStyle::PrefabCubeStroke();
+    }
+    return HierarchyPanelStyle::CubeStroke();
 }
 
 } // namespace
@@ -53,7 +63,7 @@ void EditorDragOverlayRenderer::Paint(HDC dc, const EditorPointerDragState& drag
         row.left + 21,
         row.top + 20,
     };
-    HeroIconPainter::Draw(dc, icon, drag.kind == EditorPointerDragKind::AssetFolder ? HeroIconKind::Folder : HeroIconKind::Cube, HierarchyPanelStyle::CubeStroke(), 2);
+    HeroIconPainter::Draw(dc, icon, drag.kind == EditorPointerDragKind::AssetFolder ? HeroIconKind::Folder : HeroIconKind::Cube, IconColor(drag), 2);
 
     ScopedFont font{ 12, FW_NORMAL };
     const ScopedGdiObject selectedFont(dc, font.handle);
