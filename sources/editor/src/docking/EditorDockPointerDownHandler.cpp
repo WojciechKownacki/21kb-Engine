@@ -8,8 +8,20 @@
 #include "windowing/FloatingWindowControlLayout.hpp"
 
 namespace kb::editor {
+namespace {
 
-void EditorDockPointerDownHandler::Handle(
+[[nodiscard]] const DockLeafLayout* FindLeaf(const DockLayout& layout, std::uint32_t leafId) noexcept {
+    for (const DockLeafLayout& leaf : layout.leaves) {
+        if (leaf.leafId == leafId) {
+            return &leaf;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+bool EditorDockPointerDownHandler::Handle(
     HWND window,
     int x,
     int y,
@@ -19,27 +31,32 @@ void EditorDockPointerDownHandler::Handle(
     const EditorMetrics& metrics,
     std::optional<DockPointerDrag>& drag) {
     if (IsMainWindow(window, mainWindow)) {
-        HandleMainWindowDown(window, x, y, dockModel, metrics, drag);
-        return;
+        return HandleMainWindowDown(window, x, y, dockModel, metrics, drag);
     }
 
     HandleFloatingWindowDown(window, x, y, floatingWindows, metrics, drag);
+    return false;
 }
 
 bool EditorDockPointerDownHandler::IsMainWindow(HWND window, HWND mainWindow) noexcept {
     return window == mainWindow;
 }
 
-void EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int y, EditorDockModel& dockModel, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
+bool EditorDockPointerDownHandler::HandleMainWindowDown(HWND window, int x, int y, EditorDockModel& dockModel, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {
     const DockLayout layout = DockMainLayoutResolver::Resolve(window, dockModel, metrics);
     const DockHit hit = dockModel.Queries().HitTest(layout, x, y);
     if (hit.kind == DockHitKind::None) {
-        return;
+        return false;
     }
 
+    const DockLeafLayout* leaf = FindLeaf(layout, hit.leafId);
+    const bool activePanelChanged = leaf != nullptr && leaf->activePanelId != hit.panelId;
     dockModel.Commands().ActivatePanel(hit.panelId);
     drag = DockPointerDragFactory::FromDockHit(window, layout, hit, x, y);
-    InvalidateRect(window, nullptr, FALSE);
+    if (activePanelChanged && leaf != nullptr) {
+        InvalidateRect(window, nullptr, FALSE);
+    }
+    return activePanelChanged;
 }
 
 void EditorDockPointerDownHandler::HandleFloatingWindowDown(HWND window, int x, int y, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, std::optional<DockPointerDrag>& drag) {

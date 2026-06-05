@@ -27,6 +27,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.playMode.Stop();
     }
     if (state.window != nullptr) {
+        state.sceneViewport.RequestPresent();
         InvalidateRect(state.window, nullptr, FALSE);
     }
 }

@@ -18,39 +18,86 @@ const DockDropPreview* EditorDockController::DropPreview() const noexcept {
     return dropPreview_ ? &*dropPreview_ : nullptr;
 }
 
-void EditorDockController::HandlePointerDown(HWND window, int x, int y) {
+bool EditorDockController::HandlePointerDown(HWND window, int x, int y) {
     if (!Ready()) {
-        return;
+        return false;
     }
 
+    CancelDrag();
     SetFocus(window);
-    SetCapture(window);
-    EditorDockPointerDownHandler::Handle(window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, drag_);
+    const bool handled = EditorDockPointerDownHandler::Handle(window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, drag_);
+    if (drag_.has_value()) {
+        CaptureSourceWindow();
+    }
+    return handled;
 }
 
-void EditorDockController::HandlePointerMove(HWND window, int x, int y) {
+bool EditorDockController::HandlePointerMove(HWND window, int x, int y, bool leftButtonDown) {
     if (!Ready()) {
-        return;
+        return false;
     }
 
     if (!drag_.has_value()) {
         UpdateHoverCursor(window, x, y);
-        return;
+        return false;
     }
 
-    DockDragOperationHandler::Move(*drag_, window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, dropPreview_);
+    if (!leftButtonDown) {
+        CancelDrag();
+        UpdateHoverCursor(window, x, y);
+        return false;
+    }
+
+    CaptureSourceWindow();
+    return DockDragOperationHandler::Move(*drag_, window, x, y, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, dropPreview_);
 }
 
-void EditorDockController::HandlePointerUp(HWND window) {
-    ReleaseCapture();
-
+bool EditorDockController::HandlePointerUp(HWND window) {
     if (!Ready() || !drag_.has_value()) {
-        return;
+        if (GetCapture() == window) {
+            ReleaseCapture();
+        }
+        return false;
     }
 
     const DockPointerDrag drag = *drag_;
+    const HWND capturedWindow = drag.sourceWindow;
     drag_.reset();
-    DockDragOperationHandler::Complete(drag, window, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, dropPreview_);
+    if (GetCapture() == window || GetCapture() == capturedWindow) {
+        ReleaseCapture();
+    }
+    return DockDragOperationHandler::Complete(drag, window, mainWindow_, *dockModel_, *floatingWindows_, *metrics_, dropPreview_);
+}
+
+void EditorDockController::CancelDrag() noexcept {
+    const HWND capturedWindow = drag_.has_value() ? drag_->sourceWindow : nullptr;
+    drag_.reset();
+    dropPreview_.reset();
+    if (capturedWindow != nullptr && GetCapture() == capturedWindow) {
+        ReleaseCapture();
+    }
+    if (mainWindow_ != nullptr) {
+        InvalidateRect(mainWindow_, nullptr, FALSE);
+    }
+}
+
+void EditorDockController::HandleCaptureChanged(HWND newCapture) noexcept {
+    if (!drag_.has_value()) {
+        return;
+    }
+    if (newCapture == drag_->sourceWindow) {
+        return;
+    }
+    if (LeftButtonPressed()) {
+        CaptureSourceWindow();
+        return;
+    }
+
+    drag_.reset();
+    dropPreview_.reset();
+    if (mainWindow_ != nullptr) {
+        InvalidateRect(mainWindow_, nullptr, FALSE);
+    }
 }
 
 void EditorDockController::UpdateHoverCursor(HWND window, int x, int y) const {
@@ -64,6 +111,19 @@ void EditorDockController::UpdateHoverCursor(HWND window, int x, int y) const {
 
 bool EditorDockController::Ready() const noexcept {
     return mainWindow_ != nullptr && dockModel_ != nullptr && floatingWindows_ != nullptr && metrics_ != nullptr;
+}
+
+bool EditorDockController::LeftButtonPressed() const noexcept {
+    return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+}
+
+void EditorDockController::CaptureSourceWindow() const noexcept {
+    if (!drag_.has_value() || drag_->sourceWindow == nullptr || IsWindow(drag_->sourceWindow) == 0) {
+        return;
+    }
+    if (GetCapture() != drag_->sourceWindow) {
+        SetCapture(drag_->sourceWindow);
+    }
 }
 
 } // namespace kb::editor

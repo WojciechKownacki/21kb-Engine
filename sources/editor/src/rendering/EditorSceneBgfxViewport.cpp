@@ -32,12 +32,24 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
     return EditorSceneViewportGeometry::RectHeight(rect);
 }
 
+[[nodiscard]] bool RectEquals(const RECT& lhs, const RECT& rhs) noexcept {
+    return lhs.left == rhs.left && lhs.top == rhs.top && lhs.right == rhs.right && lhs.bottom == rhs.bottom;
+}
+
 [[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
     return EditorSceneViewportGeometry::CenteredRectFor(bounds, renderWidth, renderHeight, fitMode);
 }
 
 [[nodiscard]] RECT ClipRectToClient(HWND parent, const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::ClipRectToClient(parent, rect);
+}
+
+[[nodiscard]] RECT ClipRectToBounds(const RECT& bounds, const RECT& rect) noexcept {
+    RECT clipped{};
+    if (IntersectRect(&clipped, &rect, &bounds) == 0) {
+        return {};
+    }
+    return clipped;
 }
 
 } // namespace
@@ -86,6 +98,71 @@ const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
     return renderer_.CapabilityReport().selectedBackendName;
 }
 
+void EditorSceneBgfxViewport::RequestPresent() noexcept {
+    presentRequested_ = true;
+}
+
+bool EditorSceneBgfxViewport::PresentRequested() const noexcept {
+    return presentRequested_;
+}
+
+void EditorSceneBgfxViewport::ClearPresentRequest() noexcept {
+    presentRequested_ = false;
+}
+
+void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept {
+    if (parent == nullptr) {
+        return;
+    }
+
+    hostSurfaceStore_.MarkHostNotPresented(parent);
+    HostSurface* surface = hostSurfaceStore_.Find(parent);
+    if (surface == nullptr || surface->window == nullptr || IsWindow(surface->window) == 0) {
+        return;
+    }
+
+    RECT layoutBounds{};
+    bool hasLayoutBounds = false;
+    for (const HostSurfaceLayout& layout : layouts) {
+        const RECT bounds = ClipRectToClient(parent, layout.bounds);
+        if (RectWidth(bounds) == 0U || RectHeight(bounds) == 0U) {
+            continue;
+        }
+
+        if (hasLayoutBounds) {
+            UnionRect(&layoutBounds, &layoutBounds, &bounds);
+        } else {
+            layoutBounds = bounds;
+            hasLayoutBounds = true;
+        }
+    }
+
+    if (!hasLayoutBounds) {
+        return;
+    }
+
+    if (!surface->hasLayoutBounds || !RectEquals(surface->layoutBounds, layoutBounds)) {
+        surface->layoutBounds = layoutBounds;
+        surface->hasLayoutBounds = true;
+        RequestPresent();
+    }
+
+    RECT visibleRect{};
+    const bool outsideLayout = IntersectRect(&visibleRect, &surface->rect, &layoutBounds) == 0;
+    if (outsideLayout) {
+        RequestPresent();
+    } else if (IsWindowVisible(surface->window) == 0) {
+        RequestPresent();
+        surface->presentedInCurrentPaint = true;
+    } else {
+        surface->presentedInCurrentPaint = true;
+    }
+
+    if (hostSurfaceStore_.HasVisibleUnpresentedForHost(parent)) {
+        RequestPresent();
+    }
+}
+
 void EditorSceneBgfxViewport::Shutdown() {
     ShutdownGpuResources();
 
@@ -103,6 +180,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     rendererBackendGeneration_ = 0;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
+    presentRequested_ = true;
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -197,6 +275,7 @@ bool EditorSceneBgfxViewport::EnsureWindowClass() {
     windowClass.lpfnWndProc = &EditorSceneBgfxViewport::WindowProc;
     windowClass.hInstance = instance_;
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    windowClass.hbrBackground = nullptr;
     windowClass.lpszClassName = kSceneViewportClassName;
     if (RegisterClassExW(&windowClass) == 0) {
         return false;
@@ -239,6 +318,7 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
         return false;
     }
 
+    bool needsPositionUpdate = !RectEquals(surface.rect, rect);
     if (surface.window == nullptr || IsWindow(surface.window) == 0) {
         surface.window = CreateWindowExW(
             0,
@@ -256,19 +336,23 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
         if (surface.window == nullptr) {
             return false;
         }
+        needsPositionUpdate = false;
     } else if (GetParent(surface.window) != surface.host) {
         ShowWindow(surface.window, SW_HIDE);
         SetParent(surface.window, surface.host);
+        needsPositionUpdate = true;
     }
 
-    SetWindowPos(
-        surface.window,
-        HWND_TOP,
-        rect.left,
-        rect.top,
-        static_cast<int>(RectWidth(rect)),
-        static_cast<int>(RectHeight(rect)),
-        SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW);
+    if (needsPositionUpdate) {
+        SetWindowPos(
+            surface.window,
+            HWND_BOTTOM,
+            rect.left,
+            rect.top,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
 
     std::vector<RECT> presentRects;
     presentRects.reserve(presents.size());
@@ -277,7 +361,9 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             presentRects.push_back(present->destination);
         }
     }
-    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, presentRects);
+    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(
+        rect,
+        std::span<const RECT>{presentRects.data(), presentRects.size()});
     if (combinedRegion == nullptr) {
         return false;
     }
@@ -405,7 +491,7 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     }
     const std::uint32_t width = settings.renderWidth == 0U ? panelWidth : settings.renderWidth;
     const std::uint32_t height = settings.renderHeight == 0U ? panelHeight : settings.renderHeight;
-    const RECT destination = ClipRectToClient(session.host, CenteredRectFor(clippedPanel, width, height, settings.fitMode));
+    const RECT destination = ClipRectToBounds(clippedPanel, CenteredRectFor(clippedPanel, width, height, settings.fitMode));
     const std::uint32_t outputWidth = RectWidth(destination);
     const std::uint32_t outputHeight = RectHeight(destination);
     if (outputWidth == 0U || outputHeight == 0U) {
@@ -419,6 +505,7 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     pendingPresents_.push_back(PendingPresent{
         .session = &session,
         .host = session.host,
+        .surfaceRect = destination,
         .destination = destination,
         .scene = &scene,
         .settings = settings,
@@ -439,12 +526,23 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
         return TRUE;
     }
+    case WM_NCHITTEST:
+        return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
     case WM_ERASEBKGND:
+        static_cast<void>(wparam);
         return 1;
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
         EndPaint(window, &paint);
+        if (viewport != nullptr) {
+            viewport->RequestPresent();
+            if (HWND parent = GetParent(window); parent != nullptr) {
+                InvalidateRect(parent, nullptr, FALSE);
+            }
+        }
         return 0;
     }
     case WM_NCDESTROY:

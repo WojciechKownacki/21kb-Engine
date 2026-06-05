@@ -15,6 +15,7 @@ public:
     GdiFramePainter() = delete;
 
     static void DrawSharp(HDC dc, const RECT& rect, COLORREF fill, COLORREF border);
+    static void DrawRaised(HDC dc, const RECT& rect, COLORREF fill, COLORREF highlight, COLORREF shadow);
 };
 
 #endif

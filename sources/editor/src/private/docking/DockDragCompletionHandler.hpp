@@ -32,6 +32,8 @@ public:
 
 private:
 #if defined(_WIN32)
+    [[nodiscard]] static std::optional<DockDropPreview>
+    ResolvePreviewAtCursor(HWND mainWindow, const EditorDockModel& dockModel, const EditorMetrics& metrics);
     [[nodiscard]] static bool IsMainWindow(HWND candidate, HWND mainWindow) noexcept;
 #endif
 };

@@ -18,9 +18,8 @@ namespace kb::editor {
 class EditorFloatingWindowManager {
 public:
     static constexpr const wchar_t* WindowClassName = L"KBEditorFloatingWindow";
-    static constexpr int DragWidth = 400;
-    static constexpr int DragHeight = 300;
-    static constexpr int StripCursorY = 12;
+    static constexpr int DragWidth = 640;
+    static constexpr int DragHeight = 480;
 
 #if defined(_WIN32)
     [[nodiscard]] EditorFloatingWindowQueries Queries() const noexcept;
