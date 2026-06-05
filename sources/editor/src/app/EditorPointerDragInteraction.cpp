@@ -23,6 +23,13 @@ bool EditorPointerDragInteraction::Move(HWND sourceWindow, HWND mainWindow, int 
     if (!drag.Potential()) {
         return false;
     }
+    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        drag.Clear();
+        if (GetCapture() == sourceWindow) {
+            ReleaseCapture();
+        }
+        return false;
+    }
 
     drag.x = x;
     drag.y = y;
@@ -50,6 +57,10 @@ bool EditorPointerDragInteraction::Complete(
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext,
     EditorPointerDragState& drag) {
+    if (!drag.Potential()) {
+        return false;
+    }
+
     drag.x = x;
     drag.y = y;
 
@@ -59,7 +70,9 @@ bool EditorPointerDragInteraction::Complete(
     }
 
     drag.Clear();
-    ReleaseCapture();
+    if (GetCapture() == sourceWindow) {
+        ReleaseCapture();
+    }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
     return handledDrop;
 }

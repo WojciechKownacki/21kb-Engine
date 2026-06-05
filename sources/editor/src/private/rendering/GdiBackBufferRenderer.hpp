@@ -13,6 +13,7 @@ namespace kb::editor {
 struct GdiBackBufferPaintContext {
     HDC dc = nullptr;
     RECT client{};
+    RECT dirty{};
     int width = 0;
     int height = 0;
 };

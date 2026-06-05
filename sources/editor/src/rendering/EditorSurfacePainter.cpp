@@ -14,6 +14,10 @@ void EditorSurfacePainter::Frame(HDC dc, const RECT& rect, const EditorTheme& th
     GdiDrawing::DrawSharpFrame(dc, rect, EditorSurfaceStyle::FillColor(theme, kind), border);
 }
 
+void EditorSurfacePainter::RaisedFrame(HDC dc, const RECT& rect, const EditorTheme& theme, EditorSurfaceKind kind, COLORREF highlight, COLORREF shadow) {
+    GdiDrawing::DrawRaisedFrame(dc, rect, EditorSurfaceStyle::FillColor(theme, kind), highlight, shadow);
+}
+
 } // namespace kb::editor
 
 #endif

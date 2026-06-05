@@ -22,15 +22,19 @@ public:
 
     [[nodiscard]] const DockDropPreview* DropPreview() const noexcept;
 
-    void HandlePointerDown(HWND window, int x, int y);
-    void HandlePointerMove(HWND window, int x, int y);
-    void HandlePointerUp(HWND window);
+    [[nodiscard]] bool HandlePointerDown(HWND window, int x, int y);
+    [[nodiscard]] bool HandlePointerMove(HWND window, int x, int y, bool leftButtonDown);
+    [[nodiscard]] bool HandlePointerUp(HWND window);
+    void CancelDrag() noexcept;
+    void HandleCaptureChanged(HWND newCapture) noexcept;
     void UpdateHoverCursor(HWND window, int x, int y) const;
 #endif
 
 private:
 #if defined(_WIN32)
     [[nodiscard]] bool Ready() const noexcept;
+    [[nodiscard]] bool LeftButtonPressed() const noexcept;
+    void CaptureSourceWindow() const noexcept;
 
     HWND mainWindow_ = nullptr;
     EditorDockModel* dockModel_ = nullptr;

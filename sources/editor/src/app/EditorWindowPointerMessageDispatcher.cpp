@@ -17,6 +17,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
         context_.hierarchySelection,
         context_.sceneContext,
         context_.renderBackendSettings,
+        context_.sceneViewport,
         context_.playMode,
         context_.shellInteraction,
         context_.pointerDrag,
@@ -31,7 +32,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
     case WM_RBUTTONDOWN:
         return pointerHandler.HandleRightButtonDown(messageWindow, lparam);
     case WM_MOUSEMOVE:
-        return pointerHandler.HandleMouseMove(messageWindow, lparam);
+        return pointerHandler.HandleMouseMove(messageWindow, wparam, lparam);
     case WM_LBUTTONUP:
         return pointerHandler.HandleLeftButtonUp(messageWindow, lparam);
     case WM_RBUTTONUP:
