@@ -59,6 +59,12 @@ void EditorPointerDragSourceResolver::Resolve(
         if (entity.IsValid()) {
             drag.kind = EditorPointerDragKind::HierarchyEntity;
             drag.entity = entity;
+            if (sceneContext.IsHierarchyEntitySelected(entity)) {
+                drag.entities = sceneContext.SelectedHierarchyEntities();
+            }
+            if (drag.entities.empty()) {
+                drag.entities.push_back(entity);
+            }
             return;
         }
     }
@@ -75,6 +81,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.kind = EditorPointerDragKind::PrefabAsset;
             drag.assetId = metadata->id;
             drag.assetPath = ResolveAssetPath(*metadata, manager);
+            drag.assetVirtualPath = metadata->virtualPath;
             drag.assetLabel = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);

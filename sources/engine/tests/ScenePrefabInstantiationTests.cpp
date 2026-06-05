@@ -138,6 +138,14 @@ void RunRegisteredPrefabInstantiationTest() {
     kb::tests::Require(instance.ObjectCount() == 2, "Registered prefab did not instantiate all nodes");
     kb::tests::Require(instance.Handle().IsValid(), "Registered prefab instance did not return an engine instance handle");
     kb::tests::Require(scene.Prefabs().IsInstance(instance.Handle()), "Registered prefab instance handle was not tracked by the engine");
+    kb::tests::Require(scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)) == instance.Handle(), "Registered prefab root should own the prefab instance handle");
+    kb::tests::Require(!scene.Prefabs().RootInstance(instance.ObjectAt(childNode)).IsValid(), "Registered prefab child must not own a separate prefab instance handle");
+    std::uint32_t rootContainingNode = 99;
+    std::uint32_t childContainingNode = 99;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(rootNode), rootContainingNode) == instance.Handle(), "Registered prefab root should map to the tracked prefab instance");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(childNode), childContainingNode) == instance.Handle(), "Registered prefab child should remain tracked inside the parent prefab instance");
+    kb::tests::Require(rootContainingNode == rootNode, "Registered prefab root should map to the root prefab node");
+    kb::tests::Require(childContainingNode == childNode, "Registered prefab child should map to the child prefab node");
     kb::tests::Require(scene.Prefabs().Overrides(instance.Handle()).Empty(), "Fresh registered prefab instance should not report overrides");
     kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Registered Root", "Registered prefab root name was not assigned");
     kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Registered prefab child parent was not assigned");

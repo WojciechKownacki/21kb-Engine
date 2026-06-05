@@ -48,7 +48,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::BuildPendingSubmissions(std
 }
 
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(const PendingPresentBatch& batch, HostSurface*& surface) {
-    surface = viewport_.EnsureHostSurface(batch.host);
+    surface = viewport_.EnsureHostSurface(batch.host, batch.viewportKey);
     if (surface == nullptr) {
         return false;
     }
@@ -56,23 +56,15 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         surface = nullptr;
         return true;
     }
-    const bool needsWindow = surface->window == nullptr || IsWindow(surface->window) == 0;
-    if (needsWindow) {
-        if (!viewport_.EnsureHostSurfaceWindow(
-                *surface,
-                batch.surfaceRect,
-                std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
-            return false;
-        }
-    }
-    if (!viewport_.EnsurePresentTarget(*surface, RectWidth(batch.surfaceRect), RectHeight(batch.surfaceRect))) {
-        return false;
-    }
-    if (!needsWindow &&
-        !viewport_.EnsureHostSurfaceWindow(
+
+    if (!viewport_.EnsureHostSurfaceWindow(
             *surface,
             batch.surfaceRect,
             std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
+        return false;
+    }
+
+    if (!viewport_.EnsurePresentTarget(*surface, RectWidth(surface->rect), RectHeight(surface->rect))) {
         return false;
     }
     surface->presentedInCurrentPaint = true;
@@ -80,15 +72,17 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
 }
 
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::AppendHostSubmissions(const PendingPresentBatch& batch, const HostSurface& surface) {
+    bool clearTarget = true;
     for (const PendingPresent* present : batch.presents) {
         if (present == nullptr) {
             continue;
         }
         render::Renderer::SceneFrameSubmission submission{};
-        if (!PendingSubmissionBuilder::Build(*present, surface, submission)) {
+        if (!PendingSubmissionBuilder::Build(*present, surface, clearTarget, submission)) {
             return false;
         }
         viewport_.pendingSubmissions_.push_back(submission);
+        clearTarget = false;
     }
     return true;
 }

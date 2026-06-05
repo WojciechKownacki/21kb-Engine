@@ -6,11 +6,13 @@
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
+#include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <string>
 #include <string_view>
 #include <filesystem>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -30,9 +32,12 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
+    [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
+    [[nodiscard]] bool IsHierarchyEntitySelected(kb::scene::SceneEntity entity) const noexcept;
     void SelectEntity(kb::scene::SceneEntity entity) noexcept;
     void ClearHierarchySelection() noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex) noexcept;
+    [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept;
 
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
     [[nodiscard]] std::string_view HierarchySearchQuery() const noexcept;
@@ -60,15 +65,17 @@ public:
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
+    [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);
+    [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
 
 private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
-    kb::scene::SceneEntity selectedEntity_{};
+    EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
 };

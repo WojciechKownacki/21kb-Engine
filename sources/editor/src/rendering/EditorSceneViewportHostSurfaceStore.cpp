@@ -23,27 +23,28 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Clear() noexcept {
     hostSurfaces_.clear();
 }
 
-EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Ensure(HWND host) {
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Ensure(HWND host, std::uint64_t key) {
     if (host == nullptr) {
         return nullptr;
     }
-    if (HostSurface* existing = Find(host); existing != nullptr) {
+    if (HostSurface* existing = Find(host, key); existing != nullptr) {
         return existing;
     }
 
     std::unique_ptr<HostSurface> surface = std::make_unique<HostSurface>();
     surface->host = host;
+    surface->key = key;
     hostSurfaces_.push_back(std::move(surface));
     return hostSurfaces_.back().get();
 }
 
-EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Find(HWND host) noexcept {
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore::Find(HWND host, std::uint64_t key) noexcept {
     if (host == nullptr) {
         return nullptr;
     }
 
-    const auto iter = std::ranges::find_if(hostSurfaces_, [host](const std::unique_ptr<HostSurface>& surface) {
-        return surface != nullptr && surface->host == host;
+    const auto iter = std::ranges::find_if(hostSurfaces_, [host, key](const std::unique_ptr<HostSurface>& surface) {
+        return surface != nullptr && surface->host == host && surface->key == key;
     });
     return iter == hostSurfaces_.end() ? nullptr : iter->get();
 }
@@ -152,7 +153,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept 
                     surface->rect.top,
                     static_cast<int>(RectWidth(surface->rect)),
                     static_cast<int>(RectHeight(surface->rect)),
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOCOPYBITS);
             }
         }
     }

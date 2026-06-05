@@ -16,6 +16,7 @@ struct EditorHierarchyRow {
     bool hasChildren = false;
     bool expanded = false;
     bool visible = true;
+    bool prefabRoot = false;
 };
 
 } // namespace kb::editor

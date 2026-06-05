@@ -21,7 +21,7 @@ class EditorPrefabAssetHierarchyDropHandler {
 public:
     EditorPrefabAssetHierarchyDropHandler() = delete;
 
-    [[nodiscard]] static bool Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const std::filesystem::path& assetPath);
+    [[nodiscard]] static bool Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, const std::filesystem::path& assetPath, const std::filesystem::path& assetVirtualPath);
 };
 
 #endif
