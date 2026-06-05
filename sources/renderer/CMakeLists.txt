@@ -277,9 +277,17 @@ set(KB_RENDERER_SHADER_MANIFEST
     vs_present.sc
 )
 
+file(GLOB_RECURSE KB_RENDERER_PREBUILT_SHADER_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders/*"
+)
+set(KB_RENDERER_SHADER_RUNTIME_DIR "${CMAKE_BINARY_DIR}/shaders")
+set(KB_RENDERER_SHADER_STAGE_STAMP "${KB_RENDERER_SHADER_RUNTIME_DIR}/.kb_renderer_shaders.stamp")
+set(KB_RENDERER_SHADER_MANIFEST_STAMP "${KB_RENDERER_SHADER_RUNTIME_DIR}/.kb_renderer_shader_manifest.stamp")
+set_property(GLOBAL PROPERTY KB_RENDERER_SHADER_STAGE_STAMP "${KB_RENDERER_SHADER_STAGE_STAMP}")
+set_property(GLOBAL PROPERTY KB_RENDERER_SHADER_RUNTIME_DIR "${KB_RENDERER_SHADER_RUNTIME_DIR}")
+
 if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compile_shaders)
     set(KB_RENDERER_GENERATED_SHADER_DIR ${CMAKE_BINARY_DIR}/generated_shaders)
-    set(KB_RENDERER_SHADER_RUNTIME_DIR ${CMAKE_BINARY_DIR}/shaders)
     set(KB_RENDERER_SHADER_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
     set(KB_RENDERER_BGFX_SHADER_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/src)
     set(KB_RENDERER_SHADER_VARYING_DEF ${KB_RENDERER_SHADER_INCLUDE_DIR}/varying.def.sc)
@@ -346,7 +354,8 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
     )
 
-    add_custom_target(kb_renderer_shaders ALL
+    add_custom_command(
+        OUTPUT "${KB_RENDERER_SHADER_STAGE_STAMP}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             ${KB_RENDERER_SHADER_RUNTIME_DIR}
             ${KB_RENDERER_GENERATED_SHADER_DIR}
@@ -356,29 +365,51 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${KB_RENDERER_GENERATED_SHADER_DIR}
             ${KB_RENDERER_SHADER_RUNTIME_DIR}
-        DEPENDS kb_renderer_generated_shaders
+        COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_STAGE_STAMP}"
+        DEPENDS
+            ${KB_RENDERER_PREBUILT_SHADER_FILES}
+            ${KB_RENDERER_GENERATED_VERTEX_SHADERS}
+            ${KB_RENDERER_GENERATED_FRAGMENT_SHADERS}
+            ${KB_RENDERER_GENERATED_COMPUTE_SHADERS}
         COMMENT "Generate and stage bgfx runtime shaders"
         VERBATIM
     )
 else()
-    add_custom_target(kb_renderer_shaders ALL
+    add_custom_command(
+        OUTPUT "${KB_RENDERER_SHADER_STAGE_STAMP}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${KB_RENDERER_SHADER_RUNTIME_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/prebuilt_shaders
-            ${CMAKE_BINARY_DIR}/shaders
+            ${KB_RENDERER_SHADER_RUNTIME_DIR}
+        COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_STAGE_STAMP}"
+        DEPENDS ${KB_RENDERER_PREBUILT_SHADER_FILES}
         COMMENT "Stage prebuilt bgfx shaders"
         VERBATIM
     )
 endif()
 
-add_custom_target(kb_renderer_shader_manifest ALL
+add_custom_target(kb_renderer_shaders ALL
+    DEPENDS "${KB_RENDERER_SHADER_STAGE_STAMP}"
+)
+
+add_custom_command(
+    OUTPUT "${KB_RENDERER_SHADER_MANIFEST_STAMP}"
     COMMAND ${CMAKE_COMMAND}
         "-DKB_SHADER_ROOT=${CMAKE_BINARY_DIR}/shaders"
         "-DKB_SHADER_PROFILES=$<JOIN:${KB_RENDERER_SHADER_PROFILES},$<SEMICOLON>>"
         "-DKB_SHADER_MANIFEST=$<JOIN:${KB_RENDERER_SHADER_MANIFEST},$<SEMICOLON>>"
         -P "${CMAKE_SOURCE_DIR}/CMake/ValidateBgfxShaderManifest.cmake"
-    DEPENDS kb_renderer_shaders
+    COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_MANIFEST_STAMP}"
+    DEPENDS
+        "${KB_RENDERER_SHADER_STAGE_STAMP}"
+        "${CMAKE_SOURCE_DIR}/CMake/ValidateBgfxShaderManifest.cmake"
     COMMENT "Validate bgfx shader manifest variants"
     VERBATIM
+)
+
+add_custom_target(kb_renderer_shader_manifest ALL
+    DEPENDS "${KB_RENDERER_SHADER_MANIFEST_STAMP}"
 )
 
 add_dependencies(kb_renderer kb_renderer_shader_manifest)

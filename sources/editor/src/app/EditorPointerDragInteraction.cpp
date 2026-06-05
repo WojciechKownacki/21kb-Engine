@@ -11,6 +11,40 @@ void ApplyDragCursor() noexcept {
     SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32649)));
 }
 
+[[nodiscard]] RECT OverlayRect(int x, int y) noexcept {
+    return RECT{
+        .left = x + 6,
+        .top = y - 12,
+        .right = x + 264,
+        .bottom = y + 18,
+    };
+}
+
+void InvalidateDragOverlay(HWND sourceWindow, HWND mainWindow, const EditorPointerDragState& drag, int oldX, int oldY) noexcept {
+    if (sourceWindow == nullptr || mainWindow == nullptr) {
+        return;
+    }
+    if (sourceWindow != mainWindow) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
+        return;
+    }
+
+    RECT dirty = OverlayRect(oldX, oldY);
+    const RECT current = OverlayRect(drag.x, drag.y);
+    UnionRect(&dirty, &dirty, &current);
+    InflateRect(&dirty, 2, 2);
+    InvalidateRect(mainWindow, &dirty, FALSE);
+}
+
+[[nodiscard]] HWND ResolveDropWindow(HWND sourceWindow, HWND mainWindow, const EditorFloatingWindowManager& floatingWindows, POINT screenPoint) noexcept {
+    HWND window = WindowFromPoint(screenPoint);
+    const EditorFloatingWindowQueries floatingQueries = floatingWindows.Queries();
+    while (window != nullptr && window != mainWindow && !floatingQueries.IsFloatingWindow(window)) {
+        window = GetParent(window);
+    }
+    return window != nullptr ? window : sourceWindow;
+}
+
 } // namespace
 
 void EditorPointerDragInteraction::CaptureIfActive(HWND messageWindow, const EditorPointerDragState& drag) noexcept {
@@ -23,14 +57,9 @@ bool EditorPointerDragInteraction::Move(HWND sourceWindow, HWND mainWindow, int 
     if (!drag.Potential()) {
         return false;
     }
-    if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
-        drag.Clear();
-        if (GetCapture() == sourceWindow) {
-            ReleaseCapture();
-        }
-        return false;
-    }
 
+    const int oldX = drag.x;
+    const int oldY = drag.y;
     drag.x = x;
     drag.y = y;
     if (!drag.dragging) {
@@ -43,7 +72,7 @@ bool EditorPointerDragInteraction::Move(HWND sourceWindow, HWND mainWindow, int 
     }
 
     ApplyDragCursor();
-    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, sourceWindow);
+    InvalidateDragOverlay(sourceWindow, mainWindow, drag, oldX, oldY);
     return true;
 }
 
@@ -61,12 +90,18 @@ bool EditorPointerDragInteraction::Complete(
         return false;
     }
 
-    drag.x = x;
-    drag.y = y;
+    POINT screenPoint{ x, y };
+    ClientToScreen(sourceWindow, &screenPoint);
+    HWND dropWindow = ResolveDropWindow(sourceWindow, mainWindow, floatingWindows, screenPoint);
+    POINT dropPoint = screenPoint;
+    ScreenToClient(dropWindow, &dropPoint);
+
+    drag.x = dropPoint.x;
+    drag.y = dropPoint.y;
 
     bool handledDrop = false;
     if (drag.Active()) {
-        handledDrop = EditorPointerDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag);
+        handledDrop = EditorPointerDropHandler::Drop(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
     }
 
     drag.Clear();

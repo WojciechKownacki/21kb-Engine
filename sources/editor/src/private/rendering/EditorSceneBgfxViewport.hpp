@@ -77,6 +77,7 @@ public:
 private:
     struct HostSurface {
         HWND host = nullptr;
+        std::uint64_t key = 0;
         HWND window = nullptr;
         RECT rect{};
         RECT layoutBounds{};
@@ -88,8 +89,8 @@ private:
     class HostSurfaceStore {
     public:
         void Clear() noexcept;
-        [[nodiscard]] HostSurface* Ensure(HWND host);
-        [[nodiscard]] HostSurface* Find(HWND host) noexcept;
+        [[nodiscard]] HostSurface* Ensure(HWND host, std::uint64_t key);
+        [[nodiscard]] HostSurface* Find(HWND host, std::uint64_t key) noexcept;
         [[nodiscard]] HostSurface* FindByWindow(HWND window) noexcept;
         void MarkHostNotPresented(HWND host) noexcept;
         [[nodiscard]] bool HasVisibleUnpresentedForHost(HWND host) const noexcept;
@@ -144,6 +145,7 @@ private:
 
     struct PendingPresentBatch {
         HWND host = nullptr;
+        std::uint64_t viewportKey = 0;
         RECT surfaceRect{};
         std::vector<const PendingPresent*> presents;
     };
@@ -153,7 +155,7 @@ private:
         [[nodiscard]] static std::vector<PendingPresentBatch> Build(std::span<const PendingPresent> pendingPresents);
 
     private:
-        [[nodiscard]] static PendingPresentBatch* FindBatch(std::vector<PendingPresentBatch>& batches, HWND host) noexcept;
+        [[nodiscard]] static PendingPresentBatch* FindBatch(std::vector<PendingPresentBatch>& batches, HWND host, std::uint64_t viewportKey) noexcept;
     };
 
     class PendingPaintSubmitter {
@@ -175,11 +177,19 @@ private:
     public:
         PendingSubmissionBuilder() = delete;
 
-        [[nodiscard]] static bool Build(const PendingPresent& present, const HostSurface& surface, render::Renderer::SceneFrameSubmission& submission);
+        [[nodiscard]] static bool Build(
+            const PendingPresent& present,
+            const HostSurface& surface,
+            bool clearTarget,
+            render::Renderer::SceneFrameSubmission& submission);
 
     private:
         [[nodiscard]] static bool EnsureSessionTargets(ViewportSession& session, std::uint32_t renderWidth, std::uint32_t renderHeight);
-        [[nodiscard]] static render::RenderSceneSubmitDesc BuildSubmitDesc(const PendingPresent& present, const HostSurface& surface, const ViewportSession& session);
+        [[nodiscard]] static render::RenderSceneSubmitDesc BuildSubmitDesc(
+            const PendingPresent& present,
+            const HostSurface& surface,
+            const ViewportSession& session,
+            bool clearTarget);
         [[nodiscard]] static render::RenderViewportRect OutputRectFor(const PendingPresent& present, const HostSurface& surface) noexcept;
         [[nodiscard]] static std::span<const std::uint64_t> SelectedEntitySpan(const ViewportSession& session) noexcept;
     };
@@ -200,8 +210,8 @@ private:
     [[nodiscard]] ViewportSession* EnsureSession(HWND host, std::uint64_t key);
     [[nodiscard]] ViewportSession* FindSession(HWND host, std::uint64_t key) noexcept;
     [[nodiscard]] ViewportSession* FindSessionByKey(std::uint64_t key) noexcept;
-    [[nodiscard]] HostSurface* EnsureHostSurface(HWND host);
-    [[nodiscard]] HostSurface* FindHostSurface(HWND host) noexcept;
+    [[nodiscard]] HostSurface* EnsureHostSurface(HWND host, std::uint64_t key);
+    [[nodiscard]] HostSurface* FindHostSurface(HWND host, std::uint64_t key) noexcept;
     [[nodiscard]] bool EnsureWindowClass();
     [[nodiscard]] bool EnsureContextWindow();
     [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent* const> presents);

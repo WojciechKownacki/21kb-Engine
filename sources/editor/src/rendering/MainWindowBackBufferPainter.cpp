@@ -43,7 +43,7 @@ struct MainWindowPaintContext {
             continue;
         }
         const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-        if (panel == nullptr || (panel->kind != DockPanelKind::Scene && panel->kind != DockPanelKind::Game)) {
+        if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
             continue;
         }
         const RECT content = ToRect(panelLayout.content);

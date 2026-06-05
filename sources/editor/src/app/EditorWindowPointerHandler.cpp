@@ -71,13 +71,9 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
     const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<EditorResolvedPanelContent> scenePanelContent =
         EditorPanelContentResolver::ResolvePanel(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
-    const std::optional<EditorResolvedPanelContent> gamePanelContent =
-        EditorPanelContentResolver::ResolvePanel(DockPanelKind::Game, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     std::optional<EditorResolvedPanelContent> sceneContent{};
     if (scenePanelContent.has_value() && PointInRect(scenePanelContent->content, x, y)) {
         sceneContent = scenePanelContent;
-    } else if (gamePanelContent.has_value() && PointInRect(gamePanelContent->content, x, y)) {
-        sceneContent = gamePanelContent;
     }
     const bool inAssetPanel = assetContent.has_value() && PointInRect(*assetContent, x, y);
     const bool inHierarchyPanel = hierarchyContent.has_value() && PointInRect(*hierarchyContent, x, y);
@@ -155,12 +151,13 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
 
-    if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    if (leftButtonDown && pointerDrag_.Potential() && EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
+        sceneViewport_.RequestPresent();
         return 0;
     }
-    if (EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
-        sceneViewport_.RequestPresent();
+
+    if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {
@@ -173,16 +170,17 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
 
-    if (EditorAssetBrowserPointerHandler::HandlePointerUp(sceneContext_)) {
-        shellInteraction_.ClearPressedTransport();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    shellInteraction_.ClearPressedTransport();
+    if (pointerDrag_.Potential()) {
+        const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
+        if (handledDrop) {
+            sceneViewport_.RequestPresent();
+        }
         return 0;
     }
-    shellInteraction_.ClearPressedTransport();
 
-    const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
-    if (handledDrop) {
-        sceneViewport_.RequestPresent();
+    if (EditorAssetBrowserPointerHandler::HandlePointerUp(sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
 
