@@ -67,11 +67,30 @@ void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) 
     }
 }
 
+bool EditorSceneBgfxViewport::HostSurfaceStore::HasVisibleUnpresentedForHost(HWND host) const noexcept {
+    for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
+        if (surface != nullptr &&
+            surface->host == host &&
+            !surface->presentedInCurrentPaint &&
+            surface->window != nullptr &&
+            IsWindow(surface->window) != 0 &&
+            IsWindowVisible(surface->window) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexcept {
     if (surface.window != nullptr && IsWindow(surface.window) != 0) {
         ShowWindow(surface.window, SW_HIDE);
     }
+    if (surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
+        InvalidateRect(surface.host, &surface.rect, FALSE);
+    }
     surface.presentedInCurrentPaint = false;
+    surface.layoutBounds = {};
+    surface.hasLayoutBounds = false;
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::HideUnpresentedForHost(HWND host) noexcept {
@@ -91,6 +110,8 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexc
     surface->window = nullptr;
     surface->rect = {};
     surface->presentedInCurrentPaint = false;
+    surface->layoutBounds = {};
+    surface->hasLayoutBounds = false;
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::ShutdownPresentTargets() noexcept {
@@ -115,20 +136,24 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
         }
         surface->rect = {};
         surface->presentedInCurrentPaint = false;
+        surface->layoutBounds = {};
+        surface->hasLayoutBounds = false;
     }
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->presentedInCurrentPaint && surface->window != nullptr && IsWindow(surface->window) != 0) {
-            SetWindowPos(
-                surface->window,
-                HWND_TOP,
-                surface->rect.left,
-                surface->rect.top,
-                static_cast<int>(RectWidth(surface->rect)),
-                static_cast<int>(RectHeight(surface->rect)),
-                SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOREDRAW | SWP_SHOWWINDOW);
+            if (IsWindowVisible(surface->window) == 0) {
+                SetWindowPos(
+                    surface->window,
+                    HWND_BOTTOM,
+                    surface->rect.left,
+                    surface->rect.top,
+                    static_cast<int>(RectWidth(surface->rect)),
+                    static_cast<int>(RectHeight(surface->rect)),
+                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+            }
         }
     }
 }

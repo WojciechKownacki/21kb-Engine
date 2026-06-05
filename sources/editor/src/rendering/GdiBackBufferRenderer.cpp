@@ -23,6 +23,16 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
     GetClientRect(window, &client);
     const int width = client.right - client.left;
     const int height = client.bottom - client.top;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const RECT paintRect = paintScope.PaintRect();
+    const int paintWidth = paintRect.right - paintRect.left;
+    const int paintHeight = paintRect.bottom - paintRect.top;
+    if (paintWidth <= 0 || paintHeight <= 0) {
+        return;
+    }
 
     ScopedCompatibleDc memoryDc(targetDc);
     ScopedBitmap backBuffer(targetDc, width, height);
@@ -32,6 +42,7 @@ void GdiBackBufferRenderer::Paint(HWND window, GdiBackBufferPaintFn paint, void*
             GdiBackBufferPaintContext{
                 .dc = memoryDc.handle,
                 .client = client,
+                .dirty = paintRect,
                 .width = width,
                 .height = height,
             },

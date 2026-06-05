@@ -22,7 +22,7 @@ public:
         const DockPanel& panel,
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext,
-        EditorSceneBgfxViewport& sceneViewport,
+        EditorSceneBgfxViewport* sceneViewport,
         HWND sceneViewportHost) const;
 #endif
 };

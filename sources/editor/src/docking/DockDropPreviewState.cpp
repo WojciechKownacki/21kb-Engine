@@ -43,7 +43,11 @@ bool DockDropPreviewState::SamePreview(const std::optional<DockDropPreview>& lhs
         return true;
     }
 
-    return lhs->zone == rhs->zone && lhs->kind == rhs->kind && lhs->leafId == rhs->leafId && SameRect(lhs->rect, rhs->rect);
+    return lhs->zone == rhs->zone &&
+           lhs->kind == rhs->kind &&
+           lhs->leafId == rhs->leafId &&
+           lhs->tabInsertionIndex == rhs->tabInsertionIndex &&
+           SameRect(lhs->rect, rhs->rect);
 }
 
 bool DockDropPreviewState::SameRect(const DockRect& lhs, const DockRect& rhs) noexcept {

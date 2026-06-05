@@ -29,6 +29,7 @@ public:
     static void DrawTabText(HDC dc, RECT rect, const char* text, COLORREF color);
     static void DrawCenteredText(HDC dc, RECT rect, const char* text, COLORREF color);
     static void DrawSharpFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border);
+    static void DrawRaisedFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF highlight, COLORREF shadow);
 };
 
 #endif

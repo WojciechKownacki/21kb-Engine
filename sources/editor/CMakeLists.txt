@@ -475,9 +475,19 @@ add_executable(kb_editor
     ../../third_party/heroicons/optimized/24/outline/eye.svg
     ../../third_party/heroicons/optimized/24/outline/magnifying-glass.svg
     ../../third_party/heroicons/optimized/24/outline/plus.svg
+    ../../third_party/heroicons/optimized/16/solid/adjustments-horizontal.svg
+    ../../third_party/heroicons/optimized/16/solid/command-line.svg
     ../../third_party/heroicons/optimized/16/solid/eye.svg
+    ../../third_party/heroicons/optimized/16/solid/list-bullet.svg
     ../../third_party/heroicons/optimized/24/solid/cube.svg
     ../../third_party/heroicons/optimized/24/solid/folder.svg
+    ../../third_party/lucide/LICENSE
+    ../../third_party/lucide/README.third_party.md
+    ../../third_party/lucide/icons/gamepad-2.svg
+    ../../third_party/lucide/icons/pause.svg
+    ../../third_party/lucide/icons/play.svg
+    ../../third_party/lucide/icons/square.svg
+    ../../third_party/lucide/icons/step-forward.svg
 )
 
 target_include_directories(kb_editor
@@ -493,6 +503,20 @@ set_target_properties(kb_editor PROPERTIES
 add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kb_editor>" "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/kb_editor.exe"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVuSans.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
     VERBATIM
 )
 

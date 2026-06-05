@@ -36,7 +36,21 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }.Paint(messageWindow);
         return 0;
     case WM_SIZE:
-        return EditorWindowResizeHandler::Handle(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows);
+        context_.sceneViewport.RequestPresent();
+        return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows);
+    case WM_EXITSIZEMOVE:
+        context_.sceneViewport.RequestPresent();
+        return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow);
+    case WM_CANCELMODE:
+        context_.dockController.CancelDrag();
+        context_.pointerDrag.Clear();
+        context_.shellInteraction.ClearPressedTransport();
+        context_.sceneViewport.RequestPresent();
+        return 0;
+    case WM_CAPTURECHANGED:
+        context_.dockController.HandleCaptureChanged(reinterpret_cast<HWND>(lparam));
+        context_.sceneViewport.RequestPresent();
+        return 0;
     case WM_CHAR:
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
             return 0;

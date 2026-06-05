@@ -1,7 +1,6 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #if defined(_WIN32)
-#include "app/EditorWindowInvalidator.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 
 #include <optional>
@@ -16,6 +15,37 @@ namespace {
         .right = rect.x + rect.width,
         .bottom = rect.y + rect.height,
     };
+}
+
+void IncludeRect(RECT& target, const RECT& source) noexcept {
+    RECT combined{};
+    UnionRect(&combined, &target, &source);
+    target = combined;
+}
+
+[[nodiscard]] RECT MenuInvalidationRect(const DockLayout& layout, EditorMenuCommand openMenu) noexcept {
+    RECT rect = ToRect(layout.menu);
+    const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(rect, openMenu);
+    if (openMenu != EditorMenuCommand::None) {
+        IncludeRect(rect, menu.dropdown);
+    }
+    return rect;
+}
+
+void InvalidateMainRect(HWND mainWindow, const RECT& rect) noexcept {
+    if (mainWindow != nullptr) {
+        InvalidateRect(mainWindow, &rect, FALSE);
+    }
+}
+
+void InvalidateMenuChange(HWND mainWindow, const DockLayout& layout, EditorMenuCommand oldMenu, EditorMenuCommand newMenu) noexcept {
+    RECT rect = MenuInvalidationRect(layout, oldMenu);
+    IncludeRect(rect, MenuInvalidationRect(layout, newMenu));
+    InvalidateMainRect(mainWindow, rect);
+}
+
+void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
+    InvalidateMainRect(mainWindow, ToRect(layout.toolbar));
 }
 
 [[nodiscard]] std::optional<DockLayout> ResolveMainLayout(HWND mainWindow, EditorDockModel& dockModel, const EditorMetrics& metrics) {
@@ -38,16 +68,16 @@ namespace {
 
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
-    HWND messageWindow,
     int x,
     int y,
     const DockLayout& layout,
     EditorShellInteractionState& shellInteraction) {
     const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction.OpenMenu());
     if (const EditorMenuCommand hitMenu = EditorToolbarRenderer::HitTestMenu(menu, x, y); hitMenu != EditorMenuCommand::None) {
+        const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         static_cast<void>(shellInteraction.SetHoveredMenu(hitMenu));
         static_cast<void>(shellInteraction.SetOpenMenu(hitMenu));
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+        InvalidateMenuChange(mainWindow, layout, oldMenu, hitMenu);
         return true;
     }
 
@@ -56,13 +86,15 @@ namespace {
     }
 
     if (EditorToolbarRenderer::HitTestMenuRow(menu, x, y).has_value()) {
+        const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         shellInteraction.CloseMenu();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+        InvalidateMenuChange(mainWindow, layout, oldMenu, EditorMenuCommand::None);
         return true;
     }
 
+    const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
     shellInteraction.CloseMenu();
-    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+    InvalidateMenuChange(mainWindow, layout, oldMenu, EditorMenuCommand::None);
     return false;
 }
 
@@ -109,7 +141,6 @@ struct TransportClickResult {
 
 [[nodiscard]] bool HandleTransportLeftButtonDown(
     HWND mainWindow,
-    HWND messageWindow,
     int x,
     int y,
     const DockLayout& layout,
@@ -127,7 +158,7 @@ struct TransportClickResult {
 
     const TransportClickResult result = ExecuteTransportCommand(transport, playMode);
     if (result.invalidates) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+        InvalidateToolbar(mainWindow, layout);
     }
     return result.handled;
 }
@@ -152,11 +183,11 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, messageWindow, x, y, *layout, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, shellInteraction)) {
         return true;
     }
 
-    return HandleTransportLeftButtonDown(mainWindow, messageWindow, x, y, *layout, playMode, shellInteraction);
+    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, playMode, shellInteraction);
 }
 
 bool EditorWindowToolbarPointerHandler::HandleMouseMove(
@@ -183,7 +214,9 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     changed = shellInteraction.SetHoveredMenuRow(EditorToolbarRenderer::HitTestMenuRow(menu, x, y)) || changed;
     changed = shellInteraction.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar)), x, y)) || changed;
     if (changed) {
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow, messageWindow);
+        RECT rect = MenuInvalidationRect(*layout, shellInteraction.OpenMenu());
+        IncludeRect(rect, ToRect(layout->toolbar));
+        InvalidateMainRect(mainWindow, rect);
     }
     return changed;
 }

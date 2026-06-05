@@ -113,6 +113,7 @@ struct DockDropPreview {
     DockDropPreviewKind kind = DockDropPreviewKind::Glow;
     std::uint32_t leafId = 0;
     DockRect rect{};
+    std::uint32_t tabInsertionIndex = 0;
 };
 
 } // namespace kb::editor

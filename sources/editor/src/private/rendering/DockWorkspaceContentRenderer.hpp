@@ -16,7 +16,7 @@ namespace kb::editor {
 class DockWorkspaceContentRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) const;
+    void Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport* sceneViewport) const;
 #endif
 };
 

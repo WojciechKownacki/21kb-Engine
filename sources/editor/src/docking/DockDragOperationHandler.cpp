@@ -19,7 +19,7 @@ namespace {
 
 } // namespace
 
-void DockDragOperationHandler::Move(
+bool DockDragOperationHandler::Move(
     DockPointerDrag& drag,
     HWND eventWindow,
     int x,
@@ -31,34 +31,35 @@ void DockDragOperationHandler::Move(
     std::optional<DockDropPreview>& dropPreview) {
     if (IsMainWindow(drag.sourceWindow, mainWindow) && drag.kind == DockHitKind::Splitter) {
         DockSplitterDragHandler::Move(drag, x, y, mainWindow, dockModel, metrics);
-        return;
+        return true;
     }
 
     if (drag.kind != DockHitKind::Tab || drag.panelId == 0) {
-        return;
+        return false;
     }
 
     if (!TabDragThresholdReached(drag, x, y)) {
-        return;
+        return false;
     }
 
     POINT screen{ x, y };
     ClientToScreen(eventWindow, &screen);
 
     if (DockDockedTabDragHandler::Reorder(drag, x, y, mainWindow, dockModel, metrics)) {
-        return;
+        return true;
     }
 
-    DockFloatingDragOperation::EnsureDetached(drag, screen, dockModel, floatingWindows);
+    DockFloatingDragOperation::EnsureDetached(drag, screen, dockModel, floatingWindows, metrics);
     if (!drag.detached) {
-        return;
+        return false;
     }
 
     DockFloatingDragOperation::MoveWindow(drag, screen, dockModel, floatingWindows);
     DockDropPreviewState::Update(screen, mainWindow, dockModel, metrics, dropPreview);
+    return true;
 }
 
-void DockDragOperationHandler::Complete(
+bool DockDragOperationHandler::Complete(
     const DockPointerDrag& drag,
     HWND releaseWindow,
     HWND mainWindow,
@@ -67,6 +68,7 @@ void DockDragOperationHandler::Complete(
     const EditorMetrics& metrics,
     std::optional<DockDropPreview>& dropPreview) {
     DockDragCompletionHandler::Complete(drag, releaseWindow, mainWindow, dockModel, floatingWindows, metrics, dropPreview);
+    return drag.kind == DockHitKind::Splitter || drag.detached;
 }
 
 bool DockDragOperationHandler::IsMainWindow(HWND candidate, HWND mainWindow) noexcept {

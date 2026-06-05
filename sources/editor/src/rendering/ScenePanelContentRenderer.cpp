@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <optional>
 
 namespace kb::editor {
@@ -25,34 +24,6 @@ namespace {
 
 [[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
-}
-
-[[nodiscard]] RECT CenteredRectFor(const RECT& bounds, std::uint32_t renderWidth, std::uint32_t renderHeight, EditorViewportFitMode fitMode) noexcept {
-    const std::uint32_t boundsWidth = RectWidth(bounds);
-    const std::uint32_t boundsHeight = RectHeight(bounds);
-    if (boundsWidth == 0U || boundsHeight == 0U || renderWidth == 0U || renderHeight == 0U) {
-        return bounds;
-    }
-
-    const double scaleX = static_cast<double>(boundsWidth) / static_cast<double>(renderWidth);
-    const double scaleY = static_cast<double>(boundsHeight) / static_cast<double>(renderHeight);
-    double scale = std::min(scaleX, scaleY);
-    if (fitMode == EditorViewportFitMode::OneToOne) {
-        scale = 1.0;
-    } else if (fitMode == EditorViewportFitMode::Fill) {
-        scale = std::max(scaleX, scaleY);
-    }
-
-    const LONG width = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderWidth) * scale)));
-    const LONG height = std::max<LONG>(1, static_cast<LONG>(std::lround(static_cast<double>(renderHeight) * scale)));
-    const LONG centerX = bounds.left + static_cast<LONG>(boundsWidth / 2U);
-    const LONG centerY = bounds.top + static_cast<LONG>(boundsHeight / 2U);
-    return RECT{
-        .left = centerX - width / 2,
-        .top = centerY - height / 2,
-        .right = centerX - width / 2 + width,
-        .bottom = centerY - height / 2 + height,
-    };
 }
 
 [[nodiscard]] float Aspect(std::uint32_t width, std::uint32_t height) noexcept {
@@ -218,32 +189,6 @@ struct CameraBasis {
     };
 }
 
-void DrawSafeAreaOverlay(HDC dc, const RECT& destination, const EditorViewportProfile& profile, const EditorTheme& theme) {
-    if (!profile.devicePreview || profile.width == 0U || profile.height == 0U) {
-        return;
-    }
-
-    const double scaleX = static_cast<double>(RectWidth(destination)) / static_cast<double>(profile.width);
-    const double scaleY = static_cast<double>(RectHeight(destination)) / static_cast<double>(profile.height);
-    RECT safe = destination;
-    safe.left += static_cast<LONG>(std::lround(static_cast<double>(profile.safeArea.left) * scaleX));
-    safe.top += static_cast<LONG>(std::lround(static_cast<double>(profile.safeArea.top) * scaleY));
-    safe.right -= static_cast<LONG>(std::lround(static_cast<double>(profile.safeArea.right) * scaleX));
-    safe.bottom -= static_cast<LONG>(std::lround(static_cast<double>(profile.safeArea.bottom) * scaleY));
-    if (safe.left >= safe.right || safe.top >= safe.bottom) {
-        return;
-    }
-
-    GdiDrawing::FillRectAlpha(dc, destination, GdiDrawing::ToColorRef(theme.background), 34);
-    HPEN pen = CreatePen(PS_SOLID, 1, GdiDrawing::ToColorRef(theme.accent));
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-    Rectangle(dc, safe.left, safe.top, safe.right, safe.bottom);
-    SelectObject(dc, oldBrush);
-    SelectObject(dc, oldPen);
-    DeleteObject(pen);
-}
-
 } // namespace
 
 void ScenePanelContentRenderer::Paint(
@@ -252,24 +197,22 @@ void ScenePanelContentRenderer::Paint(
     const DockPanel& panel,
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
-    EditorSceneBgfxViewport& sceneViewport,
+    EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content);
-    const EditorViewportProfile profile = viewportState.Profile();
-    const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
-    const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
-    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
-    if (sceneViewportHost != nullptr) {
-        sceneViewport.Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
-    } else {
-        sceneViewport.Present(dc, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
+    if (sceneViewport == nullptr) {
+        return;
     }
 
-    const RECT destination = CenteredRectFor(sceneRects.renderArea, renderWidth, renderHeight, viewportState.FitMode());
-    DrawSafeAreaOverlay(dc, destination, profile, theme);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
+    if (sceneViewportHost != nullptr) {
+        sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
+    } else {
+        sceneViewport->Present(dc, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
+    }
 }
 
 } // namespace kb::editor
