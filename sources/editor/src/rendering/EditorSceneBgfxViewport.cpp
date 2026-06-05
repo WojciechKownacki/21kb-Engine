@@ -116,45 +116,27 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
     }
 
     hostSurfaceStore_.MarkHostNotPresented(parent);
-    HostSurface* surface = hostSurfaceStore_.Find(parent);
-    if (surface == nullptr || surface->window == nullptr || IsWindow(surface->window) == 0) {
-        return;
-    }
-
-    RECT layoutBounds{};
-    bool hasLayoutBounds = false;
     for (const HostSurfaceLayout& layout : layouts) {
-        const RECT bounds = ClipRectToClient(parent, layout.bounds);
-        if (RectWidth(bounds) == 0U || RectHeight(bounds) == 0U) {
+        const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
+        if (RectWidth(layoutBounds) == 0U || RectHeight(layoutBounds) == 0U) {
             continue;
         }
 
-        if (hasLayoutBounds) {
-            UnionRect(&layoutBounds, &layoutBounds, &bounds);
-        } else {
-            layoutBounds = bounds;
-            hasLayoutBounds = true;
+        HostSurface* surface = hostSurfaceStore_.Find(parent, layout.viewportKey);
+        if (surface == nullptr || surface->window == nullptr || IsWindow(surface->window) == 0) {
+            continue;
         }
-    }
 
-    if (!hasLayoutBounds) {
-        return;
-    }
+        const bool layoutChanged = !surface->hasLayoutBounds || !RectEquals(surface->layoutBounds, layoutBounds);
+        if (layoutChanged) {
+            surface->layoutBounds = layoutBounds;
+            surface->hasLayoutBounds = true;
+            RequestPresent();
+        }
 
-    if (!surface->hasLayoutBounds || !RectEquals(surface->layoutBounds, layoutBounds)) {
-        surface->layoutBounds = layoutBounds;
-        surface->hasLayoutBounds = true;
-        RequestPresent();
-    }
-
-    RECT visibleRect{};
-    const bool outsideLayout = IntersectRect(&visibleRect, &surface->rect, &layoutBounds) == 0;
-    if (outsideLayout) {
-        RequestPresent();
-    } else if (IsWindowVisible(surface->window) == 0) {
-        RequestPresent();
-        surface->presentedInCurrentPaint = true;
-    } else {
+        if (IsWindowVisible(surface->window) == 0) {
+            RequestPresent();
+        }
         surface->presentedInCurrentPaint = true;
     }
 
@@ -253,12 +235,12 @@ EditorSceneBgfxViewport::ViewportSession* EditorSceneBgfxViewport::FindSessionBy
     return sessionStore_.FindByKey(key);
 }
 
-EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::EnsureHostSurface(HWND host) {
-    return hostSurfaceStore_.Ensure(host);
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::EnsureHostSurface(HWND host, std::uint64_t key) {
+    return hostSurfaceStore_.Ensure(host, key);
 }
 
-EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::FindHostSurface(HWND host) noexcept {
-    return hostSurfaceStore_.Find(host);
+EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::FindHostSurface(HWND host, std::uint64_t key) noexcept {
+    return hostSurfaceStore_.Find(host, key);
 }
 
 bool EditorSceneBgfxViewport::EnsureWindowClass() {
@@ -351,7 +333,7 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             rect.top,
             static_cast<int>(RectWidth(rect)),
             static_cast<int>(RectHeight(rect)),
-            SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS);
     }
 
     std::vector<RECT> presentRects;
@@ -428,7 +410,7 @@ void EditorSceneBgfxViewport::HideSession(HWND host, std::uint64_t key) noexcept
     ViewportSession* session = FindSession(host, key);
     if (session != nullptr) {
         session->presentedInCurrentPaint = false;
-        if (HostSurface* surface = FindHostSurface(session->host); surface != nullptr) {
+        if (HostSurface* surface = FindHostSurface(session->host, session->key); surface != nullptr) {
             HideHostSurface(*surface);
         }
     }
@@ -505,7 +487,7 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     pendingPresents_.push_back(PendingPresent{
         .session = &session,
         .host = session.host,
-        .surfaceRect = destination,
+        .surfaceRect = clippedPanel,
         .destination = destination,
         .scene = &scene,
         .settings = settings,
@@ -539,9 +521,6 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         EndPaint(window, &paint);
         if (viewport != nullptr) {
             viewport->RequestPresent();
-            if (HWND parent = GetParent(window); parent != nullptr) {
-                InvalidateRect(parent, nullptr, FALSE);
-            }
         }
         return 0;
     }

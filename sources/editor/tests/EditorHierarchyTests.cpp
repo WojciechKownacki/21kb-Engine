@@ -2,15 +2,24 @@
 #include "EditorTestSuites.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabInstance.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorHierarchySearchMatcher.hpp"
+#include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 
 #include <string>
+#include <filesystem>
+#include <optional>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -112,6 +121,93 @@ void RunRowBuilderCreationOrderTest() {
     kb::editor::tests::Require(names[2] == "Third", "Hierarchy row builder should put the newest root at the bottom");
 }
 
+void RunHierarchySelectionModelTest() {
+    const std::vector<kb::editor::EditorHierarchyRow> rows{
+        kb::editor::EditorHierarchyRow{ .entity = kb::scene::SceneEntity{ 1U }, .name = "A" },
+        kb::editor::EditorHierarchyRow{ .entity = kb::scene::SceneEntity{ 2U }, .name = "B" },
+        kb::editor::EditorHierarchyRow{ .entity = kb::scene::SceneEntity{ 3U }, .name = "C" },
+    };
+    kb::editor::EditorHierarchySelectionState selection;
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, false, false), "Hierarchy single selection failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 1, "Single selection should select exactly one entity");
+    kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Single selection did not select the clicked row");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 1, true, false), "Hierarchy Ctrl selection failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 2, "Ctrl selection should add a row");
+    kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Ctrl selection lost the previous row");
+    kb::editor::tests::Require(selection.IsSelected(rows[1].entity), "Ctrl selection did not add the clicked row");
+    kb::editor::tests::Require(selection.Primary() == rows[1].entity, "Ctrl selection should make the clicked row primary");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, true, false), "Hierarchy Ctrl toggle failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 1, "Ctrl toggle should remove an already selected row");
+    kb::editor::tests::Require(!selection.IsSelected(rows[0].entity), "Ctrl toggle left the toggled row selected");
+    kb::editor::tests::Require(selection.IsSelected(rows[1].entity), "Ctrl toggle removed the wrong row");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, false, false), "Hierarchy range anchor selection failed");
+    kb::editor::tests::Require(selection.SelectRow(rows, 2, false, true), "Hierarchy Shift range selection failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 3, "Shift range should select every row between anchor and clicked row");
+    kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Shift range missed the anchor row");
+    kb::editor::tests::Require(selection.IsSelected(rows[1].entity), "Shift range missed the middle row");
+    kb::editor::tests::Require(selection.IsSelected(rows[2].entity), "Shift range missed the clicked row");
+    kb::editor::tests::Require(selection.Primary() == rows[2].entity, "Shift range should make the clicked row primary");
+}
+
+void RunRowBuilderMarksOnlyPrefabRootsTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Prefab Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Prefab Child",
+        .parentNode = rootNode,
+    });
+
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("HierarchyPrefab", std::move(prefab));
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(handle);
+    kb::editor::tests::Require(!instance.Empty(), "Hierarchy prefab test setup failed to instantiate prefab");
+    kb::editor::tests::Require(scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)).IsValid(), "Prefab root should own the root prefab instance handle");
+    kb::editor::tests::Require(!scene.Prefabs().RootInstance(instance.ObjectAt(childNode)).IsValid(), "Prefab child must not own a root prefab instance handle");
+    std::uint32_t childContainingNode = 99;
+    kb::editor::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(childNode), childContainingNode).IsValid(), "Prefab child should remain tracked as a node inside the parent prefab instance");
+    kb::editor::tests::Require(childContainingNode == childNode, "Prefab child should map to its prefab node index, not to a separate prefab root");
+
+    const std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    kb::editor::tests::Require(rows.size() == 2, "Hierarchy should expose prefab root and child rows");
+    kb::editor::tests::Require(rows[0].prefabRoot, "Hierarchy prefab root row should render with prefab styling");
+    kb::editor::tests::Require(!rows[1].prefabRoot, "Hierarchy prefab child row should not render as a prefab root");
+}
+
+void RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_editor_hierarchy_dropped_prefab_project";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "DroppedPrefab.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove_all(projectRoot, removeError);
+    std::filesystem::create_directories(prefabPath.parent_path(), removeError);
+    kb::editor::tests::Require(!removeError, "Dropped prefab test setup failed to create asset folder");
+
+    kb::scene::Scene source;
+    kb::scene::ScenePrefab prefab;
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Dropped Prefab Root" }));
+    const kb::scene::ScenePrefabHandle handle = source.Prefabs().Register("DroppedPrefab", std::move(prefab));
+    kb::editor::tests::Require(handle.IsValid(), "Dropped prefab test setup failed to register prefab");
+    kb::editor::tests::Require(source.Prefabs().Save(handle, prefabPath), "Dropped prefab test setup failed to save prefab asset");
+
+    kb::scene::Scene scene;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Dropped prefab test setup failed to mount project assets");
+    const std::optional<kb::scene::SceneEntity> entity = kb::editor::EditorScenePrefabActions::InstantiateAsset(scene, {}, "/Game/Prefabs/DroppedPrefab.kbprefab", {});
+    kb::editor::tests::Require(entity.has_value() && entity->IsValid(), "Dropping a prefab asset into hierarchy should create a scene entity");
+
+    std::uint32_t nodeIndex = 99;
+    kb::editor::tests::Require(scene.Prefabs().ContainingInstance(*entity, nodeIndex).IsValid(), "Dropped prefab asset should create a tracked prefab instance");
+    kb::editor::tests::Require(nodeIndex == 0, "Dropped prefab root should map to prefab node 0");
+
+    const std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    kb::editor::tests::Require(rows.size() == 1, "Dropped prefab should add one hierarchy row");
+    kb::editor::tests::Require(rows[0].prefabRoot, "Dropped prefab hierarchy row should render as a prefab root");
+
+    std::filesystem::remove_all(projectRoot, removeError);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -123,6 +219,9 @@ void RunEditorHierarchyTests() {
     RunRowBuilderCollapsedTreeTest();
     RunRowBuilderFilteredTreeTest();
     RunRowBuilderCreationOrderTest();
+    RunHierarchySelectionModelTest();
+    RunRowBuilderMarksOnlyPrefabRootsTest();
+    RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
 }
 
 } // namespace kb::editor::tests

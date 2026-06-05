@@ -25,7 +25,7 @@ void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client
     FloatingWindowControlRenderer{}.Paint(dc, client, theme, metrics);
 
     const ScopedGdiObject selectedBodyFont(dc, bodyFont.handle);
-    const bool viewportPanel = panel.kind == DockPanelKind::Scene || panel.kind == DockPanelKind::Game;
+    const bool viewportPanel = panel.kind == DockPanelKind::Scene;
     RECT content = viewportPanel ? panelRect : GdiDrawing::Inset(panelRect, metrics.panelPadding);
     content.top += metrics.tabStripHeight;
     PanelContentRenderer{}.Paint(dc, content, panelRect, client, panel, theme, metrics, sceneContext, true, sceneViewport, window);

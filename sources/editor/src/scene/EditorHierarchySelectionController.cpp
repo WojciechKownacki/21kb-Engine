@@ -20,7 +20,9 @@ bool EditorHierarchySelectionController::HandlePointerDown(
         return false;
     }
 
-    const bool handled = EditorHierarchyRowPicker::SelectAtContentPoint(*content, x, y, sceneContext);
+    const bool additive = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    const bool range = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    const bool handled = EditorHierarchyRowPicker::SelectAtContentPoint(*content, x, y, additive, range, sceneContext);
     if (handled) {
         SetFocus(sourceWindow);
     }

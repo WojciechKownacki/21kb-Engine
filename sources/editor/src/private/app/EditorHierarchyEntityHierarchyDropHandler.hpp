@@ -6,6 +6,8 @@
 #include "kb/editor/theme/EditorTheme.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <span>
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -20,7 +22,7 @@ class EditorHierarchyEntityHierarchyDropHandler {
 public:
     EditorHierarchyEntityHierarchyDropHandler() = delete;
 
-    [[nodiscard]] static bool Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, kb::scene::SceneEntity entity);
+    [[nodiscard]] static bool Drop(HWND sourceWindow, HWND mainWindow, int x, int y, const EditorDockModel& dockModel, const EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics, EditorSceneContext& sceneContext, std::span<const kb::scene::SceneEntity> entities);
 };
 
 #endif

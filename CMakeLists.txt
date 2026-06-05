@@ -5,10 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio")
-    list(APPEND CMAKE_VS_GLOBALS "TrackFileAccess=false")
-endif()
-
 include(CTest)
 include(FetchContent)
 

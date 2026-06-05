@@ -5,7 +5,6 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include "engine/scene/CameraComponent.hpp"
-#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 
@@ -13,7 +12,6 @@
 
 #include <algorithm>
 #include <array>
-#include <optional>
 
 namespace kb::editor {
 namespace {
@@ -120,71 +118,26 @@ struct CameraBasis {
         renderHeight);
 }
 
-[[nodiscard]] std::optional<kb::render::SceneRenderCamera> BuildSelectedCameraOverride(
-    const EditorSceneContext& sceneContext,
-    std::uint32_t renderWidth,
-    std::uint32_t renderHeight) {
-    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
-    if (!selected.IsValid()) {
-        return std::nullopt;
-    }
-
-    const kb::scene::CameraComponent* camera = sceneContext.Scene().Components().Cameras().TryGet(selected);
-    const kb::scene::TransformComponent* transform = sceneContext.Scene().Transforms().TryGet(selected);
-    if (camera == nullptr || transform == nullptr) {
-        return std::nullopt;
-    }
-
-    const kb::scene::Vec3 position = transform->worldDirty ? transform->localPosition : transform->worldPosition;
-    const kb::scene::Quat rotation = transform->worldDirty ? transform->localRotation : transform->worldRotation;
-    return BuildCamera(position, rotation, *camera, renderWidth, renderHeight);
-}
-
-[[nodiscard]] std::optional<kb::render::SceneRenderCamera> BuildCameraOverride(
-    const EditorSceneContext& sceneContext,
-    EditorViewportCameraMode mode,
-    std::uint32_t renderWidth,
-    std::uint32_t renderHeight) {
-    switch (mode) {
-    case EditorViewportCameraMode::GameCamera:
-        return std::nullopt;
-    case EditorViewportCameraMode::EditorCamera:
-        return BuildEditorCamera(renderWidth, renderHeight);
-    case EditorViewportCameraMode::OverrideCamera:
-        if (std::optional<kb::render::SceneRenderCamera> selected = BuildSelectedCameraOverride(sceneContext, renderWidth, renderHeight); selected.has_value()) {
-            return selected;
-        }
-        return BuildEditorCamera(renderWidth, renderHeight);
-    }
-    return std::nullopt;
-}
-
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildViewportPresentSettings(
     const EditorSceneContext& sceneContext,
     std::uint32_t panelId,
     DockPanelKind panelKind,
     const EditorViewportPreviewState& viewportState,
     const SceneViewportToolbarRects& sceneRects) {
+    static_cast<void>(panelKind);
     const EditorViewportProfile profile = viewportState.Profile();
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
-    const bool sceneView = panelKind == DockPanelKind::Scene;
-    std::optional<kb::render::SceneRenderCamera> cameraOverride;
-    if (sceneView) {
-        cameraOverride = BuildEditorCamera(renderWidth, renderHeight);
-    } else {
-        cameraOverride = BuildCameraOverride(sceneContext, EditorViewportCameraMode::GameCamera, renderWidth, renderHeight);
-    }
 
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
-        .cameraOverride = cameraOverride,
-        .selectedEntityIds = sceneView ? std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() } : std::array<std::uint64_t, 1U>{},
+        .cameraOverride = BuildEditorCamera(renderWidth, renderHeight),
+        .selectedEntityIds = std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() },
         .viewportKey = panelId,
-        .editorSceneOverlaysEnabled = sceneView,
+        .editorSceneOverlaysEnabled = true,
         .drawSafeArea = profile.devicePreview,
     };
 }

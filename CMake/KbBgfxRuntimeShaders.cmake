@@ -1,5 +1,6 @@
 function(_kb_ensure_bgfx_runtime_shaders_bundle_target)
-    if(TARGET kb_bgfx_runtime_shaders_bundle)
+    get_property(_existing_bundle_stamp GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP)
+    if(_existing_bundle_stamp)
         return()
     endif()
 
@@ -11,8 +12,11 @@ function(_kb_ensure_bgfx_runtime_shaders_bundle_target)
     endif()
 
     set(_shader_src "${CMAKE_BINARY_DIR}/shaders")
+    set(_bundle_stamp "${_shader_dst}/.kb_bgfx_runtime_shaders_bundle.stamp")
+    get_property(_renderer_shader_stage_stamp GLOBAL PROPERTY KB_RENDERER_SHADER_STAGE_STAMP)
 
-    add_custom_target(kb_bgfx_runtime_shaders_bundle
+    add_custom_command(
+        OUTPUT "${_bundle_stamp}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${_shader_dst}/dxbc"
             "${_shader_dst}/dxil"
@@ -26,13 +30,13 @@ function(_kb_ensure_bgfx_runtime_shaders_bundle_target)
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${_shader_src}/metal" "${_shader_dst}/metal"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${_shader_src}/essl" "${_shader_dst}/essl"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${_shader_src}/glsl" "${_shader_dst}/glsl"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_bundle_stamp}"
+        DEPENDS "${_renderer_shader_stage_stamp}"
         COMMENT "Copy bgfx shader runtime trees"
         VERBATIM
     )
-
-    if(TARGET kb_renderer_shaders)
-        add_dependencies(kb_bgfx_runtime_shaders_bundle kb_renderer_shaders)
-    endif()
+    set_source_files_properties("${_bundle_stamp}" PROPERTIES GENERATED TRUE)
+    set_property(GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP "${_bundle_stamp}")
 endfunction()
 
 function(kb_target_copy_bgfx_runtime_shaders target_name)
@@ -41,5 +45,9 @@ function(kb_target_copy_bgfx_runtime_shaders target_name)
     endif()
 
     _kb_ensure_bgfx_runtime_shaders_bundle_target()
-    add_dependencies(${target_name} kb_bgfx_runtime_shaders_bundle)
+    get_property(_bundle_stamp GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP)
+    target_sources(${target_name} PRIVATE "${_bundle_stamp}")
+    if(TARGET kb_renderer_shaders)
+        add_dependencies(${target_name} kb_renderer_shaders)
+    endif()
 endfunction()

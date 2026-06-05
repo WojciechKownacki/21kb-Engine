@@ -18,7 +18,6 @@ enum class DockPanelKind : std::uint8_t {
     Generic,
     Hierarchy,
     Scene,
-    Game,
     Inspector,
     Assets,
     Console,

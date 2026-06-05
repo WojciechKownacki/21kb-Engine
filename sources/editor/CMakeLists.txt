@@ -348,6 +348,7 @@ add_executable(kb_editor
     src/private/scene/EditorHierarchyRowFactory.hpp
     src/private/scene/EditorHierarchySearchState.hpp
     src/private/scene/EditorHierarchySearchMatcher.hpp
+    src/private/scene/EditorHierarchySelectionState.hpp
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
@@ -452,6 +453,7 @@ add_executable(kb_editor
     src/scene/EditorHierarchyRowFactory.cpp
     src/scene/EditorHierarchySearchState.cpp
     src/scene/EditorHierarchySearchMatcher.cpp
+    src/scene/EditorHierarchySelectionState.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
@@ -612,6 +614,8 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
+        src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportPreviewState.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorShellInteractionState.cpp

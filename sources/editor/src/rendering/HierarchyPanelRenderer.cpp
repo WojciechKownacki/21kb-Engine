@@ -12,7 +12,6 @@ namespace kb::editor {
 
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     const std::vector<EditorHierarchyRow> rows = sceneContext.HierarchyRows();
-    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
 
     GdiDrawing::FillRectColor(dc, content, HierarchyPanelStyle::PanelBackground());
     const RECT listContent = HierarchyPanelToolbarRenderer{}.Paint(dc, content, theme, sceneContext);
@@ -24,7 +23,7 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
             break;
         }
 
-        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, row.entity == selected);
+        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext.IsHierarchyEntitySelected(row.entity));
         y += kHierarchyRowHeight;
     }
 }

@@ -187,6 +187,37 @@ void RunPrefabAssetRoundTripTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+void RunPrefabCreateAssetRegistersSourceInstanceTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_create_asset_instance.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Prefab Root" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Prefab Child", .parent = root });
+
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().CreateAsset(root, "CreatedPrefab", prefabPath);
+    kb::tests::Require(handle.IsValid(), "CreateAsset should return a valid prefab handle");
+    kb::tests::Require(std::filesystem::exists(prefabPath), "CreateAsset should write the prefab asset");
+
+    const kb::scene::ScenePrefabInstanceHandle rootInstance = scene.Prefabs().RootInstance(root);
+    kb::tests::Require(rootInstance.IsValid(), "CreateAsset should register the source root as a prefab instance");
+    kb::tests::Require(scene.Prefabs().IsInstance(rootInstance), "CreateAsset source instance should be tracked by ScenePrefabs");
+
+    std::uint32_t rootNodeIndex = 99;
+    const kb::scene::ScenePrefabInstanceHandle containingRoot = scene.Prefabs().ContainingInstance(root, rootNodeIndex);
+    kb::tests::Require(containingRoot == rootInstance && rootNodeIndex == 0, "CreateAsset source root should map to prefab node 0");
+
+    std::uint32_t childNodeIndex = 99;
+    const kb::scene::ScenePrefabInstanceHandle containingChild = scene.Prefabs().ContainingInstance(child, childNodeIndex);
+    kb::tests::Require(containingChild == rootInstance && childNodeIndex == 1, "CreateAsset source child should be tracked as part of the prefab instance");
+
+    const kb::scene::ScenePrefabOverrideReport overrides = scene.Prefabs().Overrides(rootInstance);
+    kb::tests::Require(overrides.properties.empty(), "Newly created source prefab instance should not report immediate property overrides");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 void RunPrefabVariantAssetRoundTripTest() {
     const std::filesystem::path basePath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_base.kbprefab";
     const std::filesystem::path variantPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_variant_roundtrip.kbprefab";
@@ -284,6 +315,7 @@ namespace kb::tests {
 void RunScenePrefabCaptureTests() {
     RunPrefabCaptureTest();
     RunPrefabAssetRoundTripTest();
+    RunPrefabCreateAssetRegistersSourceInstanceTest();
     RunPrefabVariantAssetRoundTripTest();
     RunNestedPrefabAssetRoundTripTest();
 }

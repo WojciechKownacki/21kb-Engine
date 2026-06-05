@@ -55,7 +55,8 @@ void HierarchyRowRenderer::Paint(HDC dc, const RECT& rowRect, const EditorTheme&
     }
 
     const COLORREF rowInk = row.visible ? (selected ? HierarchyPanelStyle::RowTextSelected() : HierarchyPanelStyle::RowText()) : HierarchyPanelStyle::RowTextHidden();
-    HeroIconPainter::Draw(dc, layout.entityIcon, HeroIconKind::Cube, row.visible ? HierarchyPanelStyle::CubeStroke() : HierarchyPanelStyle::RowTextHidden(), 2);
+    const COLORREF entityIcon = row.prefabRoot ? HierarchyPanelStyle::PrefabCubeStroke() : HierarchyPanelStyle::CubeStroke();
+    HeroIconPainter::Draw(dc, layout.entityIcon, HeroIconKind::Cube, row.visible ? entityIcon : HierarchyPanelStyle::RowTextHidden(), 2);
     GdiDrawing::DrawTextBlock(dc, layout.label, row.name.c_str(), rowInk);
 }
 

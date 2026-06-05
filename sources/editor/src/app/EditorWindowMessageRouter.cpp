@@ -48,9 +48,23 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.sceneViewport.RequestPresent();
         return 0;
     case WM_CAPTURECHANGED:
-        context_.dockController.HandleCaptureChanged(reinterpret_cast<HWND>(lparam));
+    {
+        HWND newCapture = reinterpret_cast<HWND>(lparam);
+        context_.dockController.HandleCaptureChanged(newCapture);
+        const bool captureStayedInEditor = newCapture == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(newCapture);
+        if (!captureStayedInEditor) {
+            context_.pointerDrag.Clear();
+            context_.shellInteraction.ClearPressedTransport();
+            if (context_.mainWindow != nullptr) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(messageWindow, nullptr, FALSE);
+            }
+        }
         context_.sceneViewport.RequestPresent();
         return 0;
+    }
     case WM_CHAR:
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
             return 0;

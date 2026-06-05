@@ -42,7 +42,6 @@ void PanelContentRenderer::Paint(
             GdiDrawing::ToColorRef(theme.textDisabled));
         break;
     case DockPanelKind::Scene:
-    case DockPanelKind::Game:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::Generic:

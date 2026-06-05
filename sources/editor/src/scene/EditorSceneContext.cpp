@@ -4,6 +4,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
@@ -12,16 +13,47 @@
 #include "scene/EditorScenePrefabActions.hpp"
 #include "project/EditorProjectPaths.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
+    return std::ranges::find(entities, entity) != entities.end();
+}
+
+[[nodiscard]] bool HasSelectedAncestor(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::span<const kb::scene::SceneEntity> selected) noexcept {
+    kb::scene::SceneEntity parent = scene.Hierarchy().Parent(entity);
+    while (parent.IsValid()) {
+        if (ContainsEntity(selected, parent)) {
+            return true;
+        }
+        parent = scene.Hierarchy().Parent(parent);
+    }
+    return false;
+}
+
+[[nodiscard]] std::vector<kb::scene::SceneEntity> TopLevelSelectedEntities(const kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> entities) {
+    std::vector<kb::scene::SceneEntity> filtered;
+    filtered.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (!entity.IsValid() || ContainsEntity(filtered, entity) || HasSelectedAncestor(scene, entity, entities)) {
+            continue;
+        }
+        filtered.push_back(entity);
+    }
+    return filtered;
+}
+
+} // namespace
 
 EditorSceneContext::EditorSceneContext() {
     std::filesystem::create_directories(EditorProjectPaths::PrefabsRoot());
     static_cast<void>(scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot()));
     static_cast<void>(scene_.Assets().Discover());
-    selectedEntity_ = EditorDefaultSceneFactory::Seed(scene_);
+    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
@@ -57,27 +89,37 @@ const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint6
 }
 
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
-    return selectedEntity_;
+    return hierarchySelection_.Primary();
+}
+
+const std::vector<kb::scene::SceneEntity>& EditorSceneContext::SelectedHierarchyEntities() const noexcept {
+    return hierarchySelection_.SelectedEntities();
+}
+
+bool EditorSceneContext::IsHierarchyEntitySelected(kb::scene::SceneEntity entity) const noexcept {
+    return hierarchySelection_.IsSelected(entity);
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
-    selectedEntity_ = scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
+    hierarchySelection_.SelectEntity(scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{});
     assetBrowser_.ClearSelection();
 }
 
 void EditorSceneContext::ClearHierarchySelection() noexcept {
-    selectedEntity_ = {};
+    hierarchySelection_.Clear();
 }
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
-    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
-    if (rowIndex >= rows.size()) {
-        selectedEntity_ = {};
-        return false;
-    }
+    return SelectHierarchyRow(rowIndex, false, false);
+}
 
-    SelectEntity(rows[rowIndex].entity);
-    return selectedEntity_.IsValid();
+bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept {
+    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    const bool selected = hierarchySelection_.SelectRow(rows, rowIndex, additive, range);
+    if (selected) {
+        assetBrowser_.ClearSelection();
+    }
+    return selected;
 }
 
 std::vector<EditorHierarchyRow> EditorSceneContext::HierarchyRows() const {
@@ -142,14 +184,21 @@ bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
 }
 
 bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
-    if (!selectedEntity_.IsValid() || !scene_.Entities().IsAlive(selectedEntity_)) {
-        selectedEntity_ = {};
+    if (hierarchySelection_.SelectedEntities().empty()) {
+        ClearHierarchySelection();
         return false;
     }
-    const kb::scene::SceneEntity deleting = selectedEntity_;
-    selectedEntity_ = {};
-    scene_.Entities().Destroy(deleting);
-    return true;
+
+    bool deleted = false;
+    const std::vector<kb::scene::SceneEntity> deleting = hierarchySelection_.SelectedEntities();
+    ClearHierarchySelection();
+    for (kb::scene::SceneEntity entity : deleting) {
+        if (scene_.Entities().IsAlive(entity)) {
+            scene_.Entities().Destroy(entity);
+            deleted = true;
+        }
+    }
+    return deleted;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
@@ -200,6 +249,45 @@ bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene:
     return moved;
 }
 
+bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent) {
+    const std::vector<kb::scene::SceneEntity> moving = TopLevelSelectedEntities(scene_, children);
+    const std::span<const kb::scene::SceneEntity> movingSpan{ moving.data(), moving.size() };
+    if (parent.IsValid() && (ContainsEntity(movingSpan, parent) || HasSelectedAncestor(scene_, parent, movingSpan))) {
+        return false;
+    }
+
+    bool moved = false;
+    for (const kb::scene::SceneEntity child : moving) {
+        if (child == parent) {
+            continue;
+        }
+        moved = EditorSceneHierarchyActions::Reparent(scene_, child, parent) || moved;
+    }
+    if (moved) {
+        const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+        hierarchySelection_.Clear();
+        bool first = true;
+        for (const kb::scene::SceneEntity entity : children) {
+            if (!scene_.Entities().IsAlive(entity)) {
+                continue;
+            }
+            for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+                if (rows[rowIndex].entity != entity) {
+                    continue;
+                }
+                static_cast<void>(hierarchySelection_.SelectRow(rows, rowIndex, !first, false));
+                first = false;
+                break;
+            }
+        }
+        if (hierarchySelection_.SelectedEntities().empty() && !moving.empty()) {
+            SelectEntity(moving.front());
+        }
+        assetBrowser_.ClearSelection();
+    }
+    return moved;
+}
+
 bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path) {
     const bool created = EditorScenePrefabActions::CreateAsset(scene_, entity, path);
     if (created) {
@@ -214,7 +302,11 @@ bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const 
 }
 
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent) {
-    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(scene_, path, parent);
+    return InstantiatePrefabAsset(path, {}, parent);
+}
+
+bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
+    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(scene_, path, virtualPath, parent);
     if (!root.has_value()) {
         return false;
     }
