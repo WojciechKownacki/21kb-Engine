@@ -19,11 +19,11 @@ std::vector<EditorSceneBgfxViewport::PendingPresentBatch> EditorSceneBgfxViewpor
         if (batch == nullptr) {
             PendingPresentBatch created{};
             created.host = present.host;
-            created.surfaceRect = present.destination;
+            created.surfaceRect = present.surfaceRect;
             batches.push_back(std::move(created));
             batch = &batches.back();
         } else {
-            UnionRect(&batch->surfaceRect, &batch->surfaceRect, &present.destination);
+            UnionRect(&batch->surfaceRect, &batch->surfaceRect, &present.surfaceRect);
         }
         batch->presents.push_back(&present);
     }

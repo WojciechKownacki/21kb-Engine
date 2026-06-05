@@ -23,6 +23,10 @@ public:
     [[nodiscard]] static HeroIconGlyph ChevronDown() noexcept;
     [[nodiscard]] static HeroIconGlyph Plus() noexcept;
     [[nodiscard]] static HeroIconGlyph EllipsisHorizontal() noexcept;
+    [[nodiscard]] static HeroIconGlyph ListBullet() noexcept;
+    [[nodiscard]] static HeroIconGlyph AdjustmentsHorizontal() noexcept;
+    [[nodiscard]] static HeroIconGlyph CommandLine() noexcept;
+    [[nodiscard]] static HeroIconGlyph Gamepad2() noexcept;
 };
 
 } // namespace kb::editor

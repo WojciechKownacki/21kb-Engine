@@ -16,7 +16,7 @@ namespace kb::editor {
 class FloatingEditorWindowRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) const;
+    void Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport* sceneViewport) const;
 #endif
 };
 

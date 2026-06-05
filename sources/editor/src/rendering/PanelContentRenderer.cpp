@@ -43,9 +43,7 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::Scene:
     case DockPanelKind::Game:
-        if (sceneViewport != nullptr) {
-            ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, *sceneViewport, sceneViewportHost);
-        }
+        ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::Generic:
     default:

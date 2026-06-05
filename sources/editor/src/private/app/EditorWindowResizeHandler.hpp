@@ -14,7 +14,8 @@ namespace kb::editor {
 class EditorWindowResizeHandler {
 public:
 #if defined(_WIN32)
-    static LRESULT Handle(HWND messageWindow, WPARAM wparam, LPARAM lparam, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows);
+    static LRESULT HandleSize(HWND messageWindow, WPARAM wparam, LPARAM lparam, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows);
+    static LRESULT HandlePlacementChanged(HWND messageWindow);
 #endif
 };
 

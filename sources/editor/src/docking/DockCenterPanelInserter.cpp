@@ -4,6 +4,7 @@
 #include "docking/DockNodeIdSource.hpp"
 #include "docking/DockNodeQuery.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::editor {
@@ -23,7 +24,13 @@ void DockCenterPanelInserter::Dock(std::unique_ptr<DockNode>& root, std::uint32_
         }
     }
 
-    leaf->panels.push_back(panelId);
+    if (target.kind == DockDropPreviewKind::StripMarker) {
+        const std::uint32_t insertIndex =
+            std::min(target.tabInsertionIndex, static_cast<std::uint32_t>(leaf->panels.size()));
+        leaf->panels.insert(leaf->panels.begin() + static_cast<std::ptrdiff_t>(insertIndex), panelId);
+    } else {
+        leaf->panels.push_back(panelId);
+    }
     leaf->activePanelId = panelId;
 }
 

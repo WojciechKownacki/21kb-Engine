@@ -56,10 +56,23 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         surface = nullptr;
         return true;
     }
-    if (!viewport_.EnsureHostSurfaceWindow(*surface, batch.surfaceRect, std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
-        return false;
+    const bool needsWindow = surface->window == nullptr || IsWindow(surface->window) == 0;
+    if (needsWindow) {
+        if (!viewport_.EnsureHostSurfaceWindow(
+                *surface,
+                batch.surfaceRect,
+                std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
+            return false;
+        }
     }
     if (!viewport_.EnsurePresentTarget(*surface, RectWidth(batch.surfaceRect), RectHeight(batch.surfaceRect))) {
+        return false;
+    }
+    if (!needsWindow &&
+        !viewport_.EnsureHostSurfaceWindow(
+            *surface,
+            batch.surfaceRect,
+            std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
         return false;
     }
     surface->presentedInCurrentPaint = true;

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -106,6 +107,49 @@ void RunUndockAndDockSameFrameTest() {
     kb::editor::tests::Require(RequirePanel(model, 2U)->area == kb::editor::DockArea::Center, "Center drop did not restore scene panel area");
 }
 
+void RunTopChromeDropPreviewTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const std::optional<kb::editor::DockDropPreview> preview =
+        model.Queries().ResolveDropPreview(layout, layout.workspace.x + 16, layout.workspace.y - 1);
+
+    kb::editor::tests::Require(preview.has_value(), "Top chrome did not resolve a root drop preview");
+    kb::editor::tests::Require(preview->zone == kb::editor::DockDropZone::Top, "Top chrome drop did not resolve to the top root zone");
+    kb::editor::tests::Require(preview->leafId == 0U, "Top chrome drop should target the root, not an existing leaf");
+    kb::editor::tests::Require(
+        preview->rect.x == layout.workspace.x && preview->rect.y == layout.workspace.y,
+        "Top chrome preview was not anchored to the workspace");
+    kb::editor::tests::Require(preview->rect.width == layout.workspace.width, "Top chrome preview should span the workspace width");
+    kb::editor::tests::Require(
+        preview->rect.height > 0 && preview->rect.height < layout.workspace.height / 2,
+        "Top chrome preview should use the root split band");
+}
+
+void RunTabStripDropInsertsAtResolvedIndexTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
+    const kb::editor::DockPanelLayout* gameLayout = FindPanelLayout(initialLayout, 3U);
+    kb::editor::tests::Require(sceneLayout != nullptr && gameLayout != nullptr, "Scene/Game tabs should exist in default layout");
+    kb::editor::tests::Require(sceneLayout->leafId == gameLayout->leafId, "Scene/Game tabs should share a leaf");
+
+    const std::optional<kb::editor::DockDropPreview> preview =
+        model.Queries().ResolveDropPreview(initialLayout, gameLayout->tab.x + 1, gameLayout->tab.y + 1);
+    kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
+    kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
+    kb::editor::tests::Require(preview->tabInsertionIndex == 1U, "Tab strip insertion index did not match the cursor position");
+    kb::editor::tests::Require(
+        preview->rect.width == 3 && preview->rect.height == gameLayout->tab.height,
+        "Tab strip marker geometry should be a thin vertical marker");
+
+    model.Commands().UndockPanel(4U, kb::editor::DockRect{ 80, 90, 380, 300 });
+    model.Commands().DockPanelTo(4U, *preview);
+    const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
+    const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
+    kb::editor::tests::Require(order.size() >= 3U, "Docked tab was not inserted into the target leaf");
+    kb::editor::tests::Require(order[0] == 2U && order[1] == 4U && order[2] == 3U, "Docked tab was not inserted at the resolved tab strip index");
+}
+
 void RunSplitterAndFloatingResizeTest() {
     kb::editor::EditorDockModel model;
     kb::editor::DockLayout layout = BuildDefaultLayout(model);
@@ -155,6 +199,8 @@ namespace kb::editor::tests {
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunUndockAndDockSameFrameTest();
+    RunTopChromeDropPreviewTest();
+    RunTabStripDropInsertsAtResolvedIndexTest();
     RunSplitterAndFloatingResizeTest();
     RunFloatingWindowControlHitTest();
 }

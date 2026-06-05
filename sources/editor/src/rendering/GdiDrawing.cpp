@@ -47,6 +47,10 @@ void GdiDrawing::DrawSharpFrame(HDC dc, const RECT& rect, COLORREF fill, COLORRE
     GdiFramePainter::DrawSharp(dc, rect, fill, border);
 }
 
+void GdiDrawing::DrawRaisedFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF highlight, COLORREF shadow) {
+    GdiFramePainter::DrawRaised(dc, rect, fill, highlight, shadow);
+}
+
 } // namespace kb::editor
 
 #endif

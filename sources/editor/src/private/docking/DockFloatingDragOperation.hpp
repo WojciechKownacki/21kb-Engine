@@ -17,7 +17,12 @@ public:
     DockFloatingDragOperation() = delete;
 
 #if defined(_WIN32)
-    static void EnsureDetached(DockPointerDrag& drag, POINT screen, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows);
+    static void EnsureDetached(
+        DockPointerDrag& drag,
+        POINT screen,
+        EditorDockModel& dockModel,
+        EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics);
     static void MoveWindow(DockPointerDrag& drag, POINT screen, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows);
 #endif
 

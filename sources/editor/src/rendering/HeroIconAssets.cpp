@@ -8,16 +8,16 @@ namespace {
 static constexpr std::array<HeroIconPath, 1> kMinus{
     HeroIconPath{ "M5 12h14", false },
 };
-// Source: LuizEngine `icons::lucide::kPlay` / lucide.dev play, MIT.
+// Source: LuizEngine `icons::lucide::kPlay` / lucide.dev play, ISC.
 static constexpr std::array<HeroIconPath, 1> kPlay{
     HeroIconPath{ "M6 3L20 12L6 21V3Z", true },
 };
-// Source: LuizEngine `icons::lucide::kPause` / lucide.dev pause, MIT.
+// Source: LuizEngine `icons::lucide::kPause` / lucide.dev pause, ISC.
 static constexpr std::array<HeroIconPath, 2> kPause{
     HeroIconPath{ "M6 4H10V20H6V4Z", true },
     HeroIconPath{ "M14 4H18V20H14V4Z", true },
 };
-// Source: LuizEngine `icons::lucide::kResume` / lucide.dev step-forward, MIT.
+// Source: LuizEngine `icons::lucide::kResume` / lucide.dev step-forward, ISC.
 static constexpr std::array<HeroIconPath, 2> kResume{
     HeroIconPath{ "M5 4L15 12L5 20V4Z", true },
     HeroIconPath{ "M19 5V19", false },
@@ -25,7 +25,7 @@ static constexpr std::array<HeroIconPath, 2> kResume{
 static constexpr std::array<HeroIconPath, 1> kStop{
     HeroIconPath{ "M5.25 7.5A2.25 2.25 0 0 1 7.5 5.25h9a2.25 2.25 0 0 1 2.25 2.25v9a2.25 2.25 0 0 1-2.25 2.25h-9a2.25 2.25 0 0 1-2.25-2.25v-9Z", false },
 };
-// Source: LuizEngine `icons::lucide::kStop` / lucide.dev square, MIT.
+// Source: LuizEngine `icons::lucide::kStop` / lucide.dev square, ISC.
 static constexpr std::array<HeroIconPath, 1> kTransportStop{
     HeroIconPath{ "M7 5H17A2 2 0 0 1 19 7V17A2 2 0 0 1 17 19H7A2 2 0 0 1 5 17V7A2 2 0 0 1 7 5Z", true },
 };
@@ -60,6 +60,23 @@ static constexpr std::array<HeroIconPath, 3> kEllipsisHorizontal{
     HeroIconPath{ "M6.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z", true },
     HeroIconPath{ "M12.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z", true },
     HeroIconPath{ "M18.75 12a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z", true },
+};
+static constexpr std::array<HeroIconPath, 1> kListBullet{
+    HeroIconPath{ "M3 4.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM6.25 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 11.5a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM4 12.25a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM3 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z", true },
+};
+static constexpr std::array<HeroIconPath, 1> kAdjustmentsHorizontal{
+    HeroIconPath{ "M6.5 2.25a.75.75 0 0 0-1.5 0v3a.75.75 0 0 0 1.5 0V4.5h6.75a.75.75 0 0 0 0-1.5H6.5v-.75ZM11 6.5a.75.75 0 0 0-1.5 0v3a.75.75 0 0 0 1.5 0v-.75h2.25a.75.75 0 0 0 0-1.5H11V6.5ZM5.75 10a.75.75 0 0 1 .75.75v.75h6.75a.75.75 0 0 1 0 1.5H6.5v.75a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 .75-.75ZM2.75 7.25H8.5v1.5H2.75a.75.75 0 0 1 0-1.5ZM4 3H2.75a.75.75 0 0 0 0 1.5H4V3ZM2.75 11.5H4V13H2.75a.75.75 0 0 1 0-1.5Z", true },
+};
+static constexpr std::array<HeroIconPath, 1> kCommandLine{
+    HeroIconPath{ "M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4Zm2.22 1.97a.75.75 0 0 0 0 1.06l.97.97-.97.97a.75.75 0 1 0 1.06 1.06l1.5-1.5a.75.75 0 0 0 0-1.06l-1.5-1.5a.75.75 0 0 0-1.06 0ZM8.75 8.5a.75.75 0 0 0 0 1.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z", true },
+};
+// Source: LuizEngine `icons::lucide::kGamepad2` / lucide.dev gamepad-2, ISC.
+static constexpr std::array<HeroIconPath, 5> kGamepad2{
+    HeroIconPath{ "M6 11h4", false },
+    HeroIconPath{ "M8 9v4", false },
+    HeroIconPath{ "M15 12h.01", false },
+    HeroIconPath{ "M18 10h.01", false },
+    HeroIconPath{ "M17.32 5H6.68a4 4 0 0 0-3.98 3.59c-.01.05-.01.1-.02.15C2.6 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.42.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.6-6.58-.68-7.26-.01-.05-.01-.1-.02-.15A4 4 0 0 0 17.32 5z", false },
 };
 
 } // namespace
@@ -122,6 +139,22 @@ HeroIconGlyph HeroIconAssets::Plus() noexcept {
 
 HeroIconGlyph HeroIconAssets::EllipsisHorizontal() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kEllipsisHorizontal } };
+}
+
+HeroIconGlyph HeroIconAssets::ListBullet() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kListBullet }, .viewBoxSize = 16.0F, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::AdjustmentsHorizontal() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kAdjustmentsHorizontal }, .viewBoxSize = 16.0F, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::CommandLine() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCommandLine }, .viewBoxSize = 16.0F, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::Gamepad2() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGamepad2 }, .strokeWidth = 2.0F };
 }
 
 } // namespace kb::editor

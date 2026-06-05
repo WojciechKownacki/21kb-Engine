@@ -54,12 +54,8 @@ LRESULT FloatingWindowHitTestResolver::Resolve(HWND window, LPARAM lparam, const
     RECT client{};
     GetClientRect(window, &client);
 
-    const int controlsLeft = client.right - FloatingWindowControlLayout::TotalWidth(metrics);
     if (FloatingWindowControlHitTester{}.HitTest(metrics, client.right, clientPoint.x, clientPoint.y) != FloatingWindowControlKind::None) {
         return HTCLIENT;
-    }
-    if (clientPoint.y >= 0 && clientPoint.y < metrics.tabStripHeight && clientPoint.x >= metrics.tabWidth && clientPoint.x < controlsLeft) {
-        return HTCAPTION;
     }
 
     return HTCLIENT;

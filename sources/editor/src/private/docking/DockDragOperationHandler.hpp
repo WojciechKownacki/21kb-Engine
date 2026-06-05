@@ -20,7 +20,7 @@ public:
     DockDragOperationHandler() = delete;
 
 #if defined(_WIN32)
-    static void Move(
+    [[nodiscard]] static bool Move(
         DockPointerDrag& drag,
         HWND eventWindow,
         int x,
@@ -31,7 +31,7 @@ public:
         const EditorMetrics& metrics,
         std::optional<DockDropPreview>& dropPreview);
 
-    static void Complete(
+    [[nodiscard]] static bool Complete(
         const DockPointerDrag& drag,
         HWND releaseWindow,
         HWND mainWindow,

@@ -84,6 +84,25 @@ substantial portions of the software.
 Heroicons copyright and permission notices must be included in all copies or
 substantial portions of the software.
 
+## Lucide
+
+- Repository: https://github.com/lucide-icons/lucide
+- Local path: `third_party/lucide`
+- License: ISC
+- License file: `third_party/lucide/LICENSE`
+
+Lucide copyright and permission notices must be included in all copies.
+
+## DejaVu Fonts
+
+- Repository: https://github.com/dejavu-fonts/dejavu-fonts
+- Local path: `sources/editor/content/EditorShell/Fonts`
+- Files: `DejaVuSans.ttf`, `DejaVu-LICENSE.txt`
+- License: DejaVu Fonts License / Bitstream Vera derived license
+- License file: `sources/editor/content/EditorShell/Fonts/DejaVu-LICENSE.txt`
+
+DejaVu font copyright and license notices must be retained with the font files.
+
 ## Notes
 
 The root `LICENSE` file applies to 21kb-Engine itself. Third-party dependencies

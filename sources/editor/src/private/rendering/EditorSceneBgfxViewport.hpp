@@ -46,6 +46,11 @@ public:
         bool drawSafeArea = false;
     };
 
+    struct HostSurfaceLayout {
+        std::uint64_t viewportKey = 0;
+        RECT bounds{};
+    };
+
     ~EditorSceneBgfxViewport();
 
     EditorSceneBgfxViewport(const EditorSceneBgfxViewport&) = delete;
@@ -55,6 +60,10 @@ public:
 
     void Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept;
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
+    void RequestPresent() noexcept;
+    [[nodiscard]] bool PresentRequested() const noexcept;
+    void ClearPresentRequest() noexcept;
+    void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
@@ -70,7 +79,9 @@ private:
         HWND host = nullptr;
         HWND window = nullptr;
         RECT rect{};
+        RECT layoutBounds{};
         bool presentedInCurrentPaint = false;
+        bool hasLayoutBounds = false;
         render::NativeWindowFramebuffer presentTarget;
     };
 
@@ -81,6 +92,7 @@ private:
         [[nodiscard]] HostSurface* Find(HWND host) noexcept;
         [[nodiscard]] HostSurface* FindByWindow(HWND window) noexcept;
         void MarkHostNotPresented(HWND host) noexcept;
+        [[nodiscard]] bool HasVisibleUnpresentedForHost(HWND host) const noexcept;
         void Hide(HostSurface& surface) noexcept;
         void HideUnpresentedForHost(HWND host) noexcept;
         void ReleaseWindow(HWND window) noexcept;
@@ -120,6 +132,7 @@ private:
     struct PendingPresent {
         ViewportSession* session = nullptr;
         HWND host = nullptr;
+        RECT surfaceRect{};
         RECT destination{};
         const kb::scene::Scene* scene = nullptr;
         PresentSettings settings{};
@@ -213,6 +226,7 @@ private:
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     bool windowClassRegistered_ = false;
+    bool presentRequested_ = true;
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;
