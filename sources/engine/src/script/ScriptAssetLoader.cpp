@@ -3,7 +3,9 @@
 #include "engine/script/ScriptApiDeclarationParser.hpp"
 #include "engine/script/ScriptAsset.hpp"
 
+#include <cerrno>
 #include <charconv>
+#include <cstdlib>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -85,6 +87,17 @@ namespace {
     return false;
 }
 
+[[nodiscard]] std::optional<float> TryParseFloat(std::string_view value) {
+    const std::string text{ value };
+    char* end = nullptr;
+    errno = 0;
+    const float parsedValue = std::strtof(text.c_str(), &end);
+    if (errno != 0 || end != text.c_str() + text.size()) {
+        return std::nullopt;
+    }
+    return parsedValue;
+}
+
 [[nodiscard]] std::optional<ScriptValue> TryParseScriptValue(std::string_view value, ScriptValueType type) {
     value = Trim(value);
     if (value.empty()) {
@@ -107,9 +120,8 @@ namespace {
     }
     case ScriptValueType::Float:
     {
-        float parsedValue = 0.0F;
-        const std::from_chars_result parsed = std::from_chars(value.data(), value.data() + value.size(), parsedValue);
-        return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() ? std::optional<ScriptValue>{ ScriptValue{ parsedValue } } : std::nullopt;
+        const std::optional<float> parsedValue = TryParseFloat(value);
+        return parsedValue.has_value() ? std::optional<ScriptValue>{ ScriptValue{ *parsedValue } } : std::nullopt;
     }
     case ScriptValueType::String:
         if ((value.size() >= 2U && value.front() == '"' && value.back() == '"') ||
