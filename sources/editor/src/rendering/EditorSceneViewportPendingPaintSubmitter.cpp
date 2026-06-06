@@ -57,10 +57,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(con
         return true;
     }
 
-    if (!viewport_.EnsureHostSurfaceWindow(
-            *surface,
-            batch.surfaceRect,
-            std::span<const PendingPresent* const>{batch.presents.data(), batch.presents.size()})) {
+    if (!viewport_.EnsureHostSurfaceWindow(*surface, batch.surfaceRect)) {
         return false;
     }
 
