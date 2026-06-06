@@ -120,7 +120,82 @@ void ProjectFilesPanelDrawing::DrawDisclosureTriangle(HDC dc, RECT rect, COLORRE
     Polygon(dc, points, 3);
 }
 
+namespace {
+
+void DrawFastFolder(HDC dc, RECT icon, COLORREF color) {
+    if (icon.right <= icon.left || icon.bottom <= icon.top) {
+        return;
+    }
+    const int width = ProjectFilesPanelDrawing::RectWidth(icon);
+    const int height = ProjectFilesPanelDrawing::RectHeight(icon);
+    const int tabHeight = std::max(3, height / 4);
+    const int tabWidth = std::max(8, width / 2);
+    const COLORREF border = ProjectFilesPanelDrawing::Blend(color, RGB(60, 42, 10), 38);
+    ScopedBrush brush{ color };
+    ScopedPen pen{ 1, border };
+    const ScopedGdiObject selectedBrush(dc, brush.handle);
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+
+    RECT tab{ icon.left + 1, icon.top + 1, icon.left + tabWidth, icon.top + tabHeight + 2 };
+    RoundRect(dc, tab.left, tab.top, tab.right, tab.bottom + 2, 5, 5);
+    RECT body{ icon.left + 1, icon.top + tabHeight, icon.right - 1, icon.bottom - 1 };
+    RoundRect(dc, body.left, body.top, body.right, body.bottom, 6, 6);
+
+    GdiDrawing::FillRectColor(dc, RECT{ body.left + 2, body.top + 2, body.right - 2, body.top + 3 }, ProjectFilesPanelDrawing::Blend(color, RGB(255, 242, 174), 18));
+}
+
+void DrawFastCube(HDC dc, RECT icon, COLORREF color) {
+    if (icon.right <= icon.left || icon.bottom <= icon.top) {
+        return;
+    }
+    const int cx = (icon.left + icon.right) / 2;
+    const int top = icon.top + 1;
+    const int midY = icon.top + ProjectFilesPanelDrawing::RectHeight(icon) / 3;
+    const int bottom = icon.bottom - 1;
+    const int left = icon.left + 1;
+    const int right = icon.right - 1;
+    const COLORREF topColor = ProjectFilesPanelDrawing::Blend(color, RGB(255, 255, 255), 24);
+    const COLORREF leftColor = ProjectFilesPanelDrawing::Blend(color, RGB(0, 0, 0), 10);
+    const COLORREF rightColor = ProjectFilesPanelDrawing::Blend(color, RGB(0, 0, 0), 24);
+
+    POINT topFace[4]{ POINT{ cx, top }, POINT{ right, midY }, POINT{ cx, midY + (midY - top) }, POINT{ left, midY } };
+    POINT leftFace[4]{ POINT{ left, midY }, POINT{ cx, midY + (midY - top) }, POINT{ cx, bottom }, POINT{ left, bottom - (midY - top) } };
+    POINT rightFace[4]{ POINT{ right, midY }, POINT{ cx, midY + (midY - top) }, POINT{ cx, bottom }, POINT{ right, bottom - (midY - top) } };
+
+    ScopedPen pen{ 1, ProjectFilesPanelDrawing::Blend(color, RGB(18, 24, 34), 35) };
+    const ScopedGdiObject selectedPen(dc, pen.handle);
+    {
+        ScopedBrush brush{ topColor };
+        const ScopedGdiObject selectedBrush(dc, brush.handle);
+        Polygon(dc, topFace, 4);
+    }
+    {
+        ScopedBrush brush{ leftColor };
+        const ScopedGdiObject selectedBrush(dc, brush.handle);
+        Polygon(dc, leftFace, 4);
+    }
+    {
+        ScopedBrush brush{ rightColor };
+        const ScopedGdiObject selectedBrush(dc, brush.handle);
+        Polygon(dc, rightFace, 4);
+    }
+}
+
+} // namespace
+
 void ProjectFilesPanelDrawing::DrawIconWithShadow(HDC dc, RECT icon, HeroIconKind kind, COLORREF color, int strokeWidth) {
+    if (kind == HeroIconKind::Folder || kind == HeroIconKind::Cube) {
+        RECT shadow = icon;
+        OffsetRect(&shadow, 1, 1);
+        if (kind == HeroIconKind::Folder) {
+            DrawFastFolder(dc, shadow, RGB(4, 5, 7));
+            DrawFastFolder(dc, icon, color);
+        } else {
+            DrawFastCube(dc, shadow, RGB(4, 5, 7));
+            DrawFastCube(dc, icon, color);
+        }
+        return;
+    }
     RECT shadow = icon;
     OffsetRect(&shadow, 1, 1);
     HeroIconPainter::Draw(dc, shadow, kind, RGB(4, 5, 7), strokeWidth);

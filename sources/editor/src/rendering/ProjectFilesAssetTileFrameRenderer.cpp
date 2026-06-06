@@ -14,14 +14,18 @@ using Draw = ProjectFilesPanelDrawing;
 }
 
 void DrawAlphaBorderRing(HDC dc, RECT rect, COLORREF color, BYTE alpha) {
+    if (alpha == 0 || rect.right <= rect.left || rect.bottom <= rect.top) {
+        return;
+    }
+    const COLORREF blended = Draw::Blend(Draw::Blend(color, RGB(0, 0, 0), 0), RGB(31, 34, 39), 100 - (alpha * 100) / 255);
     RECT top{ rect.left, rect.top, rect.right, rect.top + 1 };
     RECT left{ rect.left, rect.top + 1, rect.left + 1, rect.bottom - 1 };
     RECT bottom{ rect.left, rect.bottom - 1, rect.right, rect.bottom };
     RECT right{ rect.right - 1, rect.top + 1, rect.right, rect.bottom - 1 };
-    GdiDrawing::FillRectAlpha(dc, top, color, alpha);
-    GdiDrawing::FillRectAlpha(dc, left, color, alpha);
-    GdiDrawing::FillRectAlpha(dc, bottom, color, alpha);
-    GdiDrawing::FillRectAlpha(dc, right, color, alpha);
+    GdiDrawing::FillRectColor(dc, top, blended);
+    GdiDrawing::FillRectColor(dc, left, blended);
+    GdiDrawing::FillRectColor(dc, bottom, blended);
+    GdiDrawing::FillRectColor(dc, right, blended);
 }
 
 void DrawTileAlphaFrame(HDC dc, RECT tile, const EditorTheme& theme, bool selected, bool focused) {

@@ -97,6 +97,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
     DockWorkspaceRenderer{}.Paint(
+        paintContext->window,
         paint.dc,
         paint.width,
         paint.height,

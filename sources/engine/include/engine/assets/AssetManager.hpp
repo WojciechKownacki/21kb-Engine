@@ -32,6 +32,7 @@ public:
     [[nodiscard]] const AssetMountTable& Mounts() const noexcept;
     [[nodiscard]] AssetRegistry& Registry() noexcept;
     [[nodiscard]] const AssetRegistry& Registry() const noexcept;
+    [[nodiscard]] std::uint64_t Revision() const noexcept;
 
     [[nodiscard]] bool RegisterLoader(std::unique_ptr<IAssetLoader> loader);
     [[nodiscard]] bool RegisterAsset(AssetMetadata metadata);
@@ -99,6 +100,9 @@ private:
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;
     std::unordered_map<std::uint64_t, CachedAsset> cache_;
     mutable std::string lastError_;
+    std::uint64_t revision_ = 1;
+    mutable std::uint64_t cachedVirtualFoldersRevision_ = 0;
+    mutable std::vector<std::filesystem::path> cachedVirtualFolders_;
 };
 
 } // namespace kb::assets

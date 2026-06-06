@@ -7,14 +7,14 @@ namespace kb::editor {
 
 void EditorAssetBrowserToolbarLayout::Apply(EditorAssetBrowserLayoutRects& layout) noexcept {
     constexpr int toolbarGap = 10;
-    const int frameWidth = static_cast<int>(layout.frame.right - layout.frame.left);
+    const int toolbarWidth = static_cast<int>(layout.toolbar.right - layout.toolbar.left);
     const int toolbarButtonTop = layout.toolbar.top + 6;
     const int toolbarButtonBottom = layout.toolbar.bottom - 6;
 
-    layout.newFolderButton = RECT{ layout.toolbar.left + 130, toolbarButtonTop, layout.toolbar.left + 160, toolbarButtonBottom };
+    layout.newFolderButton = RECT{ layout.toolbar.left + 10, toolbarButtonTop, layout.toolbar.left + 44, toolbarButtonBottom };
     layout.filtersButton = RECT{ layout.newFolderButton.right + toolbarGap, toolbarButtonTop, layout.newFolderButton.right + toolbarGap + 72, toolbarButtonBottom };
 
-    const int preferredSearchWidth = std::clamp(frameWidth / 3, 240, 326);
+    const int preferredSearchWidth = std::clamp(toolbarWidth / 3, 240, 326);
     const int pathLeft = layout.filtersButton.right + toolbarGap;
     int searchLeft = layout.toolbar.right - 10 - preferredSearchWidth;
     if (searchLeft < pathLeft + 96) {

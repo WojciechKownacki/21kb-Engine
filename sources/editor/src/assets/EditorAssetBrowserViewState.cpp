@@ -53,6 +53,30 @@ bool EditorAssetBrowserViewState::IsThumbnailScaleDragging() const noexcept {
     return thumbnailScaleDragging_;
 }
 
+int EditorAssetBrowserViewState::TreeWidth() const noexcept {
+    return treeWidth_;
+}
+
+bool EditorAssetBrowserViewState::IsTreeWidthDragging() const noexcept {
+    return treeWidthDragging_;
+}
+
+int EditorAssetBrowserViewState::TreeScrollOffset() const noexcept {
+    return treeScrollOffset_;
+}
+
+bool EditorAssetBrowserViewState::IsTreeScrollbarDragging() const noexcept {
+    return treeScrollbarDragging_;
+}
+
+int EditorAssetBrowserViewState::ContentScrollOffset() const noexcept {
+    return contentScrollOffset_;
+}
+
+bool EditorAssetBrowserViewState::IsContentScrollbarDragging() const noexcept {
+    return contentScrollbarDragging_;
+}
+
 void EditorAssetBrowserViewState::FocusSearch(bool focused) noexcept {
     searchFocused_ = focused;
 }
@@ -87,6 +111,7 @@ void EditorAssetBrowserViewState::ToggleRecursive() noexcept {
 
 void EditorAssetBrowserViewState::SetViewMode(EditorAssetViewMode mode) noexcept {
     viewMode_ = mode;
+    contentScrollOffset_ = 0;
 }
 
 void EditorAssetBrowserViewState::SetSortMode(EditorAssetSortMode mode) noexcept {
@@ -146,6 +171,7 @@ void EditorAssetBrowserViewState::CloseSortMenu() noexcept {
 
 void EditorAssetBrowserViewState::SetThumbnailScale(float scale) noexcept {
     thumbnailScale_ = std::clamp(scale, 0.65F, 1.75F);
+    contentScrollOffset_ = 0;
 }
 
 void EditorAssetBrowserViewState::BeginThumbnailScaleDrag() noexcept {
@@ -156,6 +182,70 @@ void EditorAssetBrowserViewState::BeginThumbnailScaleDrag() noexcept {
 
 void EditorAssetBrowserViewState::EndThumbnailScaleDrag() noexcept {
     thumbnailScaleDragging_ = false;
+}
+
+void EditorAssetBrowserViewState::SetTreeWidth(int width) noexcept {
+    treeWidth_ = std::max(0, width);
+}
+
+void EditorAssetBrowserViewState::BeginTreeWidthDrag() noexcept {
+    treeWidthDragging_ = true;
+    filterMenuOpen_ = false;
+    sortMenuOpen_ = false;
+}
+
+void EditorAssetBrowserViewState::EndTreeWidthDrag() noexcept {
+    treeWidthDragging_ = false;
+}
+
+void EditorAssetBrowserViewState::SetTreeScrollOffset(int offset, int maxOffset) noexcept {
+    treeScrollOffset_ = std::clamp(offset, 0, std::max(0, maxOffset));
+}
+
+void EditorAssetBrowserViewState::BeginTreeScrollbarDrag(int y) noexcept {
+    treeScrollbarDragging_ = true;
+    treeScrollbarDragY_ = y;
+    treeScrollbarDragStartOffset_ = treeScrollOffset_;
+    filterMenuOpen_ = false;
+    sortMenuOpen_ = false;
+}
+
+void EditorAssetBrowserViewState::DragTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    if (trackTravel <= 0 || maxOffset <= 0) {
+        treeScrollOffset_ = 0;
+        return;
+    }
+    const int delta = y - treeScrollbarDragY_;
+    SetTreeScrollOffset(treeScrollbarDragStartOffset_ + (delta * maxOffset) / trackTravel, maxOffset);
+}
+
+void EditorAssetBrowserViewState::EndTreeScrollbarDrag() noexcept {
+    treeScrollbarDragging_ = false;
+}
+
+void EditorAssetBrowserViewState::SetContentScrollOffset(int offset, int maxOffset) noexcept {
+    contentScrollOffset_ = std::clamp(offset, 0, std::max(0, maxOffset));
+}
+
+void EditorAssetBrowserViewState::BeginContentScrollbarDrag(int y) noexcept {
+    contentScrollbarDragging_ = true;
+    contentScrollbarDragY_ = y;
+    contentScrollbarDragStartOffset_ = contentScrollOffset_;
+    filterMenuOpen_ = false;
+    sortMenuOpen_ = false;
+}
+
+void EditorAssetBrowserViewState::DragContentScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    if (trackTravel <= 0 || maxOffset <= 0) {
+        contentScrollOffset_ = 0;
+        return;
+    }
+    const int delta = y - contentScrollbarDragY_;
+    SetContentScrollOffset(contentScrollbarDragStartOffset_ + (delta * maxOffset) / trackTravel, maxOffset);
+}
+
+void EditorAssetBrowserViewState::EndContentScrollbarDrag() noexcept {
+    contentScrollbarDragging_ = false;
 }
 
 } // namespace kb::editor

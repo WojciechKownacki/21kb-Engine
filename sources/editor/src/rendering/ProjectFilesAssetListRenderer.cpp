@@ -7,6 +7,8 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 
+#include <algorithm>
+
 namespace kb::editor {
 namespace {
 
@@ -24,13 +26,14 @@ using Draw = ProjectFilesPanelDrawing;
 }
 
 void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme) {
-    RECT header{ layout.assetView.left + 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight + 2, layout.assetView.right - 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight + EditorAssetBrowserLayout::AssetHeaderHeight };
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    RECT header{ viewport.left, viewport.top, viewport.right, viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight };
     Draw::DrawLabel(dc, header, "Name", Draw::Color(theme.textSecondary));
     RECT type{ header.left + 270, header.top, header.left + 410, header.bottom };
     Draw::DrawLabel(dc, type, "Type", Draw::Color(theme.textSecondary));
     RECT path{ header.left + 420, header.top, header.right, header.bottom };
     Draw::DrawLabel(dc, path, "Path", Draw::Color(theme.textSecondary));
-    RECT line{ layout.assetView.left + 1, header.bottom, layout.assetView.right - 1, header.bottom + 1 };
+    RECT line{ viewport.left, header.bottom, viewport.right, header.bottom + 1 };
     Draw::DrawHairline(dc, line, Draw::Color(theme.borderPanel));
 }
 
@@ -39,7 +42,7 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
         GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 24, row.bottom - 4 };
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::Folder, Draw::FolderColor(folder.selected), 1);
+    Draw::DrawIconWithShadow(dc, icon, HeroIconKind::Folder, Draw::FolderColor(folder.selected), 1);
     RECT name{ icon.right + 8, row.top, row.left + 268, row.bottom };
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameFolder && Draw::SameVirtualPath(folder.virtualPath, state.TextEditTargetFolder())) {
         Draw::DrawEditField(dc, name, theme, state.TextEditValue());
@@ -57,7 +60,7 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
         GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
-    HeroIconPainter::Draw(dc, icon, HeroIconKind::Cube, AssetIconColor(asset, theme), 2);
+    Draw::DrawIconWithShadow(dc, icon, HeroIconKind::Cube, AssetIconColor(asset, theme), 2);
     RECT name{ icon.right + 8, row.top, row.left + 268, row.bottom };
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawEditField(dc, name, theme, state.TextEditValue());
@@ -70,6 +73,26 @@ void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetI
     Draw::DrawLabel(dc, path, kb::assets::NormalizeAssetPath(asset.metadata.virtualPath).c_str(), Draw::Color(theme.textDisabled));
 }
 
+[[nodiscard]] int TotalRowCount(const EditorAssetBrowserState& state, const std::vector<EditorAssetFolderRow>& folders, const std::vector<EditorAssetItemRow>& assets) noexcept {
+    return static_cast<int>(folders.size() + assets.size() + (state.TextEditMode() == EditorAssetTextEditMode::NewFolder ? 1U : 0U));
+}
+
+void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state, int contentHeight) {
+    static_cast<void>(theme);
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top - EditorAssetBrowserLayout::AssetHeaderHeight);
+    if (contentHeight <= viewportHeight) {
+        return;
+    }
+    RECT track = EditorAssetBrowserLayout::AssetScrollbarTrackRect(layout);
+    track.top += EditorAssetBrowserLayout::AssetHeaderHeight;
+    const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.ContentScrollOffset());
+    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
+    const COLORREF thumbColor = state.IsContentScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
+    const COLORREF thumbBorder = state.IsContentScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
+}
+
 } // namespace
 
 void ProjectFilesAssetListRenderer::Paint(
@@ -80,28 +103,40 @@ void ProjectFilesAssetListRenderer::Paint(
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {
     DrawListHeader(dc, layout, theme);
-    int rowIndex = 0;
-    for (const EditorAssetFolderRow& folder : folders) {
-        RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, rowIndex++);
-        if (row.top >= layout.assetView.bottom - 4) {
-            return;
-        }
-        DrawFolderRow(dc, row, theme, folder, state);
-    }
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    const int totalRows = TotalRowCount(state, folders, assets);
+    const int contentHeight = totalRows * EditorAssetBrowserLayout::RowHeight;
+    const int bodyHeight = static_cast<int>(viewport.bottom - viewport.top - EditorAssetBrowserLayout::AssetHeaderHeight);
+    const int maxOffset = std::max(0, contentHeight - bodyHeight);
+    const int scroll = std::clamp(state.ContentScrollOffset(), 0, maxOffset);
+    const int firstRow = std::max(0, scroll / EditorAssetBrowserLayout::RowHeight);
+    const int visibleRows = (bodyHeight / EditorAssetBrowserLayout::RowHeight) + 3;
+    const int lastRow = std::clamp(firstRow + visibleRows, 0, totalRows);
 
-    if (state.TextEditMode() == EditorAssetTextEditMode::NewFolder) {
-        RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, rowIndex++);
-        RECT field{ row.left + 36, row.top + 2, row.left + 268, row.bottom - 2 };
-        Draw::DrawEditField(dc, field, theme, state.TextEditValue());
-    }
-
-    for (const EditorAssetItemRow& asset : assets) {
-        RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, rowIndex++);
-        if (row.top >= layout.assetView.bottom - 4) {
-            return;
+    SaveDC(dc);
+    IntersectClipRect(dc, viewport.left, viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight, viewport.right, viewport.bottom);
+    for (int globalRow = firstRow; globalRow < lastRow; ++globalRow) {
+        RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, globalRow);
+        OffsetRect(&row, 0, -scroll);
+        if (globalRow < static_cast<int>(folders.size())) {
+            DrawFolderRow(dc, row, theme, folders[static_cast<std::size_t>(globalRow)], state);
+            continue;
         }
-        DrawAssetRow(dc, row, theme, asset, state);
+        int relative = globalRow - static_cast<int>(folders.size());
+        if (state.TextEditMode() == EditorAssetTextEditMode::NewFolder) {
+            if (relative == 0) {
+                RECT field{ row.left + 36, row.top + 2, row.left + 268, row.bottom - 2 };
+                Draw::DrawEditField(dc, field, theme, state.TextEditValue());
+                continue;
+            }
+            --relative;
+        }
+        if (relative >= 0 && relative < static_cast<int>(assets.size())) {
+            DrawAssetRow(dc, row, theme, assets[static_cast<std::size_t>(relative)], state);
+        }
     }
+    RestoreDC(dc, -1);
+    DrawScrollbar(dc, layout, theme, state, contentHeight);
 }
 
 } // namespace kb::editor

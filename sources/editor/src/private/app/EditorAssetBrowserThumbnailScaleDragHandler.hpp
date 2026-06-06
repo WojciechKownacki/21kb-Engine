@@ -29,7 +29,17 @@ public:
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext);
 
+    [[nodiscard]] static bool HandleTreeResizePointerMove(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
     [[nodiscard]] static bool HandlePointerUp(EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static bool HandleTreeResizePointerUp(EditorSceneContext& sceneContext) noexcept;
 };
 
 #endif

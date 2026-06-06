@@ -14,8 +14,10 @@ int ProjectFilesAssetTileMetrics::NamePointSize(const RECT& tile) noexcept {
 ProjectFilesAssetTileVisualLayout ProjectFilesAssetTileMetrics::ResolveVisualLayout(RECT tile) noexcept {
     const int width = ProjectFilesPanelDrawing::RectWidth(tile);
     const int height = ProjectFilesPanelDrawing::RectHeight(tile);
-    const int iconSize = std::clamp((height * 42) / 100, 30, std::min(48, width - 32));
-    const int padding = std::clamp(width / 13, 5, 9);
+    const int maxIconSize = std::max(16, std::min(48, width - 32));
+    const int iconSize = std::clamp((height * 42) / 100, std::min(30, maxIconSize), maxIconSize);
+    const int paddingMax = std::max(1, std::min(9, width / 2));
+    const int padding = std::clamp(width / 13, std::min(5, paddingMax), paddingMax);
     const int namePoint = NamePointSize(tile);
     const int nameHeight = (namePoint + 5) * 2;
     const int gap = std::clamp(height / 42, 2, 4);
