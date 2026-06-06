@@ -715,6 +715,10 @@ add_library(kb_engine STATIC
     src/private/ecs/world/WorldComponentRegistrar.hpp
 )
 
+if(NOT WIN32)
+    set_target_properties(kb_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
 target_include_directories(kb_engine
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
