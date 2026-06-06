@@ -316,6 +316,7 @@ add_executable(kb_editor
     src/private/rendering/ProjectFilesAssetTileRenderer.hpp
     src/private/rendering/ProjectFilesAssetViewRenderer.hpp
     src/private/rendering/ProjectFilesBottomBarRenderer.hpp
+    src/private/rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp
     src/private/rendering/ProjectFilesOverlayRenderer.hpp
     src/private/rendering/ProjectFilesPanelDrawing.hpp
     src/private/rendering/ProjectFilesPanelRenderer.hpp
@@ -425,6 +426,7 @@ add_executable(kb_editor
     src/rendering/ProjectFilesAssetTileRenderer.cpp
     src/rendering/ProjectFilesAssetViewRenderer.cpp
     src/rendering/ProjectFilesBottomBarRenderer.cpp
+    src/rendering/ProjectFilesDeleteConfirmOverlayWindow.cpp
     src/rendering/ProjectFilesOverlayRenderer.cpp
     src/rendering/ProjectFilesPanelDrawing.cpp
     src/rendering/ProjectFilesPanelRenderer.cpp

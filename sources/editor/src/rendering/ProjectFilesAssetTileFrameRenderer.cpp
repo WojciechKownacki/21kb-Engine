@@ -10,7 +10,7 @@ namespace {
 using Draw = ProjectFilesPanelDrawing;
 
 [[nodiscard]] COLORREF TileFill(const EditorTheme& theme, bool selected) {
-    return selected ? Draw::Blend(Draw::Color(theme.panel), RGB(128, 138, 154), 22) : Draw::Blend(Draw::Color(theme.panel), RGB(92, 98, 108), 9);
+    return selected ? Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), 28) : Draw::Blend(Draw::Color(theme.panel), RGB(52, 58, 68), 16);
 }
 
 void DrawAlphaBorderRing(HDC dc, RECT rect, COLORREF color, BYTE alpha) {
@@ -25,10 +25,10 @@ void DrawAlphaBorderRing(HDC dc, RECT rect, COLORREF color, BYTE alpha) {
 }
 
 void DrawTileAlphaFrame(HDC dc, RECT tile, const EditorTheme& theme, bool selected, bool focused) {
-    const COLORREF color = selected ? RGB(138, 151, 170) : Draw::Blend(Draw::Color(theme.borderPanel), RGB(132, 140, 154), 12);
-    const BYTE selectedAlpha[5]{ 180, 104, 66, 38, 20 };
-    const BYTE inactiveAlpha[5]{ 82, 52, 32, 18, 10 };
-    const BYTE normalAlpha[5]{ 46, 30, 20, 12, 6 };
+    const COLORREF color = selected ? RGB(126, 138, 156) : Draw::Blend(Draw::Color(theme.borderPanel), RGB(106, 116, 132), 14);
+    const BYTE selectedAlpha[5]{ 150, 66, 24, 0, 0 };
+    const BYTE inactiveAlpha[5]{ 82, 34, 12, 0, 0 };
+    const BYTE normalAlpha[5]{ 34, 14, 0, 0, 0 };
     const BYTE* alphas = selected ? (focused ? selectedAlpha : inactiveAlpha) : normalAlpha;
 
     RECT ring = tile;
@@ -41,7 +41,7 @@ void DrawTileAlphaFrame(HDC dc, RECT tile, const EditorTheme& theme, bool select
 } // namespace
 
 void ProjectFilesAssetTileFrameRenderer::Paint(HDC dc, RECT tile, const EditorTheme& theme, bool selected, bool focused) {
-    GdiDrawing::FillRectAlpha(dc, tile, TileFill(theme, selected), selected ? (focused ? 24 : 10) : 8);
+    GdiDrawing::FillRectColor(dc, tile, TileFill(theme, selected));
     DrawTileAlphaFrame(dc, tile, theme, selected, focused);
 }
 

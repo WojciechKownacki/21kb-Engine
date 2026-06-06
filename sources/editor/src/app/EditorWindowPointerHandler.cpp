@@ -3,9 +3,11 @@
 #if defined(_WIN32)
 #include "app/EditorPointerDragInteraction.hpp"
 #include "app/EditorPointerDragSourceResolver.hpp"
+#include "app/EditorAssetBrowserDeleteConfirmPointerHandler.hpp"
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
+#include "assets/EditorAssetBrowserOverlayHitTester.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -28,6 +30,14 @@ bool CommitPendingNewAssetFolder(EditorSceneContext& sceneContext) {
     return true;
 }
 
+bool CommitPendingHierarchyRename(EditorSceneContext& sceneContext) {
+    if (!sceneContext.IsHierarchyRenaming()) {
+        return false;
+    }
+    static_cast<void>(sceneContext.CommitHierarchyRename());
+    return true;
+}
+
 bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
@@ -35,6 +45,22 @@ bool PointInRect(const RECT& rect, int x, int y) noexcept {
 bool PointHitsMainSplitter(HWND window, EditorDockModel& dockModel, const EditorMetrics& metrics, int x, int y) {
     const DockLayout layout = DockMainLayoutResolver::Resolve(window, dockModel, metrics);
     return dockModel.Queries().HitTest(layout, x, y).kind == DockHitKind::Splitter;
+}
+
+bool HandleGlobalDeleteConfirm(HWND window, int x, int y, EditorSceneContext& sceneContext) {
+    if (!sceneContext.AssetBrowser().IsDeleteConfirmOpen()) {
+        return false;
+    }
+
+    RECT client{};
+    GetClientRect(window, &client);
+    const std::optional<EditorAssetBrowserHit> hit = EditorAssetBrowserOverlayHitTester::HitTestDeleteConfirm(
+        client,
+        x,
+        y,
+        sceneContext.AssetBrowser(),
+        &client);
+    return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(hit.value_or(EditorAssetBrowserHit{}), x, y, sceneContext);
 }
 
 } // namespace
@@ -68,8 +94,14 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (HandleGlobalDeleteConfirm(messageWindow, x, y, sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
     const bool committedNewFolder = CommitPendingNewAssetFolder(sceneContext_);
-    if (committedNewFolder) {
+    const bool committedHierarchyRename = CommitPendingHierarchyRename(sceneContext_);
+    if (committedNewFolder || committedHierarchyRename) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
     if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, playMode_, shellInteraction_, metrics_)) {
@@ -145,8 +177,14 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
+    if (HandleGlobalDeleteConfirm(messageWindow, x, y, sceneContext_)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
     const bool committedNewFolder = CommitPendingNewAssetFolder(sceneContext_);
-    if (committedNewFolder) {
+    const bool committedHierarchyRename = CommitPendingHierarchyRename(sceneContext_);
+    if (committedNewFolder || committedHierarchyRename) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
 
