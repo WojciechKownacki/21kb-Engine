@@ -24,8 +24,6 @@ std::vector<EditorSceneBgfxViewport::PendingPresentBatch> EditorSceneBgfxViewpor
             created.surfaceRect = present.surfaceRect;
             batches.push_back(std::move(created));
             batch = &batches.back();
-        } else {
-            UnionRect(&batch->surfaceRect, &batch->surfaceRect, &present.surfaceRect);
         }
         batch->presents.push_back(&present);
     }

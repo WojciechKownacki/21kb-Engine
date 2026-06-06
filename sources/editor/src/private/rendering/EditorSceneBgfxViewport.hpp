@@ -214,7 +214,7 @@ private:
     [[nodiscard]] HostSurface* FindHostSurface(HWND host, std::uint64_t key) noexcept;
     [[nodiscard]] bool EnsureWindowClass();
     [[nodiscard]] bool EnsureContextWindow();
-    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent* const> presents);
+    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect);
     [[nodiscard]] bool EnsureRenderer();
     [[nodiscard]] bool EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height);
     void HideHostSurface(HostSurface& surface) noexcept;

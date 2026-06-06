@@ -8,6 +8,7 @@
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
+#include "inspection/InspectorPanelState.hpp"
 
 #include <string>
 #include <string_view>
@@ -30,6 +31,8 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
+    [[nodiscard]] InspectorPanelState& Inspector() noexcept;
+    [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -74,6 +77,7 @@ public:
 private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
+    InspectorPanelState inspector_;
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;

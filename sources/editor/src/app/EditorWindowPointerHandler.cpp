@@ -6,7 +6,9 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyContentResolver.hpp"
 
@@ -68,6 +70,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
         return 0;
     }
     const std::optional<RECT> assetContent = EditorPanelContentResolver::Resolve(DockPanelKind::Assets, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<RECT> hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     const std::optional<EditorResolvedPanelContent> scenePanelContent =
         EditorPanelContentResolver::ResolvePanel(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
@@ -76,6 +79,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
         sceneContent = scenePanelContent;
     }
     const bool inAssetPanel = assetContent.has_value() && PointInRect(*assetContent, x, y);
+    const bool inInspectorPanel = inspectorContent.has_value() && PointInRect(*inspectorContent, x, y);
     const bool inHierarchyPanel = hierarchyContent.has_value() && PointInRect(*hierarchyContent, x, y);
 
     if (sceneContent.has_value()) {
@@ -99,6 +103,17 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 
     if (EditorAssetBrowserPointerHandler::HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         sceneContext_.ClearHierarchySelection();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
+    if (inInspectorPanel) {
+        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspectorContent, sceneContext_, x, y);
+        static_cast<void>(InspectorPanelInteraction::HandlePointerDown(sceneContext_, hit, x, y));
+        if (hit.kind == InspectorHitKind::FloatField) {
+            SetCapture(messageWindow);
+        }
+        sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
@@ -151,6 +166,12 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
 
+    if (leftButtonDown && InspectorPanelInteraction::HandlePointerDrag(sceneContext_, x, y)) {
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
     if (leftButtonDown && pointerDrag_.Potential() && EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
         sceneViewport_.RequestPresent();
         return 0;
@@ -159,6 +180,18 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     if (EditorAssetBrowserPointerHandler::HandlePointerMove(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
+    }
+    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (inspectorContent.has_value() && PointInRect(*inspectorContent, x, y)) {
+        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspectorContent, sceneContext_, x, y);
+        if (InspectorPanelInteraction::UpdateHover(sceneContext_, hit)) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
+        return 0;
+    }
+    if (sceneContext_.Inspector().IsAnyHovered()) {
+        sceneContext_.Inspector().ClearHover();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {
         sceneViewport_.RequestPresent();
@@ -171,6 +204,13 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
     const int y = GET_Y_LPARAM(lparam);
 
     shellInteraction_.ClearPressedTransport();
+    if (InspectorPanelInteraction::HandlePointerUp(sceneContext_)) {
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
+
     if (pointerDrag_.Potential()) {
         const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
         if (handledDrop) {

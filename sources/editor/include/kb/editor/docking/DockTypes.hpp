@@ -71,8 +71,11 @@ struct DockPanel {
 struct DockPanelLayout {
     std::uint32_t panelId = 0;
     std::uint32_t leafId = 0;
+    DockRect frame{};
+    DockRect tabStrip{};
     DockRect tab{};
     DockRect content{};
+    DockRect contentClip{};
     bool active = false;
 };
 
