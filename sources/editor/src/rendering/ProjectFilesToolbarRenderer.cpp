@@ -18,8 +18,9 @@ namespace {
 using Draw = ProjectFilesPanelDrawing;
 
 void DrawContentBreadcrumbSegment(HDC dc, RECT rect, const EditorTheme& theme, std::string_view label, bool root, bool last) {
-    const COLORREF border = last ? Draw::Color(theme.borderPanel) : Draw::Blend(Draw::Color(theme.borderPanel), Draw::Color(theme.textDisabled), 16);
-    GdiDrawing::DrawSharpFrame(dc, rect, Draw::Color(theme.panel), border);
+    const COLORREF fill = last ? Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 18) : Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 10);
+    const COLORREF border = last ? Draw::Blend(Draw::Color(theme.borderPanel), Draw::Color(theme.textSecondary), 20) : Draw::Color(theme.borderPanel);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
     if (root) {
         RECT icon{ rect.left + 9, rect.top + 4, rect.left + 25, rect.bottom - 4 };
         HeroIconPainter::Draw(dc, icon, HeroIconKind::Folder, Draw::FolderColor(false), 1);
@@ -53,7 +54,12 @@ void DrawBreadcrumb(HDC dc, RECT rect, const EditorTheme& theme, const std::file
 }
 
 void DrawSearch(HDC dc, RECT rect, const EditorTheme& theme, const EditorAssetBrowserState& state) {
-    GdiDrawing::DrawSharpFrame(dc, rect, Draw::Color(theme.panel), state.IsSearchFocused() ? Draw::Color(theme.accent) : Draw::Color(theme.borderPanel));
+    const COLORREF border = state.IsSearchFocused() ? Draw::Blend(Draw::Color(theme.textSecondary), Draw::Color(theme.accent), 28) : Draw::Color(theme.borderPanel);
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), border);
+    RECT accent{ rect.left + 1, rect.top + 5, rect.left + 3, rect.bottom - 5 };
+    if (state.IsSearchFocused() || !state.SearchQuery().empty()) {
+        GdiDrawing::FillRectColor(dc, accent, Draw::Color(theme.accent));
+    }
     RECT icon{ rect.left + 7, rect.top + 5, rect.left + 23, rect.bottom - 5 };
     HeroIconPainter::Draw(dc, icon, HeroIconKind::MagnifyingGlass, Draw::Color(theme.textSecondary), 2);
 
@@ -65,7 +71,9 @@ void DrawSearch(HDC dc, RECT rect, const EditorTheme& theme, const EditorAssetBr
 } // namespace
 
 void ProjectFilesToolbarRenderer::Paint(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state) {
-    GdiDrawing::DrawSharpFrame(dc, layout.toolbar, Draw::Color(theme.strip), Draw::Color(theme.borderPanel));
+    GdiDrawing::DrawSharpFrame(dc, layout.toolbar, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 10), Draw::Color(theme.borderPanel));
+    RECT title{ layout.toolbar.left + 8, layout.toolbar.top, layout.toolbar.left + 126, layout.toolbar.bottom };
+    Draw::DrawTextWithFont(dc, title, "Content", Draw::Color(theme.textPrimary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     Draw::DrawIconButton(dc, layout.newFolderButton, theme, HeroIconKind::Plus, state.TextEditMode() == EditorAssetTextEditMode::NewFolder);
     Draw::DrawTextButton(dc, layout.filtersButton, theme, "Filters", !state.TypeFilter().empty());
     DrawBreadcrumb(dc, layout.path, theme, state.SelectedFolder());

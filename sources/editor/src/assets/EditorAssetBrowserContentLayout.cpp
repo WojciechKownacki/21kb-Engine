@@ -6,7 +6,7 @@
 namespace kb::editor {
 
 RECT EditorAssetBrowserContentLayout::FolderRowRect(const EditorAssetBrowserLayoutRects& layout, int row) noexcept {
-    return RECT{ layout.tree.left + 8, layout.tree.top + 10 + row * EditorAssetBrowserLayout::RowHeight, layout.tree.right - 8, layout.tree.top + 10 + (row + 1) * EditorAssetBrowserLayout::RowHeight };
+    return RECT{ layout.tree.left + 6, layout.tree.top + 32 + row * EditorAssetBrowserLayout::RowHeight, layout.tree.right - 6, layout.tree.top + 32 + (row + 1) * EditorAssetBrowserLayout::RowHeight };
 }
 
 RECT EditorAssetBrowserContentLayout::AssetListRowRect(const EditorAssetBrowserLayoutRects& layout, int row) noexcept {
@@ -20,14 +20,14 @@ RECT EditorAssetBrowserContentLayout::AssetTileRect(const EditorAssetBrowserLayo
     const int columns = AssetTileColumnCount(layout, scale);
     const int column = index % columns;
     const int row = index / columns;
-    const int left = layout.assetView.left + 8 + column * (tileWidth + 5);
+    const int left = layout.assetView.left + 10 + column * (tileWidth + 5);
     const int top = layout.assetView.top + 8 + row * (tileHeight + 5);
     return RECT{ left, top, left + tileWidth, top + tileHeight };
 }
 
 int EditorAssetBrowserContentLayout::AssetTileColumnCount(const EditorAssetBrowserLayoutRects& layout, float scale) noexcept {
     const int tileWidth = TileWidth(scale);
-    const int width = std::max(1, static_cast<int>(layout.assetView.right - layout.assetView.left - 16));
+    const int width = std::max(1, static_cast<int>(layout.assetView.right - layout.assetView.left - 20));
     return std::max(1, width / (tileWidth + 5));
 }
 

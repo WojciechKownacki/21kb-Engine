@@ -47,6 +47,12 @@ enum class EditorAssetContextCommand {
     Refresh,
 };
 
+enum class EditorAssetDropAction {
+    None,
+    MoveHere,
+    CopyHere,
+};
+
 struct EditorAssetContextMenuItem {
     EditorAssetContextCommand command = EditorAssetContextCommand::None;
     const char* label = "";
