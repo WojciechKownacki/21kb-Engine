@@ -39,6 +39,8 @@ constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
 constexpr int kDividerHeight = 1;
+constexpr int kCheckboxSize = 16;
+constexpr int kTextBaselineOffsetY = 1;
 
 [[nodiscard]] COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
@@ -63,6 +65,15 @@ constexpr int kDividerHeight = 1;
     rect.right -= right;
     rect.bottom -= bottom;
     return rect;
+}
+
+[[nodiscard]] int CenteredY(const RECT& outer, int height) noexcept {
+    return static_cast<int>(outer.top) + std::max(0, (static_cast<int>(outer.bottom - outer.top) - height) / 2);
+}
+
+[[nodiscard]] RECT CenteredRect(const RECT& outer, int left, int width, int height) noexcept {
+    const int top = CenteredY(outer, height);
+    return Rect(left, top, left + width, top + height);
 }
 
 [[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept {
@@ -95,9 +106,19 @@ constexpr int kDividerHeight = 1;
 }
 
 void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    rect.top += kTextBaselineOffsetY;
+    rect.bottom += kTextBaselineOffsetY;
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
     DrawTextA(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
+}
+
+void TextW(HDC dc, RECT rect, std::wstring_view text, COLORREF color, UINT format = DT_CENTER | DT_VCENTER | DT_SINGLELINE) {
+    rect.top += kTextBaselineOffsetY;
+    rect.bottom += kTextBaselineOffsetY;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextW(dc, text.data(), static_cast<int>(text.size()), &rect, format | DT_NOPREFIX);
 }
 
 void DrawFrame(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) {
@@ -152,13 +173,15 @@ void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view 
 
 void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, char axis, std::string_view value) {
     RECT letter = Rect(rect.left, rect.top, rect.left + kAxisLetterWidth, rect.bottom);
-    ScopedFont font(11, FW_SEMIBOLD);
-    const ScopedGdiObject selectedFont(dc, font.handle);
-    char label[2]{ axis, '\0' };
-    Text(dc, letter, label, AxisColor(axis), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    {
+        ScopedFont font(11, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        char label[2]{ axis, '\0' };
+        Text(dc, letter, label, AxisColor(axis), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 
     const std::string_view shown = state.EditedProperty() == property ? std::string_view{ state.EditBuffer() } : value;
-    RECT box = Rect(letter.right + kAxisGap, rect.top + 2, rect.right, rect.top + 2 + kValueHeight);
+    RECT box = Rect(letter.right + kAxisGap, CenteredY(rect, kValueHeight), rect.right, CenteredY(rect, kValueHeight) + kValueHeight);
     DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property) || state.EditedProperty() == property);
 }
 
@@ -228,7 +251,7 @@ void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPan
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT valueRect = Rect(labelRect.right, row.top + 2, row.right - kRowPadX, row.top + 2 + kValueHeight);
+    RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
     const std::string_view shown = state.EditedProperty() == property ? std::string_view{ state.EditBuffer() } : value;
 
     ScopedFont labelFont(11, FW_SEMIBOLD);
@@ -239,12 +262,17 @@ void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPan
     DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || state.EditedProperty() == property);
 }
 
+[[nodiscard]] RECT CheckboxRectForRow(RECT row) noexcept {
+    const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);
+}
+
 void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, InspectorPropertyId property, std::string_view label, bool checked) {
     if (RowHovered(state, property)) {
         GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
     }
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT box = Rect(labelRect.right, row.top + 5, labelRect.right + 14, row.top + 19);
+    RECT box = CheckboxRectForRow(row);
     ScopedFont labelFont(11, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
@@ -253,8 +281,12 @@ void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPane
     const bool hovered = state.IsHovered(InspectorHitKind::BoolField, section, property);
     DrawFrame(dc, box, hovered ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
     if (checked) {
-        RECT inner = Shrink(box, 3, 3, 3, 3);
-        GdiDrawing::FillRectColor(dc, inner, Color(theme.textPrimary));
+        ScopedFont markFont(10, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, markFont.handle);
+        RECT glyph = box;
+        glyph.top += 1;
+        glyph.bottom += 1;
+        TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
     }
 }
 
@@ -470,40 +502,53 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
 
 [[nodiscard]] RECT ValueRectForRow(RECT row) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    return Rect(labelRect.right, row.top + 2, row.right - kRowPadX, row.top + 2 + kValueHeight);
+    const int top = CenteredY(row, kValueHeight);
+    return Rect(labelRect.right, top, row.right - kRowPadX, top + kValueHeight);
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitBool(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
-    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
-    RECT box = Rect(labelRect.right, row.top + 4, labelRect.right + 16, row.top + 20);
-    return Contains(box, x, y) ? MakeHit(InspectorHitKind::BoolField, section, property, box) : InspectorPanelRenderer::Hit{};
+    RECT box = CheckboxRectForRow(row);
+    if (Contains(box, x, y)) {
+        return MakeHit(InspectorHitKind::BoolField, section, property, box);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitFloatRow(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
     RECT value = ValueRectForRow(row);
-    return Contains(value, x, y) ? MakeHit(InspectorHitKind::FloatField, section, property, value) : InspectorPanelRenderer::Hit{};
+    if (Contains(value, x, y)) {
+        return MakeHit(InspectorHitKind::FloatField, section, property, value);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitTextRow(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
     RECT value = ValueRectForRow(row);
-    return Contains(value, x, y) ? MakeHit(InspectorHitKind::TextField, section, property, value) : InspectorPanelRenderer::Hit{};
+    if (Contains(value, x, y)) {
+        return MakeHit(InspectorHitKind::TextField, section, property, value);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitVec3(RECT row, InspectorSectionId section, InspectorPropertyId px, InspectorPropertyId py, InspectorPropertyId pz, int x, int y) noexcept {
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
-    const int laneWidth = std::max<int>(48, (valueRect.right - valueRect.left - (kLaneGap * 2)) / 3);
-    RECT lanes[3]{
-        Rect(valueRect.left, valueRect.top, valueRect.left + laneWidth, valueRect.bottom),
-        Rect(valueRect.left + laneWidth + kLaneGap, valueRect.top, valueRect.left + (laneWidth * 2) + kLaneGap, valueRect.bottom),
-        Rect(valueRect.left + (laneWidth * 2) + (kLaneGap * 2), valueRect.top, valueRect.right, valueRect.bottom),
-    };
+    const int valueWidth = static_cast<int>(valueRect.right - valueRect.left);
+    const int available = std::max(0, valueWidth - (kLaneGap * 2));
+    const int laneWidth = std::max<int>(44, available / 3);
+    const int lanesWidth = laneWidth * 3 + kLaneGap * 2;
+    const int laneLeft = static_cast<int>(valueRect.left) + std::max(0, (valueWidth - lanesWidth) / 2);
     const InspectorPropertyId properties[3]{ px, py, pz };
     for (int i = 0; i < 3; ++i) {
-        RECT box = Rect(lanes[i].left + kAxisLetterWidth + kAxisGap, lanes[i].top + 2, lanes[i].right, lanes[i].top + 2 + kValueHeight);
+        RECT lane = Rect(laneLeft + (laneWidth + kLaneGap) * i, valueRect.top, laneLeft + (laneWidth + kLaneGap) * i + laneWidth, valueRect.bottom);
+        const int top = CenteredY(lane, kValueHeight);
+        RECT box = Rect(lane.left + kAxisLetterWidth + kAxisGap, top, lane.right, top + kValueHeight);
         if (Contains(box, x, y)) {
             return MakeHit(InspectorHitKind::FloatField, section, properties[i], box);
         }
+    }
+    if (Contains(row, x, y)) {
+        return MakeHit(InspectorHitKind::Row, section, px, row);
     }
     return {};
 }
@@ -523,10 +568,14 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     };
     for (int i = 0; i < 3; ++i) {
         RECT lane = Rect(laneLeft + (laneWidth + kLaneGap) * i, valueRect.top, laneLeft + (laneWidth + kLaneGap) * i + laneWidth, valueRect.bottom);
-        RECT box = Rect(lane.left + kAxisLetterWidth + kAxisGap, lane.top + 2, lane.right, lane.top + 2 + kValueHeight);
+        const int top = CenteredY(lane, kValueHeight);
+        RECT box = Rect(lane.left + kAxisLetterWidth + kAxisGap, top, lane.right, top + kValueHeight);
         if (Contains(box, x, y)) {
             return MakeHit(InspectorHitKind::FloatField, InspectorSectionId::Transform, properties[i], box);
         }
+    }
+    if (Contains(row, x, y)) {
+        return MakeHit(InspectorHitKind::Row, InspectorSectionId::Transform, InspectorPropertyId::RotationX, row);
     }
     return {};
 }
