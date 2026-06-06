@@ -8,6 +8,7 @@
 #include "app/EditorPaintDispatcher.hpp"
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
 
 namespace kb::editor {
 
@@ -66,6 +67,13 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_CHAR:
+        if (InspectorPanelInteraction::HandleChar(context_.sceneContext, static_cast<wchar_t>(wparam))) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleChar(messageWindow, wparam)) {
             return 0;
         }
@@ -74,6 +82,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (InspectorPanelInteraction::HandleKeyDown(context_.sceneContext, wparam)) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             return 0;
         }

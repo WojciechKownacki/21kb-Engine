@@ -28,7 +28,7 @@ DockLayout DockLayoutBuilder::Build(
     DockLayout layout{};
     layout.menu = DockGeometry::MakeRect(0, 0, clientWidth, menuHeight);
     layout.toolbar = DockGeometry::MakeRect(0, menuHeight, clientWidth, toolbarHeight);
-    layout.workspace = DockGeometry::MakeRect(0, menuHeight + toolbarHeight + splitterSize, clientWidth, clientHeight - menuHeight - toolbarHeight - splitterSize);
+    layout.workspace = DockGeometry::MakeRect(0, menuHeight + toolbarHeight, clientWidth, clientHeight - menuHeight - toolbarHeight);
 
     if (root != nullptr && !layout.workspace.Empty()) {
         DockNodeLayoutBuilder{}.Build(*root, layout.workspace, layout, settings);
