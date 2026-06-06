@@ -6,6 +6,7 @@
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/EditorWindowToolbarPointerHandler.hpp"
+#include "docking/DockMainLayoutResolver.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
@@ -29,6 +30,11 @@ bool CommitPendingNewAssetFolder(EditorSceneContext& sceneContext) {
 
 bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+bool PointHitsMainSplitter(HWND window, EditorDockModel& dockModel, const EditorMetrics& metrics, int x, int y) {
+    const DockLayout layout = DockMainLayoutResolver::Resolve(window, dockModel, metrics);
+    return dockModel.Queries().HitTest(layout, x, y).kind == DockHitKind::Splitter;
 }
 
 } // namespace
@@ -90,6 +96,12 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return 0;
         }
+    }
+
+    if (messageWindow == mainWindow_ && PointHitsMainSplitter(messageWindow, dockModel_, metrics_, x, y)) {
+        static_cast<void>(dockController_.HandlePointerDown(messageWindow, x, y));
+        sceneViewport_.RequestPresent();
+        return 0;
     }
 
     EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
@@ -173,6 +185,11 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     }
 
     if (leftButtonDown && pointerDrag_.Potential() && EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
+        sceneViewport_.RequestPresent();
+        return 0;
+    }
+
+    if (leftButtonDown && dockController_.HandlePointerMove(messageWindow, x, y, true)) {
         sceneViewport_.RequestPresent();
         return 0;
     }
