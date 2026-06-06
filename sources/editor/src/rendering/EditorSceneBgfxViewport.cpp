@@ -123,12 +123,7 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         }
 
         HostSurface* surface = hostSurfaceStore_.Ensure(parent, layout.viewportKey);
-        if (surface == nullptr || surface->window == nullptr || IsWindow(surface->window) == 0) {
-            if (surface != nullptr) {
-                surface->layoutBounds = layoutBounds;
-                surface->hasLayoutBounds = true;
-                surface->presentedInCurrentPaint = true;
-            }
+        if (surface == nullptr) {
             continue;
         }
 
@@ -136,10 +131,13 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         if (layoutChanged) {
             surface->layoutBounds = layoutBounds;
             surface->hasLayoutBounds = true;
+            if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+                static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
+            }
             RequestPresent();
         }
 
-        if (IsWindowVisible(surface->window) == 0) {
+        if (surface->window != nullptr && IsWindow(surface->window) != 0 && IsWindowVisible(surface->window) == 0) {
             RequestPresent();
         }
         surface->presentedInCurrentPaint = true;
@@ -262,7 +260,7 @@ bool EditorSceneBgfxViewport::EnsureWindowClass() {
     windowClass.lpfnWndProc = &EditorSceneBgfxViewport::WindowProc;
     windowClass.hInstance = instance_;
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
-    windowClass.hbrBackground = nullptr;
+    windowClass.hbrBackground = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     windowClass.lpszClassName = kSceneViewportClassName;
     if (RegisterClassExW(&windowClass) == 0) {
         return false;
@@ -508,13 +506,17 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
         return TRUE;
     }
+    case WM_ERASEBKGND: {
+        RECT client{};
+        if (GetClientRect(window, &client) != 0) {
+            FillRect(reinterpret_cast<HDC>(wparam), &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        }
+        return TRUE;
+    }
     case WM_NCHITTEST:
         return HTTRANSPARENT;
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;
-    case WM_ERASEBKGND:
-        static_cast<void>(wparam);
-        return 1;
     case WM_PAINT: {
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
