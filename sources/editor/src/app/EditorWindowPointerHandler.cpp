@@ -63,6 +63,11 @@ bool HandleGlobalDeleteConfirm(HWND window, int x, int y, EditorSceneContext& sc
     return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(hit.value_or(EditorAssetBrowserHit{}), x, y, sceneContext);
 }
 
+void CloseAssetBrowserTransientUi(EditorSceneContext& sceneContext) noexcept {
+    sceneContext.AssetBrowser().CloseContextMenu();
+    sceneContext.AssetBrowser().CloseDropActionMenu();
+}
+
 } // namespace
 
 EditorWindowPointerHandler::EditorWindowPointerHandler(
@@ -141,6 +146,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 
     if (hierarchySelection_.HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         sceneContext_.AssetBrowser().FocusSelection(false);
+        CloseAssetBrowserTransientUi(sceneContext_);
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }
@@ -164,6 +170,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 
     if (!inAssetPanel) {
         sceneContext_.AssetBrowser().FocusSelection(false);
+        CloseAssetBrowserTransientUi(sceneContext_);
     }
     if (!inHierarchyPanel) {
         sceneContext_.ClearHierarchySelection();
