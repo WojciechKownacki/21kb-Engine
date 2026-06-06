@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "console/EditorConsoleState.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
@@ -33,6 +34,8 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
     [[nodiscard]] InspectorPanelState& Inspector() noexcept;
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
+    [[nodiscard]] EditorConsoleState& Console() noexcept;
+    [[nodiscard]] const EditorConsoleState& Console() const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -88,6 +91,7 @@ public:
 private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
+    EditorConsoleState console_;
     InspectorPanelState inspector_;
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
     EditorHierarchySelectionState hierarchySelection_;

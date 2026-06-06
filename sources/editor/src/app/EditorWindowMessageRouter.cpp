@@ -19,6 +19,15 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     switch (message) {
     case WM_ERASEBKGND:
         return 1;
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+    {
+        HDC controlDc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(controlDc, RGB(196, 205, 214));
+        SetBkColor(controlDc, RGB(20, 22, 24));
+        static HBRUSH consoleDetailBrush = CreateSolidBrush(RGB(20, 22, 24));
+        return reinterpret_cast<LRESULT>(consoleDetailBrush);
+    }
     case WM_PAINT:
         EditorPaintDispatcher{
             context_.mainWindow,
@@ -102,6 +111,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
     case WM_MOUSEMOVE:
+    case WM_MOUSEWHEEL:
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
     case WM_SETCURSOR:

@@ -74,6 +74,30 @@ bool EditorAssetBrowserState::IsThumbnailScaleDragging() const noexcept {
     return view_.IsThumbnailScaleDragging();
 }
 
+int EditorAssetBrowserState::TreeWidth() const noexcept {
+    return view_.TreeWidth();
+}
+
+bool EditorAssetBrowserState::IsTreeWidthDragging() const noexcept {
+    return view_.IsTreeWidthDragging();
+}
+
+int EditorAssetBrowserState::TreeScrollOffset() const noexcept {
+    return view_.TreeScrollOffset();
+}
+
+bool EditorAssetBrowserState::IsTreeScrollbarDragging() const noexcept {
+    return view_.IsTreeScrollbarDragging();
+}
+
+int EditorAssetBrowserState::ContentScrollOffset() const noexcept {
+    return view_.ContentScrollOffset();
+}
+
+bool EditorAssetBrowserState::IsContentScrollbarDragging() const noexcept {
+    return view_.IsContentScrollbarDragging();
+}
+
 EditorAssetTextEditMode EditorAssetBrowserState::TextEditMode() const noexcept {
     return textEdit_.Mode();
 }

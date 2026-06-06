@@ -11,6 +11,9 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserChromeHitTester::HitTest(
     int x,
     int y,
     const EditorAssetBrowserState& state) {
+    if (EditorAssetBrowserGeometry::Contains(layout.treeSplitter, x, y)) {
+        return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::TreeSplitter };
+    }
     if (EditorAssetBrowserGeometry::Contains(layout.search, x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Search };
     }

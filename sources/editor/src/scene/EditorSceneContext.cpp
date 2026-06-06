@@ -47,13 +47,24 @@ namespace {
     return filtered;
 }
 
+[[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
+    const std::string error = manager.LastError();
+    return error.empty() ? std::string{ fallback } : error;
+}
+
 } // namespace
 
 EditorSceneContext::EditorSceneContext() {
     std::filesystem::create_directories(EditorProjectPaths::PrefabsRoot());
-    static_cast<void>(scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot()));
-    static_cast<void>(scene_.Assets().Discover());
+    if (scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
+        console_.Info("Project", "Mounted project assets.");
+    } else {
+        console_.Error("Project", AssetErrorOr(scene_.Assets().Manager(), "Project assets could not be mounted."));
+    }
+    const std::size_t discovered = scene_.Assets().Discover();
+    console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+    console_.Info("Editor", "Editor scene initialized.");
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
@@ -94,6 +105,14 @@ InspectorPanelState& EditorSceneContext::Inspector() noexcept {
 
 const InspectorPanelState& EditorSceneContext::Inspector() const noexcept {
     return inspector_;
+}
+
+EditorConsoleState& EditorSceneContext::Console() noexcept {
+    return console_;
+}
+
+const EditorConsoleState& EditorSceneContext::Console() const noexcept {
+    return console_;
 }
 
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
@@ -239,6 +258,7 @@ bool EditorSceneContext::CommitHierarchyRename() {
     }
 
     scene_.Entities().SetName(hierarchyRenameEntity_, hierarchyRenameBuffer_.empty() ? "Entity" : hierarchyRenameBuffer_);
+    console_.Info("Hierarchy", "Entity renamed.");
     CancelHierarchyRename();
     return true;
 }
@@ -271,7 +291,13 @@ bool EditorSceneContext::BeginAssetFolderRename(const std::filesystem::path& vir
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
-    return EditorSceneAssetBrowserCommands::CommitTextEdit(scene_, assetBrowser_);
+    const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(scene_, assetBrowser_);
+    if (committed) {
+        console_.Info("Assets", "Asset browser text edit committed.");
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset browser text edit failed."));
+    }
+    return committed;
 }
 
 void EditorSceneContext::CancelAssetTextEdit() noexcept {
@@ -279,7 +305,13 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
 }
 
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
-    return EditorSceneAssetBrowserCommands::DeleteSelected(scene_, assetBrowser_);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(scene_, assetBrowser_);
+    if (deleted) {
+        console_.Info("Assets", "Selected asset browser item deleted.");
+    } else {
+        console_.Warning("Assets", "No asset browser item was deleted.");
+    }
+    return deleted;
 }
 
 bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
@@ -297,31 +329,72 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
             deleted = true;
         }
     }
+    if (deleted) {
+        console_.Info("Hierarchy", "Selected hierarchy entity deleted.");
+    } else {
+        console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
+    }
     return deleted;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
-    return EditorSceneAssetBrowserCommands::DeleteAsset(scene_, assetBrowser_, id);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(scene_, assetBrowser_, id);
+    if (deleted) {
+        console_.Info("Assets", "Asset deleted.");
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset delete failed."));
+    }
+    return deleted;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
-    return EditorSceneAssetBrowserCommands::DeleteFolder(scene_, assetBrowser_, virtualFolder);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(scene_, assetBrowser_, virtualFolder);
+    if (deleted) {
+        console_.Info("Assets", "Folder deleted: " + virtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder delete failed."));
+    }
+    return deleted;
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    return EditorSceneAssetBrowserCommands::MoveAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    if (moved) {
+        console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset move failed."));
+    }
+    return moved;
 }
 
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    return EditorSceneAssetBrowserCommands::MoveFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    if (moved) {
+        console_.Info("Assets", "Folder moved to " + destinationVirtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder move failed."));
+    }
+    return moved;
 }
 
 bool EditorSceneContext::CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    return EditorSceneAssetBrowserCommands::CopyAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    const bool copied = EditorSceneAssetBrowserCommands::CopyAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    if (copied) {
+        console_.Info("Assets", "Asset copied to " + destinationVirtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset copy failed."));
+    }
+    return copied;
 }
 
 bool EditorSceneContext::CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    return EditorSceneAssetBrowserCommands::CopyFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    const bool copied = EditorSceneAssetBrowserCommands::CopyFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    if (copied) {
+        console_.Info("Assets", "Folder copied to " + destinationVirtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder copy failed."));
+    }
+    return copied;
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
@@ -336,6 +409,7 @@ bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
 
 bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
     if (!EditorSceneHierarchyActions::ToggleVisibility(scene_, entity)) {
+        console_.Warning("Hierarchy", "Visibility toggle ignored for invalid entity.");
         return false;
     }
     SelectEntity(entity);
@@ -345,6 +419,7 @@ bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
 kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
     const kb::scene::SceneEntity entity = EditorSceneHierarchyActions::CreateObject(scene_);
     SelectEntity(entity);
+    console_.Info("Hierarchy", "Entity created.");
     return entity;
 }
 
@@ -352,6 +427,9 @@ bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene:
     const bool moved = EditorSceneHierarchyActions::Reparent(scene_, child, parent);
     if (moved) {
         SelectEntity(child);
+        console_.Info("Hierarchy", "Entity reparented.");
+    } else {
+        console_.Warning("Hierarchy", "Entity reparent ignored.");
     }
     return moved;
 }
@@ -360,6 +438,7 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
     const std::vector<kb::scene::SceneEntity> moving = TopLevelSelectedEntities(scene_, children);
     const std::span<const kb::scene::SceneEntity> movingSpan{ moving.data(), moving.size() };
     if (parent.IsValid() && (ContainsEntity(movingSpan, parent) || HasSelectedAncestor(scene_, parent, movingSpan))) {
+        console_.Warning("Hierarchy", "Cannot reparent an entity below itself or a selected descendant.");
         return false;
     }
 
@@ -391,6 +470,9 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
             SelectEntity(moving.front());
         }
         assetBrowser_.ClearSelection();
+        console_.Info("Hierarchy", "Hierarchy selection reparented.");
+    } else {
+        console_.Warning("Hierarchy", "Hierarchy reparent did not move any entity.");
     }
     return moved;
 }
@@ -404,6 +486,9 @@ bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const 
                 static_cast<void>(assetBrowser_.SelectAsset(metadata->id, scene_.Assets().Manager()));
             }
         }
+        console_.Info("Prefabs", "Prefab asset created: " + path.generic_string());
+    } else {
+        console_.Error("Prefabs", AssetErrorOr(scene_.Assets().Manager(), "Prefab asset creation failed."));
     }
     return created;
 }
@@ -415,29 +500,35 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
     const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(scene_, path, virtualPath, parent);
     if (!root.has_value()) {
+        console_.Error("Prefabs", "Prefab instantiation failed: " + path.generic_string());
         return false;
     }
     SelectEntity(*root);
+    console_.Info("Prefabs", "Prefab instantiated: " + path.generic_string());
     return true;
 }
 
 bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity) {
     if (!assetId.IsValid() || !entity.IsValid() || !scene_.Entities().IsAlive(entity)) {
+        console_.Warning("Scripts", "Behaviour asset assignment ignored for invalid target.");
         return false;
     }
 
     const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(assetId);
     if (metadata == nullptr) {
+        console_.Error("Scripts", "Behaviour asset metadata was not found.");
         return false;
     }
 
     const std::optional<kb::scene::BehaviourComponent> behaviour = kb::script::ScriptBehaviourAsset::CreateComponent(*metadata);
     if (!behaviour.has_value()) {
+        console_.Error("Scripts", "Behaviour component could not be created from asset: " + metadata->name);
         return false;
     }
 
     scene_.Components().Behaviours().Set(entity, *behaviour);
     SelectEntity(entity);
+    console_.Info("Scripts", "Behaviour asset assigned: " + metadata->name);
     return true;
 }
 

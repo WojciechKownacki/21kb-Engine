@@ -29,8 +29,30 @@ bool EditorAssetBrowserThumbnailScaleDragHandler::HandlePointerMove(
         return false;
     }
 
-    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(*content);
+    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(*content, state.TreeWidth());
     state.SetThumbnailScale(EditorAssetBrowserGeometry::SliderValueAt(layout, x));
+    return true;
+}
+
+bool EditorAssetBrowserThumbnailScaleDragHandler::HandleTreeResizePointerMove(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    if (!state.IsTreeWidthDragging()) {
+        return false;
+    }
+
+    const std::optional<RECT> content = EditorAssetBrowserPointerPanelResolver::ResolveContent(sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+    if (!content.has_value()) {
+        return false;
+    }
+
+    state.SetTreeWidth(x - content->left);
     return true;
 }
 
@@ -41,6 +63,16 @@ bool EditorAssetBrowserThumbnailScaleDragHandler::HandlePointerUp(EditorSceneCon
     }
 
     state.EndThumbnailScaleDrag();
+    return true;
+}
+
+bool EditorAssetBrowserThumbnailScaleDragHandler::HandleTreeResizePointerUp(EditorSceneContext& sceneContext) noexcept {
+    EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    if (!state.IsTreeWidthDragging()) {
+        return false;
+    }
+
+    state.EndTreeWidthDrag();
     return true;
 }
 
