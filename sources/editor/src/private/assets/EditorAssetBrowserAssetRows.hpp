@@ -21,6 +21,7 @@ public:
         bool recursive,
         std::string_view searchQuery,
         std::string_view typeFilter,
+        bool showTemplates,
         EditorAssetSortMode sortMode);
 
     [[nodiscard]] static std::vector<std::string> AssetTypes(const kb::assets::AssetManager& manager);

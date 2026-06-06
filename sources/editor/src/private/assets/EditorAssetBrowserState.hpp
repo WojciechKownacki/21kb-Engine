@@ -29,6 +29,10 @@ public:
     [[nodiscard]] EditorAssetViewMode ViewMode() const noexcept;
     [[nodiscard]] EditorAssetSortMode SortMode() const noexcept;
     [[nodiscard]] std::string_view TypeFilter() const noexcept;
+    [[nodiscard]] bool ShowFolders() const noexcept;
+    [[nodiscard]] bool ShowTemplates() const noexcept;
+    [[nodiscard]] bool IsFilterMenuOpen() const noexcept;
+    [[nodiscard]] int FilterMenuHoveredIndex() const noexcept;
     [[nodiscard]] bool IsSortMenuOpen() const noexcept;
     [[nodiscard]] float ThumbnailScale() const noexcept;
     [[nodiscard]] bool IsThumbnailScaleDragging() const noexcept;
@@ -69,6 +73,11 @@ public:
     void SetSortMode(EditorAssetSortMode mode) noexcept;
     void CycleSortMode() noexcept;
     void CycleTypeFilter(const kb::assets::AssetManager& manager);
+    void ToggleFilterMenu() noexcept;
+    void CloseFilterMenu() noexcept;
+    void ToggleShowFolders() noexcept;
+    void ToggleShowTemplates() noexcept;
+    [[nodiscard]] bool SetFilterMenuHoveredIndex(int index) noexcept;
     void ToggleSortMenu() noexcept;
     void CloseSortMenu() noexcept;
     void SetThumbnailScale(float scale) noexcept;
@@ -119,6 +128,7 @@ private:
     EditorAssetBrowserContextMenuState contextMenu_;
     EditorAssetBrowserDeleteConfirmState deleteConfirm_;
     bool dropActionMenuOpen_ = false;
+    int filterMenuHoveredIndex_ = -1;
     int dropActionMenuX_ = 0;
     int dropActionMenuY_ = 0;
     kb::assets::AssetId dropActionAsset_{};

@@ -7,6 +7,7 @@ bool EditorAssetBrowserState::SelectFolder(const std::filesystem::path& virtualP
         return false;
     }
     view_.CloseSortMenu();
+    view_.CloseFilterMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
     CloseDropActionMenu();
@@ -18,6 +19,7 @@ bool EditorAssetBrowserState::SelectContentFolder(const std::filesystem::path& v
         return false;
     }
     view_.CloseSortMenu();
+    view_.CloseFilterMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
     CloseDropActionMenu();
@@ -29,6 +31,7 @@ bool EditorAssetBrowserState::SelectAsset(kb::assets::AssetId id, const kb::asse
         return false;
     }
     view_.CloseSortMenu();
+    view_.CloseFilterMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
     CloseDropActionMenu();
@@ -40,6 +43,7 @@ bool EditorAssetBrowserState::ToggleFolderExpanded(const std::filesystem::path& 
         return false;
     }
     view_.CloseSortMenu();
+    view_.CloseFilterMenu();
     contextMenu_.Close();
     CloseDropActionMenu();
     return true;
