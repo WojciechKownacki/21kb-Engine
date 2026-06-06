@@ -9,6 +9,7 @@ bool EditorAssetBrowserState::SelectFolder(const std::filesystem::path& virtualP
     view_.CloseSortMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     return true;
 }
 
@@ -19,6 +20,7 @@ bool EditorAssetBrowserState::SelectContentFolder(const std::filesystem::path& v
     view_.CloseSortMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     return true;
 }
 
@@ -29,6 +31,7 @@ bool EditorAssetBrowserState::SelectAsset(kb::assets::AssetId id, const kb::asse
     view_.CloseSortMenu();
     contextMenu_.Close();
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     return true;
 }
 
@@ -38,12 +41,14 @@ bool EditorAssetBrowserState::ToggleFolderExpanded(const std::filesystem::path& 
     }
     view_.CloseSortMenu();
     contextMenu_.Close();
+    CloseDropActionMenu();
     return true;
 }
 
 void EditorAssetBrowserState::ClearSelection() noexcept {
     selection_.ClearSelection();
     deleteConfirm_.Close();
+    CloseDropActionMenu();
 }
 
 } // namespace kb::editor

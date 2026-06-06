@@ -109,11 +109,16 @@ bool EditorSceneContext::IsHierarchyEntitySelected(kb::scene::SceneEntity entity
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
-    hierarchySelection_.SelectEntity(scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{});
+    const kb::scene::SceneEntity selected = scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
+    if (hierarchyRenameEntity_.IsValid() && hierarchyRenameEntity_ != selected) {
+        static_cast<void>(CommitHierarchyRename());
+    }
+    hierarchySelection_.SelectEntity(selected);
     assetBrowser_.ClearSelection();
 }
 
 void EditorSceneContext::ClearHierarchySelection() noexcept {
+    static_cast<void>(CommitHierarchyRename());
     hierarchySelection_.Clear();
 }
 
@@ -123,6 +128,9 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept {
     const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    if (IsHierarchyRenaming()) {
+        static_cast<void>(CommitHierarchyRename());
+    }
     const bool selected = hierarchySelection_.SelectRow(rows, rowIndex, additive, range);
     if (selected) {
         assetBrowser_.ClearSelection();
@@ -142,7 +150,26 @@ bool EditorSceneContext::IsHierarchySearchFocused() const noexcept {
     return hierarchySearch_.IsFocused();
 }
 
+bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
+    return hierarchyRenameEntity_.IsValid() && scene_.Entities().IsAlive(hierarchyRenameEntity_);
+}
+
+bool EditorSceneContext::IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept {
+    return IsHierarchyRenaming() && hierarchyRenameEntity_ == entity;
+}
+
+bool EditorSceneContext::IsHierarchyRenameSelectingAll() const noexcept {
+    return IsHierarchyRenaming() && hierarchyRenameSelectingAll_;
+}
+
+std::string_view EditorSceneContext::HierarchyRenameBuffer() const noexcept {
+    return hierarchyRenameBuffer_;
+}
+
 void EditorSceneContext::FocusHierarchySearch(bool focused) noexcept {
+    if (focused) {
+        static_cast<void>(CommitHierarchyRename());
+    }
     hierarchySearch_.Focus(focused);
 }
 
@@ -162,20 +189,84 @@ void EditorSceneContext::ClearHierarchySearch() {
     hierarchySearch_.Clear();
 }
 
+bool EditorSceneContext::BeginHierarchyRename() {
+    const kb::scene::SceneEntity entity = SelectedEntity();
+    if (!scene_.Entities().IsAlive(entity)) {
+        CancelHierarchyRename();
+        return false;
+    }
+
+    hierarchySearch_.Focus(false);
+    assetBrowser_.CancelTextEdit();
+    inspector_.EndTextEdit();
+    hierarchyRenameEntity_ = entity;
+    hierarchyRenameBuffer_ = scene_.Entities().Name(entity);
+    hierarchyRenameSelectingAll_ = true;
+    return true;
+}
+
+void EditorSceneContext::AppendHierarchyRenameText(wchar_t character) {
+    if (!IsHierarchyRenaming()) {
+        return;
+    }
+    if (character >= 32 && character <= 126) {
+        if (hierarchyRenameSelectingAll_) {
+            hierarchyRenameBuffer_.clear();
+            hierarchyRenameSelectingAll_ = false;
+        }
+        hierarchyRenameBuffer_.push_back(static_cast<char>(character));
+    }
+}
+
+void EditorSceneContext::BackspaceHierarchyRename() {
+    if (!IsHierarchyRenaming()) {
+        return;
+    }
+    if (hierarchyRenameSelectingAll_) {
+        hierarchyRenameBuffer_.clear();
+        hierarchyRenameSelectingAll_ = false;
+        return;
+    }
+    if (!hierarchyRenameBuffer_.empty()) {
+        hierarchyRenameBuffer_.pop_back();
+    }
+}
+
+bool EditorSceneContext::CommitHierarchyRename() {
+    if (!IsHierarchyRenaming()) {
+        CancelHierarchyRename();
+        return false;
+    }
+
+    scene_.Entities().SetName(hierarchyRenameEntity_, hierarchyRenameBuffer_.empty() ? "Entity" : hierarchyRenameBuffer_);
+    CancelHierarchyRename();
+    return true;
+}
+
+void EditorSceneContext::CancelHierarchyRename() noexcept {
+    hierarchyRenameEntity_ = {};
+    hierarchyRenameBuffer_.clear();
+    hierarchyRenameSelectingAll_ = false;
+}
+
 bool EditorSceneContext::BeginAssetFolderCreation() {
+    static_cast<void>(CommitHierarchyRename());
     assetBrowser_.BeginNewFolder();
     return true;
 }
 
 bool EditorSceneContext::BeginAssetRename() {
+    static_cast<void>(CommitHierarchyRename());
     return assetBrowser_.BeginRenameSelection(scene_.Assets().Manager());
 }
 
 bool EditorSceneContext::BeginAssetRename(kb::assets::AssetId id) {
+    static_cast<void>(CommitHierarchyRename());
     return assetBrowser_.BeginRenameAsset(id, scene_.Assets().Manager());
 }
 
 bool EditorSceneContext::BeginAssetFolderRename(const std::filesystem::path& virtualFolder) {
+    static_cast<void>(CommitHierarchyRename());
     return assetBrowser_.BeginRenameFolder(virtualFolder, scene_.Assets().Manager());
 }
 
@@ -223,6 +314,14 @@ bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::fi
 
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
     return EditorSceneAssetBrowserCommands::MoveFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+}
+
+bool EditorSceneContext::CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
+    return EditorSceneAssetBrowserCommands::CopyAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+}
+
+bool EditorSceneContext::CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
+    return EditorSceneAssetBrowserCommands::CopyFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {

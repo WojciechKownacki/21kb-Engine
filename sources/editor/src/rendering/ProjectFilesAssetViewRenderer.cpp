@@ -18,9 +18,7 @@ void ProjectFilesAssetViewRenderer::Paint(
     const std::vector<EditorAssetItemRow>& assets) {
     using Draw = ProjectFilesPanelDrawing;
 
-    GdiDrawing::DrawSharpFrame(dc, layout.assetView, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 12), Draw::Color(theme.borderPanel));
-    RECT innerTop{ layout.assetView.left + 1, layout.assetView.top + 1, layout.assetView.right - 1, layout.assetView.top + 2 };
-    GdiDrawing::FillRectAlpha(dc, innerTop, RGB(255, 255, 255), 10);
+    GdiDrawing::DrawSharpFrame(dc, layout.assetView, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 8), Draw::Color(theme.borderPanel));
     if (state.ViewMode() == EditorAssetViewMode::Tiles) {
         ProjectFilesAssetTileRenderer::Paint(dc, layout, theme, state, folders, assets);
     } else {

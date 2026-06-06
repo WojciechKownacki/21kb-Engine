@@ -42,6 +42,8 @@ enum class EditorAssetBrowserHitKind {
     DeleteConfirmBody,
     DeleteConfirmAccept,
     DeleteConfirmCancel,
+    DropActionBody,
+    DropActionCommand,
     ContextMenuBody,
     ContextMenuCommand,
 };
@@ -51,6 +53,7 @@ struct EditorAssetBrowserHit {
     std::size_t index = 0;
     float value = 0.0F;
     EditorAssetContextCommand command = EditorAssetContextCommand::None;
+    EditorAssetDropAction dropAction = EditorAssetDropAction::None;
 };
 
 class EditorAssetBrowserHitTester {

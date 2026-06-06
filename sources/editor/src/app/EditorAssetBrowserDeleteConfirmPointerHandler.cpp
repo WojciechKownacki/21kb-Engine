@@ -21,7 +21,7 @@ bool EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(const Edit
     default:
         state.CloseDeleteConfirm();
         state.FocusSelection(false);
-        return false;
+        return true;
     }
 }
 

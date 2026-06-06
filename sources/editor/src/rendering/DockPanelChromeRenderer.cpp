@@ -14,7 +14,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kTabFontSize = 13;
+constexpr int kTabFontSize = 12;
 constexpr int kTabTextVerticalOffset = 1;
 constexpr int kTabIconSize = 15;
 constexpr int kTabIconGap = 6;
@@ -101,7 +101,7 @@ void DrawTabContent(HDC dc, const RECT& tab, const DockPanel& panel, const Edito
 } // namespace
 
 void DockPanelChromeRenderer::Paint(HDC dc, const RECT& rect, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, bool active) const {
-    ScopedFont titleFont(kTabFontSize, FW_NORMAL);
+    ScopedFont titleFont(kTabFontSize, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, titleFont.handle);
 
     DockPanelFramePainter{}.Paint(dc, rect, panel.kind, theme);

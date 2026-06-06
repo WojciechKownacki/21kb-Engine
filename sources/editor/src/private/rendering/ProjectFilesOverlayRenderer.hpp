@@ -31,6 +31,20 @@ public:
         const EditorTheme& theme,
         const EditorAssetBrowserState& state,
         const kb::assets::AssetManager& manager);
+
+    static void PaintDeleteConfirm(
+        HDC dc,
+        const RECT& bounds,
+        const EditorTheme& theme,
+        const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager);
+
+    static void PaintDeleteConfirmDialogOnly(
+        HDC dc,
+        const RECT& bounds,
+        const EditorTheme& theme,
+        const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager);
 };
 
 #endif

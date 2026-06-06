@@ -12,7 +12,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kTabFontSize = 13;
+constexpr int kTabFontSize = 12;
 constexpr int kTabTextVerticalOffset = 1;
 constexpr int kTabIconSize = 15;
 constexpr int kTabIconGap = 6;
@@ -103,7 +103,7 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
 } // namespace
 
 void DockWorkspaceTabStripRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const {
-    ScopedFont titleFont(kTabFontSize, FW_NORMAL);
+    ScopedFont titleFont(kTabFontSize, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, titleFont.handle);
 
     for (const DockPanelLayout& panelLayout : layout.panels) {

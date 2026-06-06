@@ -61,6 +61,32 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTest
     return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::ContextMenuBody };
 }
 
+std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTestDropActionMenu(
+    const RECT& content,
+    int x,
+    int y,
+    const EditorAssetBrowserState& state) {
+    if (!state.IsDropActionMenuOpen()) {
+        return std::nullopt;
+    }
+
+    const RECT menu = EditorAssetBrowserLayout::ContextMenuRect(content, state.DropActionMenuX(), state.DropActionMenuY(), 2);
+    if (!EditorAssetBrowserGeometry::Contains(menu, x, y)) {
+        return EditorAssetBrowserHit{};
+    }
+
+    for (int index = 0; index < 2; ++index) {
+        if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::ContextMenuItemRect(menu, index), x, y)) {
+            return EditorAssetBrowserHit{
+                .kind = EditorAssetBrowserHitKind::DropActionCommand,
+                .index = static_cast<std::size_t>(index),
+                .dropAction = index == 0 ? EditorAssetDropAction::MoveHere : EditorAssetDropAction::CopyHere,
+            };
+        }
+    }
+    return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DropActionBody };
+}
+
 } // namespace kb::editor
 
 #endif

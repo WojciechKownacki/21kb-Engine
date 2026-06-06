@@ -155,6 +155,8 @@ void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const Inspec
 
 void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false) {
     DrawFrame(dc, rect, hovered ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
+    ScopedFont valueFont(12, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, valueFont.handle);
     Text(dc, Shrink(rect, kValuePadX, 0, 4, 0), value, Color(theme.textPrimary));
 }
 
@@ -180,9 +182,10 @@ void DrawAxisLane(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPa
         Text(dc, letter, label, AxisColor(axis), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    const std::string_view shown = state.EditedProperty() == property ? std::string_view{ state.EditBuffer() } : value;
+    const bool editing = property != InspectorPropertyId::None && state.EditedProperty() == property;
+    const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : value;
     RECT box = Rect(letter.right + kAxisGap, CenteredY(rect, kValueHeight), rect.right, CenteredY(rect, kValueHeight) + kValueHeight);
-    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property) || state.EditedProperty() == property);
+    DrawValueBox(dc, box, theme, shown, state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
 }
 
 void DrawVec3Row(
@@ -202,7 +205,7 @@ void DrawVec3Row(
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
 
-    ScopedFont labelFont(11, FW_SEMIBOLD);
+    ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
@@ -227,7 +230,7 @@ void DrawRotationRow(HDC dc, RECT row, const EditorTheme& theme, const Inspector
     }
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT valueRect = Rect(labelRect.right, row.top, row.right - kRowPadX, row.bottom);
-    ScopedFont labelFont(11, FW_SEMIBOLD);
+    ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
@@ -252,14 +255,15 @@ void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPan
     }
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
-    const std::string_view shown = state.EditedProperty() == property ? std::string_view{ state.EditBuffer() } : value;
+    const bool editing = property != InspectorPropertyId::None && state.EditedProperty() == property;
+    const std::string_view shown = editing ? std::string_view{ state.EditBuffer() } : value;
 
-    ScopedFont labelFont(11, FW_SEMIBOLD);
+    ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
     }
-    DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || state.EditedProperty() == property);
+    DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
 }
 
 [[nodiscard]] RECT CheckboxRectForRow(RECT row) noexcept {
@@ -273,7 +277,7 @@ void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPane
     }
     RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     RECT box = CheckboxRectForRow(row);
-    ScopedFont labelFont(11, FW_SEMIBOLD);
+    ScopedFont labelFont(12, FW_SEMIBOLD);
     {
         const ScopedGdiObject selectedFont(dc, labelFont.handle);
         Text(dc, labelRect, label, Color(theme.textSecondary));
@@ -359,35 +363,6 @@ private:
     int y_ = bounds_.top;
 };
 
-[[nodiscard]] std::filesystem::path ParentVirtualPath(const std::filesystem::path& virtualPath) {
-    const std::string normalized = NormalizePath(virtualPath);
-    const std::size_t separator = normalized.find_last_of('/');
-    if (separator == std::string::npos || separator == 0) {
-        return std::filesystem::path{ "/Game" };
-    }
-    return std::filesystem::path{ normalized.substr(0, separator) };
-}
-
-[[nodiscard]] std::size_t ImmediateAssetCount(const kb::assets::AssetManager& manager, const std::filesystem::path& virtualFolder) {
-    std::size_t count = 0;
-    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (NormalizePath(ParentVirtualPath(metadata.virtualPath)) == NormalizePath(virtualFolder)) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-[[nodiscard]] std::size_t ImmediateFolderCount(const kb::assets::AssetManager& manager, const std::filesystem::path& virtualFolder) {
-    std::size_t count = 0;
-    for (const std::filesystem::path& folder : manager.VirtualFolders()) {
-        if (NormalizePath(folder) != NormalizePath(virtualFolder) && NormalizePath(ParentVirtualPath(folder)) == NormalizePath(virtualFolder)) {
-            ++count;
-        }
-    }
-    return count;
-}
-
 [[nodiscard]] std::optional<std::filesystem::path> ResolveAssetPhysicalPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     if (!metadata.physicalPath.empty()) {
         return metadata.physicalPath;
@@ -446,16 +421,6 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         return;
     }
 
-    if (state.SelectionKind() == EditorAssetBrowserSelectionKind::Folder) {
-        const std::filesystem::path folder = state.SelectedContentFolder().empty() ? state.SelectedFolder() : state.SelectedContentFolder();
-        const std::string normalized = NormalizePath(folder);
-        DrawHeader(dc, content, theme, HeroIconKind::Folder, normalized == "/Game" ? "Game" : folder.filename().string(), "Folder");
-        y += kHeaderHeight + kPanelPadTop;
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Folder, HeroIconKind::Folder, "Folder");
-        section.Field("Virtual Path", normalized);
-        section.Field("Folders", std::to_string(ImmediateFolderCount(manager, folder)));
-        section.Field("Assets", std::to_string(ImmediateAssetCount(manager, folder)));
-    }
 }
 
 void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
@@ -605,7 +570,7 @@ void InspectorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
     const RECT inner = Rect(content.left, content.top, content.right, content.bottom);
 
-    if (sceneContext.AssetBrowser().SelectionKind() != EditorAssetBrowserSelectionKind::None) {
+    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
         PaintAsset(dc, inner, theme, sceneContext);
         RestoreDC(dc, savedDc);
         return;
@@ -630,9 +595,8 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     const InspectorPanelState& state = sceneContext.Inspector();
     int y = content.top + kHeaderHeight + kPanelPadTop;
 
-    if (sceneContext.AssetBrowser().SelectionKind() != EditorAssetBrowserSelectionKind::None) {
-        const InspectorSectionId section = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset ? InspectorSectionId::Asset : InspectorSectionId::Folder;
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, section, x, yPoint); hit.kind != InspectorHitKind::None) {
+    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Asset, x, yPoint); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         return {};

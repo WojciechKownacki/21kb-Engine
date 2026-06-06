@@ -25,6 +25,12 @@ public:
         int y,
         const EditorAssetBrowserState& state,
         const kb::assets::AssetManager& manager);
+
+    [[nodiscard]] static std::optional<EditorAssetBrowserHit> HitTestDropActionMenu(
+        const RECT& content,
+        int x,
+        int y,
+        const EditorAssetBrowserState& state);
 };
 
 #endif
