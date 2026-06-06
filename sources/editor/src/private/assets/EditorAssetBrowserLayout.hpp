@@ -46,6 +46,8 @@ public:
     [[nodiscard]] static int AssetTileColumnCount(const EditorAssetBrowserLayoutRects& layout, float scale) noexcept;
     [[nodiscard]] static RECT ContextMenuRect(const RECT& content, int x, int y, int itemCount) noexcept;
     [[nodiscard]] static RECT ContextMenuItemRect(const RECT& menu, int index) noexcept;
+    [[nodiscard]] static RECT FilterMenuRect(const EditorAssetBrowserLayoutRects& layout) noexcept;
+    [[nodiscard]] static RECT FilterMenuItemRect(const RECT& menu, int index) noexcept;
     [[nodiscard]] static int TileWidth(float scale) noexcept;
     [[nodiscard]] static int TileHeight(float scale) noexcept;
 

@@ -288,8 +288,8 @@ void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPane
         ScopedFont markFont(10, FW_SEMIBOLD);
         const ScopedGdiObject selectedFont(dc, markFont.handle);
         RECT glyph = box;
-        glyph.top += 1;
-        glyph.bottom += 1;
+        glyph.top -= 1;
+        glyph.bottom -= 1;
         TextW(dc, glyph, L"\u2714", Color(theme.textPrimary));
     }
 }

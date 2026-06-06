@@ -15,6 +15,9 @@ public:
     [[nodiscard]] EditorAssetViewMode ViewMode() const noexcept;
     [[nodiscard]] EditorAssetSortMode SortMode() const noexcept;
     [[nodiscard]] std::string_view TypeFilter() const noexcept;
+    [[nodiscard]] bool ShowFolders() const noexcept;
+    [[nodiscard]] bool ShowTemplates() const noexcept;
+    [[nodiscard]] bool IsFilterMenuOpen() const noexcept;
     [[nodiscard]] bool IsSortMenuOpen() const noexcept;
     [[nodiscard]] float ThumbnailScale() const noexcept;
     [[nodiscard]] bool IsThumbnailScaleDragging() const noexcept;
@@ -31,6 +34,10 @@ public:
     void CycleSortMode() noexcept;
     void SetTypeFilter(std::string type);
     void ClearTypeFilter() noexcept;
+    void ToggleShowFolders() noexcept;
+    void ToggleShowTemplates() noexcept;
+    void ToggleFilterMenu() noexcept;
+    void CloseFilterMenu() noexcept;
     void ToggleSortMenu() noexcept;
     void CloseSortMenu() noexcept;
     void SetThumbnailScale(float scale) noexcept;
@@ -42,6 +49,9 @@ private:
     std::string typeFilter_;
     bool searchFocused_ = false;
     bool recursive_ = false;
+    bool showFolders_ = true;
+    bool showTemplates_ = true;
+    bool filterMenuOpen_ = false;
     bool sortMenuOpen_ = false;
     bool thumbnailScaleDragging_ = false;
     float thumbnailScale_ = 1.0F;

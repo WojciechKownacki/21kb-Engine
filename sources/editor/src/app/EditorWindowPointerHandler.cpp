@@ -64,6 +64,7 @@ bool HandleGlobalDeleteConfirm(HWND window, int x, int y, EditorSceneContext& sc
 }
 
 void CloseAssetBrowserTransientUi(EditorSceneContext& sceneContext) noexcept {
+    sceneContext.AssetBrowser().CloseFilterMenu();
     sceneContext.AssetBrowser().CloseContextMenu();
     sceneContext.AssetBrowser().CloseDropActionMenu();
 }
