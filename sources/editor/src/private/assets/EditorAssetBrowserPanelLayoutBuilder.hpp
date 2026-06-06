@@ -11,6 +11,7 @@ public:
     EditorAssetBrowserPanelLayoutBuilder() = delete;
 
     [[nodiscard]] static EditorAssetBrowserLayoutRects Build(const RECT& content) noexcept;
+    [[nodiscard]] static EditorAssetBrowserLayoutRects Build(const RECT& content, int treeWidth) noexcept;
 };
 
 #endif

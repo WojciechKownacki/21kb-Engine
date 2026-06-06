@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <set>
+#include <unordered_set>
 
 namespace kb::editor {
 
@@ -12,6 +13,14 @@ std::vector<EditorAssetFolderRow> EditorAssetBrowserFolderRowBuilder::BuildTreeR
     const std::filesystem::path& selectedFolder,
     const std::unordered_set<std::string>& collapsedFolders) {
     const std::set<std::string> folders = asset_browser::AllFolderPaths(manager);
+    std::unordered_set<std::string> parentsWithChildren;
+    parentsWithChildren.reserve(folders.size());
+    for (const std::string& folder : folders) {
+        const std::string parent = asset_browser::Normalize(asset_browser::ParentVirtualPath(folder));
+        if (parent != folder) {
+            parentsWithChildren.insert(parent);
+        }
+    }
 
     std::vector<EditorAssetFolderRow> rows;
     rows.reserve(folders.size());
@@ -19,7 +28,7 @@ std::vector<EditorAssetFolderRow> EditorAssetBrowserFolderRowBuilder::BuildTreeR
         if (asset_browser::IsHiddenByCollapsedAncestor(folder, collapsedFolders)) {
             continue;
         }
-        const bool hasChildren = asset_browser::HasImmediateChild(folders, folder);
+        const bool hasChildren = parentsWithChildren.contains(folder);
         rows.push_back(EditorAssetFolderRow{
             .virtualPath = std::filesystem::path{ folder },
             .name = asset_browser::FileNameOrRoot(folder),

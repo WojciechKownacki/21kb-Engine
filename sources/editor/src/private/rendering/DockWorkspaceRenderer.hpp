@@ -18,7 +18,7 @@ namespace kb::editor {
 class DockWorkspaceRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const;
+    void Paint(HWND parent, HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const;
 #endif
 };
 
