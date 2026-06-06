@@ -86,7 +86,7 @@ void ProjectFilesFilterMenuOverlayWindow::Show(HWND parent, const RECT& assetCon
     theme_ = theme;
     sceneContext_ = &sceneContext;
 
-    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(assetContent);
+    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(assetContent, sceneContext.AssetBrowser().TreeWidth());
     RECT menu = EditorAssetBrowserLayout::FilterMenuRect(layout);
     POINT screen{ menu.left, menu.top };
     ClientToScreen(parent, &screen);

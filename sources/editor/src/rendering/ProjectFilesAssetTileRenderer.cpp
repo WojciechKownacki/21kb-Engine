@@ -2,10 +2,13 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
+#include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesAssetTileFrameRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/ProjectFilesTileTextRenderer.hpp"
+
+#include <algorithm>
 
 namespace kb::editor {
 namespace {
@@ -57,6 +60,25 @@ void DrawNewFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const Editor
     Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());
 }
 
+[[nodiscard]] int TotalTileCount(const EditorAssetBrowserState& state, const std::vector<EditorAssetFolderRow>& folders, const std::vector<EditorAssetItemRow>& assets) noexcept {
+    return static_cast<int>(folders.size() + assets.size() + (state.TextEditMode() == EditorAssetTextEditMode::NewFolder ? 1U : 0U));
+}
+
+void DrawScrollbar(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state, int contentHeight) {
+    static_cast<void>(theme);
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top);
+    if (contentHeight <= viewportHeight) {
+        return;
+    }
+    const RECT track = EditorAssetBrowserLayout::AssetScrollbarTrackRect(layout);
+    const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.ContentScrollOffset());
+    GdiDrawing::DrawSharpFrame(dc, track, RGB(22, 24, 27), RGB(38, 42, 47));
+    const COLORREF thumbColor = state.IsContentScrollbarDragging() ? RGB(104, 116, 130) : RGB(76, 86, 98);
+    const COLORREF thumbBorder = state.IsContentScrollbarDragging() ? RGB(128, 142, 158) : RGB(94, 105, 118);
+    GdiDrawing::DrawSharpFrame(dc, thumb, thumbColor, thumbBorder);
+}
+
 } // namespace
 
 void ProjectFilesAssetTileRenderer::Paint(
@@ -66,30 +88,46 @@ void ProjectFilesAssetTileRenderer::Paint(
     const EditorAssetBrowserState& state,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {
-    int index = 0;
-    for (const EditorAssetFolderRow& folder : folders) {
-        RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, index++, state.ThumbnailScale());
-        if (tile.top >= layout.assetView.bottom - 4) {
-            return;
-        }
-        const bool highlighted = folder.selected
-            || (state.ContextMenuTargetKind() == EditorAssetContextTargetKind::Folder
-                && Draw::SameVirtualPath(state.ContextMenuTargetFolder(), folder.virtualPath));
-        DrawFolderTile(dc, tile, theme, folder, highlighted, state);
-    }
+    constexpr int tileGap = 5;
+    const int columns = EditorAssetBrowserLayout::AssetTileColumnCount(layout, state.ThumbnailScale());
+    const int stepY = EditorAssetBrowserLayout::TileHeight(state.ThumbnailScale()) + tileGap;
+    const int totalItems = TotalTileCount(state, folders, assets);
+    const int totalRows = (totalItems + columns - 1) / columns;
+    const int contentHeight = totalRows * stepY;
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    const int maxOffset = std::max(0, contentHeight - static_cast<int>(viewport.bottom - viewport.top));
+    const int scroll = std::clamp(state.ContentScrollOffset(), 0, maxOffset);
+    const int firstIndex = std::clamp((scroll / stepY) * columns, 0, totalItems);
+    const int visibleRows = (static_cast<int>(viewport.bottom - viewport.top) / stepY) + 3;
+    const int lastIndex = std::clamp(firstIndex + visibleRows * columns, 0, totalItems);
 
-    if (state.TextEditMode() == EditorAssetTextEditMode::NewFolder) {
-        RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, index++, state.ThumbnailScale());
-        DrawNewFolderTile(dc, tile, theme, state);
-    }
-
-    for (const EditorAssetItemRow& asset : assets) {
-        RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, index++, state.ThumbnailScale());
-        if (tile.top >= layout.assetView.bottom - 4) {
-            return;
+    SaveDC(dc);
+    IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
+    for (int globalIndex = firstIndex; globalIndex < lastIndex; ++globalIndex) {
+        RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, globalIndex, state.ThumbnailScale());
+        OffsetRect(&tile, 0, -scroll);
+        if (globalIndex < static_cast<int>(folders.size())) {
+            const EditorAssetFolderRow& folder = folders[static_cast<std::size_t>(globalIndex)];
+            const bool highlighted = folder.selected
+                || (state.ContextMenuTargetKind() == EditorAssetContextTargetKind::Folder
+                    && Draw::SameVirtualPath(state.ContextMenuTargetFolder(), folder.virtualPath));
+            DrawFolderTile(dc, tile, theme, folder, highlighted, state);
+            continue;
         }
-        DrawAssetTile(dc, tile, theme, asset, state);
+        int relative = globalIndex - static_cast<int>(folders.size());
+        if (state.TextEditMode() == EditorAssetTextEditMode::NewFolder) {
+            if (relative == 0) {
+                DrawNewFolderTile(dc, tile, theme, state);
+                continue;
+            }
+            --relative;
+        }
+        if (relative >= 0 && relative < static_cast<int>(assets.size())) {
+            DrawAssetTile(dc, tile, theme, assets[static_cast<std::size_t>(relative)], state);
+        }
     }
+    RestoreDC(dc, -1);
+    DrawScrollbar(dc, layout, theme, state, contentHeight);
 }
 
 } // namespace kb::editor

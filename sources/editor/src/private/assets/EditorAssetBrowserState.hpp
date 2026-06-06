@@ -36,6 +36,12 @@ public:
     [[nodiscard]] bool IsSortMenuOpen() const noexcept;
     [[nodiscard]] float ThumbnailScale() const noexcept;
     [[nodiscard]] bool IsThumbnailScaleDragging() const noexcept;
+    [[nodiscard]] int TreeWidth() const noexcept;
+    [[nodiscard]] bool IsTreeWidthDragging() const noexcept;
+    [[nodiscard]] int TreeScrollOffset() const noexcept;
+    [[nodiscard]] bool IsTreeScrollbarDragging() const noexcept;
+    [[nodiscard]] int ContentScrollOffset() const noexcept;
+    [[nodiscard]] bool IsContentScrollbarDragging() const noexcept;
     [[nodiscard]] EditorAssetTextEditMode TextEditMode() const noexcept;
     [[nodiscard]] kb::assets::AssetId TextEditTargetAsset() const noexcept;
     [[nodiscard]] const std::filesystem::path& TextEditTargetFolder() const noexcept;
@@ -83,6 +89,17 @@ public:
     void SetThumbnailScale(float scale) noexcept;
     void BeginThumbnailScaleDrag() noexcept;
     void EndThumbnailScaleDrag() noexcept;
+    void SetTreeWidth(int width) noexcept;
+    void BeginTreeWidthDrag() noexcept;
+    void EndTreeWidthDrag() noexcept;
+    void SetTreeScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginTreeScrollbarDrag(int y) noexcept;
+    void DragTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndTreeScrollbarDrag() noexcept;
+    void SetContentScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginContentScrollbarDrag(int y) noexcept;
+    void DragContentScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndContentScrollbarDrag() noexcept;
 
     void BeginNewFolder();
     [[nodiscard]] bool BeginRenameSelection(const kb::assets::AssetManager& manager);

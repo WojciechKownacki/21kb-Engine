@@ -137,6 +137,23 @@ void RunTextEditStateTest() {
 }
 
 #if defined(_WIN32)
+void RunProjectFilesEdgeToEdgeLayoutTest() {
+    const RECT content{ 0, 0, 960, 260 };
+    const kb::editor::EditorAssetBrowserLayoutRects layout = kb::editor::EditorAssetBrowserLayout::Build(content);
+
+    kb::editor::tests::Require(layout.frame.left == content.left && layout.frame.top == content.top, "Asset browser frame should start at the panel content edge");
+    kb::editor::tests::Require(layout.frame.right == content.right && layout.frame.bottom == content.bottom, "Asset browser frame should end at the panel content edge");
+    kb::editor::tests::Require(layout.tree.left == layout.frame.left && layout.tree.top == layout.frame.top, "Asset browser tree should use the freed toolbar space");
+    kb::editor::tests::Require(layout.toolbar.left == layout.tree.right, "Asset browser toolbar should start at the asset view column");
+    kb::editor::tests::Require(layout.assetView.left == layout.tree.right, "Asset browser asset view should share the tree separator");
+    kb::editor::tests::Require(layout.assetView.top == layout.toolbar.bottom, "Asset browser asset view should sit directly below the toolbar");
+    kb::editor::tests::Require(layout.tree.bottom == layout.bottomBar.top && layout.assetView.bottom == layout.bottomBar.top, "Asset browser body should touch the bottom bar");
+
+    const kb::editor::EditorAssetBrowserLayoutRects resized = kb::editor::EditorAssetBrowserLayout::Build(content, 360);
+    kb::editor::tests::Require(resized.tree.right == content.left + 360, "Asset browser tree should support explicit resize width");
+    kb::editor::tests::Require(resized.toolbar.left == resized.tree.right && resized.assetView.left == resized.tree.right, "Asset browser resized separator should drive the right column");
+}
+
 void RunTileHitTestUsesExactGridGeometryTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Directional_Light", "ScenePrefab", "/Game/Prefabs/Directional_Light.kbprefab")));
@@ -157,6 +174,17 @@ void RunTileHitTestUsesExactGridGeometryTest() {
     kb::editor::tests::Require(kb::editor::EditorAssetBrowserHitTester::PrefabAssetAt(content, x, y, state, manager).has_value(), "Asset browser middle prefab tile should be draggable");
     kb::editor::tests::Require(kb::editor::EditorAssetBrowserHitTester::AssetIdAt(content, x, y, state, manager).has_value(), "Asset browser middle prefab tile should expose its asset id for Project Files drops");
     kb::editor::tests::Require(kb::editor::EditorAssetBrowserLayout::TileHeight(state.ThumbnailScale()) > kb::editor::EditorAssetBrowserLayout::TileWidth(state.ThumbnailScale()), "Asset browser tiles should use a vertical layout");
+}
+
+void RunTreeSplitterHitTestTest() {
+    kb::assets::AssetManager manager;
+    kb::editor::EditorAssetBrowserState state;
+    state.SetTreeWidth(360);
+    const RECT content{ 0, 0, 960, 260 };
+    const kb::editor::EditorAssetBrowserLayoutRects layout = kb::editor::EditorAssetBrowserLayout::Build(content, state.TreeWidth());
+
+    const kb::editor::EditorAssetBrowserHit hit = kb::editor::EditorAssetBrowserHitTester::HitTest(content, layout.tree.right, layout.tree.top + 16, state, manager);
+    kb::editor::tests::Require(hit.kind == kb::editor::EditorAssetBrowserHitKind::TreeSplitter, "Asset browser tree separator should be directly resizable");
 }
 
 void RunTreeDisclosureHitTestTest() {
@@ -243,7 +271,9 @@ void RunEditorAssetBrowserTests() {
     RunSelectionAndTypeCycleTest();
     RunTextEditStateTest();
 #if defined(_WIN32)
+    RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();
+    RunTreeSplitterHitTestTest();
     RunTreeDisclosureHitTestTest();
     RunContentFolderHitTestExposesFolderDragSourceTest();
     RunLegacyPrefabExtensionStillDraggableTest();

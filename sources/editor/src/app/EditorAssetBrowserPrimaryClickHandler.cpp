@@ -2,11 +2,13 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
+#include "assets/EditorAssetBrowserLayout.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <filesystem>
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -43,6 +45,27 @@ bool ExecuteDropAction(EditorSceneContext& sceneContext, EditorAssetDropAction a
     return executed;
 }
 
+[[nodiscard]] int AssetContentHeight(const EditorAssetBrowserLayoutRects& layout, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager) {
+    const int itemCount = static_cast<int>(state.ChildFolderRows(manager).size() + state.AssetRows(manager).size())
+        + (state.TextEditMode() == EditorAssetTextEditMode::NewFolder ? 1 : 0);
+    if (state.ViewMode() == EditorAssetViewMode::Tiles) {
+        constexpr int tileGap = 5;
+        const int columns = EditorAssetBrowserLayout::AssetTileColumnCount(layout, state.ThumbnailScale());
+        const int rows = (itemCount + columns - 1) / std::max(1, columns);
+        return rows * (EditorAssetBrowserLayout::TileHeight(state.ThumbnailScale()) + tileGap);
+    }
+    return itemCount * EditorAssetBrowserLayout::RowHeight;
+}
+
+[[nodiscard]] int AssetViewportHeight(const EditorAssetBrowserLayoutRects& layout, const EditorAssetBrowserState& state) noexcept {
+    const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+    int height = static_cast<int>(viewport.bottom - viewport.top);
+    if (state.ViewMode() == EditorAssetViewMode::List) {
+        height -= EditorAssetBrowserLayout::AssetHeaderHeight;
+    }
+    return std::max(1, height);
+}
+
 } // namespace
 
 bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
@@ -53,6 +76,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
 
     switch (hit.kind) {
     case EditorAssetBrowserHitKind::Search:
@@ -121,6 +145,45 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         state.SetThumbnailScale(hit.value);
         state.BeginThumbnailScaleDrag();
         return true;
+    case EditorAssetBrowserHitKind::TreeSplitter:
+        PrepareBrowserAction(state);
+        state.SetTreeWidth(x - content.left);
+        state.BeginTreeWidthDrag();
+        return true;
+    case EditorAssetBrowserHitKind::TreeScrollbarThumb:
+        PrepareBrowserAction(state);
+        state.BeginTreeScrollbarDrag(y);
+        return true;
+    case EditorAssetBrowserHitKind::TreeScrollbarTrack: {
+        PrepareBrowserAction(state);
+        const int contentHeight = static_cast<int>(state.FolderRows(manager).size()) * EditorAssetBrowserLayout::RowHeight;
+        const RECT viewport = EditorAssetBrowserLayout::TreeViewportRect(layout);
+        const int viewportHeight = static_cast<int>(viewport.bottom - viewport.top);
+        const int maxOffset = std::max(0, contentHeight - viewportHeight);
+        const RECT track = EditorAssetBrowserLayout::TreeScrollbarTrackRect(layout);
+        const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.TreeScrollOffset());
+        const int page = std::max(1, viewportHeight - EditorAssetBrowserLayout::RowHeight);
+        state.SetTreeScrollOffset(state.TreeScrollOffset() + (y < thumb.top ? -page : page), maxOffset);
+        return true;
+    }
+    case EditorAssetBrowserHitKind::ContentScrollbarThumb:
+        PrepareBrowserAction(state);
+        state.BeginContentScrollbarDrag(y);
+        return true;
+    case EditorAssetBrowserHitKind::ContentScrollbarTrack: {
+        PrepareBrowserAction(state);
+        const int contentHeight = AssetContentHeight(layout, state, manager);
+        const int viewportHeight = AssetViewportHeight(layout, state);
+        const int maxOffset = std::max(0, contentHeight - viewportHeight);
+        RECT track = EditorAssetBrowserLayout::AssetScrollbarTrackRect(layout);
+        if (state.ViewMode() == EditorAssetViewMode::List) {
+            track.top += EditorAssetBrowserLayout::AssetHeaderHeight;
+        }
+        const RECT thumb = EditorAssetBrowserLayout::ScrollbarThumbRect(track, viewportHeight, contentHeight, state.ContentScrollOffset());
+        const int page = std::max(1, viewportHeight - EditorAssetBrowserLayout::RowHeight);
+        state.SetContentScrollOffset(state.ContentScrollOffset() + (y < thumb.top ? -page : page), maxOffset);
+        return true;
+    }
     case EditorAssetBrowserHitKind::FolderDisclosure: {
         PrepareBrowserAction(state);
         const std::optional<std::filesystem::path> folder = EditorAssetBrowserHitPayloadResolver::FolderDropTargetAt(hit, state, manager);

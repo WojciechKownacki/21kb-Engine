@@ -68,13 +68,20 @@ void DrawSearch(HDC dc, RECT rect, const EditorTheme& theme, const EditorAssetBr
     Draw::DrawLabel(dc, text, query.empty() ? "Szukaj zawartosci..." : query.c_str(), query.empty() ? Draw::Color(theme.textDisabled) : Draw::Color(theme.textPrimary));
 }
 
+void DrawNewFolderButton(HDC dc, RECT rect, const EditorTheme& theme, bool active) {
+    const COLORREF fill = active ? Draw::Blend(Draw::Color(theme.tabActive), Draw::Color(theme.accent), 10) : Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 20);
+    const COLORREF border = active ? Draw::Blend(Draw::Color(theme.accent), Draw::Color(theme.borderPanel), 28) : Draw::Color(theme.borderPanel);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+
+    RECT folder{ rect.left + 8, rect.top + 5, rect.right - 8, rect.bottom - 5 };
+    HeroIconPainter::Draw(dc, folder, HeroIconKind::Folder, active ? Draw::FolderColor(true) : Draw::FolderColor(false), 1);
+}
+
 } // namespace
 
 void ProjectFilesToolbarRenderer::Paint(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state) {
     GdiDrawing::DrawSharpFrame(dc, layout.toolbar, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 10), Draw::Color(theme.borderPanel));
-    RECT title{ layout.toolbar.left + 8, layout.toolbar.top, layout.toolbar.left + 126, layout.toolbar.bottom };
-    Draw::DrawTextWithFont(dc, title, "Content", Draw::Color(theme.textPrimary), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    Draw::DrawIconButton(dc, layout.newFolderButton, theme, HeroIconKind::Plus, state.TextEditMode() == EditorAssetTextEditMode::NewFolder);
+    DrawNewFolderButton(dc, layout.newFolderButton, theme, state.TextEditMode() == EditorAssetTextEditMode::NewFolder);
     Draw::DrawTextButton(dc, layout.filtersButton, theme, "Filters", !state.TypeFilter().empty());
     DrawBreadcrumb(dc, layout.path, theme, state.SelectedFolder());
     DrawSearch(dc, layout.search, theme, state);

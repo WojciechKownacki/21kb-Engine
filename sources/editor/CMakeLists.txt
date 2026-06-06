@@ -207,6 +207,8 @@ add_executable(kb_editor
     src/private/assets/EditorAssetBrowserState.hpp
     src/private/assets/EditorAssetBrowserTextEditState.hpp
     src/private/assets/EditorAssetBrowserViewState.hpp
+    src/private/console/EditorConsoleLayout.hpp
+    src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
     src/private/app/EditorApplicationMessageDispatcher.hpp
     src/private/app/EditorApplicationMessageLoop.hpp
@@ -267,6 +269,7 @@ add_executable(kb_editor
     src/private/rendering/DockWorkspaceTabStripRenderer.hpp
     src/private/rendering/EditorDragOverlayRenderer.hpp
     src/private/rendering/EditorBgfxBackendSelector.hpp
+    src/private/rendering/ConsoleDetailTextOverlay.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
     src/private/rendering/EditorPanelContentResolver.hpp
     src/private/rendering/EditorRenderBackendSettings.hpp
@@ -394,6 +397,7 @@ add_executable(kb_editor
     src/rendering/EditorTabIndicatorPainter.cpp
     src/rendering/EditorToolbarLayout.cpp
     src/rendering/EditorToolbarRenderer.cpp
+    src/rendering/ConsoleDetailTextOverlay.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp
     src/rendering/FloatingWindowBackBufferPainter.cpp
     src/rendering/FloatingWindowControlRenderer.cpp

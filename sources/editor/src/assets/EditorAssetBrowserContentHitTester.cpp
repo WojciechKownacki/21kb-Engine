@@ -4,6 +4,7 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace kb::editor {
@@ -16,17 +17,31 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserContentHitTester::HitTest
     const kb::assets::AssetManager& manager) {
     const std::vector<EditorAssetFolderRow> childFolders = state.ChildFolderRows(manager);
     if (state.ViewMode() == EditorAssetViewMode::Tiles) {
-        for (std::size_t index = 0; index < childFolders.size(); ++index) {
-            const RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, static_cast<int>(index), state.ThumbnailScale());
-            if (EditorAssetBrowserGeometry::Contains(tile, x, y)) {
-                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::ContentFolder, .index = index };
+        constexpr int tileGap = 5;
+        const int columns = EditorAssetBrowserLayout::AssetTileColumnCount(layout, state.ThumbnailScale());
+        const int stepY = EditorAssetBrowserLayout::TileHeight(state.ThumbnailScale()) + tileGap;
+        const int scrolledY = y + state.ContentScrollOffset();
+        const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+        if (EditorAssetBrowserGeometry::Contains(viewport, x, y)) {
+            const int column = std::clamp((x - static_cast<int>(viewport.left)) / std::max(1, EditorAssetBrowserLayout::TileWidth(state.ThumbnailScale()) + tileGap), 0, columns - 1);
+            const int row = std::max(0, (scrolledY - static_cast<int>(viewport.top)) / std::max(1, stepY));
+            const int globalIndex = row * columns + column;
+            const RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, globalIndex, state.ThumbnailScale());
+            RECT visibleTile = tile;
+            OffsetRect(&visibleTile, 0, -state.ContentScrollOffset());
+            if (EditorAssetBrowserGeometry::Contains(visibleTile, x, y)) {
+                if (globalIndex < static_cast<int>(childFolders.size())) {
+                    return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::ContentFolder, .index = static_cast<std::size_t>(globalIndex) };
+                }
             }
         }
     } else {
-        for (std::size_t index = 0; index < childFolders.size(); ++index) {
-            const RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, static_cast<int>(index));
-            if (EditorAssetBrowserGeometry::Contains(row, x, y)) {
-                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::ContentFolder, .index = index };
+        const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+        const int bodyTop = viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight;
+        if (x >= viewport.left && x < viewport.right && y >= bodyTop && y < viewport.bottom) {
+            const int globalRow = std::max(0, (y - bodyTop + state.ContentScrollOffset()) / EditorAssetBrowserLayout::RowHeight);
+            if (globalRow < static_cast<int>(childFolders.size())) {
+                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::ContentFolder, .index = static_cast<std::size_t>(globalRow) };
             }
         }
     }
@@ -35,19 +50,34 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserContentHitTester::HitTest
     const std::size_t assetOffset = childFolders.size() + editRowCount;
     const std::vector<EditorAssetItemRow> assets = state.AssetRows(manager);
     if (state.ViewMode() == EditorAssetViewMode::Tiles) {
-        for (std::size_t index = 0; index < assets.size(); ++index) {
-            const auto tileIndex = static_cast<int>(index + assetOffset);
-            const RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, tileIndex, state.ThumbnailScale());
-            if (EditorAssetBrowserGeometry::Contains(tile, x, y)) {
-                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Asset, .index = index };
+        constexpr int tileGap = 5;
+        const int columns = EditorAssetBrowserLayout::AssetTileColumnCount(layout, state.ThumbnailScale());
+        const int stepY = EditorAssetBrowserLayout::TileHeight(state.ThumbnailScale()) + tileGap;
+        const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+        if (EditorAssetBrowserGeometry::Contains(viewport, x, y)) {
+            const int column = std::clamp((x - static_cast<int>(viewport.left)) / std::max(1, EditorAssetBrowserLayout::TileWidth(state.ThumbnailScale()) + tileGap), 0, columns - 1);
+            const int row = std::max(0, (y + state.ContentScrollOffset() - static_cast<int>(viewport.top)) / std::max(1, stepY));
+            const int globalIndex = row * columns + column;
+            const RECT tile = EditorAssetBrowserLayout::AssetTileRect(layout, globalIndex, state.ThumbnailScale());
+            RECT visibleTile = tile;
+            OffsetRect(&visibleTile, 0, -state.ContentScrollOffset());
+            if (EditorAssetBrowserGeometry::Contains(visibleTile, x, y) && globalIndex >= static_cast<int>(assetOffset)) {
+                const int assetIndex = globalIndex - static_cast<int>(assetOffset);
+                if (assetIndex < static_cast<int>(assets.size())) {
+                    return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Asset, .index = static_cast<std::size_t>(assetIndex) };
+                }
             }
         }
     } else {
-        for (std::size_t index = 0; index < assets.size(); ++index) {
-            const auto rowIndex = static_cast<int>(index + assetOffset);
-            const RECT row = EditorAssetBrowserLayout::AssetListRowRect(layout, rowIndex);
-            if (EditorAssetBrowserGeometry::Contains(row, x, y)) {
-                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Asset, .index = index };
+        const RECT viewport = EditorAssetBrowserLayout::AssetViewportRect(layout);
+        const int bodyTop = viewport.top + EditorAssetBrowserLayout::AssetHeaderHeight;
+        if (x >= viewport.left && x < viewport.right && y >= bodyTop && y < viewport.bottom) {
+            const int globalRow = std::max(0, (y - bodyTop + state.ContentScrollOffset()) / EditorAssetBrowserLayout::RowHeight);
+            if (globalRow >= static_cast<int>(assetOffset)) {
+                const int assetIndex = globalRow - static_cast<int>(assetOffset);
+                if (assetIndex < static_cast<int>(assets.size())) {
+                    return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Asset, .index = static_cast<std::size_t>(assetIndex) };
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 
 #if defined(_WIN32)
+#include "rendering/ConsoleDetailTextOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
@@ -60,6 +61,9 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
+    if (panel.kind != DockPanelKind::Console) {
+        ConsoleDetailTextOverlay::Hide(window);
+    }
 }
 
 } // namespace kb::editor

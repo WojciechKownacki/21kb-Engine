@@ -97,7 +97,26 @@ bool FolderExists(const std::filesystem::path& virtualPath, const kb::assets::As
         return true;
     }
 
-    return AllFolderPaths(manager).contains(target);
+    for (const std::filesystem::path& folder : manager.VirtualFolders()) {
+        if (Normalize(folder) == target) {
+            return true;
+        }
+    }
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        std::filesystem::path folder = ParentVirtualPath(metadata.virtualPath);
+        while (!folder.empty()) {
+            const std::string normalized = Normalize(folder);
+            if (normalized == target) {
+                return true;
+            }
+            const std::filesystem::path parent = ParentVirtualPath(folder);
+            if (parent == folder) {
+                break;
+            }
+            folder = parent;
+        }
+    }
+    return false;
 }
 
 } // namespace kb::editor::asset_browser

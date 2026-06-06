@@ -21,6 +21,12 @@ public:
     [[nodiscard]] bool IsSortMenuOpen() const noexcept;
     [[nodiscard]] float ThumbnailScale() const noexcept;
     [[nodiscard]] bool IsThumbnailScaleDragging() const noexcept;
+    [[nodiscard]] int TreeWidth() const noexcept;
+    [[nodiscard]] bool IsTreeWidthDragging() const noexcept;
+    [[nodiscard]] int TreeScrollOffset() const noexcept;
+    [[nodiscard]] bool IsTreeScrollbarDragging() const noexcept;
+    [[nodiscard]] int ContentScrollOffset() const noexcept;
+    [[nodiscard]] bool IsContentScrollbarDragging() const noexcept;
 
     void FocusSearch(bool focused) noexcept;
     void SetSearchQuery(std::string query);
@@ -43,6 +49,17 @@ public:
     void SetThumbnailScale(float scale) noexcept;
     void BeginThumbnailScaleDrag() noexcept;
     void EndThumbnailScaleDrag() noexcept;
+    void SetTreeWidth(int width) noexcept;
+    void BeginTreeWidthDrag() noexcept;
+    void EndTreeWidthDrag() noexcept;
+    void SetTreeScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginTreeScrollbarDrag(int y) noexcept;
+    void DragTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndTreeScrollbarDrag() noexcept;
+    void SetContentScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginContentScrollbarDrag(int y) noexcept;
+    void DragContentScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndContentScrollbarDrag() noexcept;
 
 private:
     std::string searchQuery_;
@@ -54,6 +71,16 @@ private:
     bool filterMenuOpen_ = false;
     bool sortMenuOpen_ = false;
     bool thumbnailScaleDragging_ = false;
+    bool treeWidthDragging_ = false;
+    bool treeScrollbarDragging_ = false;
+    bool contentScrollbarDragging_ = false;
+    int treeWidth_ = 0;
+    int treeScrollOffset_ = 0;
+    int treeScrollbarDragY_ = 0;
+    int treeScrollbarDragStartOffset_ = 0;
+    int contentScrollOffset_ = 0;
+    int contentScrollbarDragY_ = 0;
+    int contentScrollbarDragStartOffset_ = 0;
     float thumbnailScale_ = 1.0F;
     EditorAssetViewMode viewMode_ = EditorAssetViewMode::Tiles;
     EditorAssetSortMode sortMode_ = EditorAssetSortMode::Name;
