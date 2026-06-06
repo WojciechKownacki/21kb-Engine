@@ -30,6 +30,10 @@ namespace {
     return typeFilter.empty() || metadata.type == typeFilter;
 }
 
+[[nodiscard]] bool MatchesTemplateFilter(const kb::assets::AssetMetadata& metadata, bool showTemplates) {
+    return showTemplates || metadata.type != "ScenePrefab";
+}
+
 } // namespace
 
 std::vector<EditorAssetItemRow> EditorAssetBrowserAssetRows::Build(
@@ -39,10 +43,14 @@ std::vector<EditorAssetItemRow> EditorAssetBrowserAssetRows::Build(
     bool recursive,
     std::string_view searchQuery,
     std::string_view typeFilter,
+    bool showTemplates,
     EditorAssetSortMode sortMode) {
     std::vector<EditorAssetItemRow> rows;
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
-        if (!MatchesFolder(metadata.virtualPath, selectedFolder, recursive) || !MatchesSearch(metadata, searchQuery) || !MatchesType(metadata, typeFilter)) {
+        if (!MatchesFolder(metadata.virtualPath, selectedFolder, recursive)
+            || !MatchesSearch(metadata, searchQuery)
+            || !MatchesType(metadata, typeFilter)
+            || !MatchesTemplateFilter(metadata, showTemplates)) {
             continue;
         }
 

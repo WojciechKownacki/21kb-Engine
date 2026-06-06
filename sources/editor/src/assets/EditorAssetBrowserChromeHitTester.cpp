@@ -17,6 +17,18 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserChromeHitTester::HitTest(
     if (EditorAssetBrowserGeometry::Contains(layout.filtersButton, x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Filters };
     }
+    if (state.IsFilterMenuOpen()) {
+        const RECT filterMenu = EditorAssetBrowserLayout::FilterMenuRect(layout);
+        if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::FilterMenuItemRect(filterMenu, 0), x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::FilterFolder };
+        }
+        if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::FilterMenuItemRect(filterMenu, 1), x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::FilterTemplate };
+        }
+        if (EditorAssetBrowserGeometry::Contains(filterMenu, x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DropActionBody };
+        }
+    }
     if (EditorAssetBrowserGeometry::Contains(layout.path, x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Breadcrumb };
     }

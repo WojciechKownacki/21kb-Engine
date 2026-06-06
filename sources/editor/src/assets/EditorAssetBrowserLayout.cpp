@@ -35,6 +35,24 @@ RECT EditorAssetBrowserLayout::ContextMenuItemRect(const RECT& menu, int index) 
     return EditorAssetBrowserContextMenuLayout::ContextMenuItemRect(menu, index);
 }
 
+RECT EditorAssetBrowserLayout::FilterMenuRect(const EditorAssetBrowserLayoutRects& layout) noexcept {
+    constexpr int width = 168;
+    constexpr int itemCount = 2;
+    constexpr int height = ContextMenuPadding * 2
+        + itemCount * ContextMenuRowHeight
+        + (itemCount - 1) * ContextMenuSeparatorHeight;
+    return RECT{
+        layout.filtersButton.left,
+        layout.filtersButton.top - 6 - height,
+        layout.filtersButton.left + width,
+        layout.filtersButton.top - 6,
+    };
+}
+
+RECT EditorAssetBrowserLayout::FilterMenuItemRect(const RECT& menu, int index) noexcept {
+    return ContextMenuItemRect(menu, index);
+}
+
 int EditorAssetBrowserLayout::TileWidth(float scale) noexcept {
     return EditorAssetBrowserContentLayout::TileWidth(scale);
 }

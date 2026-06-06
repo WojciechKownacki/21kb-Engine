@@ -8,8 +8,10 @@
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
+#include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace kb::editor {
@@ -54,6 +56,20 @@ struct MainWindowPaintContext {
         });
     }
     return layouts;
+}
+
+[[nodiscard]] std::optional<RECT> ResolveAssetContent(const DockLayout& layout, const EditorDockModel& dockModel) {
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) {
+            continue;
+        }
+        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel == nullptr || panel->kind != DockPanelKind::Assets) {
+            continue;
+        }
+        return ToRect(panelLayout.content);
+    }
+    return std::nullopt;
 }
 
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
@@ -110,6 +126,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] ProjectFilesFilterMenuOverlayWindow& MainFilterMenuOverlay() {
+    static ProjectFilesFilterMenuOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
@@ -136,6 +157,33 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         MainDeleteConfirmOverlay().Show(window, theme, sceneContext);
     } else {
         MainDeleteConfirmOverlay().Hide();
+    }
+    const DockLayout layout = dockModel.Queries().BuildLayout(
+        [] (HWND target) {
+            RECT client{};
+            GetClientRect(target, &client);
+            return client.right - client.left;
+        }(window),
+        [] (HWND target) {
+            RECT client{};
+            GetClientRect(target, &client);
+            return client.bottom - client.top;
+        }(window),
+        metrics.menuHeight,
+        metrics.toolbarHeight,
+        metrics.tabStripHeight,
+        metrics.tabMinWidth,
+        metrics.tabWidth,
+        metrics.splitterSize,
+        metrics.panelPadding);
+    if (sceneContext.AssetBrowser().IsFilterMenuOpen()) {
+        if (const std::optional<RECT> assetContent = ResolveAssetContent(layout, dockModel); assetContent.has_value()) {
+            MainFilterMenuOverlay().Show(window, *assetContent, theme, sceneContext);
+        } else {
+            MainFilterMenuOverlay().Hide();
+        }
+    } else {
+        MainFilterMenuOverlay().Hide();
     }
 }
 
