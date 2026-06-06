@@ -131,4 +131,51 @@ void EditorAssetBrowserState::EndThumbnailScaleDrag() noexcept {
     view_.EndThumbnailScaleDrag();
 }
 
+void EditorAssetBrowserState::SetTreeWidth(int width) noexcept {
+    view_.SetTreeWidth(width);
+}
+
+void EditorAssetBrowserState::BeginTreeWidthDrag() noexcept {
+    view_.BeginTreeWidthDrag();
+    contextMenu_.Close();
+}
+
+void EditorAssetBrowserState::EndTreeWidthDrag() noexcept {
+    view_.EndTreeWidthDrag();
+}
+
+void EditorAssetBrowserState::SetTreeScrollOffset(int offset, int maxOffset) noexcept {
+    view_.SetTreeScrollOffset(offset, maxOffset);
+}
+
+void EditorAssetBrowserState::BeginTreeScrollbarDrag(int y) noexcept {
+    view_.BeginTreeScrollbarDrag(y);
+    contextMenu_.Close();
+}
+
+void EditorAssetBrowserState::DragTreeScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    view_.DragTreeScrollbar(y, trackTravel, maxOffset);
+}
+
+void EditorAssetBrowserState::EndTreeScrollbarDrag() noexcept {
+    view_.EndTreeScrollbarDrag();
+}
+
+void EditorAssetBrowserState::SetContentScrollOffset(int offset, int maxOffset) noexcept {
+    view_.SetContentScrollOffset(offset, maxOffset);
+}
+
+void EditorAssetBrowserState::BeginContentScrollbarDrag(int y) noexcept {
+    view_.BeginContentScrollbarDrag(y);
+    contextMenu_.Close();
+}
+
+void EditorAssetBrowserState::DragContentScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    view_.DragContentScrollbar(y, trackTravel, maxOffset);
+}
+
+void EditorAssetBrowserState::EndContentScrollbarDrag() noexcept {
+    view_.EndContentScrollbarDrag();
+}
+
 } // namespace kb::editor

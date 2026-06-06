@@ -28,38 +28,64 @@ const AssetRegistry& AssetManager::Registry() const noexcept {
     return registry_;
 }
 
+std::uint64_t AssetManager::Revision() const noexcept {
+    return revision_;
+}
+
 bool AssetManager::RegisterLoader(std::unique_ptr<IAssetLoader> loader) {
     return AssetLoaderRegistry::Register(loaders_, std::move(loader));
 }
 
 bool AssetManager::RegisterAsset(AssetMetadata metadata) {
     if (metadata.id.IsValid()) {
-        return registry_.Upsert(std::move(metadata));
+        const bool changed = registry_.Upsert(std::move(metadata));
+        if (changed) {
+            ++revision_;
+        }
+        return changed;
     }
     if (metadata.type.empty() || metadata.virtualPath.empty()) {
         return false;
     }
 
     metadata.id = MakeAssetId(NormalizeAssetPath(metadata.virtualPath) + ":" + metadata.type);
-    return registry_.Upsert(std::move(metadata));
+    const bool changed = registry_.Upsert(std::move(metadata));
+    if (changed) {
+        ++revision_;
+    }
+    return changed;
 }
 
 std::size_t AssetManager::DiscoverMountedAssets() {
-    return AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
+    const std::size_t count = AssetDiscoveryService::DiscoverMountedAssets(mounts_, registry_, loaders_, cache_);
+    ++revision_;
+    return count;
 }
 
 std::vector<std::filesystem::path> AssetManager::VirtualFolders() const {
-    return AssetDiscoveryService::VirtualFolders(mounts_, registry_);
+    if (cachedVirtualFoldersRevision_ != revision_) {
+        cachedVirtualFolders_ = AssetDiscoveryService::VirtualFolders(mounts_, registry_);
+        cachedVirtualFoldersRevision_ = revision_;
+    }
+    return cachedVirtualFolders_;
 }
 
 bool AssetManager::CreateFolder(const std::filesystem::path& virtualFolder) {
     lastError_.clear();
-    return AssetFolderOperations::CreateFolder(mounts_, virtualFolder, lastError_);
+    const bool created = AssetFolderOperations::CreateFolder(mounts_, virtualFolder, lastError_);
+    if (created) {
+        ++revision_;
+    }
+    return created;
 }
 
 std::optional<std::filesystem::path> AssetManager::CreateUniqueFolder(const std::filesystem::path& parentVirtualFolder, std::string baseName) {
     lastError_.clear();
-    return AssetFolderOperations::CreateUniqueFolder(mounts_, VirtualFolders(), parentVirtualFolder, std::move(baseName), lastError_);
+    std::optional<std::filesystem::path> created = AssetFolderOperations::CreateUniqueFolder(mounts_, VirtualFolders(), parentVirtualFolder, std::move(baseName), lastError_);
+    if (created.has_value()) {
+        ++revision_;
+    }
+    return created;
 }
 
 bool AssetManager::RenameFolder(const std::filesystem::path& virtualFolder, std::string newName) {
@@ -140,7 +166,9 @@ bool AssetManager::DeleteAsset(AssetId id) {
     }
 
     static_cast<void>(Unload(id));
-    static_cast<void>(registry_.Remove(id));
+    if (registry_.Remove(id)) {
+        ++revision_;
+    }
     return true;
 }
 
@@ -170,6 +198,9 @@ void AssetManager::Clear() noexcept {
     mounts_.Clear();
     loaders_.clear();
     lastError_.clear();
+    cachedVirtualFolders_.clear();
+    cachedVirtualFoldersRevision_ = 0;
+    ++revision_;
 }
 
 std::shared_ptr<void> AssetManager::LoadUntyped(AssetId id, std::type_index expectedType) {

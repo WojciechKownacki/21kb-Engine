@@ -52,6 +52,7 @@ public:
         HWND mainWindow,
         int x,
         int y,
+        bool leftButtonDown,
         const EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics,
