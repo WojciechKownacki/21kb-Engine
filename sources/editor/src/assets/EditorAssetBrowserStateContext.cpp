@@ -14,6 +14,7 @@ void EditorAssetBrowserState::OpenContextMenuForBackground(int x, int y) {
     deleteConfirm_.Close();
     CloseDropActionMenu();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
 }
 
@@ -26,6 +27,7 @@ bool EditorAssetBrowserState::OpenContextMenuForAsset(int x, int y, kb::assets::
     deleteConfirm_.Close();
     CloseDropActionMenu();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
     return true;
 }
@@ -40,6 +42,7 @@ bool EditorAssetBrowserState::OpenContextMenuForFolder(int x, int y, const std::
     deleteConfirm_.Close();
     CloseDropActionMenu();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
     return true;
 }
@@ -59,6 +62,7 @@ void EditorAssetBrowserState::OpenDropActionMenuForAsset(int x, int y, kb::asset
     contextMenu_.Close();
     deleteConfirm_.Close();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
 }
 
@@ -73,6 +77,7 @@ void EditorAssetBrowserState::OpenDropActionMenuForFolder(int x, int y, const st
     contextMenu_.Close();
     deleteConfirm_.Close();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
 }
 
@@ -87,6 +92,7 @@ bool EditorAssetBrowserState::OpenDeleteConfirm() noexcept {
     }
     deleteConfirm_.Open();
     view_.FocusSearch(false);
+    view_.CloseFilterMenu();
     view_.CloseSortMenu();
     contextMenu_.Close();
     CloseDropActionMenu();

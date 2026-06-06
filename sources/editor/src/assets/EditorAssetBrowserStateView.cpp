@@ -10,6 +10,7 @@ void EditorAssetBrowserState::FocusSearch(bool focused) noexcept {
     view_.FocusSearch(focused);
     if (focused) {
         selection_.FocusSelection(false);
+        view_.CloseFilterMenu();
         view_.CloseSortMenu();
         contextMenu_.Close();
     }
@@ -52,6 +53,7 @@ void EditorAssetBrowserState::SetViewMode(EditorAssetViewMode mode) noexcept {
 
 void EditorAssetBrowserState::SetSortMode(EditorAssetSortMode mode) noexcept {
     view_.SetSortMode(mode);
+    view_.CloseFilterMenu();
     contextMenu_.Close();
 }
 
@@ -78,9 +80,38 @@ void EditorAssetBrowserState::CycleTypeFilter(const kb::assets::AssetManager& ma
     }
 }
 
+void EditorAssetBrowserState::ToggleFilterMenu() noexcept {
+    view_.ToggleFilterMenu();
+    filterMenuHoveredIndex_ = -1;
+    contextMenu_.Close();
+    CloseDropActionMenu();
+}
+
+void EditorAssetBrowserState::CloseFilterMenu() noexcept {
+    view_.CloseFilterMenu();
+    filterMenuHoveredIndex_ = -1;
+}
+
+void EditorAssetBrowserState::ToggleShowFolders() noexcept {
+    view_.ToggleShowFolders();
+}
+
+void EditorAssetBrowserState::ToggleShowTemplates() noexcept {
+    view_.ToggleShowTemplates();
+}
+
+bool EditorAssetBrowserState::SetFilterMenuHoveredIndex(int index) noexcept {
+    if (filterMenuHoveredIndex_ == index) {
+        return false;
+    }
+    filterMenuHoveredIndex_ = index;
+    return true;
+}
+
 void EditorAssetBrowserState::ToggleSortMenu() noexcept {
     view_.ToggleSortMenu();
     contextMenu_.Close();
+    CloseDropActionMenu();
 }
 
 void EditorAssetBrowserState::CloseSortMenu() noexcept {

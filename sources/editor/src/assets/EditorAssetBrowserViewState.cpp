@@ -29,6 +29,18 @@ std::string_view EditorAssetBrowserViewState::TypeFilter() const noexcept {
     return typeFilter_;
 }
 
+bool EditorAssetBrowserViewState::ShowFolders() const noexcept {
+    return showFolders_;
+}
+
+bool EditorAssetBrowserViewState::ShowTemplates() const noexcept {
+    return showTemplates_;
+}
+
+bool EditorAssetBrowserViewState::IsFilterMenuOpen() const noexcept {
+    return filterMenuOpen_;
+}
+
 bool EditorAssetBrowserViewState::IsSortMenuOpen() const noexcept {
     return sortMenuOpen_;
 }
@@ -104,8 +116,27 @@ void EditorAssetBrowserViewState::ClearTypeFilter() noexcept {
     typeFilter_.clear();
 }
 
+void EditorAssetBrowserViewState::ToggleShowFolders() noexcept {
+    showFolders_ = !showFolders_;
+}
+
+void EditorAssetBrowserViewState::ToggleShowTemplates() noexcept {
+    showTemplates_ = !showTemplates_;
+}
+
+void EditorAssetBrowserViewState::ToggleFilterMenu() noexcept {
+    filterMenuOpen_ = !filterMenuOpen_;
+    sortMenuOpen_ = false;
+    searchFocused_ = false;
+}
+
+void EditorAssetBrowserViewState::CloseFilterMenu() noexcept {
+    filterMenuOpen_ = false;
+}
+
 void EditorAssetBrowserViewState::ToggleSortMenu() noexcept {
     sortMenuOpen_ = !sortMenuOpen_;
+    filterMenuOpen_ = false;
     searchFocused_ = false;
 }
 
@@ -119,6 +150,7 @@ void EditorAssetBrowserViewState::SetThumbnailScale(float scale) noexcept {
 
 void EditorAssetBrowserViewState::BeginThumbnailScaleDrag() noexcept {
     thumbnailScaleDragging_ = true;
+    filterMenuOpen_ = false;
     sortMenuOpen_ = false;
 }
 

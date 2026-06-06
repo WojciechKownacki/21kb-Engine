@@ -9,6 +9,9 @@ std::vector<EditorAssetFolderRow> EditorAssetBrowserState::FolderRows(const kb::
 }
 
 std::vector<EditorAssetFolderRow> EditorAssetBrowserState::ChildFolderRows(const kb::assets::AssetManager& manager) const {
+    if (!view_.ShowFolders()) {
+        return {};
+    }
     return selection_.ChildFolderRows(manager);
 }
 
@@ -20,6 +23,7 @@ std::vector<EditorAssetItemRow> EditorAssetBrowserState::AssetRows(const kb::ass
         view_.Recursive(),
         view_.SearchQuery(),
         view_.TypeFilter(),
+        view_.ShowTemplates(),
         view_.SortMode());
 }
 

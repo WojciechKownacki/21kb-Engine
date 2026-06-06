@@ -46,6 +46,22 @@ std::string_view EditorAssetBrowserState::TypeFilter() const noexcept {
     return view_.TypeFilter();
 }
 
+bool EditorAssetBrowserState::ShowFolders() const noexcept {
+    return view_.ShowFolders();
+}
+
+bool EditorAssetBrowserState::ShowTemplates() const noexcept {
+    return view_.ShowTemplates();
+}
+
+bool EditorAssetBrowserState::IsFilterMenuOpen() const noexcept {
+    return view_.IsFilterMenuOpen();
+}
+
+int EditorAssetBrowserState::FilterMenuHoveredIndex() const noexcept {
+    return filterMenuHoveredIndex_;
+}
+
 bool EditorAssetBrowserState::IsSortMenuOpen() const noexcept {
     return view_.IsSortMenuOpen();
 }

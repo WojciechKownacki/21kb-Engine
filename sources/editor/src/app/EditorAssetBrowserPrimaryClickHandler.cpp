@@ -61,7 +61,15 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         return true;
     case EditorAssetBrowserHitKind::Filters:
         PrepareBrowserAction(state);
-        state.CycleTypeFilter(manager);
+        state.ToggleFilterMenu();
+        return true;
+    case EditorAssetBrowserHitKind::FilterFolder:
+        PrepareBrowserAction(state);
+        state.ToggleShowFolders();
+        return true;
+    case EditorAssetBrowserHitKind::FilterTemplate:
+        PrepareBrowserAction(state);
+        state.ToggleShowTemplates();
         return true;
     case EditorAssetBrowserHitKind::Breadcrumb:
         PrepareBrowserAction(state);
@@ -136,6 +144,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     case EditorAssetBrowserHitKind::DropTarget:
         PrepareBrowserAction(state);
         state.CloseSortMenu();
+        state.CloseFilterMenu();
         state.FocusSelection(false);
         return true;
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
@@ -152,6 +161,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     default:
         state.FocusSearch(false);
         state.CloseSortMenu();
+        state.CloseFilterMenu();
         state.CloseDropActionMenu();
         return false;
     }

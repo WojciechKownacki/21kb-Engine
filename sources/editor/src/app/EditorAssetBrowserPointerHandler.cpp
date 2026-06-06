@@ -97,8 +97,23 @@ bool EditorAssetBrowserPointerHandler::HandlePointerMove(
         return true;
     }
 
-    if (sceneContext.AssetBrowser().IsContextMenuOpen() || sceneContext.AssetBrowser().IsDropActionMenuOpen()) {
+    if (sceneContext.AssetBrowser().IsContextMenuOpen() || sceneContext.AssetBrowser().IsDropActionMenuOpen() || sceneContext.AssetBrowser().IsFilterMenuOpen()) {
         const std::optional<RECT> content = EditorAssetBrowserPointerPanelResolver::ResolveContent(sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+        if (content.has_value() && sceneContext.AssetBrowser().IsFilterMenuOpen()) {
+            const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, sceneContext.AssetBrowser(), sceneContext.Scene().Assets().Manager());
+            int hovered = -1;
+            if (hit.kind == EditorAssetBrowserHitKind::FilterFolder) {
+                hovered = 0;
+            } else if (hit.kind == EditorAssetBrowserHitKind::FilterTemplate) {
+                hovered = 1;
+            }
+            const bool hoveringFilterMenu = hit.kind == EditorAssetBrowserHitKind::FilterFolder
+                || hit.kind == EditorAssetBrowserHitKind::FilterTemplate
+                || hit.kind == EditorAssetBrowserHitKind::DropActionBody;
+            if (sceneContext.AssetBrowser().SetFilterMenuHoveredIndex(hovered) || hoveringFilterMenu) {
+                return true;
+            }
+        }
         if (content.has_value() && sceneContext.AssetBrowser().IsDropActionMenuOpen()) {
             const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, sceneContext.AssetBrowser(), sceneContext.Scene().Assets().Manager());
             const EditorAssetDropAction hovered = hit.kind == EditorAssetBrowserHitKind::DropActionCommand ? hit.dropAction : EditorAssetDropAction::None;

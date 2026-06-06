@@ -7,6 +7,7 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserOverlayHitTester.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
 #include "assets/EditorAssetBrowserTreeHitTester.hpp"
 
 namespace kb::editor {
@@ -25,6 +26,19 @@ EditorAssetBrowserHit EditorAssetBrowserHitTester::HitTest(
 
     if (const std::optional<EditorAssetBrowserHit> hit = EditorAssetBrowserOverlayHitTester::HitTestDropActionMenu(content, x, y, state)) {
         return *hit;
+    }
+
+    if (state.IsFilterMenuOpen()) {
+        const RECT filterMenu = EditorAssetBrowserLayout::FilterMenuRect(layout);
+        if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::FilterMenuItemRect(filterMenu, 0), x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::FilterFolder };
+        }
+        if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::FilterMenuItemRect(filterMenu, 1), x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::FilterTemplate };
+        }
+        if (EditorAssetBrowserGeometry::Contains(filterMenu, x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DropActionBody };
+        }
     }
 
     if (!EditorAssetBrowserGeometry::Contains(layout.frame, x, y)) {

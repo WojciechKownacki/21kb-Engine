@@ -21,6 +21,8 @@ enum class EditorAssetBrowserHitKind {
     None,
     Search,
     Filters,
+    FilterFolder,
+    FilterTemplate,
     Refresh,
     NewFolder,
     Rename,
