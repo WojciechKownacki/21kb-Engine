@@ -122,8 +122,13 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
             continue;
         }
 
-        HostSurface* surface = hostSurfaceStore_.Find(parent, layout.viewportKey);
+        HostSurface* surface = hostSurfaceStore_.Ensure(parent, layout.viewportKey);
         if (surface == nullptr || surface->window == nullptr || IsWindow(surface->window) == 0) {
+            if (surface != nullptr) {
+                surface->layoutBounds = layoutBounds;
+                surface->hasLayoutBounds = true;
+                surface->presentedInCurrentPaint = true;
+            }
             continue;
         }
 
@@ -295,7 +300,7 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, std::span<const PendingPresent* const> presents) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect) {
     if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
         return false;
     }
@@ -336,16 +341,7 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS);
     }
 
-    std::vector<RECT> presentRects;
-    presentRects.reserve(presents.size());
-    for (const PendingPresent* present : presents) {
-        if (present != nullptr) {
-            presentRects.push_back(present->destination);
-        }
-    }
-    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(
-        rect,
-        std::span<const RECT>{presentRects.data(), presentRects.size()});
+    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, std::span<const RECT>{&rect, 1U});
     if (combinedRegion == nullptr) {
         return false;
     }
@@ -464,7 +460,11 @@ bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, Viewpor
 }
 
 bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
-    const RECT clippedPanel = ClipRectToClient(session.host, rect);
+    RECT requestedPanel = rect;
+    if (HostSurface* surface = FindHostSurface(session.host, session.key); surface != nullptr && surface->hasLayoutBounds) {
+        requestedPanel = ClipRectToBounds(surface->layoutBounds, requestedPanel);
+    }
+    const RECT clippedPanel = ClipRectToClient(session.host, requestedPanel);
     const std::uint32_t panelWidth = RectWidth(clippedPanel);
     const std::uint32_t panelHeight = RectHeight(clippedPanel);
     if (panelWidth == 0U || panelHeight == 0U) {
