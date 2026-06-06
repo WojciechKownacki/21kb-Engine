@@ -18,7 +18,11 @@ bool EditorAssetFolderProjectFilesDropHandler::Drop(HWND sourceWindow, HWND main
     if (!sourceVirtualFolder.empty()) {
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
         const std::optional<std::filesystem::path> targetFolder = EditorAssetBrowserHitTester::FolderDropTargetAt(*assets, x, y, sceneContext.AssetBrowser(), manager);
-        static_cast<void>(sceneContext.MoveAssetFolderToFolder(sourceVirtualFolder, targetFolder.value_or(sceneContext.AssetBrowser().SelectedFolder())));
+        if (targetFolder.has_value()) {
+            sceneContext.AssetBrowser().OpenDropActionMenuForFolder(x, y, sourceVirtualFolder, *targetFolder);
+        } else {
+            static_cast<void>(sceneContext.MoveAssetFolderToFolder(sourceVirtualFolder, sceneContext.AssetBrowser().SelectedFolder()));
+        }
     }
     return true;
 }

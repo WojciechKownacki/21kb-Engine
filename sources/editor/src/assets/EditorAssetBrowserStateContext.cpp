@@ -12,6 +12,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
 void EditorAssetBrowserState::OpenContextMenuForBackground(int x, int y) {
     contextMenu_.OpenForBackground(x, y, selection_.SelectedFolder());
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     view_.FocusSearch(false);
     view_.CloseSortMenu();
 }
@@ -23,6 +24,7 @@ bool EditorAssetBrowserState::OpenContextMenuForAsset(int x, int y, kb::assets::
 
     contextMenu_.OpenForAsset(x, y, id);
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     view_.FocusSearch(false);
     view_.CloseSortMenu();
     return true;
@@ -36,6 +38,7 @@ bool EditorAssetBrowserState::OpenContextMenuForFolder(int x, int y, const std::
 
     contextMenu_.OpenForFolder(x, y, normalized);
     deleteConfirm_.Close();
+    CloseDropActionMenu();
     view_.FocusSearch(false);
     view_.CloseSortMenu();
     return true;
@@ -43,6 +46,39 @@ bool EditorAssetBrowserState::OpenContextMenuForFolder(int x, int y, const std::
 
 void EditorAssetBrowserState::CloseContextMenu() noexcept {
     contextMenu_.Close();
+}
+
+void EditorAssetBrowserState::OpenDropActionMenuForAsset(int x, int y, kb::assets::AssetId id, const std::filesystem::path& targetFolder) {
+    dropActionMenuOpen_ = true;
+    dropActionMenuX_ = x;
+    dropActionMenuY_ = y;
+    dropActionAsset_ = id;
+    dropActionSourceFolder_.clear();
+    dropActionTargetFolder_ = targetFolder;
+    dropActionHovered_ = EditorAssetDropAction::None;
+    contextMenu_.Close();
+    deleteConfirm_.Close();
+    view_.FocusSearch(false);
+    view_.CloseSortMenu();
+}
+
+void EditorAssetBrowserState::OpenDropActionMenuForFolder(int x, int y, const std::filesystem::path& sourceFolder, const std::filesystem::path& targetFolder) {
+    dropActionMenuOpen_ = true;
+    dropActionMenuX_ = x;
+    dropActionMenuY_ = y;
+    dropActionAsset_ = {};
+    dropActionSourceFolder_ = sourceFolder;
+    dropActionTargetFolder_ = targetFolder;
+    dropActionHovered_ = EditorAssetDropAction::None;
+    contextMenu_.Close();
+    deleteConfirm_.Close();
+    view_.FocusSearch(false);
+    view_.CloseSortMenu();
+}
+
+void EditorAssetBrowserState::CloseDropActionMenu() noexcept {
+    dropActionMenuOpen_ = false;
+    dropActionHovered_ = EditorAssetDropAction::None;
 }
 
 bool EditorAssetBrowserState::OpenDeleteConfirm() noexcept {
@@ -53,6 +89,7 @@ bool EditorAssetBrowserState::OpenDeleteConfirm() noexcept {
     view_.FocusSearch(false);
     view_.CloseSortMenu();
     contextMenu_.Close();
+    CloseDropActionMenu();
     return true;
 }
 
@@ -74,6 +111,14 @@ void EditorAssetBrowserState::EndDeleteConfirmDrag() noexcept {
 
 bool EditorAssetBrowserState::SetContextMenuHoveredCommand(EditorAssetContextCommand command) noexcept {
     return contextMenu_.SetHoveredCommand(command);
+}
+
+bool EditorAssetBrowserState::SetDropActionHoveredCommand(EditorAssetDropAction command) noexcept {
+    if (dropActionHovered_ == command) {
+        return false;
+    }
+    dropActionHovered_ = command;
+    return true;
 }
 
 bool EditorAssetBrowserState::ContextMenuTargetFolderCanMutate(const kb::assets::AssetManager& manager) const {

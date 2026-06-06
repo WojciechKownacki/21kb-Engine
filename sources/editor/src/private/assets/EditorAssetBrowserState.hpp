@@ -49,6 +49,13 @@ public:
     [[nodiscard]] const std::filesystem::path& ContextMenuTargetFolder() const noexcept;
     [[nodiscard]] EditorAssetContextCommand ContextMenuHoveredCommand() const noexcept;
     [[nodiscard]] std::vector<EditorAssetContextMenuItem> ContextMenuItems(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] bool IsDropActionMenuOpen() const noexcept;
+    [[nodiscard]] int DropActionMenuX() const noexcept;
+    [[nodiscard]] int DropActionMenuY() const noexcept;
+    [[nodiscard]] const std::filesystem::path& DropActionTargetFolder() const noexcept;
+    [[nodiscard]] kb::assets::AssetId DropActionAsset() const noexcept;
+    [[nodiscard]] const std::filesystem::path& DropActionSourceFolder() const noexcept;
+    [[nodiscard]] EditorAssetDropAction DropActionHoveredCommand() const noexcept;
 
     void FocusSearch(bool focused) noexcept;
     void FocusSelection(bool focused) noexcept;
@@ -86,6 +93,10 @@ public:
     void DragDeleteConfirm(int x, int y) noexcept;
     void EndDeleteConfirmDrag() noexcept;
     [[nodiscard]] bool SetContextMenuHoveredCommand(EditorAssetContextCommand command) noexcept;
+    void OpenDropActionMenuForAsset(int x, int y, kb::assets::AssetId id, const std::filesystem::path& targetFolder);
+    void OpenDropActionMenuForFolder(int x, int y, const std::filesystem::path& sourceFolder, const std::filesystem::path& targetFolder);
+    void CloseDropActionMenu() noexcept;
+    [[nodiscard]] bool SetDropActionHoveredCommand(EditorAssetDropAction command) noexcept;
 
     [[nodiscard]] bool SelectFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
     [[nodiscard]] bool SelectContentFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
@@ -107,6 +118,13 @@ private:
     EditorAssetBrowserTextEditState textEdit_;
     EditorAssetBrowserContextMenuState contextMenu_;
     EditorAssetBrowserDeleteConfirmState deleteConfirm_;
+    bool dropActionMenuOpen_ = false;
+    int dropActionMenuX_ = 0;
+    int dropActionMenuY_ = 0;
+    kb::assets::AssetId dropActionAsset_{};
+    std::filesystem::path dropActionSourceFolder_{};
+    std::filesystem::path dropActionTargetFolder_{};
+    EditorAssetDropAction dropActionHovered_ = EditorAssetDropAction::None;
 };
 
 } // namespace kb::editor

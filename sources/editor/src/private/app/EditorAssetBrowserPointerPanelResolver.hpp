@@ -27,12 +27,6 @@ public:
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics);
 
-    [[nodiscard]] static RECT ResolveDeleteConfirmOverlayBounds(
-        HWND sourceWindow,
-        HWND mainWindow,
-        const EditorDockModel& dockModel,
-        const EditorMetrics& metrics,
-        const RECT& fallback) noexcept;
 };
 
 #endif

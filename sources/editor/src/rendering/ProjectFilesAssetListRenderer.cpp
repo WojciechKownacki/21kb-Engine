@@ -24,7 +24,7 @@ using Draw = ProjectFilesPanelDrawing;
 }
 
 void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme) {
-    RECT header{ layout.assetView.left + 10, layout.assetView.top + 4, layout.assetView.right - 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight };
+    RECT header{ layout.assetView.left + 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight + 2, layout.assetView.right - 10, layout.assetView.top + EditorAssetBrowserLayout::AssetHeaderHeight + EditorAssetBrowserLayout::AssetHeaderHeight };
     Draw::DrawLabel(dc, header, "Name", Draw::Color(theme.textSecondary));
     RECT type{ header.left + 270, header.top, header.left + 410, header.bottom };
     Draw::DrawLabel(dc, type, "Type", Draw::Color(theme.textSecondary));
@@ -36,7 +36,7 @@ void DrawListHeader(HDC dc, const EditorAssetBrowserLayoutRects& layout, const E
 
 void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetFolderRow& folder, const EditorAssetBrowserState& state) {
     if (folder.selected) {
-        GdiDrawing::FillRectAlpha(dc, row, Draw::Color(theme.accent), 78);
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 24, row.bottom - 4 };
     HeroIconPainter::Draw(dc, icon, HeroIconKind::Folder, Draw::FolderColor(folder.selected), 1);
@@ -54,7 +54,7 @@ void DrawFolderRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAsset
 
 void DrawAssetRow(HDC dc, RECT row, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state) {
     if (asset.selected) {
-        GdiDrawing::FillRectAlpha(dc, row, Draw::Color(theme.accent), 78);
+        GdiDrawing::FillRectColor(dc, row, Draw::Blend(Draw::Color(theme.panel), RGB(96, 108, 126), state.IsSelectionFocused() ? 34 : 20));
     }
     RECT icon{ row.left + 6, row.top + 4, row.left + 22, row.bottom - 4 };
     HeroIconPainter::Draw(dc, icon, HeroIconKind::Cube, AssetIconColor(asset, theme), 2);

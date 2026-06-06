@@ -18,6 +18,31 @@ void PrepareBrowserAction(EditorAssetBrowserState& state) noexcept {
     state.CancelTextEdit();
 }
 
+bool ExecuteDropAction(EditorSceneContext& sceneContext, EditorAssetDropAction action) {
+    EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    const kb::assets::AssetId asset = state.DropActionAsset();
+    const std::filesystem::path sourceFolder = state.DropActionSourceFolder();
+    const std::filesystem::path targetFolder = state.DropActionTargetFolder();
+    const std::filesystem::path currentFolder = state.SelectedFolder();
+    state.CloseDropActionMenu();
+
+    bool executed = false;
+    if (action == EditorAssetDropAction::MoveHere) {
+        executed = asset.IsValid()
+            ? sceneContext.MoveAssetToFolder(asset, targetFolder)
+            : sceneContext.MoveAssetFolderToFolder(sourceFolder, targetFolder);
+    } else if (action == EditorAssetDropAction::CopyHere) {
+        executed = asset.IsValid()
+            ? sceneContext.CopyAssetToFolder(asset, targetFolder)
+            : sceneContext.CopyAssetFolderToFolder(sourceFolder, targetFolder);
+    }
+
+    if (executed) {
+        static_cast<void>(state.SelectFolder(currentFolder, sceneContext.Scene().Assets().Manager()));
+    }
+    return executed;
+}
+
 } // namespace
 
 bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
@@ -116,6 +141,10 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
     case EditorAssetBrowserHitKind::DeleteConfirmAccept:
     case EditorAssetBrowserHitKind::DeleteConfirmCancel:
+    case EditorAssetBrowserHitKind::DropActionBody:
+        return true;
+    case EditorAssetBrowserHitKind::DropActionCommand:
+        return ExecuteDropAction(sceneContext, hit.dropAction);
     case EditorAssetBrowserHitKind::ContextMenuBody:
     case EditorAssetBrowserHitKind::ContextMenuCommand:
         return true;
@@ -123,6 +152,7 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     default:
         state.FocusSearch(false);
         state.CloseSortMenu();
+        state.CloseDropActionMenu();
         return false;
     }
 }

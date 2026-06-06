@@ -7,6 +7,7 @@
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include <vector>
@@ -104,6 +105,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     return overlay;
 }
 
+[[nodiscard]] ProjectFilesDeleteConfirmOverlayWindow& MainDeleteConfirmOverlay() {
+    static ProjectFilesDeleteConfirmOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
@@ -125,6 +131,11 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         MainDropPreviewOverlay().Show(window, *preview, theme);
     } else {
         MainDropPreviewOverlay().Hide();
+    }
+    if (sceneContext.AssetBrowser().IsDeleteConfirmOpen()) {
+        MainDeleteConfirmOverlay().Show(window, theme, sceneContext);
+    } else {
+        MainDeleteConfirmOverlay().Hide();
     }
 }
 

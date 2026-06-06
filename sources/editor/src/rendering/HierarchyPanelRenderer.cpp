@@ -23,7 +23,7 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
             break;
         }
 
-        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext.IsHierarchyEntitySelected(row.entity));
+        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext);
         y += kHierarchyRowHeight;
     }
 }

@@ -23,6 +23,10 @@ EditorAssetBrowserHit EditorAssetBrowserHitTester::HitTest(
         return *hit;
     }
 
+    if (const std::optional<EditorAssetBrowserHit> hit = EditorAssetBrowserOverlayHitTester::HitTestDropActionMenu(content, x, y, state)) {
+        return *hit;
+    }
+
     if (!EditorAssetBrowserGeometry::Contains(layout.frame, x, y)) {
         return {};
     }

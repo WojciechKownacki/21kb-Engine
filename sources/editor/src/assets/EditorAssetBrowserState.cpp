@@ -122,6 +122,34 @@ EditorAssetContextCommand EditorAssetBrowserState::ContextMenuHoveredCommand() c
     return contextMenu_.HoveredCommand();
 }
 
+bool EditorAssetBrowserState::IsDropActionMenuOpen() const noexcept {
+    return dropActionMenuOpen_;
+}
+
+int EditorAssetBrowserState::DropActionMenuX() const noexcept {
+    return dropActionMenuX_;
+}
+
+int EditorAssetBrowserState::DropActionMenuY() const noexcept {
+    return dropActionMenuY_;
+}
+
+const std::filesystem::path& EditorAssetBrowserState::DropActionTargetFolder() const noexcept {
+    return dropActionTargetFolder_;
+}
+
+kb::assets::AssetId EditorAssetBrowserState::DropActionAsset() const noexcept {
+    return dropActionAsset_;
+}
+
+const std::filesystem::path& EditorAssetBrowserState::DropActionSourceFolder() const noexcept {
+    return dropActionSourceFolder_;
+}
+
+EditorAssetDropAction EditorAssetBrowserState::DropActionHoveredCommand() const noexcept {
+    return dropActionHovered_;
+}
+
 const kb::assets::AssetMetadata* EditorAssetBrowserState::SelectedMetadata(const kb::assets::AssetManager& manager) const noexcept {
     return manager.Registry().Find(selection_.SelectedAsset());
 }

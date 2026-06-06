@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <system_error>
 
 namespace kb::editor {
 namespace {
@@ -13,12 +14,37 @@ namespace {
     return kb::assets::NormalizeAssetPath(left) == kb::assets::NormalizeAssetPath(right);
 }
 
+[[nodiscard]] bool SameOrDescendantVirtualPath(const std::filesystem::path& parent, const std::filesystem::path& candidate) {
+    const std::string parentText = kb::assets::NormalizeAssetPath(parent);
+    const std::string candidateText = kb::assets::NormalizeAssetPath(candidate);
+    return candidateText == parentText || candidateText.starts_with(parentText + "/");
+}
+
 [[nodiscard]] kb::assets::AssetManager& AssetManager(kb::scene::Scene& scene) noexcept {
     return scene.Assets().Manager();
 }
 
 void RefreshAssets(kb::scene::Scene& scene) {
     static_cast<void>(scene.Assets().Discover());
+}
+
+[[nodiscard]] std::filesystem::path UniquePathInFolder(const std::filesystem::path& folder, const std::filesystem::path& filename) {
+    std::filesystem::path candidate = folder / filename;
+    std::error_code error;
+    if (!std::filesystem::exists(candidate, error)) {
+        return candidate;
+    }
+
+    const std::string stem = filename.stem().string();
+    const std::string extension = filename.extension().string();
+    for (int suffix = 2; suffix < 10000; ++suffix) {
+        candidate = folder / (stem + "_" + std::to_string(suffix) + extension);
+        error.clear();
+        if (!std::filesystem::exists(candidate, error)) {
+            return candidate;
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -158,6 +184,85 @@ bool EditorSceneAssetBrowserCommands::MoveFolderToFolder(
         } else {
             static_cast<void>(assetBrowser.SelectContentFolder(moved.virtualPath, manager));
         }
+    }
+    return true;
+}
+
+bool EditorSceneAssetBrowserCommands::CopyAssetToFolder(
+    kb::scene::Scene& scene,
+    EditorAssetBrowserState& assetBrowser,
+    kb::assets::AssetId id,
+    const std::filesystem::path& destinationVirtualFolder) {
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr) {
+        return false;
+    }
+
+    const std::filesystem::path source = metadata->physicalPath.empty()
+        ? manager.Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{})
+        : metadata->physicalPath;
+    const std::optional<std::filesystem::path> destinationFolder = manager.Mounts().Resolve(destinationVirtualFolder);
+    if (source.empty() || !destinationFolder.has_value()) {
+        return false;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(source, error) || !std::filesystem::is_directory(*destinationFolder, error)) {
+        return false;
+    }
+
+    const std::filesystem::path destination = UniquePathInFolder(*destinationFolder, source.filename());
+    if (destination.empty()) {
+        return false;
+    }
+    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error);
+    if (error) {
+        return false;
+    }
+
+    RefreshAssets(scene);
+    if (const std::optional<std::filesystem::path> copiedVirtualPath = manager.Mounts().ToVirtual(destination); copiedVirtualPath.has_value()) {
+        if (const kb::assets::AssetMetadata* copied = manager.Registry().FindByPath(*copiedVirtualPath); copied != nullptr) {
+            static_cast<void>(assetBrowser.SelectAsset(copied->id, manager));
+        }
+    }
+    return true;
+}
+
+bool EditorSceneAssetBrowserCommands::CopyFolderToFolder(
+    kb::scene::Scene& scene,
+    EditorAssetBrowserState& assetBrowser,
+    const std::filesystem::path& sourceVirtualFolder,
+    const std::filesystem::path& destinationVirtualFolder) {
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    if (SameOrDescendantVirtualPath(sourceVirtualFolder, destinationVirtualFolder)) {
+        return false;
+    }
+
+    const std::optional<std::filesystem::path> source = manager.Mounts().Resolve(sourceVirtualFolder);
+    const std::optional<std::filesystem::path> destinationFolder = manager.Mounts().Resolve(destinationVirtualFolder);
+    if (!source.has_value() || !destinationFolder.has_value()) {
+        return false;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::is_directory(*source, error) || !std::filesystem::is_directory(*destinationFolder, error)) {
+        return false;
+    }
+
+    std::filesystem::path destination = UniquePathInFolder(*destinationFolder, source->filename());
+    if (destination.empty()) {
+        return false;
+    }
+    std::filesystem::copy(*source, destination, std::filesystem::copy_options::recursive, error);
+    if (error) {
+        return false;
+    }
+
+    RefreshAssets(scene);
+    if (const std::optional<std::filesystem::path> copiedVirtualPath = manager.Mounts().ToVirtual(destination); copiedVirtualPath.has_value()) {
+        static_cast<void>(assetBrowser.SelectContentFolder(*copiedVirtualPath, manager));
     }
     return true;
 }

@@ -300,7 +300,7 @@ bool InspectorPanelInteraction::HandleKeyDown(EditorSceneContext& sceneContext, 
         if (sceneContext.Scene().Entities().IsAlive(entity)) {
             const InspectorPropertyId property = inspector.EditedProperty();
             if (property == InspectorPropertyId::EntityName) {
-                sceneContext.Scene().Entities().SetName(entity, inspector.EditBuffer().empty() ? "GameObject" : inspector.EditBuffer());
+                sceneContext.Scene().Entities().SetName(entity, inspector.EditBuffer().empty() ? "Entity" : inspector.EditBuffer());
             } else if (IsTransformProperty(property)) {
                 const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
                 float value = 0.0F;

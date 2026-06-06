@@ -11,7 +11,7 @@
 namespace kb::editor {
 namespace {
 
-constexpr const char* kBaseObjectName = "GameObject";
+constexpr const char* kBaseObjectName = "Entity";
 
 [[nodiscard]] bool NameExists(const kb::scene::Scene& scene, const std::string& name) {
     for (const EditorHierarchyRow& row : EditorHierarchyRowBuilder::Build(scene, EditorHierarchyRowBuilder::CollapsedEntitySet{}, {})) {

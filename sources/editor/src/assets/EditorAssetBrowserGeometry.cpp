@@ -12,19 +12,30 @@ bool EditorAssetBrowserGeometry::Contains(const RECT& rect, int x, int y) noexce
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmRect(const RECT& bounds, int offsetX, int offsetY) noexcept {
-    constexpr int width = 360;
-    constexpr int height = 154;
-    const int left = bounds.left + (bounds.right - bounds.left - width) / 2 + offsetX;
-    const int top = bounds.top + (bounds.bottom - bounds.top - height) / 2 + offsetY;
+    constexpr int preferredWidth = 460;
+    constexpr int preferredHeight = 196;
+    constexpr int margin = 12;
+    const int boundsWidth = std::max(1, static_cast<int>(bounds.right - bounds.left));
+    const int boundsHeight = std::max(1, static_cast<int>(bounds.bottom - bounds.top));
+    const int width = std::clamp(preferredWidth, 320, std::max(320, boundsWidth - margin * 2));
+    const int height = std::clamp(preferredHeight, 156, std::max(156, boundsHeight - margin * 2));
+    const int minLeft = bounds.left + margin;
+    const int maxLeft = std::max(minLeft, static_cast<int>(bounds.right) - margin - width);
+    const int minTop = bounds.top + margin;
+    const int maxTop = std::max(minTop, static_cast<int>(bounds.bottom) - margin - height);
+    const int centeredLeft = bounds.left + (boundsWidth - width) / 2 + offsetX;
+    const int centeredTop = bounds.top + (boundsHeight - height) / 2 + offsetY;
+    const int left = std::clamp(centeredLeft, minLeft, maxLeft);
+    const int top = std::clamp(centeredTop, minTop, maxTop);
     return RECT{ left, top, left + width, top + height };
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmAcceptRect(const RECT& dialog) noexcept {
-    return RECT{ dialog.right - 180, dialog.bottom - 42, dialog.right - 96, dialog.bottom - 16 };
+    return RECT{ dialog.right - 216, dialog.bottom - 52, dialog.right - 116, dialog.bottom - 22 };
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmCancelRect(const RECT& dialog) noexcept {
-    return RECT{ dialog.right - 88, dialog.bottom - 42, dialog.right - 16, dialog.bottom - 16 };
+    return RECT{ dialog.right - 104, dialog.bottom - 52, dialog.right - 22, dialog.bottom - 22 };
 }
 
 RECT EditorAssetBrowserGeometry::FolderDisclosureRect(RECT row, const EditorAssetFolderRow& folder) noexcept {

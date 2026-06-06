@@ -36,8 +36,7 @@ bool EditorAssetBrowserPointerHandler::HandlePointerDown(
     }
 
     kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    const RECT deleteConfirmOverlay = EditorAssetBrowserPointerPanelResolver::ResolveDeleteConfirmOverlayBounds(sourceWindow, mainWindow, dockModel, metrics, *content);
-    const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, state, manager, &deleteConfirmOverlay);
+    const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, state, manager);
 
     if (state.IsDeleteConfirmOpen()) {
         return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(hit, x, y, sceneContext);
@@ -98,8 +97,15 @@ bool EditorAssetBrowserPointerHandler::HandlePointerMove(
         return true;
     }
 
-    if (sceneContext.AssetBrowser().IsContextMenuOpen()) {
+    if (sceneContext.AssetBrowser().IsContextMenuOpen() || sceneContext.AssetBrowser().IsDropActionMenuOpen()) {
         const std::optional<RECT> content = EditorAssetBrowserPointerPanelResolver::ResolveContent(sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+        if (content.has_value() && sceneContext.AssetBrowser().IsDropActionMenuOpen()) {
+            const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, sceneContext.AssetBrowser(), sceneContext.Scene().Assets().Manager());
+            const EditorAssetDropAction hovered = hit.kind == EditorAssetBrowserHitKind::DropActionCommand ? hit.dropAction : EditorAssetDropAction::None;
+            if (sceneContext.AssetBrowser().SetDropActionHoveredCommand(hovered)) {
+                return true;
+            }
+        }
         if (content.has_value() && EditorAssetBrowserContextMenuPointerHandler::HandlePointerMove(*content, x, y, sceneContext)) {
             return true;
         }
