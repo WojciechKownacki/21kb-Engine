@@ -42,7 +42,7 @@ COLORREF ProjectFilesPanelDrawing::Blend(COLORREF a, COLORREF b, int percentB) n
 }
 
 COLORREF ProjectFilesPanelDrawing::FolderColor(bool selected) noexcept {
-    return selected ? RGB(246, 190, 58) : RGB(226, 176, 57);
+    return selected ? RGB(247, 196, 70) : RGB(232, 181, 56);
 }
 
 bool ProjectFilesPanelDrawing::SameVirtualPath(const std::filesystem::path& left, const std::filesystem::path& right) {
@@ -75,23 +75,27 @@ void ProjectFilesPanelDrawing::DrawHairline(HDC dc, RECT rect, COLORREF color) {
 }
 
 void ProjectFilesPanelDrawing::DrawEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value) {
-    GdiDrawing::DrawSharpFrame(dc, rect, Color(theme.tabActive), Color(theme.accent));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), Blend(Color(theme.borderPanel), Color(theme.textSecondary), 34));
     DrawTextWithFont(dc, Inset(rect, 6, 0), std::string{ value }.c_str(), Color(theme.textPrimary), std::clamp(RectHeight(rect) - 5, 8, 12), FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void ProjectFilesPanelDrawing::DrawCenteredEditField(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value) {
-    GdiDrawing::DrawSharpFrame(dc, rect, Color(theme.tabActive), Color(theme.accent));
+    GdiDrawing::DrawSharpFrame(dc, rect, RGB(18, 20, 24), Blend(Color(theme.borderPanel), Color(theme.textSecondary), 34));
     DrawTextWithFont(dc, Inset(rect, 5, 0), std::string{ value }.c_str(), Color(theme.textPrimary), std::clamp(RectHeight(rect) - 5, 8, 12), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void ProjectFilesPanelDrawing::DrawIconButton(HDC dc, RECT rect, const EditorTheme& theme, HeroIconKind icon, bool active) {
-    GdiDrawing::DrawSharpFrame(dc, rect, active ? Color(theme.tabActive) : Color(theme.panel), active ? Color(theme.accent) : Color(theme.borderPanel));
+    const COLORREF fill = active ? Blend(Color(theme.tabActive), Color(theme.accent), 10) : Blend(Color(theme.panel), Color(theme.strip), 20);
+    const COLORREF border = active ? Blend(Color(theme.accent), Color(theme.borderPanel), 28) : Color(theme.borderPanel);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
     RECT iconRect{ rect.left + 6, rect.top + 4, rect.right - 6, rect.bottom - 4 };
-    HeroIconPainter::Draw(dc, iconRect, icon, active ? Color(theme.accent) : Color(theme.textSecondary), 2);
+    HeroIconPainter::Draw(dc, iconRect, icon, active ? Color(theme.textPrimary) : Color(theme.textSecondary), 2);
 }
 
 void ProjectFilesPanelDrawing::DrawTextButton(HDC dc, RECT rect, const EditorTheme& theme, const char* text, bool active) {
-    GdiDrawing::DrawSharpFrame(dc, rect, active ? Color(theme.tabActive) : Color(theme.panel), active ? Color(theme.accent) : Color(theme.borderPanel));
+    const COLORREF fill = active ? Blend(Color(theme.tabActive), Color(theme.accent), 10) : Blend(Color(theme.panel), Color(theme.strip), 20);
+    const COLORREF border = active ? Blend(Color(theme.accent), Color(theme.borderPanel), 28) : Color(theme.borderPanel);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
     DrawCenteredLabel(dc, Inset(rect, 6, 0), text, active ? Color(theme.textPrimary) : Color(theme.textSecondary));
 }
 

@@ -19,7 +19,11 @@ bool EditorPrefabAssetProjectFilesDropHandler::Drop(HWND sourceWindow, HWND main
     if (assetId.IsValid()) {
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
         const std::optional<std::filesystem::path> targetFolder = EditorAssetBrowserHitTester::FolderDropTargetAt(*assets, x, y, sceneContext.AssetBrowser(), manager);
-        static_cast<void>(sceneContext.MoveAssetToFolder(assetId, targetFolder.value_or(sceneContext.AssetBrowser().SelectedFolder())));
+        if (targetFolder.has_value()) {
+            sceneContext.AssetBrowser().OpenDropActionMenuForAsset(x, y, assetId, *targetFolder);
+        } else {
+            static_cast<void>(sceneContext.MoveAssetToFolder(assetId, sceneContext.AssetBrowser().SelectedFolder()));
+        }
     }
     return true;
 }

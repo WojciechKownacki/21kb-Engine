@@ -29,6 +29,16 @@ public:
         EditorAssetBrowserState& assetBrowser,
         const std::filesystem::path& sourceVirtualFolder,
         const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] static bool CopyAssetToFolder(
+        kb::scene::Scene& scene,
+        EditorAssetBrowserState& assetBrowser,
+        kb::assets::AssetId id,
+        const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] static bool CopyFolderToFolder(
+        kb::scene::Scene& scene,
+        EditorAssetBrowserState& assetBrowser,
+        const std::filesystem::path& sourceVirtualFolder,
+        const std::filesystem::path& destinationVirtualFolder);
 };
 
 } // namespace kb::editor

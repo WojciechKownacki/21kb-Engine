@@ -45,12 +45,21 @@ public:
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
     [[nodiscard]] std::string_view HierarchySearchQuery() const noexcept;
     [[nodiscard]] bool IsHierarchySearchFocused() const noexcept;
+    [[nodiscard]] bool IsHierarchyRenaming() const noexcept;
+    [[nodiscard]] bool IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept;
+    [[nodiscard]] bool IsHierarchyRenameSelectingAll() const noexcept;
+    [[nodiscard]] std::string_view HierarchyRenameBuffer() const noexcept;
 
     void FocusHierarchySearch(bool focused) noexcept;
     void SetHierarchySearchQuery(std::string query);
     void AppendHierarchySearchText(wchar_t character);
     void BackspaceHierarchySearch();
     void ClearHierarchySearch();
+    [[nodiscard]] bool BeginHierarchyRename();
+    void AppendHierarchyRenameText(wchar_t character);
+    void BackspaceHierarchyRename();
+    [[nodiscard]] bool CommitHierarchyRename();
+    void CancelHierarchyRename() noexcept;
     [[nodiscard]] bool BeginAssetFolderCreation();
     [[nodiscard]] bool BeginAssetRename();
     [[nodiscard]] bool BeginAssetRename(kb::assets::AssetId id);
@@ -63,6 +72,8 @@ public:
     [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] bool CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] bool CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
@@ -82,6 +93,9 @@ private:
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
+    kb::scene::SceneEntity hierarchyRenameEntity_{};
+    std::string hierarchyRenameBuffer_;
+    bool hierarchyRenameSelectingAll_ = false;
 };
 
 } // namespace kb::editor
