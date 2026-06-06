@@ -28,7 +28,7 @@ void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client
     const bool viewportPanel = panel.kind == DockPanelKind::Scene;
     RECT content = viewportPanel ? panelRect : GdiDrawing::Inset(panelRect, metrics.panelPadding);
     content.top += metrics.tabStripHeight;
-    PanelContentRenderer{}.Paint(dc, content, panelRect, client, panel, theme, metrics, sceneContext, true, sceneViewport, window);
+    PanelContentRenderer{}.Paint(dc, content, panelRect, content, client, panel, theme, metrics, sceneContext, true, sceneViewport, window);
 }
 
 } // namespace kb::editor

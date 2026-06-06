@@ -13,6 +13,7 @@ void PanelContentRenderer::Paint(
     HDC dc,
     const RECT& content,
     const RECT& panelFrame,
+    const RECT& contentClip,
     const RECT& overlayBounds,
     const DockPanel& panel,
     const EditorTheme& theme,
@@ -23,6 +24,9 @@ void PanelContentRenderer::Paint(
     HWND sceneViewportHost) const {
     static_cast<void>(panelFrame);
     static_cast<void>(metrics);
+
+    const int savedDc = SaveDC(dc);
+    IntersectClipRect(dc, contentClip.left, contentClip.top, contentClip.right, contentClip.bottom);
 
     switch (panel.kind) {
     case DockPanelKind::Hierarchy:
@@ -48,6 +52,8 @@ void PanelContentRenderer::Paint(
     default:
         break;
     }
+
+    RestoreDC(dc, savedDc);
 }
 
 } // namespace kb::editor

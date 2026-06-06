@@ -39,6 +39,18 @@ namespace {
     return panel;
 }
 
+[[nodiscard]] const kb::editor::DockLeafLayout* FindLeafForPanel(const kb::editor::DockLayout& layout, std::uint32_t panelId) noexcept {
+    const kb::editor::DockPanelLayout* panel = FindPanelLayout(layout, panelId);
+    if (panel == nullptr) {
+        return nullptr;
+    }
+
+    const auto iter = std::find_if(layout.leaves.begin(), layout.leaves.end(), [panel](const kb::editor::DockLeafLayout& leaf) {
+        return leaf.leafId == panel->leafId;
+    });
+    return iter == layout.leaves.end() ? nullptr : &(*iter);
+}
+
 [[nodiscard]] std::vector<std::uint32_t> PanelOrderInLeaf(const kb::editor::DockLayout& layout, std::uint32_t leafId) {
     std::vector<std::uint32_t> order;
     for (const kb::editor::DockPanelLayout& panel : layout.panels) {
@@ -133,6 +145,33 @@ void RunTopChromeDropPreviewTest() {
         "Top chrome preview should use the root split band");
 }
 
+void RunDockedPanelsShareEdgesWithoutVisibleGapsTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::EditorMetrics metrics{};
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+
+    kb::editor::tests::Require(layout.workspace.y == metrics.menuHeight + metrics.toolbarHeight, "Dock workspace should start directly below the toolbar");
+
+    const kb::editor::DockLeafLayout* hierarchy = FindLeafForPanel(layout, 1U);
+    const kb::editor::DockLeafLayout* scene = FindLeafForPanel(layout, 2U);
+    const kb::editor::DockLeafLayout* inspector = FindLeafForPanel(layout, 4U);
+    const kb::editor::DockLeafLayout* assets = FindLeafForPanel(layout, 5U);
+    kb::editor::tests::Require(hierarchy != nullptr && scene != nullptr && inspector != nullptr && assets != nullptr, "Default dock leaves were not found");
+
+    const kb::editor::DockPanelLayout* scenePanel = FindPanelLayout(layout, 2U);
+    kb::editor::tests::Require(scenePanel != nullptr, "Scene panel layout should be available");
+    kb::editor::tests::Require(scenePanel->frame.x == scene->frame.x && scenePanel->frame.width == scene->frame.width, "Panel layout should carry the owning leaf frame");
+    kb::editor::tests::Require(scenePanel->tabStrip.y == scene->tabStrip.y && scenePanel->tabStrip.height == scene->tabStrip.height, "Panel layout should carry the owning tab strip");
+    kb::editor::tests::Require(scenePanel->contentClip.x == scenePanel->content.x && scenePanel->contentClip.width == scenePanel->content.width, "Panel content clip should match the active content bounds");
+
+    kb::editor::tests::Require(hierarchy->frame.x + hierarchy->frame.width == scene->frame.x, "Hierarchy and Scene panels should share a vertical edge without a gap");
+    kb::editor::tests::Require(scene->frame.x + scene->frame.width == inspector->frame.x, "Scene and Inspector panels should share a vertical edge without a gap");
+    kb::editor::tests::Require(scene->frame.y + scene->frame.height == assets->frame.y, "Scene and bottom panels should share a horizontal edge without a gap");
+
+    const kb::editor::DockHit sceneLeftEdgeHit = model.Queries().HitTest(layout, scene->frame.x, scene->frame.y + 12);
+    kb::editor::tests::Require(sceneLeftEdgeHit.kind == kb::editor::DockHitKind::Splitter, "Shared panel edge should remain a splitter hit target");
+}
+
 void RunTabStripDropInsertsAtResolvedIndexTest() {
     kb::editor::EditorDockModel model;
     const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
@@ -219,6 +258,7 @@ void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunUndockAndDockSameFrameTest();
     RunTopChromeDropPreviewTest();
+    RunDockedPanelsShareEdgesWithoutVisibleGapsTest();
     RunTabStripDropInsertsAtResolvedIndexTest();
     RunSplitterAndFloatingResizeTest();
     RunFloatingWindowControlHitTest();

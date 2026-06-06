@@ -26,8 +26,11 @@ void DockLeafLayoutBuilder::Build(const DockNode& node, const DockRect& rect, Do
         layout.panels.push_back(DockPanelLayout{
             .panelId = panelId,
             .leafId = node.id,
+            .frame = leaf.frame,
+            .tabStrip = leaf.tabStrip,
             .tab = DockGeometry::MakeRect(tabX, leaf.tabStrip.y, std::min(resolvedTabWidth, leaf.tabStrip.x + leaf.tabStrip.width - tabX), settings.tabStripHeight),
             .content = leaf.content,
+            .contentClip = leaf.content,
             .active = panelId == node.activePanelId,
         });
         tabX += resolvedTabWidth;

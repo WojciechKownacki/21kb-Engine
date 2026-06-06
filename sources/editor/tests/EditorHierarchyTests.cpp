@@ -151,6 +151,24 @@ void RunHierarchySelectionModelTest() {
     kb::editor::tests::Require(selection.IsSelected(rows[1].entity), "Shift range missed the middle row");
     kb::editor::tests::Require(selection.IsSelected(rows[2].entity), "Shift range missed the clicked row");
     kb::editor::tests::Require(selection.Primary() == rows[2].entity, "Shift range should make the clicked row primary");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 1, false, false), "Hierarchy selected-row pointer down failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 3, "Pointer down on an already multi-selected row should preserve the selection for dragging");
+    kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Selected-row pointer down lost the first selected row");
+    kb::editor::tests::Require(selection.IsSelected(rows[1].entity), "Selected-row pointer down lost the clicked selected row");
+    kb::editor::tests::Require(selection.IsSelected(rows[2].entity), "Selected-row pointer down lost the last selected row");
+    kb::editor::tests::Require(selection.Primary() == rows[1].entity, "Selected-row pointer down should make the clicked row primary");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, false, false), "Hierarchy preserved selection did not update primary");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 3, "Pointer down on another already selected row should keep preserving the selection");
+    kb::editor::tests::Require(selection.Primary() == rows[0].entity, "Selected-row pointer down should update primary each time");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, true, false), "Hierarchy Ctrl remove after preserved selection failed");
+    kb::editor::tests::Require(!selection.IsSelected(rows[0].entity), "Ctrl remove should still remove a selected row after preserved pointer down");
+
+    kb::editor::tests::Require(selection.SelectRow(rows, 0, false, false), "Hierarchy single selection after preserved selection failed");
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 1, "Pointer down on a non-selected row should still collapse selection");
+    kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Collapsed selection should select the clicked row");
 }
 
 void RunRowBuilderMarksOnlyPrefabRootsTest() {

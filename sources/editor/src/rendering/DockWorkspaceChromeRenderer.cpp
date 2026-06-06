@@ -8,14 +8,13 @@
 namespace kb::editor {
 
 void DockWorkspaceChromeRenderer::Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const {
-    PaintSplitters(dc, layout, theme);
     PaintLeaves(dc, layout, dockModel, theme);
 }
 
 void DockWorkspaceChromeRenderer::PaintSplitters(HDC dc, const DockLayout& layout, const EditorTheme& theme) {
-    for (const DockSplitterLayout& splitter : layout.splitters) {
-        GdiDrawing::FillRectColor(dc, GdiDrawing::ToRect(splitter.rect), GdiDrawing::ToColorRef(theme.splitter));
-    }
+    static_cast<void>(dc);
+    static_cast<void>(layout);
+    static_cast<void>(theme);
 }
 
 void DockWorkspaceChromeRenderer::PaintLeaves(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) {

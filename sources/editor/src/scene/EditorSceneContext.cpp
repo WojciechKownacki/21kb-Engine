@@ -88,6 +88,14 @@ const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint6
     return viewportPreviews_.try_emplace(viewportKey).first->second;
 }
 
+InspectorPanelState& EditorSceneContext::Inspector() noexcept {
+    return inspector_;
+}
+
+const InspectorPanelState& EditorSceneContext::Inspector() const noexcept {
+    return inspector_;
+}
+
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
     return hierarchySelection_.Primary();
 }

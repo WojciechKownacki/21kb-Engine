@@ -20,7 +20,9 @@ void DockWorkspaceContentRenderer::Paint(HDC dc, const DockLayout& layout, const
         }
 
         const RECT content = GdiDrawing::ToRect(panelLayout.content);
-        contentRenderer.Paint(dc, content, content, workspace, *panel, theme, metrics, sceneContext, false, sceneViewport);
+        const RECT panelFrame = GdiDrawing::ToRect(panelLayout.frame);
+        const RECT contentClip = GdiDrawing::ToRect(panelLayout.contentClip);
+        contentRenderer.Paint(dc, content, panelFrame, contentClip, workspace, *panel, theme, metrics, sceneContext, false, sceneViewport);
     }
 }
 

@@ -415,6 +415,8 @@ add_executable(kb_editor
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/inspection/InspectorPanelInteraction.cpp
+    src/inspection/InspectorPanelState.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp

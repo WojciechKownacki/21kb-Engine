@@ -86,6 +86,12 @@ bool EditorHierarchySelectionState::SelectRow(const std::vector<EditorHierarchyR
         return true;
     }
 
+    if (selected_.size() > 1U && IsSelected(clicked)) {
+        primary_ = clicked;
+        anchor_ = clicked;
+        return true;
+    }
+
     SelectEntity(clicked);
     return primary_.IsValid();
 }
