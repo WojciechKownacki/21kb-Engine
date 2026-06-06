@@ -18,6 +18,7 @@ enum class InspectorSectionId : std::uint8_t {
 
 enum class InspectorHitKind : std::uint8_t {
     None,
+    Row,
     SectionHeader,
     TextField,
     BoolField,
