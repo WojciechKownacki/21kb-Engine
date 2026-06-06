@@ -199,13 +199,6 @@ void PopulateSandboxEnvironment(lua_State* state, int environmentIndex) {
     return iter == variables.end() ? nullptr : &*iter;
 }
 
-[[nodiscard]] const PucLuaExposedVariableInstance* FindVariable(const std::vector<PucLuaExposedVariableInstance>& variables, std::string_view name) noexcept {
-    const auto iter = std::ranges::find_if(variables, [name](const PucLuaExposedVariableInstance& variable) {
-        return variable.name == name;
-    });
-    return iter == variables.end() ? nullptr : &*iter;
-}
-
 [[nodiscard]] const PucLuaExposedVariableInstance* FindVariable(std::span<const PucLuaExposedVariableInstance> variables, std::string_view name) noexcept {
     const auto iter = std::ranges::find_if(variables, [name](const PucLuaExposedVariableInstance& variable) {
         return variable.name == name;
