@@ -66,6 +66,10 @@ bool ExecuteDropAction(EditorSceneContext& sceneContext, EditorAssetDropAction a
     return std::max(1, height);
 }
 
+[[nodiscard]] bool KeyDown(int virtualKey) noexcept {
+    return (GetKeyState(virtualKey) & 0x8000) != 0;
+}
+
 } // namespace
 
 bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
@@ -196,13 +200,11 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     }
     case EditorAssetBrowserHitKind::ContentFolder: {
         PrepareBrowserAction(state);
-        const std::optional<std::filesystem::path> folder = EditorAssetBrowserHitPayloadResolver::FolderAt(hit, state, manager);
-        return folder.has_value() ? state.SelectContentFolder(*folder, manager) : false;
+        return state.SelectContentFolderAt(hit.index, manager, KeyDown(VK_CONTROL), KeyDown(VK_SHIFT));
     }
     case EditorAssetBrowserHitKind::Asset: {
         PrepareBrowserAction(state);
-        const std::optional<kb::assets::AssetId> asset = EditorAssetBrowserHitPayloadResolver::AssetIdAt(hit, state, manager);
-        return asset.has_value() ? state.SelectAsset(*asset, manager) : false;
+        return state.SelectAssetAt(hit.index, manager, KeyDown(VK_CONTROL), KeyDown(VK_SHIFT));
     }
     case EditorAssetBrowserHitKind::DropTarget:
         PrepareBrowserAction(state);
@@ -211,6 +213,10 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         state.FocusSelection(false);
         return true;
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
+    case EditorAssetBrowserHitKind::DeleteConfirmListBody:
+    case EditorAssetBrowserHitKind::DeleteConfirmCheckbox:
+    case EditorAssetBrowserHitKind::DeleteConfirmScrollbarThumb:
+    case EditorAssetBrowserHitKind::DeleteConfirmScrollbarTrack:
     case EditorAssetBrowserHitKind::DeleteConfirmAccept:
     case EditorAssetBrowserHitKind::DeleteConfirmCancel:
     case EditorAssetBrowserHitKind::DropActionBody:

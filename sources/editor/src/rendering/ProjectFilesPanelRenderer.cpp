@@ -68,6 +68,18 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
         << ";ctxKind=" << static_cast<int>(state.ContextMenuTargetKind())
         << ";ctxFolder=" << kb::assets::NormalizeAssetPath(state.ContextMenuTargetFolder())
         << ";ctxAsset=" << state.ContextMenuTargetAsset().value;
+    const std::vector<EditorAssetFolderRow> childFolders = state.ChildFolderRows(manager);
+    for (const EditorAssetFolderRow& folder : childFolders) {
+        if (folder.selected) {
+            out << ";selFolder=" << kb::assets::NormalizeAssetPath(folder.virtualPath);
+        }
+    }
+    const std::vector<EditorAssetItemRow> assets = state.AssetRows(manager);
+    for (const EditorAssetItemRow& asset : assets) {
+        if (asset.selected) {
+            out << ";selAsset=" << asset.metadata.id.value;
+        }
+    }
     return out.str();
 }
 

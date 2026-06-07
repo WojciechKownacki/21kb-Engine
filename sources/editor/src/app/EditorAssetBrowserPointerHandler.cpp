@@ -110,7 +110,7 @@ bool EditorAssetBrowserPointerHandler::HandlePointerDown(
     const EditorAssetBrowserHit hit = EditorAssetBrowserHitTester::HitTest(*content, x, y, state, manager);
 
     if (state.IsDeleteConfirmOpen()) {
-        return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(hit, x, y, sceneContext);
+        return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(*content, hit, x, y, sceneContext);
     }
 
     if (const std::optional<bool> handled = EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(hit, sceneContext)) {
@@ -165,7 +165,9 @@ bool EditorAssetBrowserPointerHandler::HandlePointerMove(
     const EditorFloatingWindowManager& floatingWindows,
     const EditorMetrics& metrics,
     EditorSceneContext& sceneContext) {
-    if (EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerMove(x, y, sceneContext)) {
+    RECT sourceBounds{};
+    GetClientRect(sourceWindow, &sourceBounds);
+    if (EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerMove(sourceBounds, x, y, sceneContext)) {
         return true;
     }
     if (HandleScrollbarDrag(sourceWindow, mainWindow, y, leftButtonDown, dockModel, floatingWindows, metrics, sceneContext)) {
@@ -232,7 +234,8 @@ bool EditorAssetBrowserPointerHandler::RequiresMouseCapture(const EditorSceneCon
     return sceneContext.AssetBrowser().IsTreeWidthDragging()
         || sceneContext.AssetBrowser().IsThumbnailScaleDragging()
         || sceneContext.AssetBrowser().IsTreeScrollbarDragging()
-        || sceneContext.AssetBrowser().IsContentScrollbarDragging();
+        || sceneContext.AssetBrowser().IsContentScrollbarDragging()
+        || sceneContext.AssetBrowser().IsDeleteConfirmListScrollbarDragging();
 }
 
 } // namespace kb::editor

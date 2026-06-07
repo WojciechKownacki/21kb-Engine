@@ -5,7 +5,9 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -106,17 +108,41 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
 }
 
 bool EditorSceneAssetBrowserCommands::DeleteSelected(kb::scene::Scene& scene, EditorAssetBrowserState& assetBrowser) {
-    const kb::assets::AssetId selected = assetBrowser.SelectedAsset();
-    const std::filesystem::path selectedContentFolder = assetBrowser.SelectedContentFolder();
     kb::assets::AssetManager& manager = AssetManager(scene);
-    const bool deletingAsset = selected.IsValid();
-    const bool deletingContentFolder = !selectedContentFolder.empty();
-    const std::filesystem::path folderToDelete = deletingContentFolder ? selectedContentFolder : assetBrowser.SelectedFolder();
-    const bool deleted = deletingAsset ? manager.DeleteAsset(selected) : manager.DeleteFolder(folderToDelete);
+
+    std::vector<kb::assets::AssetId> assetsToDelete;
+    std::vector<std::filesystem::path> foldersToDelete;
+    for (const EditorAssetSelectionSummaryRow& row : assetBrowser.CheckedDeleteTargetRows(manager)) {
+        if (row.key.rfind("Asset:", 0) == 0) {
+            kb::assets::AssetId id{};
+            if (kb::assets::TryParseAssetId(std::string_view(row.key).substr(6), id) && id.IsValid()) {
+                assetsToDelete.push_back(id);
+            }
+        } else if (row.key.rfind("Folder:", 0) == 0) {
+            foldersToDelete.push_back(row.id);
+        }
+    }
+
+    if (assetsToDelete.empty() && foldersToDelete.empty()) {
+        return false;
+    }
+
+    const std::filesystem::path openFolderBeforeDelete = assetBrowser.SelectedFolder();
+    bool deleted = false;
+    for (const kb::assets::AssetId asset : assetsToDelete) {
+        deleted = manager.DeleteAsset(asset) || deleted;
+    }
+    for (const std::filesystem::path& folder : foldersToDelete) {
+        deleted = manager.DeleteFolder(folder) || deleted;
+    }
+
     if (deleted) {
         assetBrowser.ClearSelection();
-        if (!deletingAsset && !deletingContentFolder) {
-            static_cast<void>(assetBrowser.SelectFolder(assetBrowser.SelectedFolder().parent_path(), manager));
+        for (const std::filesystem::path& folder : foldersToDelete) {
+            if (SameOrDescendantVirtualPath(folder, openFolderBeforeDelete)) {
+                static_cast<void>(assetBrowser.SelectFolder(folder.parent_path(), manager));
+                break;
+            }
         }
         RefreshAssets(scene);
     }
