@@ -54,13 +54,13 @@ void RunViewportCameraAxesTest() {
     kb::editor::EditorViewportCameraState camera;
     const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
 
-    RequireNear(axes.position.x, 0.0F, 0.001F, "Viewport camera default x position is wrong");
-    RequireNear(axes.position.y, 2.0F, 0.001F, "Viewport camera default y position is wrong");
-    RequireNear(axes.position.z, -6.0F, 0.001F, "Viewport camera default z position is wrong");
-    RequireNear(axes.forward.x, 0.0F, 0.001F, "Viewport camera default forward x is wrong");
-    RequireNear(axes.forward.y, 0.0F, 0.001F, "Viewport camera default forward y is wrong");
-    RequireNear(axes.forward.z, 1.0F, 0.001F, "Viewport camera default forward z is wrong");
-    RequireNear(axes.up.y, 1.0F, 0.001F, "Viewport camera default up vector is wrong");
+    RequireNear(axes.position.x, 8.0F, 0.001F, "Viewport camera default x position is wrong");
+    RequireNear(axes.position.y, 6.0F, 0.001F, "Viewport camera default y position is wrong");
+    RequireNear(axes.position.z, -8.0F, 0.001F, "Viewport camera default z position is wrong");
+    RequireNear(axes.forward.x, -0.612F, 0.001F, "Viewport camera default forward x is wrong");
+    RequireNear(axes.forward.y, -0.5F, 0.001F, "Viewport camera default forward y is wrong");
+    RequireNear(axes.forward.z, 0.612F, 0.001F, "Viewport camera default forward z is wrong");
+    RequireNear(axes.up.y, 0.866F, 0.001F, "Viewport camera default up vector is wrong");
 }
 
 void RunViewportCameraNavigationTest() {
@@ -70,8 +70,8 @@ void RunViewportCameraNavigationTest() {
     kb::editor::tests::Require(camera.AllowsKeyboardFlight(), "RMB look mode should allow keyboard flight");
 
     static_cast<void>(camera.UpdatePointer(200, 50));
-    kb::editor::tests::Require(camera.YawDegrees() > 0.0F, "Dragging look mode right should increase yaw");
-    kb::editor::tests::Require(camera.PitchDegrees() > 0.0F, "Dragging look mode up should increase pitch");
+    kb::editor::tests::Require(camera.YawDegrees() > -45.0F, "Dragging look mode right should increase yaw");
+    kb::editor::tests::Require(camera.PitchDegrees() > -30.0F, "Dragging look mode up should increase pitch");
 
     const kb::scene::Vec3 beforeFlight = camera.Position();
     const bool moved = camera.ApplyKeyboardFlight(
@@ -97,7 +97,7 @@ void RunViewportCameraOrbitTest() {
     static_cast<void>(camera.UpdatePointer(120, 20));
     const kb::scene::Vec3 afterOrbit = camera.Position();
 
-    kb::editor::tests::Require(camera.YawDegrees() > 0.0F, "Alt+LMB orbit should rotate camera yaw");
+    kb::editor::tests::Require(camera.YawDegrees() > -45.0F, "Alt+LMB orbit should rotate camera yaw");
     kb::editor::tests::Require(
         afterOrbit.x != beforeOrbit.x || afterOrbit.z != beforeOrbit.z,
         "Alt+LMB orbit should move camera around the pivot");
