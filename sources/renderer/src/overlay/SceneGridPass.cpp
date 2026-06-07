@@ -3,6 +3,8 @@
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/ShaderLoader.hpp"
 
+#include <bx/math.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -23,19 +25,26 @@ struct LineVertex {
 
 struct GridCamera {
     float x = 0.0F;
+    float y = 0.0F;
     float z = 0.0F;
+    float forwardY = 1.0F;
 };
 
-constexpr int kLineHalfCount = 96;
-constexpr float kSpacing = 1.0F;
-constexpr float kFadeStart = 28.0F;
-constexpr float kFadeEnd = 72.0F;
-constexpr float kHorizontalFadeStart = 14.0F;
-constexpr float kHorizontalFadeEnd = 34.0F;
-constexpr float kHorizontalDetailEnd = 16.0F;
-constexpr float kHorizontalMajorEnd = 26.0F;
-constexpr std::uint32_t kMaxSegmentsPerGridLine = 3U;
-constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2) * kMaxSegmentsPerGridLine * 2U;
+struct GridBuildParams {
+    float smallStep = 1.0F;
+    float largeStep = 8.0F;
+    float divisionDecimals = 0.0F;
+    float shaderFadeSize = 192.0F;
+    float centerX = 0.0F;
+    float centerZ = 0.0F;
+};
+
+constexpr int kGridSize = 200;
+constexpr int kPrimaryGridSteps = 8;
+constexpr int kDivisionLevelMin = 0;
+constexpr int kDivisionLevelMax = 2;
+constexpr float kDivisionLevelBias = -0.2F;
+constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kGridSize * 2 + 1) * 4);
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -54,145 +63,98 @@ constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineH
     return std::clamp(value, 0.0F, 1.0F);
 }
 
-[[nodiscard]] float FadeFor(float x, float z, const GridCamera& camera) noexcept {
-    const float dx = x - camera.x;
-    const float dz = z - camera.z;
-    const float distance = std::sqrt(dx * dx + dz * dz);
-    const float t = Saturate((distance - kFadeStart) / (kFadeEnd - kFadeStart));
-    const float smooth = t * t * (3.0F - 2.0F * t);
-    const float fade = 1.0F - smooth;
-    return fade * fade;
+[[nodiscard]] float SmoothStep(float edge0, float edge1, float value) noexcept {
+    const float t = Saturate((value - edge0) / (edge1 - edge0));
+    return t * t * (3.0F - 2.0F * t);
 }
 
-[[nodiscard]] LineVertex Vertex(float x, float z, std::array<float, 3> color, const GridCamera& camera) noexcept {
-    const float fade = FadeFor(x, z, camera);
-    return LineVertex{x, 0.0F, z, color[0] * fade, color[1] * fade, color[2] * fade};
+[[nodiscard]] std::array<float, 3> LerpColor(std::array<float, 3> a, std::array<float, 3> b, float t) noexcept {
+    return std::array<float, 3>{
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    };
 }
 
-[[nodiscard]] LineVertex VertexWithFade(float x, float z, std::array<float, 3> color, float fade) noexcept {
-    return LineVertex{x, 0.0F, z, color[0] * fade, color[1] * fade, color[2] * fade};
+[[nodiscard]] std::array<float, 3> ScaleColor(std::array<float, 3> color, float scale) noexcept {
+    return std::array<float, 3>{ color[0] * scale, color[1] * scale, color[2] * scale };
 }
 
 [[nodiscard]] GridCamera CameraFromView(const SceneRenderCamera& camera) noexcept {
     float inverseView[16]{};
     bx::mtxInverse(inverseView, camera.view.data());
-    return GridCamera{.x = inverseView[12], .z = inverseView[14]};
+    return GridCamera{
+        .x = inverseView[12],
+        .y = inverseView[13],
+        .z = inverseView[14],
+        .forwardY = inverseView[9],
+    };
 }
 
-void AddSegment(
+[[nodiscard]] GridBuildParams BuildParams(const GridCamera& camera) noexcept {
+    const float cameraDistance = std::max(std::abs(camera.y), 0.0001F);
+    const float primarySteps = static_cast<float>(kPrimaryGridSteps);
+    const float divisionLevel = (std::log(cameraDistance) / std::log(primarySteps)) + kDivisionLevelBias;
+    const float clampedLevel = std::clamp(divisionLevel, static_cast<float>(kDivisionLevelMin), static_cast<float>(kDivisionLevelMax));
+    const float flooredLevel = std::floor(clampedLevel);
+    const float divisionDecimals = clampedLevel - flooredLevel;
+    const float smallStep = std::pow(primarySteps, flooredLevel);
+    const float largeStep = smallStep * primarySteps;
+    const float centerX = largeStep * static_cast<float>(static_cast<int>(camera.x / largeStep));
+    const float centerZ = largeStep * static_cast<float>(static_cast<int>(camera.z / largeStep));
+
+    float fadeStep = std::pow(primarySteps, divisionLevel - 1.0F);
+    const float minFadeStep = std::pow(primarySteps, static_cast<float>(kDivisionLevelMin));
+    const float maxFadeStep = std::pow(primarySteps, static_cast<float>(kDivisionLevelMax));
+    fadeStep = std::clamp(fadeStep, minFadeStep, maxFadeStep);
+
+    return GridBuildParams{
+        .smallStep = smallStep,
+        .largeStep = largeStep,
+        .divisionDecimals = divisionDecimals,
+        .shaderFadeSize = static_cast<float>(kGridSize - kPrimaryGridSteps) * fadeStep,
+        .centerX = centerX,
+        .centerZ = centerZ,
+    };
+}
+
+void AddLine(
     std::array<LineVertex, kGridVertexCapacity>& vertices,
     std::uint32_t& count,
     float x0,
     float z0,
     float x1,
     float z1,
-    std::array<float, 3> color,
-    const GridCamera& camera) noexcept {
+    std::array<float, 3> color) noexcept {
     if (count + 2U > vertices.size()) {
         return;
     }
-    vertices[count++] = Vertex(x0, z0, color, camera);
-    vertices[count++] = Vertex(x1, z1, color, camera);
+    vertices[count++] = LineVertex{ x0, 0.0F, z0, color[0], color[1], color[2] };
+    vertices[count++] = LineVertex{ x1, 0.0F, z1, color[0], color[1], color[2] };
 }
 
-void AddHorizontalLine(
-    std::array<LineVertex, kGridVertexCapacity>& vertices,
-    std::uint32_t& count,
-    float z,
-    std::array<float, 3> color,
-    const GridCamera& camera) noexcept {
-    const float dz = std::abs(z - camera.z);
-    if (dz >= kHorizontalFadeEnd) {
-        return;
-    }
-
-    const float t = Saturate((dz - kHorizontalFadeStart) / (kHorizontalFadeEnd - kHorizontalFadeStart));
-    const float smooth = t * t * (3.0F - 2.0F * t);
-    const float lineFade = (1.0F - smooth) * (1.0F - smooth);
-    const float halfLength = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dz * dz));
-    const float x0 = camera.x - halfLength;
-    const float x1 = camera.x + halfLength;
-    if (dz >= kFadeStart) {
-        if (count + 4U > vertices.size()) {
-            return;
-        }
-        vertices[count++] = VertexWithFade(x0, z, color, 0.0F);
-        vertices[count++] = VertexWithFade(camera.x, z, color, lineFade);
-        vertices[count++] = VertexWithFade(camera.x, z, color, lineFade);
-        vertices[count++] = VertexWithFade(x1, z, color, 0.0F);
-        return;
-    }
-
-    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dz * dz));
-    const float leftInner = camera.x - inner;
-    const float rightInner = camera.x + inner;
-    if (count + 6U > vertices.size()) {
-        return;
-    }
-    vertices[count++] = VertexWithFade(x0, z, color, 0.0F);
-    vertices[count++] = VertexWithFade(leftInner, z, color, lineFade);
-    vertices[count++] = VertexWithFade(leftInner, z, color, lineFade);
-    vertices[count++] = VertexWithFade(rightInner, z, color, lineFade);
-    vertices[count++] = VertexWithFade(rightInner, z, color, lineFade);
-    vertices[count++] = VertexWithFade(x1, z, color, 0.0F);
-}
-
-void AddVerticalLine(
-    std::array<LineVertex, kGridVertexCapacity>& vertices,
-    std::uint32_t& count,
-    float x,
-    std::array<float, 3> color,
-    const GridCamera& camera) noexcept {
-    const float dx = std::abs(x - camera.x);
-    if (dx >= kFadeEnd) {
-        return;
-    }
-
-    const float outer = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dx * dx));
-    const float z0 = camera.z - outer;
-    const float z1 = camera.z + outer;
-    if (dx >= kFadeStart) {
-        AddSegment(vertices, count, x, z0, x, camera.z, color, camera);
-        AddSegment(vertices, count, x, camera.z, x, z1, color, camera);
-        return;
-    }
-
-    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dx * dx));
-    const float nearInner = camera.z - inner;
-    const float farInner = camera.z + inner;
-    AddSegment(vertices, count, x, z0, x, nearInner, color, camera);
-    AddSegment(vertices, count, x, nearInner, x, farInner, color, camera);
-    AddSegment(vertices, count, x, farInner, x, z1, color, camera);
-}
-
-[[nodiscard]] std::uint32_t BuildGrid(std::array<LineVertex, kGridVertexCapacity>& vertices, const GridCamera& camera) noexcept {
-    constexpr std::array<float, 3> kMinor{0.20F, 0.23F, 0.27F};
-    constexpr std::array<float, 3> kMajor{0.34F, 0.38F, 0.44F};
-    constexpr std::array<float, 3> kAxisX{0.84F, 0.22F, 0.20F};
-    constexpr std::array<float, 3> kAxisZ{0.22F, 0.46F, 0.88F};
+[[nodiscard]] std::uint32_t BuildGrid(std::array<LineVertex, kGridVertexCapacity>& vertices, const GridBuildParams& params) noexcept {
+    constexpr std::array<float, 3> kSecondary{ 0.20F, 0.23F, 0.27F };
+    constexpr std::array<float, 3> kPrimary{ 0.34F, 0.38F, 0.44F };
+    constexpr std::array<float, 3> kAxisX{ 0.84F, 0.22F, 0.20F };
+    constexpr std::array<float, 3> kAxisZ{ 0.22F, 0.46F, 0.88F };
 
     std::uint32_t count = 0U;
-    const int centerX = static_cast<int>(std::floor(camera.x / kSpacing));
-    const int centerZ = static_cast<int>(std::floor(camera.z / kSpacing));
+    const float beginX = params.centerX - static_cast<float>(kGridSize) * params.smallStep;
+    const float endX = params.centerX + static_cast<float>(kGridSize) * params.smallStep;
+    const float beginZ = params.centerZ - static_cast<float>(kGridSize) * params.smallStep;
+    const float endZ = params.centerZ + static_cast<float>(kGridSize) * params.smallStep;
 
-    for (int offset = -kLineHalfCount; offset <= kLineHalfCount; ++offset) {
-        const int zLine = centerZ + offset;
-        const int xLine = centerX + offset;
-        const float z = static_cast<float>(zLine) * kSpacing;
-        const float x = static_cast<float>(xLine) * kSpacing;
-        const bool zAxis = zLine == 0;
-        const bool xAxis = xLine == 0;
-        const bool zMajor = zLine % 5 == 0;
-        const bool xMajor = xLine % 5 == 0;
-        const float horizontalDistance = std::abs(z - camera.z);
-        const bool drawHorizontal =
-            horizontalDistance < kHorizontalDetailEnd ||
-            zAxis ||
-            (horizontalDistance < kHorizontalMajorEnd && zMajor);
-        if (drawHorizontal) {
-            AddHorizontalLine(vertices, count, z, zAxis ? kAxisX : (zMajor ? kMajor : kMinor), camera);
-        }
-        AddVerticalLine(vertices, count, x, xAxis ? kAxisZ : (xMajor ? kMajor : kMinor), camera);
+    for (int i = -kGridSize; i <= kGridSize; ++i) {
+        const bool primary = i % kPrimaryGridSteps == 0;
+        const std::array<float, 3> color = primary
+            ? LerpColor(kPrimary, kSecondary, params.divisionDecimals)
+            : ScaleColor(kSecondary, 1.0F - params.divisionDecimals);
+        const float x = params.centerX + static_cast<float>(i) * params.smallStep;
+        const float z = params.centerZ + static_cast<float>(i) * params.smallStep;
+
+        AddLine(vertices, count, x, beginZ, x, endZ, x == 0.0F ? kAxisZ : color);
+        AddLine(vertices, count, beginX, z, endX, z, z == 0.0F ? kAxisX : color);
     }
     return count;
 }
@@ -200,7 +162,7 @@ void AddVerticalLine(
 void ConfigureOverlayView(const SceneGridPassDesc& desc) {
     const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
         ? desc.outputRect
-        : RenderViewportRect{.extent = desc.extent};
+        : RenderViewportRect{ .extent = desc.extent };
     bgfx::setViewName(desc.viewId, "KB Editor Grid");
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
     bgfx::setViewTransform(desc.viewId, desc.camera->view.data(), desc.camera->projection.data());
@@ -230,6 +192,7 @@ bool SceneGridPass::Initialize() {
         return true;
     }
     program_ = ShaderLoader::LoadProgram("vs_editor_grid.sc", "fs_editor_grid.sc");
+    gridParamsUniform_ = bgfx::createUniform("u_editorGridParams", bgfx::UniformType::Vec4);
     lineLayout_ = LineLayout();
     initialized_ = true;
     if (!IsInitialized()) {
@@ -242,6 +205,10 @@ bool SceneGridPass::Initialize() {
 void SceneGridPass::Shutdown() noexcept {
     if (!initialized_) {
         return;
+    }
+    if (bgfx::isValid(gridParamsUniform_)) {
+        bgfx::destroy(gridParamsUniform_);
+        gridParamsUniform_ = BGFX_INVALID_HANDLE;
     }
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
@@ -256,8 +223,10 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
         return false;
     }
 
+    const GridCamera camera = CameraFromView(*desc.camera);
+    const GridBuildParams params = BuildParams(camera);
     std::array<LineVertex, kGridVertexCapacity> vertices{};
-    const std::uint32_t vertexCount = BuildGrid(vertices, CameraFromView(*desc.camera));
+    const std::uint32_t vertexCount = BuildGrid(vertices, params);
     if (vertexCount == 0U || bgfx::getAvailTransientVertexBuffer(vertexCount, lineLayout_) < vertexCount) {
         return false;
     }
@@ -267,14 +236,17 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     bgfx::allocTransientVertexBuffer(&buffer, vertexCount, lineLayout_);
     std::memcpy(buffer.data, vertices.data(), sizeof(LineVertex) * vertexCount);
 
-    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_PT_LINES);
+    const float angleFade = SmoothStep(0.05F, 0.2F, std::abs(camera.forwardY));
+    const std::array<float, 4> gridParams{ camera.x, camera.z, params.shaderFadeSize, angleFade * 0.72F };
+    bgfx::setUniform(gridParamsUniform_, gridParams.data());
+    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_PT_LINES | BGFX_STATE_BLEND_ALPHA);
     bgfx::setVertexBuffer(0, &buffer);
     bgfx::submit(desc.viewId, program_);
     return true;
 }
 
 bool SceneGridPass::IsInitialized() const noexcept {
-    return initialized_ && bgfx::isValid(program_) && lineLayout_.getStride() == sizeof(LineVertex);
+    return initialized_ && bgfx::isValid(program_) && bgfx::isValid(gridParamsUniform_) && lineLayout_.getStride() == sizeof(LineVertex);
 }
 
 } // namespace kb::render

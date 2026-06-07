@@ -32,6 +32,7 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle gridParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout lineLayout_{};
     bool initialized_ = false;
 };
