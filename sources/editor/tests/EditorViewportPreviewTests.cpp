@@ -70,8 +70,8 @@ void RunViewportCameraNavigationTest() {
     kb::editor::tests::Require(camera.AllowsKeyboardFlight(), "RMB look mode should allow keyboard flight");
 
     static_cast<void>(camera.UpdatePointer(200, 50));
-    kb::editor::tests::Require(camera.YawDegrees() > -45.0F, "Dragging look mode right should increase yaw");
-    kb::editor::tests::Require(camera.PitchDegrees() > -30.0F, "Dragging look mode up should increase pitch");
+    kb::editor::tests::Require(camera.YawDegrees() < -45.0F, "Dragging look mode right should decrease yaw");
+    kb::editor::tests::Require(camera.PitchDegrees() < -30.0F, "Dragging look mode up should decrease pitch");
 
     const kb::scene::Vec3 beforeFlight = camera.Position();
     const bool moved = camera.ApplyKeyboardFlight(
@@ -97,7 +97,7 @@ void RunViewportCameraOrbitTest() {
     static_cast<void>(camera.UpdatePointer(120, 20));
     const kb::scene::Vec3 afterOrbit = camera.Position();
 
-    kb::editor::tests::Require(camera.YawDegrees() > -45.0F, "Alt+LMB orbit should rotate camera yaw");
+    kb::editor::tests::Require(camera.YawDegrees() < -45.0F, "Alt+LMB orbit should rotate camera yaw");
     kb::editor::tests::Require(
         afterOrbit.x != beforeOrbit.x || afterOrbit.z != beforeOrbit.z,
         "Alt+LMB orbit should move camera around the pivot");
@@ -111,8 +111,8 @@ void RunViewportCameraTrackDirectionTest() {
     static_cast<void>(camera.UpdatePointer(120, 80));
     const kb::scene::Vec3 afterTrack = camera.Position();
 
-    kb::editor::tests::Require(afterTrack.x > beforeTrack.x, "Dragging track mode right should move camera right");
-    kb::editor::tests::Require(afterTrack.y > beforeTrack.y, "Dragging track mode up should move camera up");
+    kb::editor::tests::Require(afterTrack.x < beforeTrack.x, "Dragging track mode right should move camera left");
+    kb::editor::tests::Require(afterTrack.y < beforeTrack.y, "Dragging track mode up should move camera down");
 }
 
 void RunRenderBackendSettingsTest() {
