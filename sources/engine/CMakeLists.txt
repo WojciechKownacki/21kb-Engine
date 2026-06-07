@@ -430,6 +430,16 @@ add_library(kb_engine STATIC
     src/script/NativeScriptBackend.cpp
     src/script/NativeScriptPluginManager.cpp
     src/script/NativeScriptPluginRegistrar.cpp
+    src/script/lua/api/PucLuaEventApi.cpp
+    src/script/lua/api/PucLuaFunctionApi.cpp
+    src/script/lua/api/PucLuaModuleApi.cpp
+    src/script/lua/api/PucLuaSelfApi.cpp
+    src/script/lua/api/PucLuaSharedApi.cpp
+    src/script/lua/PucLuaDebugHook.cpp
+    src/script/lua/PucLuaRuntimeApi.cpp
+    src/script/lua/PucLuaSandboxEnvironment.cpp
+    src/script/lua/PucLuaStateUtilities.cpp
+    src/script/lua/PucLuaValueBridge.cpp
     src/script/PucLuaScriptRuntime.cpp
     src/script/ScriptApiNameCollector.cpp
     src/script/ScriptApiNameRegistry.cpp
@@ -451,6 +461,16 @@ add_library(kb_engine STATIC
     src/script/ScriptSharedVisualGraphBindings.cpp
     src/script/ScriptValue.cpp
     src/script/VisualGraphScriptBackend.cpp
+    src/private/script/lua/api/PucLuaEventApi.hpp
+    src/private/script/lua/api/PucLuaFunctionApi.hpp
+    src/private/script/lua/api/PucLuaModuleApi.hpp
+    src/private/script/lua/api/PucLuaSelfApi.hpp
+    src/private/script/lua/api/PucLuaSharedApi.hpp
+    src/private/script/lua/PucLuaDebugHook.hpp
+    src/private/script/lua/PucLuaRuntimeApi.hpp
+    src/private/script/lua/PucLuaSandboxEnvironment.hpp
+    src/private/script/lua/PucLuaStateUtilities.hpp
+    src/private/script/lua/PucLuaValueBridge.hpp
     src/private/scene/components/SceneComponentAccess.hpp
     src/private/assets/AssetDiscoveryService.hpp
     src/private/assets/AssetFileOperations.hpp
