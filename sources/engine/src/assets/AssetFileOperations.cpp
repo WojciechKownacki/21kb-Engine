@@ -3,9 +3,74 @@
 #include "assets/AssetFileSystem.hpp"
 #include "assets/AssetPathUtilities.hpp"
 
+#include <string>
 #include <system_error>
 
 namespace kb::assets {
+namespace {
+
+[[nodiscard]] std::filesystem::path MetaPathForAssetPath(std::filesystem::path assetPath) {
+    assetPath.replace_extension(".meta");
+    return assetPath;
+}
+
+[[nodiscard]] bool ExistingMetaSidecar(const std::filesystem::path& assetPath, std::filesystem::path& metaPath) {
+    metaPath = MetaPathForAssetPath(assetPath);
+    std::error_code error;
+    return std::filesystem::is_regular_file(metaPath, error) && !error;
+}
+
+[[nodiscard]] std::filesystem::path UniqueAssetPathWithMeta(
+    const std::filesystem::path& folder,
+    const std::filesystem::path& filename) {
+    const std::string stem = filename.stem().string();
+    const std::string extension = filename.extension().string();
+    for (int index = 0; index < 10000; ++index) {
+        const std::string suffix = index == 0 ? std::string{} : "_" + std::to_string(index);
+        const std::filesystem::path candidate = (folder / (stem + suffix + extension)).lexically_normal();
+        const std::filesystem::path meta = MetaPathForAssetPath(candidate);
+        std::error_code error;
+        const bool assetExists = std::filesystem::exists(candidate, error);
+        error.clear();
+        const bool metaExists = std::filesystem::exists(meta, error);
+        if (!assetExists && !metaExists) {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+[[nodiscard]] bool MoveMetaSidecarIfPresent(
+    const std::filesystem::path& sourceAsset,
+    const std::filesystem::path& destinationAsset) {
+    std::filesystem::path sourceMeta;
+    if (!ExistingMetaSidecar(sourceAsset, sourceMeta)) {
+        return true;
+    }
+
+    const std::filesystem::path destinationMeta = MetaPathForAssetPath(destinationAsset);
+    std::error_code error;
+    if (std::filesystem::exists(destinationMeta, error)) {
+        return false;
+    }
+
+    std::filesystem::rename(sourceMeta, destinationMeta, error);
+    if (!error) {
+        return true;
+    }
+
+    error.clear();
+    std::filesystem::copy_file(sourceMeta, destinationMeta, std::filesystem::copy_options::none, error);
+    if (error) {
+        return false;
+    }
+
+    error.clear();
+    std::filesystem::remove(sourceMeta, error);
+    return !error;
+}
+
+} // namespace
 
 bool AssetFileOperations::RenameAsset(
     const AssetRegistry& registry,
@@ -30,8 +95,9 @@ bool AssetFileOperations::RenameAsset(
     }
 
     std::filesystem::path destination = physical.parent_path() / (std::move(newName) + physical.extension().string());
+    const std::filesystem::path destinationMeta = MetaPathForAssetPath(destination);
     std::error_code error;
-    if (!std::filesystem::is_regular_file(physical, error) || std::filesystem::exists(destination, error)) {
+    if (!std::filesystem::is_regular_file(physical, error) || std::filesystem::exists(destination, error) || std::filesystem::exists(destinationMeta, error)) {
         errorMessage = "Asset rename destination is invalid";
         return false;
     }
@@ -39,6 +105,10 @@ bool AssetFileOperations::RenameAsset(
     std::filesystem::rename(physical, destination, error);
     if (error) {
         errorMessage = "Asset could not be renamed";
+        return false;
+    }
+    if (!MoveMetaSidecarIfPresent(physical, destination)) {
+        errorMessage = "Asset meta could not be renamed";
         return false;
     }
     return true;
@@ -83,7 +153,7 @@ AssetMoveResult AssetFileOperations::MoveAssetIntoFolder(
         return AssetMoveResult{ .succeeded = true, .virtualPath = metadata->virtualPath };
     }
 
-    destination = AssetFileSystem::UniqueFilePathInFolder(*destinationFolder, source.filename());
+    destination = UniqueAssetPathWithMeta(*destinationFolder, source.filename());
     if (destination.empty()) {
         errorMessage = "Asset move destination could not be made unique";
         return {};
@@ -91,6 +161,10 @@ AssetMoveResult AssetFileOperations::MoveAssetIntoFolder(
 
     if (!AssetFileSystem::MoveFileReplacingNothing(source, destination)) {
         errorMessage = "Asset file could not be moved";
+        return {};
+    }
+    if (!MoveMetaSidecarIfPresent(source, destination)) {
+        errorMessage = "Asset meta could not be moved";
         return {};
     }
 
@@ -128,6 +202,15 @@ bool AssetFileOperations::DeleteAsset(
     if (error) {
         errorMessage = "Asset file could not be deleted";
         return false;
+    }
+    std::filesystem::path metaPath;
+    if (ExistingMetaSidecar(physical, metaPath)) {
+        error.clear();
+        std::filesystem::remove(metaPath, error);
+        if (error) {
+            errorMessage = "Asset meta could not be deleted";
+            return false;
+        }
     }
     return true;
 }

@@ -5,6 +5,10 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
+#include <cstdint>
+#include <vector>
+
 namespace kb::render {
 
 struct SceneGizmoPassDesc {
@@ -13,6 +17,11 @@ struct SceneGizmoPassDesc {
     RenderExtent extent{};
     RenderViewportRect outputRect{};
     const SceneRenderCamera* camera = nullptr;
+    std::array<float, 3> targetPosition{0.0F, 0.0F, 0.0F};
+    float worldScale = 1.0F;
+    int hoveredAxis = -1;
+    int draggedAxis = -1;
+    bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -30,9 +39,32 @@ public:
     [[nodiscard]] bool Submit(const SceneGizmoPassDesc& desc) const;
     [[nodiscard]] bool IsInitialized() const noexcept;
 
+    struct GizmoVertex {
+        float x = 0.0F;
+        float y = 0.0F;
+        float z = 0.0F;
+        float nx = 0.0F;
+        float ny = 1.0F;
+        float nz = 0.0F;
+        float r = 1.0F;
+        float g = 1.0F;
+        float b = 1.0F;
+        float alpha = 1.0F;
+        float unused = 0.0F;
+    };
+    struct MeshRange {
+        std::uint32_t indexStart = 0U;
+        std::uint32_t indexCount = 0U;
+    };
+
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
-    bgfx::VertexLayout lineLayout_{};
+    bgfx::VertexLayout layout_{};
+    std::vector<GizmoVertex> vertices_{};
+    std::vector<std::uint32_t> indices_{};
+    MeshRange shaft_{};
+    MeshRange tip_{};
+    MeshRange hub_{};
     bool initialized_ = false;
 };
 

@@ -45,7 +45,7 @@ bool EditorRenderPassSubmitter::Initialize() {
     if (IsInitialized()) {
         return true;
     }
-    if (!gridPass_.Initialize() || !selectionOutlinePass_.Initialize()) {
+    if (!gridPass_.Initialize() || !gizmoPass_.Initialize() || !selectionOutlinePass_.Initialize()) {
         Shutdown();
         return false;
     }
@@ -54,11 +54,12 @@ bool EditorRenderPassSubmitter::Initialize() {
 
 void EditorRenderPassSubmitter::Shutdown() noexcept {
     selectionOutlinePass_.Shutdown();
+    gizmoPass_.Shutdown();
     gridPass_.Shutdown();
 }
 
 bool EditorRenderPassSubmitter::IsInitialized() const noexcept {
-    return gridPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
+    return gridPass_.IsInitialized() && gizmoPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
 }
 
 void EditorRenderPassSubmitter::SubmitSelectionMask(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const {
@@ -96,8 +97,21 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
             .extent = extent,
             .outputRect = outputRect,
             .camera = camera,
+            .sceneDepthTexture = desc.target.depthTexture,
         };
         static_cast<void>(gridPass_.Submit(gridDesc));
+        static_cast<void>(gizmoPass_.Submit(SceneGizmoPassDesc{
+            .viewId = viewportPlan.viewIds.sceneOverlays,
+            .frameBuffer = frameBuffer,
+            .extent = extent,
+            .outputRect = outputRect,
+            .camera = camera,
+            .targetPosition = desc.editorGizmo.targetPosition,
+            .worldScale = desc.editorGizmo.worldScale,
+            .hoveredAxis = desc.editorGizmo.hoveredAxis,
+            .draggedAxis = desc.editorGizmo.draggedAxis,
+            .visible = desc.editorGizmo.visible,
+        }));
         return;
     }
 

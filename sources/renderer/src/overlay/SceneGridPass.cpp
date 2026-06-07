@@ -26,6 +26,7 @@ struct GridCamera {
     std::array<float, 4> basisUp{ 0.0F, 1.0F, 0.0F, 1.0F };
     std::array<float, 4> basisForward{ 0.0F, 0.0F, 1.0F, 0.0F };
     std::array<float, 4> gridOrigin{ 0.0F, 0.0F, 0.01F, 0.0F };
+    std::array<float, 16> viewProjection{};
 };
 
 constexpr float kPlaneY = 0.0F;
@@ -142,6 +143,8 @@ constexpr float kAxisAlpha = 0.55F;
 
     const float majorSpacing = kMinorSpacingMeters * static_cast<float>(kMajorEvery);
     const float anchorSpacing = majorSpacing * 10.0F;
+    std::array<float, 16> viewProjection{};
+    bx::mtxMul(viewProjection.data(), camera.view.data(), camera.projection.data());
 
     return GridCamera{
         .cameraPos = { inverseView[12], inverseView[13], inverseView[14], kPlaneY },
@@ -154,6 +157,7 @@ constexpr float kAxisAlpha = 0.55F;
             nearClip,
             farClip,
         },
+        .viewProjection = viewProjection,
     };
 }
 
@@ -206,6 +210,9 @@ bool SceneGridPass::Initialize() {
     gridOriginUniform_ = bgfx::createUniform("u_editorGridOrigin", bgfx::UniformType::Vec4);
     gridWidthsUniform_ = bgfx::createUniform("u_editorGridWidths", bgfx::UniformType::Vec4);
     gridStyleUniform_ = bgfx::createUniform("u_editorGridStyle", bgfx::UniformType::Vec4);
+    sceneDepthSampler_ = bgfx::createUniform("s_editorGridSceneDepth", bgfx::UniformType::Sampler);
+    depthParamsUniform_ = bgfx::createUniform("u_editorGridDepthParams", bgfx::UniformType::Vec4);
+    viewProjectionUniform_ = bgfx::createUniform("u_editorGridViewProjection", bgfx::UniformType::Mat4);
     fullscreenLayout_ = FullscreenLayout();
     initialized_ = true;
     if (!IsInitialized()) {
@@ -220,6 +227,9 @@ void SceneGridPass::Shutdown() noexcept {
         return;
     }
     DestroyUniform(gridStyleUniform_);
+    DestroyUniform(viewProjectionUniform_);
+    DestroyUniform(depthParamsUniform_);
+    DestroyUniform(sceneDepthSampler_);
     DestroyUniform(gridWidthsUniform_);
     DestroyUniform(gridOriginUniform_);
     DestroyUniform(gridParamsUniform_);
@@ -255,6 +265,8 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     const std::array<float, 4> gridParams{ kMinorSpacingMeters, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
     const std::array<float, 4> gridWidths{ kMinorLineWidthPixels, kMajorLineWidthPixels, kAxisLineWidthPixels, 0.0F };
     const std::array<float, 4> gridStyle{ kMinorAlpha, kMajorAlpha, kAxisAlpha, 0.0F };
+    const bool depthTextureValid = bgfx::isValid(desc.sceneDepthTexture);
+    const std::array<float, 4> depthParams{ depthTextureValid ? 1.0F : 0.0F, 0.0000005F, SceneDepthPolicy::HomogeneousDepth() ? 1.0F : 0.0F, 0.0F };
 
     ConfigureOverlayView(desc);
     bgfx::TransientVertexBuffer vertices{};
@@ -269,7 +281,12 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
     bgfx::setUniform(gridOriginUniform_, camera.gridOrigin.data());
     bgfx::setUniform(gridWidthsUniform_, gridWidths.data());
     bgfx::setUniform(gridStyleUniform_, gridStyle.data());
-    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_BLEND_ALPHA);
+    bgfx::setUniform(depthParamsUniform_, depthParams.data());
+    bgfx::setUniform(viewProjectionUniform_, camera.viewProjection.data());
+    if (depthTextureValid) {
+        bgfx::setTexture(0, sceneDepthSampler_, desc.sceneDepthTexture);
+    }
+    bgfx::setState(SceneDepthPolicy::SceneOverlayState(false) | BGFX_STATE_BLEND_ALPHA);
     bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
     return true;
@@ -280,7 +297,9 @@ bool SceneGridPass::IsInitialized() const noexcept {
            bgfx::isValid(basisRightUniform_) && bgfx::isValid(basisUpUniform_) &&
            bgfx::isValid(basisForwardUniform_) && bgfx::isValid(gridParamsUniform_) &&
            bgfx::isValid(gridOriginUniform_) && bgfx::isValid(gridWidthsUniform_) &&
-           bgfx::isValid(gridStyleUniform_) && fullscreenLayout_.getStride() == sizeof(PosVertex);
+           bgfx::isValid(gridStyleUniform_) && bgfx::isValid(sceneDepthSampler_) &&
+           bgfx::isValid(depthParamsUniform_) && bgfx::isValid(viewProjectionUniform_) &&
+           fullscreenLayout_.getStride() == sizeof(PosVertex);
 }
 
 } // namespace kb::render

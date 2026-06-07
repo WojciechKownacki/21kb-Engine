@@ -6,6 +6,7 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 
 namespace kb::editor {
 
@@ -33,6 +34,13 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     shellInteraction_.ClearPressedTransport();
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     if (inspectorPointer.HandlePointerUp()) {
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (EditorSceneViewportObjectInteraction::EndGizmoDrag(sceneContext_)) {
         ReleaseCapture();
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

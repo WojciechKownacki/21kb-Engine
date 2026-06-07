@@ -1,7 +1,10 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -14,6 +17,7 @@
 #include "engine/script/ScriptBehaviourBindingService.hpp"
 #include "engine/visual/VisualGraphTypes.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -123,6 +127,7 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata != nullptr, "Restored asset manifest did not index the virtual path");
     kb::tests::Require(restoredMetadata->id == metadata->id, "Restored asset manifest did not preserve stable asset id");
     kb::tests::Require(restoredMetadata->contentHash == metadata->contentHash, "Restored asset manifest did not preserve content hash");
+    kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
 void RunAssetManagerFolderAndRenameOperationsTest() {
@@ -149,7 +154,9 @@ void RunAssetManagerFolderAndRenameOperationsTest() {
     const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Text/Greeting.txt");
     kb::tests::Require(metadata != nullptr, "Operations test asset was not indexed before rename");
     const kb::assets::AssetId oldId = metadata->id;
+    WriteTextFile(assetsRoot / "Text" / "Greeting.meta", "meta");
     kb::tests::Require(manager.RenameAsset(oldId, "RenamedGreeting"), "Asset manager did not rename an asset file");
+    kb::tests::Require(std::filesystem::is_regular_file(assetsRoot / "Text" / "RenamedGreeting.meta"), "Asset manager did not rename the sidecar meta file");
     kb::tests::Require(manager.Registry().FindByPath("/Game/Text/Greeting.txt") == nullptr, "Old asset virtual path remained indexed after rename");
     metadata = manager.Registry().FindByPath("/Game/Text/RenamedGreeting.txt");
     kb::tests::Require(metadata != nullptr, "Renamed asset virtual path was not indexed");
@@ -162,8 +169,10 @@ void RunAssetManagerFolderAndRenameOperationsTest() {
     metadata = manager.Registry().FindByPath(movedAsset.virtualPath);
     kb::tests::Require(metadata != nullptr, "Moved asset virtual path was not indexed");
     kb::tests::Require(std::filesystem::is_regular_file(assetsRoot / "Moved" / "RenamedGreeting_1.txt"), "Moved asset file does not exist on disk");
+    kb::tests::Require(std::filesystem::is_regular_file(assetsRoot / "Moved" / "RenamedGreeting_1.meta"), "Moved asset sidecar meta file does not exist on disk");
     kb::tests::Require(manager.DeleteAsset(metadata->id), "Asset manager did not delete an asset file");
     kb::tests::Require(manager.Registry().FindByPath(movedAsset.virtualPath) == nullptr, "Deleted asset remained indexed");
+    kb::tests::Require(!std::filesystem::exists(assetsRoot / "Moved" / "RenamedGreeting_1.meta"), "Deleted asset sidecar meta file still exists");
 
     kb::tests::Require(manager.CreateFolder("/Game/FolderSource"), "Asset manager did not create a source folder for move");
     WriteTextFile(assetsRoot / "FolderSource" / "Nested" / "Inside.txt", "inside folder");
@@ -175,6 +184,49 @@ void RunAssetManagerFolderAndRenameOperationsTest() {
     kb::tests::Require(std::filesystem::is_regular_file(assetsRoot / "Moved" / "FolderSource_1" / "Nested" / "Inside.txt"), "Moved folder contents were not preserved");
     kb::tests::Require(manager.Registry().FindByPath("/Game/Moved/FolderSource_1/Nested/Inside.txt") != nullptr, "Moved folder assets were not rediscovered");
     kb::tests::Require(!manager.MoveFolder(movedFolder.virtualPath, movedFolder.virtualPath / "Nested"), "Asset manager allowed a folder to move into its own child");
+}
+
+void RunAssetImportServiceBinaryContainerTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "Project" / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "External";
+    WriteTextFile(sourceRoot / "Albedo.png", "texture bytes");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported asset loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed for import test");
+
+    const std::array<std::filesystem::path, 1> files{ sourceRoot / "Albedo.png" };
+    const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Textures");
+    kb::tests::Require(result.Succeeded() && result.ImportedCount() == 1U, "Asset import service did not import the source file");
+
+    const kb::assets::AssetImportItemResult& item = result.items.front();
+    kb::tests::Require(item.assetPhysicalPath.extension() == ".21kb", "Imported asset file should use the .21kb extension");
+    kb::tests::Require(item.metaPhysicalPath.extension() == ".meta", "Imported asset meta file should use the .meta extension");
+    kb::tests::Require(item.assetPhysicalPath.stem() == item.metaPhysicalPath.stem(), "Imported asset and meta should share the same base name");
+    kb::tests::Require(std::filesystem::is_regular_file(item.assetPhysicalPath), "Imported .21kb file was not written");
+    kb::tests::Require(std::filesystem::is_regular_file(item.metaPhysicalPath), "Imported .meta file was not written");
+    kb::tests::Require(item.virtualPath == "/Game/Textures/Albedo.21kb", "Imported asset virtual path should point at the .21kb file");
+
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(item.virtualPath);
+    kb::tests::Require(metadata != nullptr && metadata->type == "ImportedAsset", "Imported asset metadata was not registered");
+    kb::tests::Require(metadata != nullptr && metadata->importCategory == "Texture", "Imported asset metadata did not expose the import category");
+    kb::tests::Require(metadata->contentHash == item.assetHash && metadata->contentHash != 0U, "Imported asset metadata did not store the container hash");
+
+    const kb::assets::AssetHandle<kb::assets::ImportedAsset> loaded = manager.Load<kb::assets::ImportedAsset>(metadata->id);
+    kb::tests::Require(loaded.IsLoaded(), "Imported .21kb asset did not load through the imported asset loader");
+    kb::tests::Require(loaded->category == kb::assets::AssetImportCategory::Texture, "Imported asset category was not preserved");
+    kb::tests::Require(loaded->sourceName == "Albedo.png", "Imported asset source name was not preserved");
+    kb::tests::Require(loaded->sourceExtension == ".png", "Imported asset source extension was not preserved");
+    kb::tests::Require(loaded->payload.size() == 13U, "Imported asset payload size was not preserved");
+
+    kb::assets::AssetManager rediscovered;
+    kb::tests::Require(rediscovered.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported asset rediscovery loader registration failed");
+    kb::tests::Require(rediscovered.Mounts().Mount("Game", assetsRoot), "Game asset remount failed for imported asset rediscovery");
+    kb::tests::Require(rediscovered.DiscoverMountedAssets() == 1U, "Imported asset rediscovery did not find the .21kb file");
+    const kb::assets::AssetMetadata* rediscoveredMetadata = rediscovered.Registry().FindByPath(item.virtualPath);
+    kb::tests::Require(rediscoveredMetadata != nullptr && rediscoveredMetadata->importCategory == "Texture", "Imported asset rediscovery did not read the binary category flag");
 }
 
 void RunScenePrefabRuntimeAssetTest() {
@@ -298,6 +350,7 @@ namespace kb::tests {
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerFolderAndRenameOperationsTest();
+    RunAssetImportServiceBinaryContainerTest();
     RunScenePrefabRuntimeAssetTest();
     RunScriptAssetPipelineTest();
 }

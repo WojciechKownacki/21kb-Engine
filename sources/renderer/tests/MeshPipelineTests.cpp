@@ -505,6 +505,41 @@ void RunMeshPipelineUsesMaterialDoubleSidedStateTest() {
 
     Require(result.commands.size() == 1U, "MeshPipeline double sided material test did not emit a command");
     Require((result.commands[0].state & BGFX_STATE_CULL_CW) == 0U, "MeshPipeline ignored material double sided state");
+    Require((result.commands[0].state & BGFX_STATE_CULL_CCW) == 0U, "MeshPipeline ignored material double sided state");
+}
+
+void RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 3U;
+    mesh.doubleSided = false;
+    mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F };
+    mesh.sections = {
+        RenderMeshSection{
+            .indexStart = 0U,
+            .indexCount = 3U,
+            .bounds = mesh.bounds,
+        },
+    };
+    RenderMaterialResource material{};
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = { SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U, .model = IdentityMatrix() } },
+        },
+    };
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &material,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.commands.size() == 1U, "MeshPipeline single-sided culling test did not emit a command");
+    Require((result.commands[0].state & BGFX_STATE_CULL_CCW) != 0U, "MeshPipeline does not cull back faces for single-sided meshes");
+    Require((result.commands[0].state & BGFX_STATE_CULL_CW) == 0U, "MeshPipeline culls the authored front faces");
 }
 
 void RunMeshPipelineSortsTransparentCommandsBackToFrontTest() {
@@ -1070,6 +1105,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineSortsCommandsBySortKeyTest();
     RunMeshPipelineRoutesMaterialAlphaModesToPassesTest();
     RunMeshPipelineUsesMaterialDoubleSidedStateTest();
+    RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
     RunMeshPipelineSortsTransparentCommandsBackToFrontTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();

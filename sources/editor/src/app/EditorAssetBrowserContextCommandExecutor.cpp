@@ -2,6 +2,7 @@
 
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "platform/win32/EditorAssetImportDialog.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <filesystem>
@@ -16,6 +17,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     const std::filesystem::path targetFolder = state.ContextMenuTargetFolder();
 
     switch (command) {
+    case EditorAssetContextCommand::Import: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        const std::vector<std::filesystem::path> files = EditorAssetImportDialog::Open(GetActiveWindow());
+        return files.empty() ? true : sceneContext.ImportAssetFiles(files, destinationFolder);
+    }
     case EditorAssetContextCommand::NewFolder:
         if (targetKind == EditorAssetContextTargetKind::Folder) {
             static_cast<void>(state.SelectFolder(targetFolder, manager));

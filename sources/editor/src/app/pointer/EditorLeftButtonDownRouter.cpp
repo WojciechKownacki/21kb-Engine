@@ -14,6 +14,7 @@
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 
 namespace kb::editor {
@@ -66,9 +67,20 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
 
-        EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
-        if (sceneCamera.HandleLeftButtonDown(messageWindow, x, y)) {
-            pointerDrag_.Clear();
+        if (EditorSceneViewportObjectInteraction::BeginGizmoDrag(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+            SetCapture(messageWindow);
+            sceneContext_.AssetBrowser().FocusSelection(false);
+            EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+
+        if (EditorSceneViewportObjectInteraction::SelectAt(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+            sceneContext_.AssetBrowser().FocusSelection(false);
+            EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+            sceneViewport_.RequestPresent();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
     }

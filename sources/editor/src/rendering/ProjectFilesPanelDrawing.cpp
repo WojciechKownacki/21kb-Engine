@@ -122,6 +122,25 @@ void ProjectFilesPanelDrawing::DrawDisclosureTriangle(HDC dc, RECT rect, COLORRE
 
 namespace {
 
+[[nodiscard]] RECT FitAspectRatio(RECT bounds, int widthRatio, int heightRatio) noexcept {
+    const int width = ProjectFilesPanelDrawing::RectWidth(bounds);
+    const int height = ProjectFilesPanelDrawing::RectHeight(bounds);
+    if (width <= 0 || height <= 0 || widthRatio <= 0 || heightRatio <= 0) {
+        return bounds;
+    }
+
+    int fittedWidth = width;
+    int fittedHeight = (width * heightRatio) / widthRatio;
+    if (fittedHeight > height) {
+        fittedHeight = height;
+        fittedWidth = (height * widthRatio) / heightRatio;
+    }
+
+    const int left = bounds.left + (width - fittedWidth) / 2;
+    const int top = bounds.top + (height - fittedHeight) / 2;
+    return RECT{ left, top, left + fittedWidth, top + fittedHeight };
+}
+
 void DrawFastFolder(HDC dc, RECT icon, COLORREF color) {
     if (icon.right <= icon.left || icon.bottom <= icon.top) {
         return;
@@ -185,14 +204,15 @@ void DrawFastCube(HDC dc, RECT icon, COLORREF color) {
 
 void ProjectFilesPanelDrawing::DrawIconWithShadow(HDC dc, RECT icon, HeroIconKind kind, COLORREF color, int strokeWidth) {
     if (kind == HeroIconKind::Folder || kind == HeroIconKind::Cube) {
-        RECT shadow = icon;
+        const RECT fitted = kind == HeroIconKind::Folder ? FitAspectRatio(icon, 5, 4) : FitAspectRatio(icon, 1, 1);
+        RECT shadow = fitted;
         OffsetRect(&shadow, 1, 1);
         if (kind == HeroIconKind::Folder) {
             DrawFastFolder(dc, shadow, RGB(4, 5, 7));
-            DrawFastFolder(dc, icon, color);
+            DrawFastFolder(dc, fitted, color);
         } else {
             DrawFastCube(dc, shadow, RGB(4, 5, 7));
-            DrawFastCube(dc, icon, color);
+            DrawFastCube(dc, fitted, color);
         }
         return;
     }

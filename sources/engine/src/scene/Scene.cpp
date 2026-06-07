@@ -1,6 +1,7 @@
 #include "engine/scene/Scene.hpp"
 
 #include "engine/script/ScriptAssetLoader.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -24,10 +25,12 @@ Scene::Scene()
     const bool registeredLuaScriptLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::LuaScriptAssetLoader>());
     const bool registeredNativeBehaviourLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::NativeBehaviourDescriptorAssetLoader>());
     const bool registeredVisualGraphLoader = state_->assets.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>());
+    const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredLuaScriptLoader);
     static_cast<void>(registeredNativeBehaviourLoader);
     static_cast<void>(registeredVisualGraphLoader);
+    static_cast<void>(registeredImportedAssetLoader);
 }
 
 Scene::~Scene() {

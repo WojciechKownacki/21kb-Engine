@@ -88,6 +88,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .selectedEntityIds = SelectedEntitySpan(session),
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
+        .editorGizmo = present.settings.editorGizmo,
     };
 }
 

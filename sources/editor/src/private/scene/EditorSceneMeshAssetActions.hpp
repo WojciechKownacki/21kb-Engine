@@ -1,0 +1,23 @@
+#pragma once
+
+#include "engine/assets/AssetId.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/TransformComponent.hpp"
+
+#include <string_view>
+
+namespace kb::editor {
+
+class EditorSceneMeshAssetActions {
+public:
+    EditorSceneMeshAssetActions() = delete;
+
+    [[nodiscard]] static kb::scene::SceneEntity CreateMeshEntity(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId meshAssetId,
+        std::string_view name,
+        kb::scene::Vec3 position = {});
+};
+
+} // namespace kb::editor

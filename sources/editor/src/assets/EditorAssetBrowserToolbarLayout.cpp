@@ -12,7 +12,8 @@ void EditorAssetBrowserToolbarLayout::Apply(EditorAssetBrowserLayoutRects& layou
     const int toolbarButtonBottom = layout.toolbar.bottom - 6;
 
     layout.newFolderButton = RECT{ layout.toolbar.left + 10, toolbarButtonTop, layout.toolbar.left + 44, toolbarButtonBottom };
-    layout.filtersButton = RECT{ layout.newFolderButton.right + toolbarGap, toolbarButtonTop, layout.newFolderButton.right + toolbarGap + 72, toolbarButtonBottom };
+    layout.importButton = RECT{ layout.newFolderButton.right + toolbarGap, toolbarButtonTop, layout.newFolderButton.right + toolbarGap + 82, toolbarButtonBottom };
+    layout.filtersButton = RECT{ layout.importButton.right + toolbarGap, toolbarButtonTop, layout.importButton.right + toolbarGap + 72, toolbarButtonBottom };
 
     const int preferredSearchWidth = std::clamp(toolbarWidth / 3, 240, 326);
     const int pathLeft = layout.filtersButton.right + toolbarGap;

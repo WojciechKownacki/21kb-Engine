@@ -79,7 +79,10 @@ UINT_PTR EditorSceneViewportCameraController::TimerId() noexcept {
 }
 
 bool EditorSceneViewportCameraController::HandleLeftButtonDown(HWND messageWindow, int x, int y) {
-    return BeginNavigation(messageWindow, x, y, true, KeyDown(VK_RBUTTON), false);
+    static_cast<void>(messageWindow);
+    static_cast<void>(x);
+    static_cast<void>(y);
+    return false;
 }
 
 bool EditorSceneViewportCameraController::HandleRightButtonDown(HWND messageWindow, int x, int y) {

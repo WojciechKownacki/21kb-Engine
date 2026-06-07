@@ -4,6 +4,7 @@
 #include "engine/assets/AssetId.hpp"
 
 #include <filesystem>
+#include <span>
 
 namespace kb::scene {
 class Scene;
@@ -38,6 +39,11 @@ public:
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,
         const std::filesystem::path& sourceVirtualFolder,
+        const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] static bool ImportFiles(
+        kb::scene::Scene& scene,
+        EditorAssetBrowserState& assetBrowser,
+        std::span<const std::filesystem::path> sourceFiles,
         const std::filesystem::path& destinationVirtualFolder);
 };
 

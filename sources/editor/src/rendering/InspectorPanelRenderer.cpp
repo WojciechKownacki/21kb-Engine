@@ -410,6 +410,9 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
         y += kHeaderHeight + kPanelPadTop;
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        if (!metadata->importCategory.empty()) {
+            section.Field("Category", metadata->importCategory);
+        }
         section.Field("Id", FormatUInt64(metadata->id.value));
         section.Field("Virtual Path", NormalizePath(metadata->virtualPath));
         if (const std::optional<std::filesystem::path> physical = ResolveAssetPhysicalPath(manager, *metadata)) {

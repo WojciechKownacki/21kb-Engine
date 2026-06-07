@@ -139,6 +139,8 @@ add_library(kb_renderer STATIC
     src/resources/RenderMeshAssetFinalizer.cpp
     src/resources/RenderMeshAssetFinalizer.hpp
     src/resources/RenderMeshAssetBuilder.cpp
+    src/resources/RenderMeshFbxImporter.cpp
+    src/resources/RenderMeshFbxImporter.hpp
     src/resources/RenderMeshGltfImporter.cpp
     src/resources/RenderMeshGltfImporter.hpp
     src/resources/RenderMeshGltfMaterialImporter.cpp
@@ -300,6 +302,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_mesh_shadow_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_present.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_grid.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/vs_editor_gizmo.sc
         VARYING_DEF ${KB_RENDERER_SHADER_VARYING_DEF}
         OUTPUT_DIR ${KB_RENDERER_GENERATED_SHADER_DIR}
         INCLUDE_DIRS
@@ -420,6 +423,7 @@ target_include_directories(kb_renderer
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/3rdparty
+        ${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bimg/3rdparty
 )
 
 target_link_libraries(kb_renderer

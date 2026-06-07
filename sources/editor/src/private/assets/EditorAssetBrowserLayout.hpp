@@ -17,6 +17,7 @@ struct EditorAssetBrowserLayoutRects {
     RECT search{};
     RECT refreshButton{};
     RECT newFolderButton{};
+    RECT importButton{};
     RECT filtersButton{};
     RECT renameButton{};
     RECT deleteButton{};

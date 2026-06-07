@@ -10,6 +10,9 @@ uniform vec4 u_editorGridParams;
 uniform vec4 u_editorGridOrigin;
 uniform vec4 u_editorGridWidths;
 uniform vec4 u_editorGridStyle;
+SAMPLER2D(s_editorGridSceneDepth, 0);
+uniform vec4 u_editorGridDepthParams;
+uniform mat4 u_editorGridViewProjection;
 
 float axis_line_coverage(float t, float spacing, float width_pixels)
 {
@@ -151,14 +154,19 @@ void main()
         discard;
     }
 
-    float znear = u_editorGridOrigin.z;
-    float view_z = dot(u_editorGridBasisForward.xyz, hit - u_editorGridCameraPos.xyz);
-    if (is_ortho) {
-        float zfar = u_editorGridOrigin.w;
-        gl_FragDepth = clamp((zfar - view_z) / max(zfar - znear, 1e-6), 0.0, 1.0);
-    } else {
-        gl_FragDepth = clamp(znear / max(view_z, znear), 0.0, 1.0);
+    vec4 grid_clip = mul(u_editorGridViewProjection, vec4(hit, 1.0));
+    float grid_ndc_depth = grid_clip.z / max(grid_clip.w, 0.000001);
+    float grid_depth = u_editorGridDepthParams.z > 0.5 ? grid_ndc_depth * 0.5 + 0.5 : grid_ndc_depth;
+    grid_depth = clamp(grid_depth, 0.0, 1.0);
+
+    if (u_editorGridDepthParams.x > 0.5) {
+        vec2 depth_uv = vec2(v_texcoord0.x * 0.5 + 0.5, 0.5 - v_texcoord0.y * 0.5);
+        float scene_depth = texture2D(s_editorGridSceneDepth, depth_uv).x;
+        if (scene_depth > 0.000001 && grid_depth <= scene_depth + u_editorGridDepthParams.y) {
+            discard;
+        }
     }
+    gl_FragDepth = grid_depth;
 
     vec3 minor_color = vec3(0.28, 0.28, 0.28);
     vec3 major_color = vec3(0.42, 0.42, 0.42);

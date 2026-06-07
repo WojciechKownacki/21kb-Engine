@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorPointerDropHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 
 namespace kb::editor {
 namespace {
@@ -101,9 +102,14 @@ bool EditorPointerDragInteraction::Complete(
 
     bool handledDrop = false;
     if (drag.Active()) {
-        handledDrop = EditorPointerDropHandler::Drop(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
+        handledDrop = drag.assetCreatesMeshEntity
+            && EditorSceneViewportObjectInteraction::CommitMeshDragPreview(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
+        if (!handledDrop) {
+            handledDrop = EditorPointerDropHandler::Drop(dropWindow, mainWindow, dropPoint.x, dropPoint.y, dockModel, floatingWindows, metrics, sceneContext, drag);
+        }
     }
 
+    EditorSceneViewportObjectInteraction::CancelMeshDragPreview(sceneContext, drag);
     drag.Clear();
     if (GetCapture() == sourceWindow) {
         ReleaseCapture();

@@ -5,6 +5,8 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
@@ -16,6 +18,10 @@
 namespace kb::editor {
 namespace {
 
+constexpr float kGizmoTargetPixels = 90.0F;
+constexpr float kGizmoAxisLength = 1.16F;
+constexpr float kMinGizmoDepth = 0.25F;
+
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
 }
@@ -26,6 +32,26 @@ namespace {
 
 [[nodiscard]] float Aspect(std::uint32_t width, std::uint32_t height) noexcept {
     return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
+}
+
+[[nodiscard]] float DegreesToRadians(float degrees) noexcept {
+    return degrees * 3.14159265358979323846F / 180.0F;
+}
+
+[[nodiscard]] float GizmoScreenSpaceScale(
+    const EditorViewportCameraState& camera,
+    const EditorViewportCameraAxes& axes,
+    kb::scene::Vec3 target,
+    std::uint32_t renderHeight) noexcept {
+    const float toX = target.x - axes.position.x;
+    const float toY = target.y - axes.position.y;
+    const float toZ = target.z - axes.position.z;
+    const float viewDepth = toX * axes.forward.x + toY * axes.forward.y + toZ * axes.forward.z;
+    const float depth = std::max(kMinGizmoDepth, viewDepth);
+    const float worldPerPixel = renderHeight == 0U
+        ? 1.0F
+        : (2.0F * depth * std::tan(DegreesToRadians(camera.VerticalFovDegrees()) * 0.5F)) / static_cast<float>(renderHeight);
+    return std::clamp((kGizmoTargetPixels * worldPerPixel) / kGizmoAxisLength, 0.05F, 50000.0F);
 }
 
 [[nodiscard]] kb::render::SceneRenderCamera BuildCamera(
@@ -90,16 +116,31 @@ namespace {
     const EditorViewportProfile profile = viewportState.Profile();
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
+    const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
+    const EditorViewportCameraAxes axes = viewportCamera.Axes();
+    kb::render::RenderSceneSubmitDesc::EditorGizmoDesc gizmo{};
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
+        if (const kb::scene::TransformComponent* transform = sceneContext.Scene().Transforms().TryGet(selected); transform != nullptr) {
+            const kb::scene::Vec3 target = transform->localPosition;
+            gizmo.visible = true;
+            gizmo.targetPosition = {target.x, target.y, target.z};
+            gizmo.worldScale = GizmoScreenSpaceScale(viewportCamera, axes, target, renderHeight);
+            gizmo.hoveredAxis = sceneContext.Gizmo().hoveredAxis;
+            gizmo.draggedAxis = sceneContext.Gizmo().draggedAxis;
+        }
+    }
 
     return EditorSceneBgfxViewport::PresentSettings{
         .renderWidth = renderWidth,
         .renderHeight = renderHeight,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
-        .cameraOverride = BuildEditorCamera(sceneContext.ViewportCamera(panelId), renderWidth, renderHeight),
+        .cameraOverride = BuildEditorCamera(viewportCamera, renderWidth, renderHeight),
         .selectedEntityIds = std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() },
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = true,
+        .editorGizmo = gizmo,
         .drawSafeArea = profile.devicePreview,
     };
 }
