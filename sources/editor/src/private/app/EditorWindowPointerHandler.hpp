@@ -38,9 +38,12 @@ public:
     LRESULT HandleLeftButtonDown(HWND messageWindow, LPARAM lparam);
     LRESULT HandleLeftButtonDoubleClick(HWND messageWindow, LPARAM lparam);
     LRESULT HandleRightButtonDown(HWND messageWindow, LPARAM lparam);
+    LRESULT HandleMiddleButtonDown(HWND messageWindow, LPARAM lparam);
     LRESULT HandleMouseMove(HWND messageWindow, WPARAM wparam, LPARAM lparam);
     LRESULT HandleMouseWheel(HWND messageWindow, WPARAM wparam, LPARAM lparam);
     LRESULT HandleLeftButtonUp(HWND messageWindow, LPARAM lparam);
+    LRESULT HandleRightButtonUp(HWND messageWindow);
+    LRESULT HandleMiddleButtonUp(HWND messageWindow);
     LRESULT HandleSetCursor(HWND messageWindow, WPARAM wparam, LPARAM lparam);
 #endif
 

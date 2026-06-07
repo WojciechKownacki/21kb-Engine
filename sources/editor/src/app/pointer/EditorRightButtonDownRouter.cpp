@@ -6,6 +6,7 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
+#include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 
 #include <optional>
@@ -17,12 +18,14 @@ EditorRightButtonDownRouter::EditorRightButtonDownRouter(
     const EditorDockModel& dockModel,
     const EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     EditorPointerDragState& pointerDrag,
     const EditorMetrics& metrics) noexcept
     : mainWindow_(mainWindow)
     , dockModel_(dockModel)
     , floatingWindows_(floatingWindows)
     , sceneContext_(sceneContext)
+    , sceneViewport_(sceneViewport)
     , pointerDrag_(pointerDrag)
     , metrics_(metrics) {}
 
@@ -39,6 +42,11 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     pointerDrag_.Clear();
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (sceneCamera.HandleRightButtonDown(messageWindow, x, y)) {
+        return;
+    }
+
     const std::optional<RECT> consoleContent = EditorPanelContentResolver::Resolve(DockPanelKind::Console, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorConsolePointerController consolePointer(messageWindow, sceneContext_);
     if (consoleContent.has_value() && consolePointer.HandleContextMenu(*consoleContent, x, y)) {

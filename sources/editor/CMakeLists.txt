@@ -49,6 +49,7 @@ add_executable(kb_editor
     src/app/project_files/EditorProjectFilesDeleteConfirmOverlayController.cpp
     src/app/project_files/EditorProjectFilesMouseWheelController.cpp
     src/app/project_files/EditorProjectFilesTransientUiController.cpp
+    src/app/scene_viewport/EditorSceneViewportCameraController.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
@@ -271,6 +272,7 @@ add_executable(kb_editor
     src/private/app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp
     src/private/app/project_files/EditorProjectFilesMouseWheelController.hpp
     src/private/app/project_files/EditorProjectFilesTransientUiController.hpp
+    src/private/app/scene_viewport/EditorSceneViewportCameraController.hpp
     src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
@@ -394,6 +396,7 @@ add_executable(kb_editor
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorScenePrefabActions.hpp
+    src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
@@ -504,6 +507,7 @@ add_executable(kb_editor
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorScenePrefabActions.cpp
+    src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
@@ -660,6 +664,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorScenePrefabActions.cpp
+        src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorShellInteractionState.cpp

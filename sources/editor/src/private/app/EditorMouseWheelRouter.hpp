@@ -10,6 +10,7 @@ namespace kb::editor {
 
 class EditorDockModel;
 class EditorFloatingWindowManager;
+class EditorSceneBgfxViewport;
 class EditorSceneContext;
 struct EditorMetrics;
 
@@ -22,7 +23,8 @@ public:
         const EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics,
-        EditorSceneContext& sceneContext) noexcept;
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport) noexcept;
 
     [[nodiscard]] bool HandleMouseWheel(int x, int y, int wheelDelta);
 
@@ -33,6 +35,7 @@ private:
     const EditorFloatingWindowManager& floatingWindows_;
     const EditorMetrics& metrics_;
     EditorSceneContext& sceneContext_;
+    EditorSceneBgfxViewport& sceneViewport_;
 };
 #endif
 

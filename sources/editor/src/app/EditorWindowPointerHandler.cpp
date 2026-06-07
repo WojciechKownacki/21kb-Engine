@@ -8,6 +8,7 @@
 #include "app/pointer/EditorMouseMoveRouter.hpp"
 #include "app/pointer/EditorRightButtonDownRouter.hpp"
 #include "app/pointer/EditorSetCursorRouter.hpp"
+#include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/EditorWindowInvalidator.hpp"
 
 #include <windowsx.h>
@@ -60,9 +61,19 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
 LRESULT EditorWindowPointerHandler::HandleRightButtonDown(HWND messageWindow, LPARAM lparam) {
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
-    EditorRightButtonDownRouter rightButtonDown(mainWindow_, dockModel_, floatingWindows_, sceneContext_, pointerDrag_, metrics_);
+    EditorRightButtonDownRouter rightButtonDown(mainWindow_, dockModel_, floatingWindows_, sceneContext_, sceneViewport_, pointerDrag_, metrics_);
     rightButtonDown.Handle(messageWindow, x, y);
     return 0;
+}
+
+LRESULT EditorWindowPointerHandler::HandleMiddleButtonDown(HWND messageWindow, LPARAM lparam) {
+    const int x = GET_X_LPARAM(lparam);
+    const int y = GET_Y_LPARAM(lparam);
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (sceneCamera.HandleMiddleButtonDown(messageWindow, x, y)) {
+        return 0;
+    }
+    return DefWindowProcW(messageWindow, WM_MBUTTONDOWN, 0, lparam);
 }
 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonDoubleClick(HWND messageWindow, LPARAM lparam) {
@@ -98,7 +109,7 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
 LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM wparam, LPARAM lparam) {
     POINT point{ GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
     ScreenToClient(messageWindow, &point);
-    EditorMouseWheelRouter mouseWheel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_);
+    EditorMouseWheelRouter mouseWheel(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (mouseWheel.HandleMouseWheel(point.x, point.y, GET_WHEEL_DELTA_WPARAM(wparam))) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
@@ -107,6 +118,11 @@ LRESULT EditorWindowPointerHandler::HandleMouseWheel(HWND messageWindow, WPARAM 
 }
 
 LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARAM lparam) {
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (sceneCamera.HandleButtonUp(messageWindow)) {
+        return 0;
+    }
+
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
 
@@ -122,6 +138,20 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
         metrics_);
     leftButtonUp.Handle(messageWindow, x, y);
     return 0;
+}
+
+LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow) {
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    static_cast<void>(sceneCamera.HandleButtonUp(messageWindow));
+    return 0;
+}
+
+LRESULT EditorWindowPointerHandler::HandleMiddleButtonUp(HWND messageWindow) {
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (sceneCamera.HandleButtonUp(messageWindow)) {
+        return 0;
+    }
+    return DefWindowProcW(messageWindow, WM_MBUTTONUP, 0, 0);
 }
 
 LRESULT EditorWindowPointerHandler::HandleSetCursor(HWND messageWindow, WPARAM wparam, LPARAM lparam) {

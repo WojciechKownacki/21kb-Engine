@@ -3,11 +3,17 @@
 
 #include "app/EditorPlayModeState.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
+#include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 
+#include <cmath>
 #include <string_view>
 
 namespace {
+
+void RequireNear(float actual, float expected, float tolerance, const char* message) {
+    kb::editor::tests::Require(std::fabs(actual - expected) <= tolerance, message);
+}
 
 void RunProfileCycleAndResolutionTest() {
     kb::editor::EditorViewportPreviewState state;
@@ -42,6 +48,59 @@ void RunFitCameraAndCustomTest() {
     state.SetCustomResolution(1U, 50000U);
     kb::editor::tests::Require(state.RenderWidthForPanel(800U) == 16U, "Custom viewport width was not clamped");
     kb::editor::tests::Require(state.RenderHeightForPanel(600U) == 16384U, "Custom viewport height was not clamped");
+}
+
+void RunViewportCameraAxesTest() {
+    kb::editor::EditorViewportCameraState camera;
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+
+    RequireNear(axes.position.x, 0.0F, 0.001F, "Viewport camera default x position is wrong");
+    RequireNear(axes.position.y, 2.0F, 0.001F, "Viewport camera default y position is wrong");
+    RequireNear(axes.position.z, -6.0F, 0.001F, "Viewport camera default z position is wrong");
+    RequireNear(axes.forward.x, 0.0F, 0.001F, "Viewport camera default forward x is wrong");
+    RequireNear(axes.forward.y, 0.0F, 0.001F, "Viewport camera default forward y is wrong");
+    RequireNear(axes.forward.z, 1.0F, 0.001F, "Viewport camera default forward z is wrong");
+    RequireNear(axes.up.y, 1.0F, 0.001F, "Viewport camera default up vector is wrong");
+}
+
+void RunViewportCameraNavigationTest() {
+    kb::editor::EditorViewportCameraState camera;
+    camera.BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Look, 100, 100);
+    kb::editor::tests::Require(camera.IsNavigating(), "Viewport camera should enter navigation mode");
+    kb::editor::tests::Require(camera.AllowsKeyboardFlight(), "RMB look mode should allow keyboard flight");
+
+    static_cast<void>(camera.UpdatePointer(200, 50));
+    kb::editor::tests::Require(camera.YawDegrees() > 0.0F, "Dragging look mode right should increase yaw");
+    kb::editor::tests::Require(camera.PitchDegrees() > 0.0F, "Dragging look mode up should increase pitch");
+
+    const kb::scene::Vec3 beforeFlight = camera.Position();
+    const bool moved = camera.ApplyKeyboardFlight(
+        kb::editor::EditorViewportCameraFlightInput{ .forward = true, .right = true, .up = true },
+        1.0F);
+    kb::editor::tests::Require(moved, "Viewport camera flight input should move camera");
+    const kb::scene::Vec3 afterFlight = camera.Position();
+    kb::editor::tests::Require(
+        afterFlight.x != beforeFlight.x || afterFlight.y != beforeFlight.y || afterFlight.z != beforeFlight.z,
+        "Viewport camera position did not change after flight input");
+
+    const float speedBeforeWheel = camera.Speed();
+    static_cast<void>(camera.ApplyWheel(1.0F, true));
+    kb::editor::tests::Require(camera.Speed() > speedBeforeWheel, "Mouse wheel in flight mode should increase camera speed");
+    camera.EndNavigation();
+    kb::editor::tests::Require(!camera.IsNavigating(), "Viewport camera should exit navigation mode");
+}
+
+void RunViewportCameraOrbitTest() {
+    kb::editor::EditorViewportCameraState camera;
+    camera.BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Orbit, 20, 20);
+    const kb::scene::Vec3 beforeOrbit = camera.Position();
+    static_cast<void>(camera.UpdatePointer(120, 20));
+    const kb::scene::Vec3 afterOrbit = camera.Position();
+
+    kb::editor::tests::Require(camera.YawDegrees() > 0.0F, "Alt+LMB orbit should rotate camera yaw");
+    kb::editor::tests::Require(
+        afterOrbit.x != beforeOrbit.x || afterOrbit.z != beforeOrbit.z,
+        "Alt+LMB orbit should move camera around the pivot");
 }
 
 void RunRenderBackendSettingsTest() {
@@ -102,6 +161,9 @@ namespace kb::editor::tests {
 void RunEditorViewportPreviewTests() {
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
+    RunViewportCameraAxesTest();
+    RunViewportCameraNavigationTest();
+    RunViewportCameraOrbitTest();
     RunRenderBackendSettingsTest();
     RunPlayModeStateTest();
 }
