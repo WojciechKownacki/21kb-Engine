@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRow.hpp"
@@ -14,10 +15,14 @@
 #include <string>
 #include <string_view>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <span>
 #include <vector>
 
 namespace kb::editor {
+
+class EditorSceneCommandController;
 
 class EditorSceneContext {
 public:
@@ -47,6 +52,14 @@ public:
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
+    [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
+    [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
+    [[nodiscard]] bool UndoSceneCommand();
+    [[nodiscard]] bool RedoSceneCommand();
+    [[nodiscard]] bool BeginSceneEditTransaction(std::string label);
+    [[nodiscard]] bool CommitSceneEditTransaction();
+    void CancelSceneEditTransaction();
+    [[nodiscard]] bool HasPendingSceneEditTransaction() const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -88,6 +101,7 @@ public:
     void CancelAssetTextEdit() noexcept;
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
+    [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
     [[nodiscard]] bool DeleteAssetBrowserItem(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
@@ -110,17 +124,22 @@ public:
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
 
 private:
+    [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
+    [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
+    EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
+    std::optional<std::string> pendingSceneTransactionLabel_;
 };
 
 } // namespace kb::editor

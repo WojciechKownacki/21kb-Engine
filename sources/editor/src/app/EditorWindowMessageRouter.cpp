@@ -1,6 +1,7 @@
 #include "app/EditorWindowMessageRouter.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorEditCommandInputHandler.hpp"
 #include "app/EditorHierarchySearchInputHandler.hpp"
 #include "app/EditorAssetBrowserInputHandler.hpp"
 #include "app/EditorWindowHitTestHandler.hpp"
@@ -123,6 +124,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             context_.sceneViewport.RequestPresent();
+            return 0;
+        }
+        if (EditorEditCommandInputHandler{ context_.sceneContext }.HandleKeyDown(wparam)) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
             return 0;
         }
         break;
