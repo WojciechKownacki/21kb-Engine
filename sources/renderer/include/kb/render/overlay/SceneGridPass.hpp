@@ -32,8 +32,15 @@ public:
 
 private:
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle cameraPosUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle basisRightUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle basisUpUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle basisForwardUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle gridParamsUniform_ = BGFX_INVALID_HANDLE;
-    bgfx::VertexLayout lineLayout_{};
+    bgfx::UniformHandle gridOriginUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle gridWidthsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle gridStyleUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::VertexLayout fullscreenLayout_{};
     bool initialized_ = false;
 };
 
