@@ -28,8 +28,10 @@ struct GridCamera {
 
 constexpr int kLineHalfCount = 96;
 constexpr float kSpacing = 1.0F;
-constexpr float kFadeStart = 52.0F;
-constexpr float kFadeEnd = 96.0F;
+constexpr float kFadeStart = 28.0F;
+constexpr float kFadeEnd = 72.0F;
+constexpr float kHorizontalDetailEnd = 30.0F;
+constexpr float kHorizontalMajorEnd = 48.0F;
 constexpr std::uint32_t kMaxSegmentsPerGridLine = 3U;
 constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2) * kMaxSegmentsPerGridLine * 2U;
 
@@ -54,7 +56,10 @@ constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineH
     const float dx = x - camera.x;
     const float dz = z - camera.z;
     const float distance = std::sqrt(dx * dx + dz * dz);
-    return 1.0F - Saturate((distance - kFadeStart) / (kFadeEnd - kFadeStart));
+    const float t = Saturate((distance - kFadeStart) / (kFadeEnd - kFadeStart));
+    const float smooth = t * t * (3.0F - 2.0F * t);
+    const float fade = 1.0F - smooth;
+    return fade * fade;
 }
 
 [[nodiscard]] LineVertex Vertex(float x, float z, std::array<float, 3> color, const GridCamera& camera) noexcept {
@@ -159,7 +164,14 @@ void AddVerticalLine(
         const bool xAxis = xLine == 0;
         const bool zMajor = zLine % 5 == 0;
         const bool xMajor = xLine % 5 == 0;
-        AddHorizontalLine(vertices, count, z, zAxis ? kAxisX : (zMajor ? kMajor : kMinor), camera);
+        const float horizontalDistance = std::abs(z - camera.z);
+        const bool drawHorizontal =
+            horizontalDistance < kHorizontalDetailEnd ||
+            zAxis ||
+            (horizontalDistance < kHorizontalMajorEnd && zMajor);
+        if (drawHorizontal) {
+            AddHorizontalLine(vertices, count, z, zAxis ? kAxisX : (zMajor ? kMajor : kMinor), camera);
+        }
         AddVerticalLine(vertices, count, x, xAxis ? kAxisZ : (xMajor ? kMajor : kMinor), camera);
     }
     return count;
