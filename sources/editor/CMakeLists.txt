@@ -26,6 +26,7 @@ add_executable(kb_editor
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
+    src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
@@ -51,6 +52,7 @@ add_executable(kb_editor
     src/app/project_files/EditorProjectFilesMouseWheelController.cpp
     src/app/project_files/EditorProjectFilesTransientUiController.cpp
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
+    src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
@@ -251,6 +253,7 @@ add_executable(kb_editor
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
+    src/private/app/EditorMeshAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorMouseWheelRouter.hpp
     src/private/app/inspector/EditorInspectorPointerController.hpp
@@ -275,6 +278,7 @@ add_executable(kb_editor
     src/private/app/project_files/EditorProjectFilesMouseWheelController.hpp
     src/private/app/project_files/EditorProjectFilesTransientUiController.hpp
     src/private/app/scene_viewport/EditorSceneViewportCameraController.hpp
+    src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
@@ -292,6 +296,7 @@ add_executable(kb_editor
     src/private/inspection/InspectorMeshRendererTextBuilder.hpp
     src/private/inspection/InspectorPanelTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
+    src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
     src/private/project/EditorProjectAssetIndex.hpp
@@ -397,6 +402,7 @@ add_executable(kb_editor
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
+    src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorScenePrefabActions.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
@@ -408,6 +414,7 @@ add_executable(kb_editor
     src/private/windowing/FloatingWindowFactory.hpp
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
+    src/platform/win32/EditorAssetImportDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
     src/rendering/DockDropPreviewRenderer.cpp
@@ -508,6 +515,7 @@ add_executable(kb_editor
     src/scene/EditorSceneAssetBrowserCommands.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
+    src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
@@ -578,7 +586,7 @@ target_link_libraries(kb_editor
         kb_renderer
 )
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
@@ -665,6 +673,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorSceneMeshAssetActions.cpp
         src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp

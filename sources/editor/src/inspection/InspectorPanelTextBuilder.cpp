@@ -35,6 +35,7 @@ namespace {
             : metadata->physicalPath;
         text << "Asset: " << metadata->name << '\n'
              << "Type: " << metadata->type << '\n'
+             << "Category: " << (metadata->importCategory.empty() ? "-" : metadata->importCategory) << '\n'
              << "Id: " << metadata->id.value << '\n'
              << "Virtual path: " << Normalize(metadata->virtualPath) << '\n';
         if (!resolved.empty()) {

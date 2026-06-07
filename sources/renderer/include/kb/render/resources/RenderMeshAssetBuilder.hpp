@@ -3,9 +3,11 @@
 #include "kb/render/resources/RenderResources.hpp"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <iosfwd>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,9 @@ struct RenderMeshGltfImportDesc {
     const RenderMeshAssetMaterialBinding* materialBindings = nullptr;
     std::uint32_t materialBindingCount = 0;
     bool flipV = false;
+};
+
+struct RenderMeshFbxImportDesc {
 };
 
 struct RenderMeshEmbeddedMaterial {
@@ -70,6 +75,8 @@ public:
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadObj(const std::filesystem::path& path, const RenderMeshObjImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadObj(std::istream& input, const RenderMeshObjImportDesc& desc = {});
     [[nodiscard]] static std::optional<RenderMeshAssetData> LoadGltf(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc = {});
+    [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc = {});
+    [[nodiscard]] static std::optional<RenderMeshAssetData> LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc = {});
 };
 
 } // namespace kb::render

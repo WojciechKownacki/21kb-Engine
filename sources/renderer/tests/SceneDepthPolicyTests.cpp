@@ -26,6 +26,15 @@ void SceneMeshStateUsesReverseZDepthTest() {
     Require((state & BGFX_STATE_DEPTH_TEST_MASK) == BGFX_STATE_DEPTH_TEST_GEQUAL, "Scene mesh state does not use reverse-Z depth test");
 }
 
+void SceneMeshStateCullsBackFacesForSingleSidedMeshes() {
+    constexpr std::uint64_t singleSided = SceneDepthPolicy::SceneMeshState(false);
+    constexpr std::uint64_t doubleSided = SceneDepthPolicy::SceneMeshState(true);
+
+    Require((singleSided & BGFX_STATE_CULL_CCW) != 0U, "Scene mesh state does not cull back faces for single-sided meshes");
+    Require((singleSided & BGFX_STATE_CULL_CW) == 0U, "Scene mesh state culls the authored front faces");
+    Require((doubleSided & (BGFX_STATE_CULL_CW | BGFX_STATE_CULL_CCW)) == 0U, "Double-sided scene mesh state unexpectedly culls faces");
+}
+
 void SceneOverlayStateUsesExplicitDepthPolicy() {
     constexpr std::uint64_t depthTested = SceneDepthPolicy::SceneOverlayState(true);
     constexpr std::uint64_t screenSpace = SceneDepthPolicy::SceneOverlayState(false);
@@ -107,6 +116,7 @@ void RunSceneDepthPolicyTests() {
     SceneDepthPolicyUsesReverseZConventions();
     SceneSubmitDescDefaultsToReverseZClearDepth();
     SceneMeshStateUsesReverseZDepthTest();
+    SceneMeshStateCullsBackFacesForSingleSidedMeshes();
     SceneOverlayStateUsesExplicitDepthPolicy();
     SceneDepthPolicySanitizesProjectionInputs();
     SceneDepthPolicyPerspectiveProjectionUsesReverseZ();
