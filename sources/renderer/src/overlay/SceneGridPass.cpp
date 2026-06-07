@@ -30,8 +30,10 @@ constexpr int kLineHalfCount = 96;
 constexpr float kSpacing = 1.0F;
 constexpr float kFadeStart = 28.0F;
 constexpr float kFadeEnd = 72.0F;
-constexpr float kHorizontalDetailEnd = 30.0F;
-constexpr float kHorizontalMajorEnd = 48.0F;
+constexpr float kHorizontalFadeStart = 14.0F;
+constexpr float kHorizontalFadeEnd = 34.0F;
+constexpr float kHorizontalDetailEnd = 16.0F;
+constexpr float kHorizontalMajorEnd = 26.0F;
 constexpr std::uint32_t kMaxSegmentsPerGridLine = 3U;
 constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2) * kMaxSegmentsPerGridLine * 2U;
 
@@ -67,6 +69,10 @@ constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineH
     return LineVertex{x, 0.0F, z, color[0] * fade, color[1] * fade, color[2] * fade};
 }
 
+[[nodiscard]] LineVertex VertexWithFade(float x, float z, std::array<float, 3> color, float fade) noexcept {
+    return LineVertex{x, 0.0F, z, color[0] * fade, color[1] * fade, color[2] * fade};
+}
+
 [[nodiscard]] GridCamera CameraFromView(const SceneRenderCamera& camera) noexcept {
     float inverseView[16]{};
     bx::mtxInverse(inverseView, camera.view.data());
@@ -96,25 +102,21 @@ void AddHorizontalLine(
     std::array<float, 3> color,
     const GridCamera& camera) noexcept {
     const float dz = std::abs(z - camera.z);
-    if (dz >= kFadeEnd) {
+    if (dz >= kHorizontalFadeEnd) {
         return;
     }
 
-    const float outer = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dz * dz));
-    const float x0 = camera.x - outer;
-    const float x1 = camera.x + outer;
-    if (dz >= kFadeStart) {
-        AddSegment(vertices, count, x0, z, camera.x, z, color, camera);
-        AddSegment(vertices, count, camera.x, z, x1, z, color, camera);
+    const float t = Saturate((dz - kHorizontalFadeStart) / (kHorizontalFadeEnd - kHorizontalFadeStart));
+    const float smooth = t * t * (3.0F - 2.0F * t);
+    const float lineFade = (1.0F - smooth) * (1.0F - smooth);
+    const float halfLength = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dz * dz));
+    const float x0 = camera.x - halfLength;
+    const float x1 = camera.x + halfLength;
+    if (count + 2U > vertices.size()) {
         return;
     }
-
-    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dz * dz));
-    const float leftInner = camera.x - inner;
-    const float rightInner = camera.x + inner;
-    AddSegment(vertices, count, x0, z, leftInner, z, color, camera);
-    AddSegment(vertices, count, leftInner, z, rightInner, z, color, camera);
-    AddSegment(vertices, count, rightInner, z, x1, z, color, camera);
+    vertices[count++] = VertexWithFade(x0, z, color, lineFade);
+    vertices[count++] = VertexWithFade(x1, z, color, lineFade);
 }
 
 void AddVerticalLine(
