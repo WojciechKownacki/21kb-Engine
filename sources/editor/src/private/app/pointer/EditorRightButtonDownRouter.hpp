@@ -3,6 +3,7 @@
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "app/EditorPointerDragState.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -21,6 +22,7 @@ public:
         const EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport,
         EditorPointerDragState& pointerDrag,
         const EditorMetrics& metrics) noexcept;
 
@@ -31,6 +33,7 @@ private:
     const EditorDockModel& dockModel_;
     const EditorFloatingWindowManager& floatingWindows_;
     EditorSceneContext& sceneContext_;
+    EditorSceneBgfxViewport& sceneViewport_;
     EditorPointerDragState& pointerDrag_;
     const EditorMetrics& metrics_;
 };
