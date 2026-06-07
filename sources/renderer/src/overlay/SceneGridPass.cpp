@@ -30,9 +30,8 @@ constexpr int kLineHalfCount = 96;
 constexpr float kSpacing = 1.0F;
 constexpr float kFadeStart = 52.0F;
 constexpr float kFadeEnd = 96.0F;
-constexpr float kSegmentLength = 4.0F;
-constexpr int kSegmentsPerLine = static_cast<int>((static_cast<float>(kLineHalfCount * 2) * kSpacing) / kSegmentLength);
-constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2 * kSegmentsPerLine * 2);
+constexpr std::uint32_t kMaxSegmentsPerGridLine = 3U;
+constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2) * kMaxSegmentsPerGridLine * 2U;
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -69,7 +68,7 @@ constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineH
     return GridCamera{.x = inverseView[12], .z = inverseView[14]};
 }
 
-void AddLine(
+void AddSegment(
     std::array<LineVertex, kGridVertexCapacity>& vertices,
     std::uint32_t& count,
     float x0,
@@ -78,20 +77,67 @@ void AddLine(
     float z1,
     std::array<float, 3> color,
     const GridCamera& camera) noexcept {
-    for (int segment = 0; segment < kSegmentsPerLine; ++segment) {
-        if (count + 2U > vertices.size()) {
-            return;
-        }
-
-        const float t0 = static_cast<float>(segment) / static_cast<float>(kSegmentsPerLine);
-        const float t1 = static_cast<float>(segment + 1) / static_cast<float>(kSegmentsPerLine);
-        const float sx0 = x0 + (x1 - x0) * t0;
-        const float sz0 = z0 + (z1 - z0) * t0;
-        const float sx1 = x0 + (x1 - x0) * t1;
-        const float sz1 = z0 + (z1 - z0) * t1;
-        vertices[count++] = Vertex(sx0, sz0, color, camera);
-        vertices[count++] = Vertex(sx1, sz1, color, camera);
+    if (count + 2U > vertices.size()) {
+        return;
     }
+    vertices[count++] = Vertex(x0, z0, color, camera);
+    vertices[count++] = Vertex(x1, z1, color, camera);
+}
+
+void AddHorizontalLine(
+    std::array<LineVertex, kGridVertexCapacity>& vertices,
+    std::uint32_t& count,
+    float z,
+    std::array<float, 3> color,
+    const GridCamera& camera) noexcept {
+    const float dz = std::abs(z - camera.z);
+    if (dz >= kFadeEnd) {
+        return;
+    }
+
+    const float outer = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dz * dz));
+    const float x0 = camera.x - outer;
+    const float x1 = camera.x + outer;
+    if (dz >= kFadeStart) {
+        AddSegment(vertices, count, x0, z, camera.x, z, color, camera);
+        AddSegment(vertices, count, camera.x, z, x1, z, color, camera);
+        return;
+    }
+
+    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dz * dz));
+    const float leftInner = camera.x - inner;
+    const float rightInner = camera.x + inner;
+    AddSegment(vertices, count, x0, z, leftInner, z, color, camera);
+    AddSegment(vertices, count, leftInner, z, rightInner, z, color, camera);
+    AddSegment(vertices, count, rightInner, z, x1, z, color, camera);
+}
+
+void AddVerticalLine(
+    std::array<LineVertex, kGridVertexCapacity>& vertices,
+    std::uint32_t& count,
+    float x,
+    std::array<float, 3> color,
+    const GridCamera& camera) noexcept {
+    const float dx = std::abs(x - camera.x);
+    if (dx >= kFadeEnd) {
+        return;
+    }
+
+    const float outer = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dx * dx));
+    const float z0 = camera.z - outer;
+    const float z1 = camera.z + outer;
+    if (dx >= kFadeStart) {
+        AddSegment(vertices, count, x, z0, x, camera.z, color, camera);
+        AddSegment(vertices, count, x, camera.z, x, z1, color, camera);
+        return;
+    }
+
+    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dx * dx));
+    const float nearInner = camera.z - inner;
+    const float farInner = camera.z + inner;
+    AddSegment(vertices, count, x, z0, x, nearInner, color, camera);
+    AddSegment(vertices, count, x, nearInner, x, farInner, color, camera);
+    AddSegment(vertices, count, x, farInner, x, z1, color, camera);
 }
 
 [[nodiscard]] std::uint32_t BuildGrid(std::array<LineVertex, kGridVertexCapacity>& vertices, const GridCamera& camera) noexcept {
@@ -103,10 +149,6 @@ void AddLine(
     std::uint32_t count = 0U;
     const int centerX = static_cast<int>(std::floor(camera.x / kSpacing));
     const int centerZ = static_cast<int>(std::floor(camera.z / kSpacing));
-    const float minX = static_cast<float>(centerX - kLineHalfCount) * kSpacing;
-    const float maxX = static_cast<float>(centerX + kLineHalfCount) * kSpacing;
-    const float minZ = static_cast<float>(centerZ - kLineHalfCount) * kSpacing;
-    const float maxZ = static_cast<float>(centerZ + kLineHalfCount) * kSpacing;
 
     for (int offset = -kLineHalfCount; offset <= kLineHalfCount; ++offset) {
         const int zLine = centerZ + offset;
@@ -117,8 +159,8 @@ void AddLine(
         const bool xAxis = xLine == 0;
         const bool zMajor = zLine % 5 == 0;
         const bool xMajor = xLine % 5 == 0;
-        AddLine(vertices, count, minX, z, maxX, z, zAxis ? kAxisX : (zMajor ? kMajor : kMinor), camera);
-        AddLine(vertices, count, x, minZ, x, maxZ, xAxis ? kAxisZ : (xMajor ? kMajor : kMinor), camera);
+        AddHorizontalLine(vertices, count, z, zAxis ? kAxisX : (zMajor ? kMajor : kMinor), camera);
+        AddVerticalLine(vertices, count, x, xAxis ? kAxisZ : (xMajor ? kMajor : kMinor), camera);
     }
     return count;
 }
