@@ -26,9 +26,21 @@ public:
 
 private:
 #if defined(_WIN32)
+    struct StateSnapshot {
+        bool open = false;
+        int offsetX = 0;
+        int offsetY = 0;
+        int listScroll = 0;
+    };
+
     [[nodiscard]] bool EnsureWindow(HWND parent);
+    [[nodiscard]] RECT ResolveScreenBounds() const noexcept;
+    [[nodiscard]] bool MoveToCurrentBounds(bool showWindow) noexcept;
     void Paint(HDC dc) const;
     void ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const;
+    void ForwardMouseWheel(WPARAM wparam, LPARAM lparam) const;
+    [[nodiscard]] StateSnapshot SnapshotState() const noexcept;
+    [[nodiscard]] static bool SameSnapshot(const StateSnapshot& left, const StateSnapshot& right) noexcept;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 

@@ -25,6 +25,14 @@ bool EditorAssetBrowserSelectionState::IsSelectionFocused() const noexcept {
     return selection_.IsSelectionFocused();
 }
 
+bool EditorAssetBrowserSelectionState::IsContentFolderSelected(const std::filesystem::path& virtualPath) const {
+    return selection_.IsContentFolderSelected(virtualPath);
+}
+
+bool EditorAssetBrowserSelectionState::IsAssetSelected(kb::assets::AssetId id) const noexcept {
+    return selection_.IsAssetSelected(id);
+}
+
 void EditorAssetBrowserSelectionState::FocusSelection(bool focused) noexcept {
     selection_.FocusSelection(focused);
 }
@@ -50,6 +58,26 @@ bool EditorAssetBrowserSelectionState::SelectContentFolder(const std::filesystem
     return true;
 }
 
+bool EditorAssetBrowserSelectionState::AddContentFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager) {
+    const std::filesystem::path normalized{ asset_browser::Normalize(virtualPath) };
+    if (!FolderExists(normalized, manager)) {
+        return false;
+    }
+
+    selection_.AddContentFolder(normalized);
+    return true;
+}
+
+bool EditorAssetBrowserSelectionState::ToggleContentFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager) {
+    const std::filesystem::path normalized{ asset_browser::Normalize(virtualPath) };
+    if (!FolderExists(normalized, manager)) {
+        return false;
+    }
+
+    selection_.ToggleContentFolder(normalized);
+    return true;
+}
+
 bool EditorAssetBrowserSelectionState::SelectAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager) {
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
     if (metadata == nullptr) {
@@ -61,6 +89,34 @@ bool EditorAssetBrowserSelectionState::SelectAsset(kb::assets::AssetId id, const
     selection_.SelectAsset(id, folder);
     expansion_.ExpandAncestors(folder);
     return true;
+}
+
+bool EditorAssetBrowserSelectionState::AddAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager) {
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr) {
+        return false;
+    }
+
+    const std::filesystem::path folder = asset_browser::ParentVirtualPath(metadata->virtualPath);
+    selection_.AddAsset(id, folder);
+    expansion_.ExpandAncestors(folder);
+    return true;
+}
+
+bool EditorAssetBrowserSelectionState::ToggleAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager) {
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr) {
+        return false;
+    }
+
+    const std::filesystem::path folder = asset_browser::ParentVirtualPath(metadata->virtualPath);
+    selection_.ToggleAsset(id, folder);
+    expansion_.ExpandAncestors(folder);
+    return true;
+}
+
+void EditorAssetBrowserSelectionState::ClearContentSelection() noexcept {
+    selection_.ClearContentSelection();
 }
 
 bool EditorAssetBrowserSelectionState::ToggleFolderExpanded(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager) {

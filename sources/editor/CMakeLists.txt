@@ -17,6 +17,7 @@ add_executable(kb_editor
     src/app/EditorAssetBrowserPointerPanelResolver.cpp
     src/app/EditorAssetBrowserPrimaryClickHandler.cpp
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
+    src/app/EditorTextInputShortcuts.cpp
     src/app/console/EditorConsolePointerController.cpp
     src/app/cursor/EditorInternalSplitterCursorController.cpp
     src/app/docking/EditorMainDockSplitterPointerController.cpp
@@ -241,6 +242,7 @@ add_executable(kb_editor
     src/private/app/EditorAssetBrowserPointerPanelResolver.hpp
     src/private/app/EditorAssetBrowserPrimaryClickHandler.hpp
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
+    src/private/app/EditorTextInputShortcuts.hpp
     src/private/app/console/EditorConsolePointerController.hpp
     src/private/app/cursor/EditorInternalSplitterCursorController.hpp
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
