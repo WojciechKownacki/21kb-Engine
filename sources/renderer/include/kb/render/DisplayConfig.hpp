@@ -12,7 +12,7 @@ enum class DisplaySyncMode : std::uint8_t {
 
 struct DisplayConfig {
     DisplaySyncMode syncMode = DisplaySyncMode::VSync;
-    std::uint32_t targetFps = 180;
+    std::uint32_t targetFps = 120;
     bool requestGpuDebugLayers = false;
     bool flushAfterRender = false;
     bool allowHeadlessNoop = false;
