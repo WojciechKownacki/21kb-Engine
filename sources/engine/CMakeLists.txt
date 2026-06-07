@@ -1,12 +1,18 @@
 add_library(kb_engine STATIC
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
+    include/engine/assets/AssetImportCatalog.hpp
+    include/engine/assets/AssetImportService.hpp
+    include/engine/assets/AssetImportTypes.hpp
     include/engine/assets/AssetManager.hpp
     include/engine/assets/AssetManifest.hpp
     include/engine/assets/AssetMetadata.hpp
     include/engine/assets/AssetMountTable.hpp
     include/engine/assets/AssetReference.hpp
     include/engine/assets/AssetRegistry.hpp
+    include/engine/assets/ImportedAsset.hpp
+    include/engine/assets/ImportedAssetHeaderReader.hpp
+    include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/ComponentEvent.hpp
@@ -157,6 +163,9 @@ add_library(kb_engine STATIC
     src/assets/AssetFileOperations.cpp
     src/assets/AssetFileSystem.cpp
     src/assets/AssetFolderOperations.cpp
+    src/assets/AssetImportCatalog.cpp
+    src/assets/AssetImportService.cpp
+    src/assets/AssetImportTypes.cpp
     src/assets/AssetLoaderRegistry.cpp
     src/assets/AssetManager.cpp
     src/assets/AssetManifest.cpp
@@ -165,6 +174,8 @@ add_library(kb_engine STATIC
     src/assets/AssetPathUtilities.cpp
     src/assets/AssetRegistry.cpp
     src/assets/AssetRuntimeLoadService.cpp
+    src/assets/ImportedAssetHeaderReader.cpp
+    src/assets/ImportedAssetLoader.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/ComponentEventMapper.cpp
     src/ecs/ComponentFieldAccess.cpp

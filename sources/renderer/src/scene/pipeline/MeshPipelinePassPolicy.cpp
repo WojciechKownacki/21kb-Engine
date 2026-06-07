@@ -79,7 +79,7 @@ std::uint64_t MeshPipelinePassPolicy::State(
     const RenderMaterialResource* material) noexcept {
     const bool doubleSided = (mesh != nullptr && mesh->doubleSided) || (material != nullptr && material->doubleSided);
     const std::uint64_t rasterStateExtra = mesh == nullptr ? 0U : mesh->rasterStateExtra;
-    const std::uint64_t cullState = doubleSided ? 0U : BGFX_STATE_CULL_CW;
+    const std::uint64_t cullState = doubleSided ? 0U : BGFX_STATE_CULL_CCW;
 
     switch (pass) {
     case MeshPassType::Depth:

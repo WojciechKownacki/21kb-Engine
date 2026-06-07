@@ -26,7 +26,10 @@ struct EditorPointerDragState {
     std::filesystem::path assetFolderPath{};
     std::string assetLabel{};
     bool assetInstantiatesPrefab = false;
+    bool assetCreatesMeshEntity = false;
     bool assetAddsBehaviour = false;
+    kb::scene::SceneEntity meshScenePreview{};
+    bool meshScenePreviewCommitted = false;
     bool dragging = false;
     int startX = 0;
     int startY = 0;
@@ -51,7 +54,10 @@ struct EditorPointerDragState {
         assetFolderPath.clear();
         assetLabel.clear();
         assetInstantiatesPrefab = false;
+        assetCreatesMeshEntity = false;
         assetAddsBehaviour = false;
+        meshScenePreview = {};
+        meshScenePreviewCommitted = false;
         dragging = false;
         startX = 0;
         startY = 0;

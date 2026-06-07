@@ -1,6 +1,8 @@
 #include "RendererTestSupport.hpp"
 
+#include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -9,6 +11,7 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -300,6 +303,86 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
     Require(asset->desc.vertexCount == 3U && asset->desc.indexCount == 3U, "Loaded RenderMeshAssetData has the wrong geometry counts");
 
     std::filesystem::remove_all(root, error);
+}
+
+void RunRenderMeshAssetLoaderLoadsImportedObjContainerTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_imported_mesh_asset_loader";
+    const std::filesystem::path sourceRoot = root / "External";
+    const std::filesystem::path assetsRoot = root / "Project" / "Assets";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(sourceRoot, error);
+    Require(!error, "Imported mesh loader test could not create temp root");
+
+    const std::filesystem::path sourcePath = sourceRoot / "cube.obj";
+    {
+        std::ofstream output{ sourcePath, std::ios::trunc };
+        output
+            << "v 0 0 0\n"
+            << "v 1 0 0\n"
+            << "v 1 1 0\n"
+            << "vt 0 0\n"
+            << "vt 1 0\n"
+            << "vt 1 1\n"
+            << "vn 0 0 1\n"
+            << "f 1/1/1 2/2/1 3/3/1\n";
+    }
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported asset loader registration failed for mesh container test");
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Render mesh loader registration failed for mesh container test");
+    Require(manager.Mounts().Mount("Game", assetsRoot), "Imported mesh loader test could not mount project assets");
+
+    const std::array<std::filesystem::path, 1> files{ sourcePath };
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Meshes");
+    Require(imported.Succeeded(), "Mesh source file did not import into a .21kb container");
+
+    const kb::assets::AssetImportItemResult& item = imported.items.front();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(item.virtualPath);
+    Require(metadata != nullptr && metadata->id == item.id, "Imported mesh metadata was not registered under the import id");
+    Require(metadata != nullptr && metadata->type == "RenderMesh", "Imported mesh container was not registered as a render mesh");
+    Require(metadata != nullptr && metadata->importCategory == "Mesh", "Imported mesh container did not expose the Mesh category");
+
+    const kb::assets::AssetHandle<RenderMeshAssetData> loaded = manager.Load<RenderMeshAssetData>(item.id);
+    Require(loaded.IsLoaded(), "RenderMeshAssetLoader did not load a mesh from the .21kb container payload");
+    Require(loaded->desc.vertexCount == 3U && loaded->desc.indexCount == 3U, "Imported mesh container loaded the wrong geometry counts");
+
+    kb::assets::AssetManager rediscovered;
+    Require(rediscovered.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported mesh rediscovery loader registration failed");
+    Require(rediscovered.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Imported mesh render loader registration failed");
+    Require(rediscovered.Mounts().Mount("Game", assetsRoot), "Imported mesh rediscovery could not mount project assets");
+    Require(rediscovered.DiscoverMountedAssets() == 1U, "Imported mesh rediscovery did not find the .21kb mesh file");
+
+    const kb::assets::AssetMetadata* rediscoveredMetadata = rediscovered.Registry().FindByPath(item.virtualPath);
+    Require(rediscoveredMetadata != nullptr && rediscoveredMetadata->id == item.id, "Imported mesh rediscovery did not preserve the render mesh asset id");
+    Require(rediscoveredMetadata != nullptr && rediscoveredMetadata->type == "RenderMesh", "Imported mesh rediscovery did not keep the render mesh type");
+    const kb::assets::AssetHandle<RenderMeshAssetData> rediscoveredLoaded = rediscovered.Load<RenderMeshAssetData>(item.id);
+    Require(rediscoveredLoaded.IsLoaded(), "Rediscovered .21kb mesh did not load as RenderMeshAssetData");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest() {
+    const std::filesystem::path projectAssets = std::filesystem::current_path().parent_path() / "Project" / "Assets";
+    const std::filesystem::path cubePath = projectAssets / "Cube.21kb";
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(cubePath, error)) {
+        return;
+    }
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Workspace FBX cube test could not register imported asset loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Workspace FBX cube test could not register render mesh loader");
+    Require(manager.Mounts().Mount("Game", projectAssets), "Workspace FBX cube test could not mount Project/Assets");
+    Require(manager.DiscoverMountedAssets() >= 1U, "Workspace FBX cube test did not discover Cube.21kb");
+
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath("/Game/Cube.21kb");
+    Require(metadata != nullptr && metadata->type == "RenderMesh", "Workspace Cube.21kb was not discovered as RenderMesh");
+    Require(metadata != nullptr && metadata->importCategory == "Mesh", "Workspace Cube.21kb did not expose Mesh import category");
+
+    const kb::assets::AssetHandle<RenderMeshAssetData> loaded = manager.Load<RenderMeshAssetData>(metadata->id);
+    Require(loaded.IsLoaded(), "Workspace Cube.21kb FBX payload did not load as RenderMeshAssetData");
+    Require(loaded->desc.vertexCount > 0U && loaded->desc.indexCount > 0U, "Workspace Cube.21kb loaded an empty mesh");
 }
 
 void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
@@ -911,6 +994,8 @@ void RunRenderResourceRegistryTests() {
     RunStaticMeshRegistryRejectsSkinnedFormatUntilSkinningRuntimeExistsTest();
     RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest();
+    RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
+    RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest();
     RunGltfImporterRejectsSkinnedMeshesUntilSkinningRuntimeExistsTest();
     RunGltfImporterRejectsSkinNodesUntilSkinningRuntimeExistsTest();

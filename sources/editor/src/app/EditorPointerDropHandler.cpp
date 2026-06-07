@@ -5,6 +5,7 @@
 #include "app/EditorBehaviourAssetHierarchyDropHandler.hpp"
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
+#include "app/EditorMeshAssetSceneDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
 
@@ -26,6 +27,7 @@ bool EditorPointerDropHandler::Drop(
             || EditorHierarchyEntityHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entities);
     case EditorPointerDragKind::PrefabAsset:
         return (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
+            || (drag.assetCreatesMeshEntity && EditorMeshAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:

@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/assets/AssetImportService.hpp"
 
 #include <optional>
 #include <string>
@@ -47,6 +48,22 @@ void RefreshAssets(kb::scene::Scene& scene) {
         }
     }
     return {};
+}
+
+[[nodiscard]] std::filesystem::path MetaPathForAssetPath(std::filesystem::path assetPath) {
+    assetPath.replace_extension(".meta");
+    return assetPath;
+}
+
+void CopyMetaSidecarIfPresent(const std::filesystem::path& sourceAsset, const std::filesystem::path& destinationAsset) {
+    const std::filesystem::path sourceMeta = MetaPathForAssetPath(sourceAsset);
+    const std::filesystem::path destinationMeta = MetaPathForAssetPath(destinationAsset);
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(sourceMeta, error) || std::filesystem::exists(destinationMeta, error)) {
+        return;
+    }
+    error.clear();
+    std::filesystem::copy_file(sourceMeta, destinationMeta, std::filesystem::copy_options::none, error);
 }
 
 } // namespace
@@ -246,6 +263,7 @@ bool EditorSceneAssetBrowserCommands::CopyAssetToFolder(
     if (error) {
         return false;
     }
+    CopyMetaSidecarIfPresent(source, destination);
 
     RefreshAssets(scene);
     if (const std::optional<std::filesystem::path> copiedVirtualPath = manager.Mounts().ToVirtual(destination); copiedVirtualPath.has_value()) {
@@ -289,6 +307,34 @@ bool EditorSceneAssetBrowserCommands::CopyFolderToFolder(
     RefreshAssets(scene);
     if (const std::optional<std::filesystem::path> copiedVirtualPath = manager.Mounts().ToVirtual(destination); copiedVirtualPath.has_value()) {
         static_cast<void>(assetBrowser.SelectContentFolder(*copiedVirtualPath, manager));
+    }
+    return true;
+}
+
+bool EditorSceneAssetBrowserCommands::ImportFiles(
+    kb::scene::Scene& scene,
+    EditorAssetBrowserState& assetBrowser,
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder) {
+    if (sourceFiles.empty()) {
+        return false;
+    }
+
+    kb::assets::AssetManager& manager = AssetManager(scene);
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder);
+    if (imported.ImportedCount() == 0U) {
+        return false;
+    }
+
+    RefreshAssets(scene);
+    for (const kb::assets::AssetImportItemResult& item : imported.items) {
+        if (!item.Succeeded()) {
+            continue;
+        }
+        if (const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(item.virtualPath); metadata != nullptr) {
+            static_cast<void>(assetBrowser.SelectAsset(metadata->id, manager));
+            break;
+        }
     }
     return true;
 }

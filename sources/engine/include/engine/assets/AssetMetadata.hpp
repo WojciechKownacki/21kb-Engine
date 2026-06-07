@@ -18,6 +18,7 @@ enum class AssetLoadState {
 struct AssetMetadata {
     AssetId id{};
     std::string type;
+    std::string importCategory;
     std::string name;
     std::filesystem::path virtualPath;
     std::filesystem::path physicalPath;

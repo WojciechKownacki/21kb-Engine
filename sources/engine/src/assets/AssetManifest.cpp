@@ -9,7 +9,8 @@
 namespace kb::assets {
 namespace {
 
-constexpr std::string_view Header = "kbassetmanifest.v1";
+constexpr std::string_view HeaderV1 = "kbassetmanifest.v1";
+constexpr std::string_view HeaderV2 = "kbassetmanifest.v2";
 
 [[nodiscard]] std::string Escape(std::string_view text) {
     std::string output;
@@ -91,10 +92,11 @@ bool AssetManifest::Save(const std::filesystem::path& path, const AssetRegistry&
         return false;
     }
 
-    output << Header << '\n';
+    output << HeaderV2 << '\n';
     for (const AssetMetadata& metadata : registry.All()) {
         output << ToString(metadata.id) << '\t'
                << Escape(metadata.type) << '\t'
+               << Escape(metadata.importCategory) << '\t'
                << Escape(metadata.name) << '\t'
                << Escape(NormalizeAssetPath(metadata.virtualPath)) << '\t'
                << Escape(metadata.physicalPath.string()) << '\t'
@@ -111,9 +113,10 @@ bool AssetManifest::Load(const std::filesystem::path& path, AssetRegistry& regis
     }
 
     std::string line;
-    if (!std::getline(input, line) || line != Header) {
+    if (!std::getline(input, line) || (line != HeaderV1 && line != HeaderV2)) {
         return false;
     }
+    const bool v2 = line == HeaderV2;
 
     AssetRegistry loaded;
     while (std::getline(input, line)) {
@@ -125,7 +128,7 @@ bool AssetManifest::Load(const std::filesystem::path& path, AssetRegistry& regis
         }
 
         const std::vector<std::string_view> fields = SplitTabs(line);
-        if (fields.size() != 7) {
+        if ((!v2 && fields.size() != 7) || (v2 && fields.size() != 8)) {
             return false;
         }
 
@@ -134,15 +137,16 @@ bool AssetManifest::Load(const std::filesystem::path& path, AssetRegistry& regis
         std::string physicalPath;
         if (!TryParseAssetId(fields[0], metadata.id)
             || !Unescape(fields[1], metadata.type)
-            || !Unescape(fields[2], metadata.name)
-            || !Unescape(fields[3], virtualPath)
-            || !Unescape(fields[4], physicalPath)) {
+            || (v2 && !Unescape(fields[2], metadata.importCategory))
+            || !Unescape(fields[v2 ? 3 : 2], metadata.name)
+            || !Unescape(fields[v2 ? 4 : 3], virtualPath)
+            || !Unescape(fields[v2 ? 5 : 4], physicalPath)) {
             return false;
         }
 
-        std::istringstream hashStream{ std::string{ fields[5] } };
+        std::istringstream hashStream{ std::string{ fields[v2 ? 6 : 5] } };
         int runtimeLoadable = 0;
-        std::istringstream runtimeStream{ std::string{ fields[6] } };
+        std::istringstream runtimeStream{ std::string{ fields[v2 ? 7 : 6] } };
         if (!(hashStream >> metadata.contentHash) || !(runtimeStream >> runtimeLoadable)) {
             return false;
         }

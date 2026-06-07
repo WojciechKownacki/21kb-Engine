@@ -82,6 +82,7 @@ void DrawNewFolderButton(HDC dc, RECT rect, const EditorTheme& theme, bool activ
 void ProjectFilesToolbarRenderer::Paint(HDC dc, const EditorAssetBrowserLayoutRects& layout, const EditorTheme& theme, const EditorAssetBrowserState& state) {
     GdiDrawing::DrawSharpFrame(dc, layout.toolbar, Draw::Blend(Draw::Color(theme.strip), RGB(0, 0, 0), 10), Draw::Color(theme.borderPanel));
     DrawNewFolderButton(dc, layout.newFolderButton, theme, state.TextEditMode() == EditorAssetTextEditMode::NewFolder);
+    Draw::DrawTextButton(dc, layout.importButton, theme, "Import", false);
     Draw::DrawTextButton(dc, layout.filtersButton, theme, "Filters", !state.TypeFilter().empty());
     DrawBreadcrumb(dc, layout.path, theme, state.SelectedFolder());
     DrawSearch(dc, layout.search, theme, state);

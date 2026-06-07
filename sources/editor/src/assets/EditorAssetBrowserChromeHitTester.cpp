@@ -17,6 +17,9 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserChromeHitTester::HitTest(
     if (EditorAssetBrowserGeometry::Contains(layout.search, x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Search };
     }
+    if (EditorAssetBrowserGeometry::Contains(layout.importButton, x, y)) {
+        return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Import };
+    }
     if (EditorAssetBrowserGeometry::Contains(layout.filtersButton, x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::Filters };
     }

@@ -124,7 +124,7 @@ bool SelectionOutlineCompositePass::Submit(const SelectionOutlineCompositePassDe
 
     const float width = static_cast<float>(std::max(1U, desc.extent.width));
     const float height = static_cast<float>(std::max(1U, desc.extent.height));
-    const float outlineParams[4] = {1.0F / width, 1.0F / height, 1.5F, 0.0F};
+    const float outlineParams[4] = {1.0F / width, 1.0F / height, 2.5F, 0.0F};
     bgfx::setUniform(outlineParams_, outlineParams);
     bgfx::setTexture(0, selectionMaskSampler_, desc.selectionMask);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);

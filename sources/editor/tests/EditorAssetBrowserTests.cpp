@@ -11,6 +11,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -167,6 +168,18 @@ void RunMultiSelectionStateTest() {
     kb::editor::tests::Require(std::ranges::any_of(allDeleteRows, [](const kb::editor::EditorAssetSelectionSummaryRow& row) {
         return row.name == "RootAsset" && row.objectType == "ScenePrefab";
     }), "Asset browser delete confirmation should include selected assets");
+    const kb::assets::AssetMetadata* rootAsset = manager.Registry().FindByPath("/Game/RootAsset.kbprefab");
+    kb::editor::tests::Require(rootAsset != nullptr, "Asset browser delete key test expected the root asset");
+    const auto rootAssetDeleteRow = std::ranges::find_if(allDeleteRows, [](const kb::editor::EditorAssetSelectionSummaryRow& row) {
+        return row.name == "RootAsset";
+    });
+    kb::editor::tests::Require(rootAssetDeleteRow != allDeleteRows.end(), "Asset browser delete key test expected a root asset row");
+    kb::assets::AssetId parsedDeleteId{};
+    kb::editor::tests::Require(
+        rootAssetDeleteRow->key.rfind("Asset:", 0) == 0
+            && kb::assets::TryParseAssetId(std::string_view(rootAssetDeleteRow->key).substr(6), parsedDeleteId)
+            && parsedDeleteId == rootAsset->id,
+        "Asset browser asset delete row key should round-trip through AssetId parsing");
     kb::editor::tests::Require(state.ToggleDeleteTargetChecked(allDeleteRows.front().key), "Asset browser delete confirmation should toggle a row checkbox");
     const std::vector<kb::editor::EditorAssetSelectionSummaryRow> checkedDeleteRows = state.CheckedDeleteTargetRows(manager);
     kb::editor::tests::Require(checkedDeleteRows.size() + 1 == allDeleteRows.size(), "Asset browser checked delete targets should exclude unchecked rows");
@@ -235,6 +248,7 @@ void RunProjectFilesEdgeToEdgeLayoutTest() {
     kb::editor::tests::Require(layout.assetView.left == layout.tree.right, "Asset browser asset view should share the tree separator");
     kb::editor::tests::Require(layout.assetView.top == layout.toolbar.bottom, "Asset browser asset view should sit directly below the toolbar");
     kb::editor::tests::Require(layout.tree.bottom == layout.bottomBar.top && layout.assetView.bottom == layout.bottomBar.top, "Asset browser body should touch the bottom bar");
+    kb::editor::tests::Require(layout.importButton.right <= layout.filtersButton.left, "Asset browser Import button should sit before Filters");
 
     const kb::editor::EditorAssetBrowserLayoutRects resized = kb::editor::EditorAssetBrowserLayout::Build(content, 360);
     kb::editor::tests::Require(resized.tree.right == content.left + 360, "Asset browser tree should support explicit resize width");
@@ -346,6 +360,24 @@ void RunContextMenuHitTestTest() {
     kb::editor::tests::Require(hit.kind == kb::editor::EditorAssetBrowserHitKind::ContextMenuCommand, "Asset browser context menu row should be hit-testable");
     kb::editor::tests::Require(hit.command == kb::editor::EditorAssetContextCommand::Rename, "Asset browser first asset context command should rename");
 }
+
+void RunImportCommandHitTestTest() {
+    kb::assets::AssetManager manager;
+    kb::editor::EditorAssetBrowserState state;
+    const RECT content{ 0, 0, 720, 240 };
+    const kb::editor::EditorAssetBrowserLayoutRects layout = kb::editor::EditorAssetBrowserLayout::Build(content);
+    const kb::editor::EditorAssetBrowserHit toolbarHit = kb::editor::EditorAssetBrowserHitTester::HitTest(
+        content,
+        (layout.importButton.left + layout.importButton.right) / 2,
+        (layout.importButton.top + layout.importButton.bottom) / 2,
+        state,
+        manager);
+    kb::editor::tests::Require(toolbarHit.kind == kb::editor::EditorAssetBrowserHitKind::Import, "Asset browser Import toolbar button should be hit-testable");
+
+    state.OpenContextMenuForBackground(220, 70);
+    const std::vector<kb::editor::EditorAssetContextMenuItem> items = state.ContextMenuItems(manager);
+    kb::editor::tests::Require(!items.empty() && items.front().command == kb::editor::EditorAssetContextCommand::Import, "Asset browser background context menu should expose Import first");
+}
 #endif
 
 } // namespace
@@ -367,6 +399,7 @@ void RunEditorAssetBrowserTests() {
     RunContentFolderHitTestExposesFolderDragSourceTest();
     RunLegacyPrefabExtensionStillDraggableTest();
     RunContextMenuHitTestTest();
+    RunImportCommandHitTestTest();
 #endif
 }
 

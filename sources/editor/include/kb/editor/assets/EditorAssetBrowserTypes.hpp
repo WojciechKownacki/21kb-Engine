@@ -41,6 +41,7 @@ enum class EditorAssetContextTargetKind {
 
 enum class EditorAssetContextCommand {
     None,
+    Import,
     NewFolder,
     Rename,
     Delete,

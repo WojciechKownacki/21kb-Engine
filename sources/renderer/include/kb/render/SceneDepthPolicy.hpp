@@ -51,7 +51,7 @@ public:
     }
 
     [[nodiscard]] static constexpr std::uint64_t SceneMeshState(bool doubleSided) noexcept {
-        return doubleSided ? SceneWriteState() : (SceneWriteState() | BGFX_STATE_CULL_CW);
+        return doubleSided ? SceneWriteState() : (SceneWriteState() | BGFX_STATE_CULL_CCW);
     }
 
     [[nodiscard]] static float SanitizeNearClip(float nearClip) noexcept {

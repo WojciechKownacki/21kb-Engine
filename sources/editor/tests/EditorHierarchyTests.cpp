@@ -5,10 +5,13 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
@@ -235,6 +238,20 @@ void RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest() {
     std::filesystem::remove_all(projectRoot, removeError);
 }
 
+void RunMeshAssetActionCreatesRenderableSceneEntityTest() {
+    kb::scene::Scene scene;
+    constexpr kb::assets::AssetId meshAssetId{ 0x2100ULL };
+
+    const kb::scene::SceneEntity entity = kb::editor::EditorSceneMeshAssetActions::CreateMeshEntity(scene, meshAssetId, "Imported Cube");
+    kb::editor::tests::Require(entity.IsValid(), "Mesh asset action did not create a scene entity");
+    kb::editor::tests::Require(scene.Entities().IsAlive(entity), "Mesh asset action returned an entity that is not alive");
+    kb::editor::tests::Require(scene.Entities().Name(entity) == "Imported Cube", "Mesh asset action did not preserve the asset name");
+
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(renderer != nullptr, "Mesh asset action did not attach a mesh renderer component");
+    kb::editor::tests::Require(renderer->meshAssetId == meshAssetId.value, "Mesh renderer component did not reference the imported mesh asset");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -249,6 +266,7 @@ void RunEditorHierarchyTests() {
     RunHierarchySelectionModelTest();
     RunRowBuilderMarksOnlyPrefabRootsTest();
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
+    RunMeshAssetActionCreatesRenderableSceneEntityTest();
 }
 
 } // namespace kb::editor::tests

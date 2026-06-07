@@ -48,12 +48,15 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         if (targetFolderCanMutate) {
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete", .separatorAfter = true });
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import...", .separatorAfter = true });
         } else {
+            items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
         }
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
     case EditorAssetContextTargetKind::Background:
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;

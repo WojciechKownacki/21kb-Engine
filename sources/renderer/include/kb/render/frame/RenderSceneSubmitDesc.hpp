@@ -122,6 +122,14 @@ struct RenderPostProcessTargetBinding {
 };
 
 struct RenderSceneSubmitDesc {
+    struct EditorGizmoDesc {
+        std::array<float, 3> targetPosition{0.0F, 0.0F, 0.0F};
+        float worldScale = 1.0F;
+        int hoveredAxis = -1;
+        int draggedAxis = -1;
+        bool visible = false;
+    };
+
     RenderSceneTargetBinding target{};
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
@@ -134,6 +142,7 @@ struct RenderSceneSubmitDesc {
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
     bool editorSceneOverlaysEnabled = true;
+    EditorGizmoDesc editorGizmo{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&

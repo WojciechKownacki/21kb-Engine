@@ -10,6 +10,7 @@
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
+#include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "project/EditorProjectPaths.hpp"
 
@@ -174,6 +175,14 @@ EditorConsoleState& EditorSceneContext::Console() noexcept {
 
 const EditorConsoleState& EditorSceneContext::Console() const noexcept {
     return console_;
+}
+
+EditorSceneGizmoState& EditorSceneContext::Gizmo() noexcept {
+    return gizmo_;
+}
+
+const EditorSceneGizmoState& EditorSceneContext::Gizmo() const noexcept {
+    return gizmo_;
 }
 
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
@@ -503,6 +512,20 @@ bool EditorSceneContext::CopyAssetFolderToFolder(const std::filesystem::path& so
     return copied;
 }
 
+bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles) {
+    return ImportAssetFiles(sourceFiles, assetBrowser_.SelectedFolder());
+}
+
+bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder) {
+    const bool imported = EditorSceneAssetBrowserCommands::ImportFiles(scene_, assetBrowser_, sourceFiles, destinationVirtualFolder);
+    if (imported) {
+        console_.Info("Assets", "Imported " + std::to_string(sourceFiles.size()) + " file(s) to " + destinationVirtualFolder.generic_string());
+    } else {
+        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset import failed."));
+    }
+    return imported;
+}
+
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
     const std::vector<EditorHierarchyRow> rows = HierarchyRows();
     if (rowIndex >= rows.size() || !rows[rowIndex].hasChildren) {
@@ -612,6 +635,39 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
     SelectEntity(*root);
     console_.Info("Prefabs", "Prefab instantiated: " + path.generic_string());
     return true;
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
+    return CreateMeshAssetEntity(assetId, {}, true);
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation) {
+    if (!assetId.IsValid()) {
+        console_.Warning("Assets", "Mesh entity creation ignored for invalid asset.");
+        return {};
+    }
+
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr) {
+        console_.Error("Assets", "Mesh asset metadata was not found.");
+        return {};
+    }
+    if (metadata->importCategory != "Mesh" || metadata->type != "RenderMesh") {
+        console_.Warning("Assets", "Only imported mesh assets can be placed on the scene.");
+        return {};
+    }
+
+    const kb::scene::SceneEntity entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+    if (!entity.IsValid()) {
+        console_.Error("Assets", "Mesh entity could not be created: " + metadata->name);
+        return {};
+    }
+
+    SelectEntity(entity);
+    if (logCreation) {
+        console_.Info("Assets", "Mesh entity created: " + metadata->name);
+    }
+    return entity;
 }
 
 bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity) {

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserHitTester.hpp"
+#include "engine/assets/AssetImportTypes.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -23,6 +24,10 @@ namespace {
 
 [[nodiscard]] bool IsPrefabLike(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "ScenePrefab" || Lower(metadata.virtualPath.extension().string()) == ".kbprefab";
+}
+
+[[nodiscard]] bool IsMeshAsset(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "RenderMesh" && metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model);
 }
 
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetMetadata& metadata, const kb::assets::AssetManager& manager) {
@@ -84,6 +89,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetVirtualPath = metadata->virtualPath;
             drag.assetLabel = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
+            drag.assetCreatesMeshEntity = IsMeshAsset(*metadata);
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             return;
         }
