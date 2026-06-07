@@ -59,6 +59,7 @@ public:
         EditorSceneContext& sceneContext);
 
     [[nodiscard]] static bool HandlePointerUp(EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static bool RequiresMouseCapture(const EditorSceneContext& sceneContext) noexcept;
 #endif
 };
 

@@ -228,6 +228,13 @@ bool EditorAssetBrowserPointerHandler::HandlePointerUp(EditorSceneContext& scene
     return EditorAssetBrowserThumbnailScaleDragHandler::HandlePointerUp(sceneContext);
 }
 
+bool EditorAssetBrowserPointerHandler::RequiresMouseCapture(const EditorSceneContext& sceneContext) noexcept {
+    return sceneContext.AssetBrowser().IsTreeWidthDragging()
+        || sceneContext.AssetBrowser().IsThumbnailScaleDragging()
+        || sceneContext.AssetBrowser().IsTreeScrollbarDragging()
+        || sceneContext.AssetBrowser().IsContentScrollbarDragging();
+}
+
 } // namespace kb::editor
 
 #endif
