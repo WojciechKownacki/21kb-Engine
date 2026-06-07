@@ -146,11 +146,11 @@ bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
 
     switch (navigationMode_) {
     case EditorViewportCameraNavigationMode::LeftYawDolly:
-        yawDegrees_ -= static_cast<float>(dx) * kLookSensitivity;
+        yawDegrees_ += static_cast<float>(dx) * kLookSensitivity;
         MoveLocal(0.0F, 0.0F, static_cast<float>(dy) * kLeftDollyScale);
         return true;
     case EditorViewportCameraNavigationMode::Look:
-        yawDegrees_ -= static_cast<float>(dx) * kLookSensitivity;
+        yawDegrees_ += static_cast<float>(dx) * kLookSensitivity;
         pitchDegrees_ += static_cast<float>(dy) * kLookSensitivity;
         ClampPitch();
         return true;
@@ -159,7 +159,7 @@ bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
         MoveLocal(static_cast<float>(-dx) * kPanScale, static_cast<float>(dy) * kPanScale, 0.0F);
         return true;
     case EditorViewportCameraNavigationMode::Orbit:
-        yawDegrees_ -= static_cast<float>(dx) * kLookSensitivity;
+        yawDegrees_ += static_cast<float>(dx) * kLookSensitivity;
         pitchDegrees_ += static_cast<float>(dy) * kLookSensitivity;
         ClampPitch();
         UpdateOrbitPosition();
