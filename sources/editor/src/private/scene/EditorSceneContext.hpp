@@ -8,6 +8,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
+#include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
 #include "inspection/InspectorPanelState.hpp"
 
@@ -32,6 +33,16 @@ public:
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview() const noexcept;
     [[nodiscard]] EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) noexcept;
     [[nodiscard]] const EditorViewportPreviewState& ViewportPreview(std::uint64_t viewportKey) const noexcept;
+    [[nodiscard]] EditorViewportCameraState& ViewportCamera() noexcept;
+    [[nodiscard]] const EditorViewportCameraState& ViewportCamera() const noexcept;
+    [[nodiscard]] EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) noexcept;
+    [[nodiscard]] const EditorViewportCameraState& ViewportCamera(std::uint64_t viewportKey) const noexcept;
+    void BeginViewportCameraNavigation(std::uint64_t viewportKey, EditorViewportCameraNavigationMode mode, int x, int y) noexcept;
+    [[nodiscard]] bool HasActiveViewportCameraNavigation() const noexcept;
+    [[nodiscard]] std::uint64_t ActiveViewportCameraKey() const noexcept;
+    [[nodiscard]] EditorViewportCameraState* ActiveViewportCamera() noexcept;
+    [[nodiscard]] const EditorViewportCameraState* ActiveViewportCamera() const noexcept;
+    void EndViewportCameraNavigation() noexcept;
     [[nodiscard]] InspectorPanelState& Inspector() noexcept;
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
@@ -94,6 +105,9 @@ private:
     EditorConsoleState console_;
     InspectorPanelState inspector_;
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
+    mutable std::unordered_map<std::uint64_t, EditorViewportCameraState> viewportCameras_;
+    std::uint64_t activeViewportCameraKey_ = 0U;
+    bool hasActiveViewportCameraNavigation_ = false;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;

@@ -8,6 +8,7 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 
 #include <optional>
@@ -35,6 +36,11 @@ EditorMouseMoveRouter::EditorMouseMoveRouter(
     , metrics_(metrics) {}
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown) {
+    EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+    if (sceneCamera.HandlePointerMove(messageWindow, x, y)) {
+        return;
+    }
+
     const EditorInternalSplitterCursorController splitterCursor(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_);
     splitterCursor.UpdateCursor(x, y);
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));

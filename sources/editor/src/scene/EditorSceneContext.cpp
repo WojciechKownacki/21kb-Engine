@@ -99,6 +99,67 @@ const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint6
     return viewportPreviews_.try_emplace(viewportKey).first->second;
 }
 
+EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
+    return ViewportCamera(0U);
+}
+
+const EditorViewportCameraState& EditorSceneContext::ViewportCamera() const noexcept {
+    return ViewportCamera(0U);
+}
+
+EditorViewportCameraState& EditorSceneContext::ViewportCamera(std::uint64_t viewportKey) noexcept {
+    return viewportCameras_.try_emplace(viewportKey).first->second;
+}
+
+const EditorViewportCameraState& EditorSceneContext::ViewportCamera(std::uint64_t viewportKey) const noexcept {
+    return viewportCameras_.try_emplace(viewportKey).first->second;
+}
+
+void EditorSceneContext::BeginViewportCameraNavigation(std::uint64_t viewportKey, EditorViewportCameraNavigationMode mode, int x, int y) noexcept {
+    EndViewportCameraNavigation();
+    activeViewportCameraKey_ = viewportKey;
+    hasActiveViewportCameraNavigation_ = true;
+    ViewportCamera(viewportKey).BeginNavigation(mode, x, y);
+}
+
+bool EditorSceneContext::HasActiveViewportCameraNavigation() const noexcept {
+    return hasActiveViewportCameraNavigation_ && ActiveViewportCamera() != nullptr;
+}
+
+std::uint64_t EditorSceneContext::ActiveViewportCameraKey() const noexcept {
+    return activeViewportCameraKey_;
+}
+
+EditorViewportCameraState* EditorSceneContext::ActiveViewportCamera() noexcept {
+    if (!hasActiveViewportCameraNavigation_) {
+        return nullptr;
+    }
+    auto it = viewportCameras_.find(activeViewportCameraKey_);
+    if (it == viewportCameras_.end() || !it->second.IsNavigating()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+const EditorViewportCameraState* EditorSceneContext::ActiveViewportCamera() const noexcept {
+    if (!hasActiveViewportCameraNavigation_) {
+        return nullptr;
+    }
+    auto it = viewportCameras_.find(activeViewportCameraKey_);
+    if (it == viewportCameras_.end() || !it->second.IsNavigating()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
+void EditorSceneContext::EndViewportCameraNavigation() noexcept {
+    if (EditorViewportCameraState* camera = ActiveViewportCamera(); camera != nullptr) {
+        camera->EndNavigation();
+    }
+    hasActiveViewportCameraNavigation_ = false;
+    activeViewportCameraKey_ = 0U;
+}
+
 InspectorPanelState& EditorSceneContext::Inspector() noexcept {
     return inspector_;
 }

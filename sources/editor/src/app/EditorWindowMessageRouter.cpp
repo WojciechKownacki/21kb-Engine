@@ -8,6 +8,7 @@
 #include "app/EditorPaintDispatcher.hpp"
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
+#include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 
 namespace kb::editor {
@@ -52,6 +53,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         context_.sceneViewport.RequestPresent();
         return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow);
     case WM_CANCELMODE:
+        EditorSceneViewportCameraController{
+            context_.mainWindow,
+            context_.dockModel,
+            context_.floatingWindows,
+            context_.metrics,
+            context_.sceneContext,
+            context_.sceneViewport,
+        }.Cancel(messageWindow);
         context_.dockController.CancelDrag();
         context_.pointerDrag.Clear();
         context_.shellInteraction.ClearPressedTransport();
@@ -61,6 +70,16 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     {
         HWND newCapture = reinterpret_cast<HWND>(lparam);
         context_.dockController.HandleCaptureChanged(newCapture);
+        if (newCapture != messageWindow) {
+            EditorSceneViewportCameraController{
+                context_.mainWindow,
+                context_.dockModel,
+                context_.floatingWindows,
+                context_.metrics,
+                context_.sceneContext,
+                context_.sceneViewport,
+            }.Cancel(messageWindow);
+        }
         const bool captureStayedInEditor = newCapture == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(newCapture);
         if (!captureStayedInEditor) {
             context_.pointerDrag.Clear();
@@ -106,14 +125,28 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         break;
+    case WM_TIMER:
+        if (EditorSceneViewportCameraController{
+                context_.mainWindow,
+                context_.dockModel,
+                context_.floatingWindows,
+                context_.metrics,
+                context_.sceneContext,
+                context_.sceneViewport,
+            }.HandleTimer(messageWindow, wparam)) {
+            return 0;
+        }
+        break;
     case WM_NCHITTEST:
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
     case WM_MOUSEMOVE:
     case WM_MOUSEWHEEL:
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
+    case WM_MBUTTONUP:
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
             return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows);

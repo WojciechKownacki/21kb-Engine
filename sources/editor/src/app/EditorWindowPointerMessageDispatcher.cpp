@@ -30,6 +30,8 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
         return pointerHandler.HandleLeftButtonDoubleClick(messageWindow, lparam);
     case WM_RBUTTONDOWN:
         return pointerHandler.HandleRightButtonDown(messageWindow, lparam);
+    case WM_MBUTTONDOWN:
+        return pointerHandler.HandleMiddleButtonDown(messageWindow, lparam);
     case WM_MOUSEMOVE:
         return pointerHandler.HandleMouseMove(messageWindow, wparam, lparam);
     case WM_MOUSEWHEEL:
@@ -37,7 +39,9 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
     case WM_LBUTTONUP:
         return pointerHandler.HandleLeftButtonUp(messageWindow, lparam);
     case WM_RBUTTONUP:
-        return 0;
+        return pointerHandler.HandleRightButtonUp(messageWindow);
+    case WM_MBUTTONUP:
+        return pointerHandler.HandleMiddleButtonUp(messageWindow);
     case WM_SETCURSOR:
         return pointerHandler.HandleSetCursor(messageWindow, wparam, lparam);
     default:

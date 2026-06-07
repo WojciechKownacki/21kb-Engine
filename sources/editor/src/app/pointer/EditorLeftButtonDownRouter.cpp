@@ -13,6 +13,7 @@
 #include "app/panels/EditorPanelPointerHitContext.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
+#include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 
 namespace kb::editor {
@@ -62,6 +63,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         EditorSceneViewportToolbarPointerController sceneToolbar(sceneContext_, sceneViewport_);
         if (sceneToolbar.HandlePointerDown(*panelHit.sceneContent, x, y)) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+
+        EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
+        if (sceneCamera.HandleLeftButtonDown(messageWindow, x, y)) {
+            pointerDrag_.Clear();
             return;
         }
     }
