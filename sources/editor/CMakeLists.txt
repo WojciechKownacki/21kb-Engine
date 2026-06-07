@@ -17,15 +17,21 @@ add_executable(kb_editor
     src/app/EditorAssetBrowserPointerPanelResolver.cpp
     src/app/EditorAssetBrowserPrimaryClickHandler.cpp
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
+    src/app/console/EditorConsolePointerController.cpp
+    src/app/cursor/EditorInternalSplitterCursorController.cpp
+    src/app/docking/EditorMainDockSplitterPointerController.cpp
     src/app/EditorAssetFolderProjectFilesDropHandler.cpp
     src/app/EditorBehaviourAssetHierarchyDropHandler.cpp
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
+    src/app/EditorMouseWheelRouter.cpp
+    src/app/inspector/EditorInspectorPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
+    src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
     src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
@@ -33,6 +39,17 @@ add_executable(kb_editor
     src/app/EditorPointerDropHandler.cpp
     src/app/EditorPrefabAssetHierarchyDropHandler.cpp
     src/app/EditorPrefabAssetProjectFilesDropHandler.cpp
+    src/app/panels/EditorPanelPointerHitContext.cpp
+    src/app/pointer/EditorLeftButtonDoubleClickRouter.cpp
+    src/app/pointer/EditorLeftButtonDownRouter.cpp
+    src/app/pointer/EditorLeftButtonUpRouter.cpp
+    src/app/pointer/EditorMouseMoveRouter.cpp
+    src/app/pointer/EditorRightButtonDownRouter.cpp
+    src/app/pointer/EditorSetCursorRouter.cpp
+    src/app/project_files/EditorProjectFilesDeleteConfirmOverlayController.cpp
+    src/app/project_files/EditorProjectFilesMouseWheelController.cpp
+    src/app/project_files/EditorProjectFilesTransientUiController.cpp
+    src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
@@ -223,13 +240,19 @@ add_executable(kb_editor
     src/private/app/EditorAssetBrowserPointerPanelResolver.hpp
     src/private/app/EditorAssetBrowserPrimaryClickHandler.hpp
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
+    src/private/app/console/EditorConsolePointerController.hpp
+    src/private/app/cursor/EditorInternalSplitterCursorController.hpp
+    src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
+    src/private/app/EditorMouseWheelRouter.hpp
+    src/private/app/inspector/EditorInspectorPointerController.hpp
     src/private/app/EditorPaintDispatcher.hpp
+    src/private/app/EditorPendingTextEditCommitter.hpp
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
@@ -238,6 +261,17 @@ add_executable(kb_editor
     src/private/app/EditorPointerDropHandler.hpp
     src/private/app/EditorPrefabAssetHierarchyDropHandler.hpp
     src/private/app/EditorPrefabAssetProjectFilesDropHandler.hpp
+    src/private/app/panels/EditorPanelPointerHitContext.hpp
+    src/private/app/pointer/EditorLeftButtonDoubleClickRouter.hpp
+    src/private/app/pointer/EditorLeftButtonDownRouter.hpp
+    src/private/app/pointer/EditorLeftButtonUpRouter.hpp
+    src/private/app/pointer/EditorMouseMoveRouter.hpp
+    src/private/app/pointer/EditorRightButtonDownRouter.hpp
+    src/private/app/pointer/EditorSetCursorRouter.hpp
+    src/private/app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp
+    src/private/app/project_files/EditorProjectFilesMouseWheelController.hpp
+    src/private/app/project_files/EditorProjectFilesTransientUiController.hpp
+    src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
     src/private/app/EditorWindowMessageContext.hpp

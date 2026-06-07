@@ -1,16 +1,5 @@
 #pragma once
 
-#include "docking/EditorDockController.hpp"
-#include "docking/EditorDockModel.hpp"
-#include "docking/EditorFloatingWindowManager.hpp"
-#include "app/EditorPlayModeState.hpp"
-#include "app/EditorPointerDragState.hpp"
-#include "app/EditorShellInteractionState.hpp"
-#include "rendering/EditorRenderBackendSettings.hpp"
-#include "rendering/EditorSceneBgfxViewport.hpp"
-#include "scene/EditorHierarchySelectionController.hpp"
-#include "scene/EditorSceneContext.hpp"
-
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -18,6 +7,17 @@
 #endif
 
 namespace kb::editor {
+
+class EditorDockController;
+class EditorDockModel;
+class EditorFloatingWindowManager;
+class EditorHierarchySelectionController;
+class EditorPlayModeState;
+class EditorSceneBgfxViewport;
+class EditorSceneContext;
+class EditorShellInteractionState;
+struct EditorMetrics;
+struct EditorPointerDragState;
 
 class EditorWindowPointerHandler {
 public:
@@ -29,7 +29,6 @@ public:
         EditorDockController& dockController,
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
-        EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport& sceneViewport,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
@@ -53,7 +52,6 @@ private:
     EditorDockController& dockController_;
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
-    EditorRenderBackendSettings& renderBackendSettings_;
     EditorSceneBgfxViewport& sceneViewport_;
     EditorPlayModeState& playMode_;
     EditorShellInteractionState& shellInteraction_;
