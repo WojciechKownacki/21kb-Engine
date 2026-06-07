@@ -14,158 +14,164 @@
 namespace kb::render {
 namespace {
 
-struct LineVertex {
+struct PosVertex {
     float x = 0.0F;
     float y = 0.0F;
     float z = 0.0F;
-    float r = 0.0F;
-    float g = 0.0F;
-    float b = 0.0F;
 };
 
 struct GridCamera {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-    float forwardY = 1.0F;
+    std::array<float, 4> cameraPos{ 0.0F, 5.0F, 5.0F, 0.0F };
+    std::array<float, 4> basisRight{ 1.0F, 0.0F, 0.0F, 1.0F };
+    std::array<float, 4> basisUp{ 0.0F, 1.0F, 0.0F, 1.0F };
+    std::array<float, 4> basisForward{ 0.0F, 0.0F, 1.0F, 0.0F };
+    std::array<float, 4> gridOrigin{ 0.0F, 0.0F, 0.01F, 0.0F };
 };
 
-struct GridBuildParams {
-    float smallStep = 1.0F;
-    float largeStep = 8.0F;
-    float divisionDecimals = 0.0F;
-    float shaderFadeSize = 192.0F;
-    float centerX = 0.0F;
-    float centerZ = 0.0F;
-};
-
-constexpr int kGridSize = 200;
-constexpr int kPrimaryGridSteps = 8;
-constexpr int kDivisionLevelMin = 0;
-constexpr int kDivisionLevelMax = 2;
-constexpr float kDivisionLevelBias = -0.2F;
-constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kGridSize * 2 + 1) * 4);
+constexpr float kPlaneY = 0.0F;
+constexpr float kMinorSpacingMeters = 1.0F;
+constexpr std::uint32_t kMajorEvery = 10U;
+constexpr float kFarFadeStartMeters = 220.0F;
+constexpr float kFarFadeEndMeters = 1600.0F;
+constexpr float kMinorLineWidthPixels = 1.00F;
+constexpr float kMajorLineWidthPixels = 1.22F;
+constexpr float kAxisLineWidthPixels = 1.60F;
+constexpr float kMinorAlpha = 0.36F;
+constexpr float kMajorAlpha = 0.60F;
+constexpr float kAxisAlpha = 0.55F;
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
 }
 
-[[nodiscard]] bgfx::VertexLayout LineLayout() noexcept {
+[[nodiscard]] std::array<float, 16> IdentityMatrix() noexcept {
+    return std::array<float, 16>{
+        1.0F, 0.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F, 0.0F,
+        0.0F, 0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F,
+    };
+}
+
+[[nodiscard]] bgfx::VertexLayout FullscreenLayout() noexcept {
     bgfx::VertexLayout layout;
     layout.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-        .add(bgfx::Attrib::Color0, 3, bgfx::AttribType::Float)
         .end();
     return layout;
 }
 
-[[nodiscard]] float Saturate(float value) noexcept {
-    return std::clamp(value, 0.0F, 1.0F);
+[[nodiscard]] bool IsFinite(float value) noexcept {
+    return std::isfinite(value);
 }
 
-[[nodiscard]] float SmoothStep(float edge0, float edge1, float value) noexcept {
-    const float t = Saturate((value - edge0) / (edge1 - edge0));
-    return t * t * (3.0F - 2.0F * t);
+[[nodiscard]] bool IsPerspectiveProjection(const std::array<float, 16>& projection) noexcept {
+    return std::abs(projection[15]) < 0.0001F;
 }
 
-[[nodiscard]] std::array<float, 3> LerpColor(std::array<float, 3> a, std::array<float, 3> b, float t) noexcept {
-    return std::array<float, 3>{
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    };
+[[nodiscard]] float SafeReciprocal(float value, float fallback) noexcept {
+    return std::abs(value) > 0.000001F ? 1.0F / value : fallback;
 }
 
-[[nodiscard]] std::array<float, 3> ScaleColor(std::array<float, 3> color, float scale) noexcept {
-    return std::array<float, 3>{ color[0] * scale, color[1] * scale, color[2] * scale };
+[[nodiscard]] float ExtractAspect(const std::array<float, 16>& projection) noexcept {
+    if (!IsFinite(projection[0]) || !IsFinite(projection[5]) || std::abs(projection[0]) <= 0.000001F) {
+        return 1.0F;
+    }
+    return std::max(projection[5] / projection[0], SceneDepthPolicy::kMinimumAspect);
 }
 
-[[nodiscard]] GridCamera CameraFromView(const SceneRenderCamera& camera) noexcept {
+[[nodiscard]] float ExtractNearClip(const std::array<float, 16>& projection) noexcept {
+    if (!IsFinite(projection[10]) || !IsFinite(projection[14])) {
+        return 0.01F;
+    }
+
+    const float denominator = 1.0F - projection[10];
+    if (std::abs(denominator) <= 0.000001F) {
+        return 0.01F;
+    }
+    return SceneDepthPolicy::SanitizeNearClip(projection[14] / denominator);
+}
+
+[[nodiscard]] float ExtractOrthoNearClip(const std::array<float, 16>& projection, bool homogeneousDepth) noexcept {
+    if (!IsFinite(projection[10]) || !IsFinite(projection[14]) || std::abs(projection[10]) <= 0.000001F) {
+        return 0.01F;
+    }
+
+    if (homogeneousDepth) {
+        const float range = -2.0F / projection[10];
+        const float nearClip = ((projection[14] * range) - range) * 0.5F;
+        return SceneDepthPolicy::SanitizeNearClip(nearClip);
+    }
+
+    const float range = -1.0F / projection[10];
+    return SceneDepthPolicy::SanitizeNearClip((projection[14] - 1.0F) * range);
+}
+
+[[nodiscard]] float ExtractOrthoFarClip(const std::array<float, 16>& projection, bool homogeneousDepth) noexcept {
+    if (!IsFinite(projection[10]) || !IsFinite(projection[14]) || std::abs(projection[10]) <= 0.000001F) {
+        return 100000.0F;
+    }
+
+    const float range = homogeneousDepth ? (-2.0F / projection[10]) : (-1.0F / projection[10]);
+    const float farClip = homogeneousDepth
+        ? ((projection[14] * range) + range) * 0.5F
+        : projection[14] * range;
+    return std::clamp(farClip, 1.0F, 100000.0F);
+}
+
+[[nodiscard]] float SnapToAnchor(float worldCoord, float anchorSpacing) noexcept {
+    if (!IsFinite(worldCoord) || !IsFinite(anchorSpacing) || anchorSpacing <= 0.0F) {
+        return 0.0F;
+    }
+    return std::floor(worldCoord / anchorSpacing) * anchorSpacing;
+}
+
+[[nodiscard]] GridCamera CameraFromMatrices(const SceneRenderCamera& camera) noexcept {
     float inverseView[16]{};
     bx::mtxInverse(inverseView, camera.view.data());
+
+    const bool orthographic = !IsPerspectiveProjection(camera.projection);
+    const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
+    const float aspect = ExtractAspect(camera.projection);
+    const float halfHeight = orthographic
+        ? std::max(0.5F * SafeReciprocal(camera.projection[5], 20.0F), 0.0001F)
+        : SafeReciprocal(camera.projection[5], 1.0F);
+    const float halfWidth = halfHeight * aspect;
+    const float nearClip = orthographic ? ExtractOrthoNearClip(camera.projection, homogeneousDepth) : ExtractNearClip(camera.projection);
+    const float farClip = orthographic ? ExtractOrthoFarClip(camera.projection, homogeneousDepth) : 0.0F;
+
+    const float majorSpacing = kMinorSpacingMeters * static_cast<float>(kMajorEvery);
+    const float anchorSpacing = majorSpacing * 10.0F;
+
     return GridCamera{
-        .x = inverseView[12],
-        .y = inverseView[13],
-        .z = inverseView[14],
-        .forwardY = inverseView[9],
+        .cameraPos = { inverseView[12], inverseView[13], inverseView[14], kPlaneY },
+        .basisRight = { inverseView[0], inverseView[1], inverseView[2], halfWidth },
+        .basisUp = { inverseView[4], inverseView[5], inverseView[6], halfHeight },
+        .basisForward = { inverseView[8], inverseView[9], inverseView[10], orthographic ? 1.0F : 0.0F },
+        .gridOrigin = {
+            SnapToAnchor(inverseView[12], anchorSpacing),
+            SnapToAnchor(inverseView[14], anchorSpacing),
+            nearClip,
+            farClip,
+        },
     };
 }
 
-[[nodiscard]] GridBuildParams BuildParams(const GridCamera& camera) noexcept {
-    const float cameraDistance = std::max(std::abs(camera.y), 0.0001F);
-    const float primarySteps = static_cast<float>(kPrimaryGridSteps);
-    const float divisionLevel = (std::log(cameraDistance) / std::log(primarySteps)) + kDivisionLevelBias;
-    const float clampedLevel = std::clamp(divisionLevel, static_cast<float>(kDivisionLevelMin), static_cast<float>(kDivisionLevelMax));
-    const float flooredLevel = std::floor(clampedLevel);
-    const float divisionDecimals = clampedLevel - flooredLevel;
-    const float smallStep = std::pow(primarySteps, flooredLevel);
-    const float largeStep = smallStep * primarySteps;
-    const float centerX = largeStep * static_cast<float>(static_cast<int>(camera.x / largeStep));
-    const float centerZ = largeStep * static_cast<float>(static_cast<int>(camera.z / largeStep));
-
-    float fadeStep = std::pow(primarySteps, divisionLevel - 1.0F);
-    const float minFadeStep = std::pow(primarySteps, static_cast<float>(kDivisionLevelMin));
-    const float maxFadeStep = std::pow(primarySteps, static_cast<float>(kDivisionLevelMax));
-    fadeStep = std::clamp(fadeStep, minFadeStep, maxFadeStep);
-
-    return GridBuildParams{
-        .smallStep = smallStep,
-        .largeStep = largeStep,
-        .divisionDecimals = divisionDecimals,
-        .shaderFadeSize = static_cast<float>(kGridSize - kPrimaryGridSteps) * fadeStep,
-        .centerX = centerX,
-        .centerZ = centerZ,
-    };
-}
-
-void AddLine(
-    std::array<LineVertex, kGridVertexCapacity>& vertices,
-    std::uint32_t& count,
-    float x0,
-    float z0,
-    float x1,
-    float z1,
-    std::array<float, 3> color) noexcept {
-    if (count + 2U > vertices.size()) {
-        return;
+void DestroyUniform(bgfx::UniformHandle& uniform) noexcept {
+    if (bgfx::isValid(uniform)) {
+        bgfx::destroy(uniform);
+        uniform = BGFX_INVALID_HANDLE;
     }
-    vertices[count++] = LineVertex{ x0, 0.0F, z0, color[0], color[1], color[2] };
-    vertices[count++] = LineVertex{ x1, 0.0F, z1, color[0], color[1], color[2] };
-}
-
-[[nodiscard]] std::uint32_t BuildGrid(std::array<LineVertex, kGridVertexCapacity>& vertices, const GridBuildParams& params) noexcept {
-    constexpr std::array<float, 3> kSecondary{ 0.20F, 0.23F, 0.27F };
-    constexpr std::array<float, 3> kPrimary{ 0.34F, 0.38F, 0.44F };
-    constexpr std::array<float, 3> kAxisX{ 0.84F, 0.22F, 0.20F };
-    constexpr std::array<float, 3> kAxisZ{ 0.22F, 0.46F, 0.88F };
-
-    std::uint32_t count = 0U;
-    const float beginX = params.centerX - static_cast<float>(kGridSize) * params.smallStep;
-    const float endX = params.centerX + static_cast<float>(kGridSize) * params.smallStep;
-    const float beginZ = params.centerZ - static_cast<float>(kGridSize) * params.smallStep;
-    const float endZ = params.centerZ + static_cast<float>(kGridSize) * params.smallStep;
-
-    for (int i = -kGridSize; i <= kGridSize; ++i) {
-        const bool primary = i % kPrimaryGridSteps == 0;
-        const std::array<float, 3> color = primary
-            ? LerpColor(kPrimary, kSecondary, params.divisionDecimals)
-            : ScaleColor(kSecondary, 1.0F - params.divisionDecimals);
-        const float x = params.centerX + static_cast<float>(i) * params.smallStep;
-        const float z = params.centerZ + static_cast<float>(i) * params.smallStep;
-
-        AddLine(vertices, count, x, beginZ, x, endZ, x == 0.0F ? kAxisZ : color);
-        AddLine(vertices, count, beginX, z, endX, z, z == 0.0F ? kAxisX : color);
-    }
-    return count;
 }
 
 void ConfigureOverlayView(const SceneGridPassDesc& desc) {
+    const std::array<float, 16> identity = IdentityMatrix();
     const RenderViewportRect outputRect = desc.outputRect.extent.IsValid()
         ? desc.outputRect
         : RenderViewportRect{ .extent = desc.extent };
     bgfx::setViewName(desc.viewId, "KB Editor Grid");
     bgfx::setViewFrameBuffer(desc.viewId, desc.frameBuffer);
-    bgfx::setViewTransform(desc.viewId, desc.camera->view.data(), desc.camera->projection.data());
+    bgfx::setViewTransform(desc.viewId, identity.data(), identity.data());
     bgfx::setViewRect(
         desc.viewId,
         ClampToViewExtent(outputRect.x),
@@ -192,8 +198,15 @@ bool SceneGridPass::Initialize() {
         return true;
     }
     program_ = ShaderLoader::LoadProgram("vs_editor_grid.sc", "fs_editor_grid.sc");
+    cameraPosUniform_ = bgfx::createUniform("u_editorGridCameraPos", bgfx::UniformType::Vec4);
+    basisRightUniform_ = bgfx::createUniform("u_editorGridBasisRight", bgfx::UniformType::Vec4);
+    basisUpUniform_ = bgfx::createUniform("u_editorGridBasisUp", bgfx::UniformType::Vec4);
+    basisForwardUniform_ = bgfx::createUniform("u_editorGridBasisForward", bgfx::UniformType::Vec4);
     gridParamsUniform_ = bgfx::createUniform("u_editorGridParams", bgfx::UniformType::Vec4);
-    lineLayout_ = LineLayout();
+    gridOriginUniform_ = bgfx::createUniform("u_editorGridOrigin", bgfx::UniformType::Vec4);
+    gridWidthsUniform_ = bgfx::createUniform("u_editorGridWidths", bgfx::UniformType::Vec4);
+    gridStyleUniform_ = bgfx::createUniform("u_editorGridStyle", bgfx::UniformType::Vec4);
+    fullscreenLayout_ = FullscreenLayout();
     initialized_ = true;
     if (!IsInitialized()) {
         Shutdown();
@@ -206,15 +219,19 @@ void SceneGridPass::Shutdown() noexcept {
     if (!initialized_) {
         return;
     }
-    if (bgfx::isValid(gridParamsUniform_)) {
-        bgfx::destroy(gridParamsUniform_);
-        gridParamsUniform_ = BGFX_INVALID_HANDLE;
-    }
+    DestroyUniform(gridStyleUniform_);
+    DestroyUniform(gridWidthsUniform_);
+    DestroyUniform(gridOriginUniform_);
+    DestroyUniform(gridParamsUniform_);
+    DestroyUniform(basisForwardUniform_);
+    DestroyUniform(basisUpUniform_);
+    DestroyUniform(basisRightUniform_);
+    DestroyUniform(cameraPosUniform_);
     if (bgfx::isValid(program_)) {
         bgfx::destroy(program_);
         program_ = BGFX_INVALID_HANDLE;
     }
-    lineLayout_ = {};
+    fullscreenLayout_ = {};
     initialized_ = false;
 }
 
@@ -223,30 +240,47 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
         return false;
     }
 
-    const GridCamera camera = CameraFromView(*desc.camera);
-    const GridBuildParams params = BuildParams(camera);
-    std::array<LineVertex, kGridVertexCapacity> vertices{};
-    const std::uint32_t vertexCount = BuildGrid(vertices, params);
-    if (vertexCount == 0U || bgfx::getAvailTransientVertexBuffer(vertexCount, lineLayout_) < vertexCount) {
+    constexpr std::array<PosVertex, 3U> triangle{
+        PosVertex{ -1.0F, -1.0F, 1.0F },
+        PosVertex{ 3.0F, -1.0F, 1.0F },
+        PosVertex{ -1.0F, 3.0F, 1.0F },
+    };
+    constexpr std::uint32_t vertexCount = static_cast<std::uint32_t>(triangle.size());
+    if (bgfx::getAvailTransientVertexBuffer(vertexCount, fullscreenLayout_) < vertexCount) {
         return false;
     }
 
-    ConfigureOverlayView(desc);
-    bgfx::TransientVertexBuffer buffer{};
-    bgfx::allocTransientVertexBuffer(&buffer, vertexCount, lineLayout_);
-    std::memcpy(buffer.data, vertices.data(), sizeof(LineVertex) * vertexCount);
+    const GridCamera camera = CameraFromMatrices(*desc.camera);
+    const float majorSpacing = kMinorSpacingMeters * static_cast<float>(kMajorEvery);
+    const std::array<float, 4> gridParams{ kMinorSpacingMeters, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
+    const std::array<float, 4> gridWidths{ kMinorLineWidthPixels, kMajorLineWidthPixels, kAxisLineWidthPixels, 0.0F };
+    const std::array<float, 4> gridStyle{ kMinorAlpha, kMajorAlpha, kAxisAlpha, 0.0F };
 
-    const float angleFade = SmoothStep(0.05F, 0.2F, std::abs(camera.forwardY));
-    const std::array<float, 4> gridParams{ camera.x, camera.z, params.shaderFadeSize, angleFade * 0.72F };
+    ConfigureOverlayView(desc);
+    bgfx::TransientVertexBuffer vertices{};
+    bgfx::allocTransientVertexBuffer(&vertices, vertexCount, fullscreenLayout_);
+    std::memcpy(vertices.data, triangle.data(), sizeof(PosVertex) * triangle.size());
+
+    bgfx::setUniform(cameraPosUniform_, camera.cameraPos.data());
+    bgfx::setUniform(basisRightUniform_, camera.basisRight.data());
+    bgfx::setUniform(basisUpUniform_, camera.basisUp.data());
+    bgfx::setUniform(basisForwardUniform_, camera.basisForward.data());
     bgfx::setUniform(gridParamsUniform_, gridParams.data());
-    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_PT_LINES | BGFX_STATE_BLEND_ALPHA);
-    bgfx::setVertexBuffer(0, &buffer);
+    bgfx::setUniform(gridOriginUniform_, camera.gridOrigin.data());
+    bgfx::setUniform(gridWidthsUniform_, gridWidths.data());
+    bgfx::setUniform(gridStyleUniform_, gridStyle.data());
+    bgfx::setState(SceneDepthPolicy::SceneOverlayState(true) | BGFX_STATE_BLEND_ALPHA);
+    bgfx::setVertexBuffer(0, &vertices);
     bgfx::submit(desc.viewId, program_);
     return true;
 }
 
 bool SceneGridPass::IsInitialized() const noexcept {
-    return initialized_ && bgfx::isValid(program_) && bgfx::isValid(gridParamsUniform_) && lineLayout_.getStride() == sizeof(LineVertex);
+    return initialized_ && bgfx::isValid(program_) && bgfx::isValid(cameraPosUniform_) &&
+           bgfx::isValid(basisRightUniform_) && bgfx::isValid(basisUpUniform_) &&
+           bgfx::isValid(basisForwardUniform_) && bgfx::isValid(gridParamsUniform_) &&
+           bgfx::isValid(gridOriginUniform_) && bgfx::isValid(gridWidthsUniform_) &&
+           bgfx::isValid(gridStyleUniform_) && fullscreenLayout_.getStride() == sizeof(PosVertex);
 }
 
 } // namespace kb::render
