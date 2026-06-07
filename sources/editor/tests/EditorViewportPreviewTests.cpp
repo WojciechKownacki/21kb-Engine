@@ -71,7 +71,7 @@ void RunViewportCameraNavigationTest() {
 
     static_cast<void>(camera.UpdatePointer(200, 50));
     kb::editor::tests::Require(camera.YawDegrees() > -45.0F, "Dragging look mode right should increase yaw");
-    kb::editor::tests::Require(camera.PitchDegrees() < -30.0F, "Dragging look mode up should decrease pitch");
+    kb::editor::tests::Require(camera.PitchDegrees() > -30.0F, "Dragging look mode up should increase pitch");
 
     const kb::scene::Vec3 beforeFlight = camera.Position();
     const bool moved = camera.ApplyKeyboardFlight(
