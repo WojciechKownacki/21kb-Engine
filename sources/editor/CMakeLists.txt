@@ -8,6 +8,8 @@ add_executable(kb_editor
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorEditCommandPolicy.cpp
+    src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
@@ -101,6 +103,8 @@ add_executable(kb_editor
     src/assets/EditorAssetBrowserToolbarLayout.cpp
     src/assets/EditorAssetBrowserTreeHitTester.cpp
     src/assets/EditorAssetBrowserViewState.cpp
+    src/commands/EditorCommandStack.cpp
+    src/commands/EditorSceneHistoryCommand.cpp
     src/docking/DefaultDockWorkspace.cpp
     src/docking/DockDropPreviewFactory.cpp
     src/docking/DockDropPlacementPolicy.cpp
@@ -235,6 +239,9 @@ add_executable(kb_editor
     src/private/assets/EditorAssetBrowserState.hpp
     src/private/assets/EditorAssetBrowserTextEditState.hpp
     src/private/assets/EditorAssetBrowserViewState.hpp
+    src/private/commands/EditorCommandStack.hpp
+    src/private/commands/EditorSceneHistoryCommand.hpp
+    src/private/commands/IEditorCommand.hpp
     src/private/console/EditorConsoleLayout.hpp
     src/private/console/EditorConsoleState.hpp
     src/private/app/EditorApplicationLifecycle.hpp
@@ -242,6 +249,8 @@ add_executable(kb_editor
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorEditCommandPolicy.hpp
+    src/private/app/EditorEditCommandInputHandler.hpp
     src/private/app/EditorAssetBrowserContextCommandExecutor.hpp
     src/private/app/EditorAssetBrowserContextMenuPointerHandler.hpp
     src/private/app/EditorAssetBrowserDeleteConfirmPointerHandler.hpp
@@ -414,6 +423,7 @@ add_executable(kb_editor
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
+    src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
@@ -528,6 +538,7 @@ add_executable(kb_editor
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
+    src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
@@ -614,6 +625,7 @@ if(BUILD_TESTING)
         tests/EditorViewportPreviewTests.cpp
         tests/EditorDockingTests.cpp
         tests/EditorRuntimeTests.cpp
+        tests/EditorCommandStackTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
         tests/SvgPathTests.cpp
@@ -683,6 +695,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserToolbarLayout.cpp
         src/assets/EditorAssetBrowserTreeHitTester.cpp
         src/assets/EditorAssetBrowserViewState.cpp
+        src/commands/EditorCommandStack.cpp
         src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
         src/scene/EditorHierarchyRowFactory.cpp
