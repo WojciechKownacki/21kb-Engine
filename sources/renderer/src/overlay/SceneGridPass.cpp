@@ -112,11 +112,29 @@ void AddHorizontalLine(
     const float halfLength = std::sqrt(std::max(0.0F, kFadeEnd * kFadeEnd - dz * dz));
     const float x0 = camera.x - halfLength;
     const float x1 = camera.x + halfLength;
-    if (count + 2U > vertices.size()) {
+    if (dz >= kFadeStart) {
+        if (count + 4U > vertices.size()) {
+            return;
+        }
+        vertices[count++] = VertexWithFade(x0, z, color, 0.0F);
+        vertices[count++] = VertexWithFade(camera.x, z, color, lineFade);
+        vertices[count++] = VertexWithFade(camera.x, z, color, lineFade);
+        vertices[count++] = VertexWithFade(x1, z, color, 0.0F);
         return;
     }
-    vertices[count++] = VertexWithFade(x0, z, color, lineFade);
-    vertices[count++] = VertexWithFade(x1, z, color, lineFade);
+
+    const float inner = std::sqrt(std::max(0.0F, kFadeStart * kFadeStart - dz * dz));
+    const float leftInner = camera.x - inner;
+    const float rightInner = camera.x + inner;
+    if (count + 6U > vertices.size()) {
+        return;
+    }
+    vertices[count++] = VertexWithFade(x0, z, color, 0.0F);
+    vertices[count++] = VertexWithFade(leftInner, z, color, lineFade);
+    vertices[count++] = VertexWithFade(leftInner, z, color, lineFade);
+    vertices[count++] = VertexWithFade(rightInner, z, color, lineFade);
+    vertices[count++] = VertexWithFade(rightInner, z, color, lineFade);
+    vertices[count++] = VertexWithFade(x1, z, color, 0.0F);
 }
 
 void AddVerticalLine(
