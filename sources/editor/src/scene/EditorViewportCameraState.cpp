@@ -156,7 +156,7 @@ bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
         return true;
     case EditorViewportCameraNavigationMode::Pan:
     case EditorViewportCameraNavigationMode::Track:
-        MoveLocal(static_cast<float>(-dx) * kPanScale, static_cast<float>(dy) * kPanScale, 0.0F);
+        MoveLocal(static_cast<float>(dx) * kPanScale, static_cast<float>(-dy) * kPanScale, 0.0F);
         return true;
     case EditorViewportCameraNavigationMode::Orbit:
         yawDegrees_ += static_cast<float>(dx) * kLookSensitivity;
