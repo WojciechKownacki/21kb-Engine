@@ -58,7 +58,7 @@ void RunViewportCameraAxesTest() {
     RequireNear(axes.position.y, 6.0F, 0.001F, "Viewport camera default y position is wrong");
     RequireNear(axes.position.z, -8.0F, 0.001F, "Viewport camera default z position is wrong");
     RequireNear(axes.forward.x, -0.612F, 0.001F, "Viewport camera default forward x is wrong");
-    RequireNear(axes.forward.y, 0.5F, 0.001F, "Viewport camera default forward y is wrong");
+    RequireNear(axes.forward.y, -0.5F, 0.001F, "Viewport camera default forward y is wrong");
     RequireNear(axes.forward.z, 0.612F, 0.001F, "Viewport camera default forward z is wrong");
     RequireNear(axes.up.y, 0.866F, 0.001F, "Viewport camera default up vector is wrong");
 }
@@ -71,7 +71,7 @@ void RunViewportCameraNavigationTest() {
 
     static_cast<void>(camera.UpdatePointer(200, 50));
     kb::editor::tests::Require(camera.YawDegrees() < -45.0F, "Dragging look mode right should decrease yaw");
-    kb::editor::tests::Require(camera.PitchDegrees() < 30.0F, "Dragging look mode up should decrease pitch");
+    kb::editor::tests::Require(camera.PitchDegrees() < -30.0F, "Dragging look mode up should decrease pitch");
 
     const kb::scene::Vec3 beforeFlight = camera.Position();
     const bool moved = camera.ApplyKeyboardFlight(
