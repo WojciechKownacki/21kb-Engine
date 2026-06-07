@@ -57,7 +57,7 @@ void DockDropPreviewOverlayWindow::Show(HWND parent, const DockDropPreview& prev
     SetLayeredWindowAttributes(window_, 0, OverlayAlpha(preview.kind), LWA_ALPHA);
     SetWindowPos(
         window_,
-        HWND_TOP,
+        HWND_TOPMOST,
         screen.x,
         screen.y,
         preview.rect.width,
