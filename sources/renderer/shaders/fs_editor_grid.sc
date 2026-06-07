@@ -77,14 +77,14 @@ void main()
     if (is_ortho) {
         ray_o = u_editorGridCameraPos.xyz
             + u_editorGridBasisRight.xyz * (v_texcoord0.x * u_editorGridBasisRight.w)
-            - u_editorGridBasisUp.xyz * (v_texcoord0.y * u_editorGridBasisUp.w);
+            + u_editorGridBasisUp.xyz * (v_texcoord0.y * u_editorGridBasisUp.w);
         ray = normalize(u_editorGridBasisForward.xyz);
     } else {
         ray_o = u_editorGridCameraPos.xyz;
         ray = normalize(
             u_editorGridBasisForward.xyz
             + u_editorGridBasisRight.xyz * (v_texcoord0.x * u_editorGridBasisRight.w)
-            - u_editorGridBasisUp.xyz * (v_texcoord0.y * u_editorGridBasisUp.w)
+            + u_editorGridBasisUp.xyz * (v_texcoord0.y * u_editorGridBasisUp.w)
         );
     }
 
