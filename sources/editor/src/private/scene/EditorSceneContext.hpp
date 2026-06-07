@@ -21,6 +21,33 @@
 
 namespace kb::editor {
 
+struct EditorSceneGizmoAxisDrag {
+    float axis[3]{};
+    float planeNormal[3]{};
+    float removeNormal[3]{};
+    float startPoint[3]{};
+};
+
+struct EditorSceneGizmoState {
+    int hoveredAxis = -1;
+    int draggedAxis = -1;
+    bool centerDrag = false;
+    float dragStartTargetX = 0.0F;
+    float dragStartTargetY = 0.0F;
+    float dragStartTargetZ = 0.0F;
+    float centerPlaneNx = 0.0F;
+    float centerPlaneNy = 0.0F;
+    float centerPlaneNz = 1.0F;
+    float centerStartPx = 0.0F;
+    float centerStartPy = 0.0F;
+    float centerStartPz = 0.0F;
+    EditorSceneGizmoAxisDrag axisDrag{};
+
+    [[nodiscard]] bool IsDragging() const noexcept {
+        return draggedAxis >= 0 || centerDrag;
+    }
+};
+
 class EditorSceneContext {
 public:
     EditorSceneContext();
@@ -47,6 +74,8 @@ public:
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
+    [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
+    [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
 
     [[nodiscard]] kb::scene::SceneEntity SelectedEntity() const noexcept;
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
@@ -94,6 +123,8 @@ public:
     [[nodiscard]] bool MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] bool CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles);
+    [[nodiscard]] bool ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder);
 
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
@@ -103,12 +134,15 @@ public:
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent);
+    [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
+    [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
 
 private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
+    EditorSceneGizmoState gizmo_;
     InspectorPanelState inspector_;
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
     mutable std::unordered_map<std::uint64_t, EditorViewportCameraState> viewportCameras_;

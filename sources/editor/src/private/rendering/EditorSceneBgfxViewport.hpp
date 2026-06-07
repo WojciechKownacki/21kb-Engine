@@ -3,6 +3,7 @@
 #include "kb/render/DisplayConfig.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/post/ScenePostProcessTargets.hpp"
 #include "kb/render/resources/NativeWindowFramebuffer.hpp"
@@ -43,6 +44,7 @@ public:
         std::array<std::uint64_t, 1U> selectedEntityIds{};
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;
+        render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         bool drawSafeArea = false;
     };
 

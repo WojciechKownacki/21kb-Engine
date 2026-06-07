@@ -2,6 +2,7 @@
 
 #include "kb/render/frame/RenderFramePipeline.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
+#include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/overlay/SceneGridPass.hpp"
 #include "kb/render/overlay/SelectionOutlineCompositePass.hpp"
 
@@ -19,6 +20,7 @@ public:
 
 private:
     SceneGridPass gridPass_;
+    SceneGizmoPass gizmoPass_;
     SelectionOutlineCompositePass selectionOutlinePass_;
 };
 

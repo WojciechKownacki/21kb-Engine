@@ -1,5 +1,6 @@
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 
+#include "resources/RenderMeshFbxImporter.hpp"
 #include "resources/RenderMeshGltfImporter.hpp"
 #include "resources/RenderMeshObjImporter.hpp"
 
@@ -43,6 +44,16 @@ std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadObj(std::istream&
 
 std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadGltf(const std::filesystem::path& path, const RenderMeshGltfImportDesc& desc) {
     return RenderMeshGltfImporter::Load(path, desc);
+}
+
+std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(const std::filesystem::path& path, const RenderMeshFbxImportDesc& desc) {
+    static_cast<void>(desc);
+    return RenderMeshFbxImporter::Load(path);
+}
+
+std::optional<RenderMeshAssetData> RenderMeshAssetBuilder::LoadFbx(std::span<const std::byte> data, const RenderMeshFbxImportDesc& desc) {
+    static_cast<void>(desc);
+    return RenderMeshFbxImporter::Load(data);
 }
 
 } // namespace kb::render
