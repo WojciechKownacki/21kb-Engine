@@ -85,80 +85,59 @@ const EditorAssetBrowserState& EditorSceneContext::AssetBrowser() const noexcept
 }
 
 EditorViewportPreviewState& EditorSceneContext::ViewportPreview() noexcept {
-    return ViewportPreview(0U);
+    return viewportState_.Preview();
 }
 
 const EditorViewportPreviewState& EditorSceneContext::ViewportPreview() const noexcept {
-    return ViewportPreview(0U);
+    return viewportState_.Preview();
 }
 
 EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint64_t viewportKey) noexcept {
-    return viewportPreviews_.try_emplace(viewportKey).first->second;
+    return viewportState_.Preview(viewportKey);
 }
 
 const EditorViewportPreviewState& EditorSceneContext::ViewportPreview(std::uint64_t viewportKey) const noexcept {
-    return viewportPreviews_.try_emplace(viewportKey).first->second;
+    return viewportState_.Preview(viewportKey);
 }
 
 EditorViewportCameraState& EditorSceneContext::ViewportCamera() noexcept {
-    return ViewportCamera(0U);
+    return viewportState_.Camera();
 }
 
 const EditorViewportCameraState& EditorSceneContext::ViewportCamera() const noexcept {
-    return ViewportCamera(0U);
+    return viewportState_.Camera();
 }
 
 EditorViewportCameraState& EditorSceneContext::ViewportCamera(std::uint64_t viewportKey) noexcept {
-    return viewportCameras_.try_emplace(viewportKey).first->second;
+    return viewportState_.Camera(viewportKey);
 }
 
 const EditorViewportCameraState& EditorSceneContext::ViewportCamera(std::uint64_t viewportKey) const noexcept {
-    return viewportCameras_.try_emplace(viewportKey).first->second;
+    return viewportState_.Camera(viewportKey);
 }
 
 void EditorSceneContext::BeginViewportCameraNavigation(std::uint64_t viewportKey, EditorViewportCameraNavigationMode mode, int x, int y) noexcept {
-    EndViewportCameraNavigation();
-    activeViewportCameraKey_ = viewportKey;
-    hasActiveViewportCameraNavigation_ = true;
-    ViewportCamera(viewportKey).BeginNavigation(mode, x, y);
+    viewportState_.BeginCameraNavigation(viewportKey, mode, x, y);
 }
 
 bool EditorSceneContext::HasActiveViewportCameraNavigation() const noexcept {
-    return hasActiveViewportCameraNavigation_ && ActiveViewportCamera() != nullptr;
+    return viewportState_.HasActiveCameraNavigation();
 }
 
 std::uint64_t EditorSceneContext::ActiveViewportCameraKey() const noexcept {
-    return activeViewportCameraKey_;
+    return viewportState_.ActiveCameraKey();
 }
 
 EditorViewportCameraState* EditorSceneContext::ActiveViewportCamera() noexcept {
-    if (!hasActiveViewportCameraNavigation_) {
-        return nullptr;
-    }
-    auto it = viewportCameras_.find(activeViewportCameraKey_);
-    if (it == viewportCameras_.end() || !it->second.IsNavigating()) {
-        return nullptr;
-    }
-    return &it->second;
+    return viewportState_.ActiveCamera();
 }
 
 const EditorViewportCameraState* EditorSceneContext::ActiveViewportCamera() const noexcept {
-    if (!hasActiveViewportCameraNavigation_) {
-        return nullptr;
-    }
-    auto it = viewportCameras_.find(activeViewportCameraKey_);
-    if (it == viewportCameras_.end() || !it->second.IsNavigating()) {
-        return nullptr;
-    }
-    return &it->second;
+    return viewportState_.ActiveCamera();
 }
 
 void EditorSceneContext::EndViewportCameraNavigation() noexcept {
-    if (EditorViewportCameraState* camera = ActiveViewportCamera(); camera != nullptr) {
-        camera->EndNavigation();
-    }
-    hasActiveViewportCameraNavigation_ = false;
-    activeViewportCameraKey_ = 0U;
+    viewportState_.EndCameraNavigation();
 }
 
 InspectorPanelState& EditorSceneContext::Inspector() noexcept {
@@ -178,11 +157,11 @@ const EditorConsoleState& EditorSceneContext::Console() const noexcept {
 }
 
 EditorSceneGizmoState& EditorSceneContext::Gizmo() noexcept {
-    return gizmo_;
+    return viewportState_.Gizmo();
 }
 
 const EditorSceneGizmoState& EditorSceneContext::Gizmo() const noexcept {
-    return gizmo_;
+    return viewportState_.Gizmo();
 }
 
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
