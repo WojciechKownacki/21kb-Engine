@@ -52,7 +52,14 @@ add_executable(kb_editor
     src/app/project_files/EditorProjectFilesMouseWheelController.cpp
     src/app/project_files/EditorProjectFilesTransientUiController.cpp
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
+    src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
+    src/app/scene_viewport/EditorSceneViewportGizmoHitTester.cpp
+    src/app/scene_viewport/EditorSceneViewportGizmoInteraction.cpp
+    src/app/scene_viewport/EditorSceneViewportHitResolver.cpp
+    src/app/scene_viewport/EditorSceneViewportMath.cpp
+    src/app/scene_viewport/EditorSceneViewportMeshDragPreview.cpp
     src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
+    src/app/scene_viewport/EditorSceneViewportSelectionInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
     src/app/EditorWindowPointerHandler.cpp
@@ -278,8 +285,15 @@ add_executable(kb_editor
     src/private/app/project_files/EditorProjectFilesMouseWheelController.hpp
     src/private/app/project_files/EditorProjectFilesTransientUiController.hpp
     src/private/app/scene_viewport/EditorSceneViewportCameraController.hpp
+    src/private/app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp
+    src/private/app/scene_viewport/EditorSceneViewportGizmoHitTester.hpp
+    src/private/app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp
+    src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
+    src/private/app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp
     src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
+    src/private/app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
+    src/private/app/scene_viewport/EditorSceneViewportTypes.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp
     src/private/app/EditorWindowHitTestHandler.hpp
     src/private/app/EditorWindowMessageContext.hpp
@@ -404,6 +418,7 @@ add_executable(kb_editor
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorScenePrefabActions.hpp
+    src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
@@ -517,6 +532,7 @@ add_executable(kb_editor
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorScenePrefabActions.cpp
+    src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/windowing/FloatingWindowControlActions.cpp

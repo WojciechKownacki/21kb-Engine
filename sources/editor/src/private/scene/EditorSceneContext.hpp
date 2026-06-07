@@ -8,45 +8,16 @@
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
-#include "scene/EditorViewportCameraState.hpp"
-#include "scene/EditorViewportPreviewState.hpp"
+#include "scene/EditorSceneViewportStateStore.hpp"
 #include "inspection/InspectorPanelState.hpp"
 
 #include <string>
 #include <string_view>
 #include <filesystem>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace kb::editor {
-
-struct EditorSceneGizmoAxisDrag {
-    float axis[3]{};
-    float planeNormal[3]{};
-    float removeNormal[3]{};
-    float startPoint[3]{};
-};
-
-struct EditorSceneGizmoState {
-    int hoveredAxis = -1;
-    int draggedAxis = -1;
-    bool centerDrag = false;
-    float dragStartTargetX = 0.0F;
-    float dragStartTargetY = 0.0F;
-    float dragStartTargetZ = 0.0F;
-    float centerPlaneNx = 0.0F;
-    float centerPlaneNy = 0.0F;
-    float centerPlaneNz = 1.0F;
-    float centerStartPx = 0.0F;
-    float centerStartPy = 0.0F;
-    float centerStartPz = 0.0F;
-    EditorSceneGizmoAxisDrag axisDrag{};
-
-    [[nodiscard]] bool IsDragging() const noexcept {
-        return draggedAxis >= 0 || centerDrag;
-    }
-};
 
 class EditorSceneContext {
 public:
@@ -142,12 +113,8 @@ private:
     kb::scene::Scene scene_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
-    EditorSceneGizmoState gizmo_;
+    EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
-    mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> viewportPreviews_;
-    mutable std::unordered_map<std::uint64_t, EditorViewportCameraState> viewportCameras_;
-    std::uint64_t activeViewportCameraKey_ = 0U;
-    bool hasActiveViewportCameraNavigation_ = false;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
