@@ -145,16 +145,16 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->presentedInCurrentPaint && surface->window != nullptr && IsWindow(surface->window) != 0) {
-            if (IsWindowVisible(surface->window) == 0) {
-                SetWindowPos(
-                    surface->window,
-                    HWND_BOTTOM,
-                    surface->rect.left,
-                    surface->rect.top,
-                    static_cast<int>(RectWidth(surface->rect)),
-                    static_cast<int>(RectHeight(surface->rect)),
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOCOPYBITS);
-            }
+            const UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS |
+                               (IsWindowVisible(surface->window) == 0 ? SWP_SHOWWINDOW : 0U);
+            SetWindowPos(
+                surface->window,
+                HWND_BOTTOM,
+                surface->rect.left,
+                surface->rect.top,
+                static_cast<int>(RectWidth(surface->rect)),
+                static_cast<int>(RectHeight(surface->rect)),
+                flags);
         }
     }
 }
