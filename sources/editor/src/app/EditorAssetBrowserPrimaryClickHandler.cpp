@@ -5,6 +5,7 @@
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "platform/win32/EditorAssetImportDialog.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <filesystem>
@@ -87,6 +88,11 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         state.CancelTextEdit();
         state.FocusSearch(true);
         return true;
+    case EditorAssetBrowserHitKind::Import: {
+        PrepareBrowserAction(state);
+        const std::vector<std::filesystem::path> files = EditorAssetImportDialog::Open(GetActiveWindow());
+        return files.empty() ? true : sceneContext.ImportAssetFiles(files);
+    }
     case EditorAssetBrowserHitKind::Filters:
         PrepareBrowserAction(state);
         state.ToggleFilterMenu();

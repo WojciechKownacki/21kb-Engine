@@ -13,6 +13,7 @@ struct SceneGridPassDesc {
     RenderExtent extent{};
     RenderViewportRect outputRect{};
     const SceneRenderCamera* camera = nullptr;
+    bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -40,6 +41,9 @@ private:
     bgfx::UniformHandle gridOriginUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle gridWidthsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle gridStyleUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle sceneDepthSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle viewProjectionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::VertexLayout fullscreenLayout_{};
     bool initialized_ = false;
 };

@@ -20,6 +20,7 @@ class EditorAssetBrowserState;
 enum class EditorAssetBrowserHitKind {
     None,
     Search,
+    Import,
     Filters,
     FilterFolder,
     FilterTemplate,

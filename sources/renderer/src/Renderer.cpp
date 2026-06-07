@@ -336,7 +336,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, defaultPostProcessSettings_.temporalJitterEnabled);
+    const bool temporalJitterEnabled = defaultPostProcessSettings_.temporalJitterEnabled && !desc.editorSceneOverlaysEnabled;
+    const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
     if (overlayCamera != nullptr) {
         jitteredCamera = *overlayCamera;
         RendererTemporalJitter::Apply(*jitteredCamera, jitter);
@@ -372,7 +373,20 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
     }
     editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
-    RendererMeshPassSubmitter::SubmitSelectionMask(meshPassSubmitDesc);
+    const RendererMeshPassSubmitDesc selectionMaskSubmitDesc{
+        .sceneRenderer = *sceneRenderer_,
+        .renderScene = renderScene,
+        .sceneDesc = desc,
+        .viewportPlan = viewportPlan,
+        .sceneCamera = overlayCamera,
+        .lightingConfig = effectiveLightingConfig,
+        .width = width,
+        .height = height,
+        .aggregateSubmitStats = lastSceneSubmitStats_,
+        .diagnostics = lastSceneDiagnostics_,
+        .passSubmitStats = lastScenePassSubmitStats_,
+    };
+    RendererMeshPassSubmitter::SubmitSelectionMask(selectionMaskSubmitDesc);
 
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr && scenePostProcessRenderer_ != nullptr) {
         PostProcessOutput postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{

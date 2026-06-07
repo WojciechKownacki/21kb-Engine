@@ -6,7 +6,7 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] std::string AssetDeleteTargetKey(kb::assets::AssetId id) {
-    return "Asset:" + std::to_string(id.value);
+    return "Asset:" + kb::assets::ToString(id);
 }
 
 [[nodiscard]] std::string FolderDeleteTargetKey(const std::filesystem::path& virtualPath) {
