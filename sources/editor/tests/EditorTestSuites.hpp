@@ -4,6 +4,7 @@ namespace kb::editor::tests {
 
 void RunEditorHierarchyTests();
 void RunEditorAssetBrowserTests();
+void RunEditorCommandStackTests();
 void RunEditorViewportPreviewTests();
 void RunEditorDockingTests();
 void RunSvgPathTests();

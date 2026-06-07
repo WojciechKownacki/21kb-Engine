@@ -82,6 +82,9 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         kb::scene::Vec3 centerStart{};
         const kb::scene::Vec3 planeNormal = camera.Axes().forward;
         if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, *targetPosition, planeNormal, centerStart)) {
+            if (!sceneContext.BeginSceneEditTransaction("Move Entity")) {
+                return false;
+            }
             StartCenterDrag(gizmo, *targetPosition, planeNormal, centerStart);
             return true;
         }
@@ -98,6 +101,9 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         return false;
     }
 
+    if (!sceneContext.BeginSceneEditTransaction("Move Entity")) {
+        return false;
+    }
     StartAxisDrag(gizmo, *targetPosition, axis, drag);
     return true;
 }
@@ -128,6 +134,7 @@ bool EditorSceneViewportGizmoInteraction::EndDrag(EditorSceneContext& sceneConte
 
     gizmo.draggedAxis = -1;
     gizmo.centerDrag = false;
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
     return true;
 }
 
@@ -153,6 +160,7 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        sceneContext.CancelSceneEditTransaction();
         static_cast<void>(EndDrag(sceneContext));
         return true;
     }
