@@ -103,6 +103,18 @@ void RunViewportCameraOrbitTest() {
         "Alt+LMB orbit should move camera around the pivot");
 }
 
+void RunViewportCameraTrackDirectionTest() {
+    kb::editor::EditorViewportCameraState camera;
+    camera.BeginNavigation(kb::editor::EditorViewportCameraNavigationMode::Track, 100, 100);
+    const kb::scene::Vec3 beforeTrack = camera.Position();
+
+    static_cast<void>(camera.UpdatePointer(120, 80));
+    const kb::scene::Vec3 afterTrack = camera.Position();
+
+    kb::editor::tests::Require(afterTrack.x > beforeTrack.x, "Dragging track mode right should move camera right");
+    kb::editor::tests::Require(afterTrack.y > beforeTrack.y, "Dragging track mode up should move camera up");
+}
+
 void RunRenderBackendSettingsTest() {
     kb::editor::EditorRenderBackendSettings settings;
     kb::editor::tests::Require(settings.Backend() == kb::editor::EditorRenderBackend::Auto, "Render backend should default to Auto");
@@ -164,6 +176,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraAxesTest();
     RunViewportCameraNavigationTest();
     RunViewportCameraOrbitTest();
+    RunViewportCameraTrackDirectionTest();
     RunRenderBackendSettingsTest();
     RunPlayModeStateTest();
 }
