@@ -12,8 +12,8 @@ class EditorAssetBrowserDeleteConfirmPointerHandler {
 public:
     EditorAssetBrowserDeleteConfirmPointerHandler() = delete;
 
-    [[nodiscard]] static bool HandlePointerDown(const EditorAssetBrowserHit& hit, int x, int y, EditorSceneContext& sceneContext);
-    [[nodiscard]] static bool HandlePointerMove(int x, int y, EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool HandlePointerDown(const RECT& bounds, const EditorAssetBrowserHit& hit, int x, int y, EditorSceneContext& sceneContext);
+    [[nodiscard]] static bool HandlePointerMove(const RECT& bounds, int x, int y, EditorSceneContext& sceneContext);
     [[nodiscard]] static bool HandlePointerUp(EditorSceneContext& sceneContext) noexcept;
 };
 

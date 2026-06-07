@@ -31,7 +31,9 @@ public:
     void FocusSearch(bool focused) noexcept;
     void SetSearchQuery(std::string query);
     void AppendSearchText(wchar_t character);
+    void InsertSearchText(std::string_view text);
     void BackspaceSearch();
+    void SelectAllSearch() noexcept;
     void ClearSearch();
     void SetRecursive(bool recursive) noexcept;
     void ToggleRecursive() noexcept;
@@ -65,6 +67,7 @@ private:
     std::string searchQuery_;
     std::string typeFilter_;
     bool searchFocused_ = false;
+    bool searchSelectingAll_ = false;
     bool recursive_ = false;
     bool showFolders_ = true;
     bool showTemplates_ = true;

@@ -1,24 +1,38 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
 
 #if defined(_WIN32)
+#include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 
 #include <algorithm>
 
 namespace kb::editor {
+namespace {
+
+constexpr int kDeleteConfirmListHeaderHeight = 26;
+constexpr int kDeleteConfirmListRowHeight = 24;
+constexpr int kDeleteConfirmListScrollbarWidth = 12;
+constexpr int kDeleteConfirmListCheckboxColumnWidth = 32;
+constexpr int kDeleteConfirmListCheckboxSize = 15;
+
+[[nodiscard]] int Height(const RECT& rect) noexcept {
+    return static_cast<int>(rect.bottom - rect.top);
+}
+
+} // namespace
 
 bool EditorAssetBrowserGeometry::Contains(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmRect(const RECT& bounds, int offsetX, int offsetY) noexcept {
-    constexpr int preferredWidth = 460;
-    constexpr int preferredHeight = 196;
+    constexpr int preferredWidth = 520;
+    constexpr int preferredHeight = 340;
     constexpr int margin = 12;
     const int boundsWidth = std::max(1, static_cast<int>(bounds.right - bounds.left));
     const int boundsHeight = std::max(1, static_cast<int>(bounds.bottom - bounds.top));
     const int width = std::clamp(preferredWidth, 320, std::max(320, boundsWidth - margin * 2));
-    const int height = std::clamp(preferredHeight, 156, std::max(156, boundsHeight - margin * 2));
+    const int height = std::clamp(preferredHeight, 240, std::max(240, boundsHeight - margin * 2));
     const int minLeft = bounds.left + margin;
     const int maxLeft = std::max(minLeft, static_cast<int>(bounds.right) - margin - width);
     const int minTop = bounds.top + margin;
@@ -31,11 +45,82 @@ RECT EditorAssetBrowserGeometry::DeleteConfirmRect(const RECT& bounds, int offse
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmAcceptRect(const RECT& dialog) noexcept {
-    return RECT{ dialog.right - 216, dialog.bottom - 52, dialog.right - 116, dialog.bottom - 22 };
+    return RECT{ dialog.right - 216, dialog.bottom - 44, dialog.right - 116, dialog.bottom - 14 };
 }
 
 RECT EditorAssetBrowserGeometry::DeleteConfirmCancelRect(const RECT& dialog) noexcept {
-    return RECT{ dialog.right - 104, dialog.bottom - 52, dialog.right - 22, dialog.bottom - 22 };
+    return RECT{ dialog.right - 104, dialog.bottom - 44, dialog.right - 22, dialog.bottom - 14 };
+}
+
+RECT EditorAssetBrowserGeometry::DeleteConfirmListRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept {
+    const RECT dialog = DeleteConfirmRect(bounds, state.DeleteConfirmOffsetX(), state.DeleteConfirmOffsetY());
+    return RECT{ dialog.left + 24, dialog.top + 108, dialog.right - 24, dialog.bottom - 62 };
+}
+
+RECT EditorAssetBrowserGeometry::DeleteConfirmListViewportRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept {
+    const RECT list = DeleteConfirmListRect(bounds, state);
+    return RECT{
+        list.left + 1,
+        list.top + kDeleteConfirmListHeaderHeight + 2,
+        list.right - 1,
+        list.bottom - 1,
+    };
+}
+
+RECT EditorAssetBrowserGeometry::DeleteConfirmListScrollbarTrackRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept {
+    const RECT viewport = DeleteConfirmListViewportRect(bounds, state);
+    return RECT{ viewport.right - kDeleteConfirmListScrollbarWidth, viewport.top, viewport.right, viewport.bottom };
+}
+
+RECT EditorAssetBrowserGeometry::DeleteConfirmListScrollbarThumbRect(const RECT& bounds, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager) {
+    const RECT track = DeleteConfirmListScrollbarTrackRect(bounds, state);
+    const int viewportHeight = Height(track);
+    const int contentHeight = static_cast<int>(state.DeleteTargetRows(manager).size()) * kDeleteConfirmListRowHeight;
+    if (contentHeight <= viewportHeight || viewportHeight <= 0) {
+        return RECT{};
+    }
+    const int thumbHeight = std::max(18, viewportHeight * viewportHeight / std::max(1, contentHeight));
+    const int travel = std::max(1, viewportHeight - thumbHeight);
+    const int maxScroll = std::max(1, contentHeight - viewportHeight);
+    const int scroll = std::clamp(state.DeleteConfirmListScrollOffset(), 0, maxScroll);
+    const int thumbTop = track.top + (scroll * travel) / maxScroll;
+    return RECT{ track.left + 2, thumbTop + 2, track.right - 2, thumbTop + thumbHeight - 2 };
+}
+
+RECT EditorAssetBrowserGeometry::DeleteConfirmListCheckboxRect(const RECT& bounds, const EditorAssetBrowserState& state, std::size_t rowIndex) noexcept {
+    const RECT viewport = DeleteConfirmListViewportRect(bounds, state);
+    const int rowTop = viewport.top + static_cast<int>(rowIndex) * kDeleteConfirmListRowHeight - state.DeleteConfirmListScrollOffset();
+    const int boxLeft = viewport.left + (kDeleteConfirmListCheckboxColumnWidth - kDeleteConfirmListCheckboxSize) / 2;
+    const int boxTop = rowTop + (kDeleteConfirmListRowHeight - kDeleteConfirmListCheckboxSize) / 2;
+    return RECT{ boxLeft, boxTop, boxLeft + kDeleteConfirmListCheckboxSize, boxTop + kDeleteConfirmListCheckboxSize };
+}
+
+std::optional<std::size_t> EditorAssetBrowserGeometry::DeleteConfirmListRowAt(
+    const RECT& bounds,
+    const EditorAssetBrowserState& state,
+    const kb::assets::AssetManager& manager,
+    int x,
+    int y) {
+    const RECT viewport = DeleteConfirmListViewportRect(bounds, state);
+    if (!Contains(RECT{ viewport.left, viewport.top, viewport.right - kDeleteConfirmListScrollbarWidth, viewport.bottom }, x, y)) {
+        return std::nullopt;
+    }
+    const int relativeY = y - viewport.top + state.DeleteConfirmListScrollOffset();
+    if (relativeY < 0) {
+        return std::nullopt;
+    }
+    const std::size_t rowIndex = static_cast<std::size_t>(relativeY / kDeleteConfirmListRowHeight);
+    return rowIndex < state.DeleteTargetRows(manager).size() ? std::optional<std::size_t>{ rowIndex } : std::nullopt;
+}
+
+int EditorAssetBrowserGeometry::DeleteConfirmListMaxScroll(const RECT& bounds, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager) {
+    const RECT viewport = DeleteConfirmListViewportRect(bounds, state);
+    const int contentHeight = static_cast<int>(state.DeleteTargetRows(manager).size()) * kDeleteConfirmListRowHeight;
+    return std::max(0, contentHeight - Height(viewport));
+}
+
+int EditorAssetBrowserGeometry::DeleteConfirmListRowHeight() noexcept {
+    return kDeleteConfirmListRowHeight;
 }
 
 RECT EditorAssetBrowserGeometry::FolderDisclosureRect(RECT row, const EditorAssetFolderRow& folder) noexcept {

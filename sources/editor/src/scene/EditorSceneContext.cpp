@@ -261,8 +261,16 @@ void EditorSceneContext::AppendHierarchySearchText(wchar_t character) {
     hierarchySearch_.AppendAscii(character);
 }
 
+void EditorSceneContext::InsertHierarchySearchText(std::string_view text) {
+    hierarchySearch_.Insert(text);
+}
+
 void EditorSceneContext::BackspaceHierarchySearch() {
     hierarchySearch_.Backspace();
+}
+
+void EditorSceneContext::SelectAllHierarchySearch() noexcept {
+    hierarchySearch_.SelectAll();
 }
 
 void EditorSceneContext::ClearHierarchySearch() {
@@ -298,6 +306,29 @@ void EditorSceneContext::AppendHierarchyRenameText(wchar_t character) {
     }
 }
 
+void EditorSceneContext::InsertHierarchyRenameText(std::string_view text) {
+    if (!IsHierarchyRenaming()) {
+        return;
+    }
+    if (hierarchyRenameSelectingAll_) {
+        hierarchyRenameBuffer_.clear();
+        hierarchyRenameSelectingAll_ = false;
+    }
+    for (const char character : text) {
+        if (character >= 32 && character <= 126) {
+            hierarchyRenameBuffer_.push_back(character);
+        }
+    }
+}
+
+void EditorSceneContext::SetHierarchyRenameText(std::string text) {
+    if (!IsHierarchyRenaming()) {
+        return;
+    }
+    hierarchyRenameBuffer_ = std::move(text);
+    hierarchyRenameSelectingAll_ = false;
+}
+
 void EditorSceneContext::BackspaceHierarchyRename() {
     if (!IsHierarchyRenaming()) {
         return;
@@ -310,6 +341,20 @@ void EditorSceneContext::BackspaceHierarchyRename() {
     if (!hierarchyRenameBuffer_.empty()) {
         hierarchyRenameBuffer_.pop_back();
     }
+}
+
+void EditorSceneContext::SelectAllHierarchyRename() noexcept {
+    if (IsHierarchyRenaming()) {
+        hierarchyRenameSelectingAll_ = true;
+    }
+}
+
+void EditorSceneContext::ClearHierarchyRename() noexcept {
+    if (!IsHierarchyRenaming()) {
+        return;
+    }
+    hierarchyRenameBuffer_.clear();
+    hierarchyRenameSelectingAll_ = false;
 }
 
 bool EditorSceneContext::CommitHierarchyRename() {

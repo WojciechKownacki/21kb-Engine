@@ -1,6 +1,7 @@
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 
 #if defined(_WIN32)
+#include "assets/EditorAssetBrowserGeometry.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesOverlayRenderer.hpp"
@@ -11,7 +12,6 @@ namespace kb::editor {
 namespace {
 
 constexpr wchar_t kDeleteConfirmOverlayClassName[] = L"KBEditorProjectFilesDeleteConfirmOverlay";
-constexpr COLORREF kTransparentColor = RGB(255, 0, 255);
 
 [[nodiscard]] bool SameRect(const RECT& left, const RECT& right) noexcept {
     return left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom;
@@ -37,33 +37,15 @@ void ProjectFilesDeleteConfirmOverlayWindow::Show(HWND parent, const EditorTheme
     theme_ = theme;
     sceneContext_ = &sceneContext;
 
-    RECT client{};
-    GetClientRect(parent, &client);
-    POINT screen{ client.left, client.top };
-    ClientToScreen(parent, &screen);
-    RECT nextBounds{
-        screen.x,
-        screen.y,
-        screen.x + client.right - client.left,
-        screen.y + client.bottom - client.top,
-    };
+    const RECT nextBounds = ResolveScreenBounds();
     const bool movedOrResized = !SameRect(screenBounds_, nextBounds);
+    const bool wasShown = shown_;
     const bool resized = (screenBounds_.right - screenBounds_.left) != (nextBounds.right - nextBounds.left)
         || (screenBounds_.bottom - screenBounds_.top) != (nextBounds.bottom - nextBounds.top);
     if (movedOrResized || !shown_) {
-        screenBounds_ = nextBounds;
-        SetWindowPos(
-            window_,
-            HWND_TOP,
-            screenBounds_.left,
-            screenBounds_.top,
-            screenBounds_.right - screenBounds_.left,
-            screenBounds_.bottom - screenBounds_.top,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW | (movedOrResized ? 0 : SWP_NOMOVE | SWP_NOSIZE));
-        shown_ = true;
+        static_cast<void>(MoveToCurrentBounds(true));
     }
-    SetLayeredWindowAttributes(window_, kTransparentColor, 0, LWA_COLORKEY);
-    if (!movedOrResized || resized || !shown_) {
+    if (movedOrResized || resized || !wasShown) {
         InvalidateRect(window_, nullptr, FALSE);
     }
 }
@@ -93,7 +75,7 @@ bool ProjectFilesDeleteConfirmOverlayWindow::EnsureWindow(HWND parent) {
     }
 
     window_ = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+        WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         kDeleteConfirmOverlayClassName,
         L"",
         WS_POPUP,
@@ -108,6 +90,50 @@ bool ProjectFilesDeleteConfirmOverlayWindow::EnsureWindow(HWND parent) {
     return window_ != nullptr;
 }
 
+RECT ProjectFilesDeleteConfirmOverlayWindow::ResolveScreenBounds() const noexcept {
+    if (parent_ == nullptr || sceneContext_ == nullptr || IsWindow(parent_) == 0) {
+        return {};
+    }
+
+    RECT client{};
+    GetClientRect(parent_, &client);
+    const RECT dialog = EditorAssetBrowserGeometry::DeleteConfirmRect(
+        client,
+        sceneContext_->AssetBrowser().DeleteConfirmOffsetX(),
+        sceneContext_->AssetBrowser().DeleteConfirmOffsetY());
+    POINT screen{ dialog.left, dialog.top };
+    ClientToScreen(parent_, &screen);
+    return RECT{
+        screen.x,
+        screen.y,
+        screen.x + dialog.right - dialog.left,
+        screen.y + dialog.bottom - dialog.top,
+    };
+}
+
+bool ProjectFilesDeleteConfirmOverlayWindow::MoveToCurrentBounds(bool showWindow) noexcept {
+    if (window_ == nullptr || IsWindow(window_) == 0) {
+        return false;
+    }
+
+    const RECT nextBounds = ResolveScreenBounds();
+    if (SameRect(screenBounds_, nextBounds) && shown_) {
+        return false;
+    }
+
+    screenBounds_ = nextBounds;
+    SetWindowPos(
+        window_,
+        HWND_TOPMOST,
+        screenBounds_.left,
+        screenBounds_.top,
+        screenBounds_.right - screenBounds_.left,
+        screenBounds_.bottom - screenBounds_.top,
+        SWP_NOACTIVATE | (showWindow ? SWP_SHOWWINDOW : 0U));
+    shown_ = shown_ || showWindow;
+    return true;
+}
+
 void ProjectFilesDeleteConfirmOverlayWindow::Paint(HDC dc) const {
     if (sceneContext_ == nullptr) {
         return;
@@ -115,8 +141,8 @@ void ProjectFilesDeleteConfirmOverlayWindow::Paint(HDC dc) const {
 
     RECT client{};
     GetClientRect(window_, &client);
-    GdiDrawing::FillRectColor(dc, client, kTransparentColor);
-    ProjectFilesOverlayRenderer::PaintDeleteConfirmDialogOnly(
+    GdiDrawing::FillRectColor(dc, client, RGB(18, 20, 24));
+    ProjectFilesOverlayRenderer::PaintDeleteConfirmDialogAt(
         dc,
         client,
         theme_,
@@ -135,6 +161,33 @@ void ProjectFilesDeleteConfirmOverlayWindow::ForwardMouseMessage(UINT message, W
     ClientToScreen(window_, &point);
     ScreenToClient(parent_, &point);
     SendMessageW(parent_, message, wparam, MAKELPARAM(point.x, point.y));
+}
+
+void ProjectFilesDeleteConfirmOverlayWindow::ForwardMouseWheel(WPARAM wparam, LPARAM lparam) const {
+    if (parent_ == nullptr || IsWindow(parent_) == 0) {
+        return;
+    }
+    SendMessageW(parent_, WM_MOUSEWHEEL, wparam, lparam);
+}
+
+ProjectFilesDeleteConfirmOverlayWindow::StateSnapshot ProjectFilesDeleteConfirmOverlayWindow::SnapshotState() const noexcept {
+    if (sceneContext_ == nullptr) {
+        return {};
+    }
+    const EditorAssetBrowserState& state = sceneContext_->AssetBrowser();
+    return StateSnapshot{
+        .open = state.IsDeleteConfirmOpen(),
+        .offsetX = state.DeleteConfirmOffsetX(),
+        .offsetY = state.DeleteConfirmOffsetY(),
+        .listScroll = state.DeleteConfirmListScrollOffset(),
+    };
+}
+
+bool ProjectFilesDeleteConfirmOverlayWindow::SameSnapshot(const StateSnapshot& left, const StateSnapshot& right) noexcept {
+    return left.open == right.open
+        && left.offsetX == right.offsetX
+        && left.offsetY == right.offsetY
+        && left.listScroll == right.listScroll;
 }
 
 LRESULT CALLBACK ProjectFilesDeleteConfirmOverlayWindow::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -162,9 +215,32 @@ LRESULT CALLBACK ProjectFilesDeleteConfirmOverlayWindow::WindowProc(HWND window,
     case WM_RBUTTONUP:
     case WM_MOUSEMOVE:
         if (overlay != nullptr) {
+            const bool pointerClick = message == WM_LBUTTONDOWN
+                || message == WM_RBUTTONDOWN
+                || message == WM_LBUTTONUP
+                || message == WM_RBUTTONUP;
+            const StateSnapshot before = overlay->SnapshotState();
             overlay->ForwardMouseMessage(message, wparam, lparam);
-            if (overlay->sceneContext_ != nullptr && !overlay->sceneContext_->AssetBrowser().IsDeleteConfirmOpen()) {
+            const StateSnapshot after = overlay->SnapshotState();
+            if (overlay->sceneContext_ != nullptr && !after.open) {
                 ShowWindow(window, SW_HIDE);
+            } else if (before.offsetX != after.offsetX || before.offsetY != after.offsetY) {
+                static_cast<void>(overlay->MoveToCurrentBounds(false));
+                if (before.listScroll != after.listScroll) {
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+            } else if (before.listScroll != after.listScroll || pointerClick) {
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        }
+        break;
+    case WM_MOUSEWHEEL:
+        if (overlay != nullptr) {
+            const StateSnapshot before = overlay->SnapshotState();
+            overlay->ForwardMouseWheel(wparam, lparam);
+            if (const StateSnapshot after = overlay->SnapshotState(); !SameSnapshot(before, after)) {
+                InvalidateRect(window, nullptr, FALSE);
             }
             return 0;
         }

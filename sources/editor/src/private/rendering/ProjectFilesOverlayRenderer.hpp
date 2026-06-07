@@ -32,6 +32,13 @@ public:
         const EditorAssetBrowserState& state,
         const kb::assets::AssetManager& manager);
 
+    [[nodiscard]] static int DeleteConfirmMaxScroll(const RECT& bounds, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager);
+    [[nodiscard]] static RECT DeleteConfirmListRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept;
+    [[nodiscard]] static RECT DeleteConfirmListViewportRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept;
+    [[nodiscard]] static RECT DeleteConfirmListScrollbarTrackRect(const RECT& bounds, const EditorAssetBrowserState& state) noexcept;
+    [[nodiscard]] static RECT DeleteConfirmListScrollbarThumbRect(const RECT& bounds, const EditorAssetBrowserState& state, const kb::assets::AssetManager& manager);
+    [[nodiscard]] static int DeleteConfirmListRowHeight() noexcept;
+
     static void PaintDeleteConfirm(
         HDC dc,
         const RECT& bounds,
@@ -42,6 +49,13 @@ public:
     static void PaintDeleteConfirmDialogOnly(
         HDC dc,
         const RECT& bounds,
+        const EditorTheme& theme,
+        const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager);
+
+    static void PaintDeleteConfirmDialogAt(
+        HDC dc,
+        const RECT& dialog,
         const EditorTheme& theme,
         const EditorAssetBrowserState& state,
         const kb::assets::AssetManager& manager);
