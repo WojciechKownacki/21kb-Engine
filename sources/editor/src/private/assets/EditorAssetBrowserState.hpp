@@ -11,7 +11,9 @@
 #include "kb/editor/assets/EditorAssetBrowserTypes.hpp"
 
 #include <filesystem>
+#include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::editor {
@@ -42,6 +44,8 @@ public:
     [[nodiscard]] bool IsTreeScrollbarDragging() const noexcept;
     [[nodiscard]] int ContentScrollOffset() const noexcept;
     [[nodiscard]] bool IsContentScrollbarDragging() const noexcept;
+    [[nodiscard]] int DeleteConfirmListScrollOffset() const noexcept;
+    [[nodiscard]] bool IsDeleteConfirmListScrollbarDragging() const noexcept;
     [[nodiscard]] EditorAssetTextEditMode TextEditMode() const noexcept;
     [[nodiscard]] kb::assets::AssetId TextEditTargetAsset() const noexcept;
     [[nodiscard]] const std::filesystem::path& TextEditTargetFolder() const noexcept;
@@ -71,7 +75,9 @@ public:
     void FocusSelection(bool focused) noexcept;
     void SetSearchQuery(std::string query);
     void AppendSearchText(wchar_t character);
+    void InsertSearchText(std::string_view text);
     void BackspaceSearch();
+    void SelectAllSearch() noexcept;
     void ClearSearch();
     void SetRecursive(bool recursive) noexcept;
     void ToggleRecursive() noexcept;
@@ -100,6 +106,12 @@ public:
     void BeginContentScrollbarDrag(int y) noexcept;
     void DragContentScrollbar(int y, int trackTravel, int maxOffset) noexcept;
     void EndContentScrollbarDrag() noexcept;
+    [[nodiscard]] bool SetDeleteConfirmListScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginDeleteConfirmListScrollbarDrag(int y) noexcept;
+    void DragDeleteConfirmListScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndDeleteConfirmListScrollbarDrag() noexcept;
+    [[nodiscard]] bool IsDeleteTargetChecked(std::string_view key) const;
+    [[nodiscard]] bool ToggleDeleteTargetChecked(std::string_view key);
 
     void BeginNewFolder();
     [[nodiscard]] bool BeginRenameSelection(const kb::assets::AssetManager& manager);
@@ -107,7 +119,10 @@ public:
     [[nodiscard]] bool BeginRenameFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
     void SetTextEditValue(std::string value);
     void AppendTextEdit(wchar_t character);
+    void InsertTextEdit(std::string_view text);
     void BackspaceTextEdit();
+    void ClearTextEdit() noexcept;
+    void SelectAllTextEdit() noexcept;
     void CancelTextEdit() noexcept;
     void OpenContextMenuForBackground(int x, int y);
     [[nodiscard]] bool OpenContextMenuForAsset(int x, int y, kb::assets::AssetId id, const kb::assets::AssetManager& manager);
@@ -126,13 +141,19 @@ public:
 
     [[nodiscard]] bool SelectFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
     [[nodiscard]] bool SelectContentFolder(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool SelectContentFolderAt(std::size_t index, const kb::assets::AssetManager& manager, bool additive, bool range);
     [[nodiscard]] bool SelectAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager);
+    [[nodiscard]] bool SelectAssetAt(std::size_t index, const kb::assets::AssetManager& manager, bool additive, bool range);
+    [[nodiscard]] bool SelectAllContent(const kb::assets::AssetManager& manager);
     [[nodiscard]] bool ToggleFolderExpanded(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
     void ClearSelection() noexcept;
 
     [[nodiscard]] std::vector<EditorAssetFolderRow> FolderRows(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] std::vector<EditorAssetFolderRow> ChildFolderRows(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] std::vector<EditorAssetItemRow> AssetRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<EditorAssetSelectionSummaryRow> SelectedContentRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<EditorAssetSelectionSummaryRow> DeleteTargetRows(const kb::assets::AssetManager& manager) const;
+    [[nodiscard]] std::vector<EditorAssetSelectionSummaryRow> CheckedDeleteTargetRows(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] std::vector<std::string> AssetTypes(const kb::assets::AssetManager& manager) const;
     [[nodiscard]] const kb::assets::AssetMetadata* SelectedMetadata(const kb::assets::AssetManager& manager) const noexcept;
 
@@ -144,6 +165,13 @@ private:
     EditorAssetBrowserTextEditState textEdit_;
     EditorAssetBrowserContextMenuState contextMenu_;
     EditorAssetBrowserDeleteConfirmState deleteConfirm_;
+    std::size_t contentSelectionAnchor_ = 0;
+    bool hasContentSelectionAnchor_ = false;
+    int deleteConfirmListScrollOffset_ = 0;
+    int deleteConfirmListScrollbarDragY_ = 0;
+    int deleteConfirmListScrollbarDragStartOffset_ = 0;
+    bool deleteConfirmListScrollbarDragging_ = false;
+    std::unordered_set<std::string> uncheckedDeleteTargets_;
     bool dropActionMenuOpen_ = false;
     int filterMenuHoveredIndex_ = -1;
     int dropActionMenuX_ = 0;

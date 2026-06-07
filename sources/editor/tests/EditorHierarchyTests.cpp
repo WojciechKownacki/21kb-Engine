@@ -42,6 +42,15 @@ void RunSearchStateTest() {
 
     state.SetQuery("Camera");
     kb::editor::tests::Require(state.Query() == "Camera", "Hierarchy search SetQuery did not replace text");
+    state.SelectAll();
+    state.AppendAscii(L'L');
+    kb::editor::tests::Require(state.Query() == "L", "Hierarchy search select-all should replace text on input");
+    state.SetQuery("Camera");
+    state.SelectAll();
+    state.Backspace();
+    kb::editor::tests::Require(state.Query().empty(), "Hierarchy search select-all backspace should clear text");
+    state.Insert("Light");
+    kb::editor::tests::Require(state.Query() == "Light", "Hierarchy search insert should accept pasted ASCII input");
     state.Clear();
     kb::editor::tests::Require(state.Query().empty(), "Hierarchy search Clear did not empty text");
 }

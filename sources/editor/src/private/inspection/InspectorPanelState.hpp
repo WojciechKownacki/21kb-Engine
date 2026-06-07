@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace kb::editor {
 
@@ -53,7 +54,10 @@ struct InspectorPanelState {
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
     void BeginTextEdit(InspectorPropertyId property, std::string value);
     void AppendText(wchar_t character);
+    void InsertText(std::string_view text);
     void BackspaceText();
+    void ClearText() noexcept;
+    void SelectAllText() noexcept;
     void EndTextEdit() noexcept;
     [[nodiscard]] bool IsDraggingFloat() const noexcept;
     [[nodiscard]] InspectorPropertyId DraggedProperty() const noexcept;
@@ -75,6 +79,7 @@ private:
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
     std::string editBuffer_;
+    bool editSelectingAll_ = false;
     InspectorPropertyId draggedProperty_ = InspectorPropertyId::None;
     float dragStartValue_ = 0.0F;
     int dragStartX_ = 0;

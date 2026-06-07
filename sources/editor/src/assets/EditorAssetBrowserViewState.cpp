@@ -79,26 +79,57 @@ bool EditorAssetBrowserViewState::IsContentScrollbarDragging() const noexcept {
 
 void EditorAssetBrowserViewState::FocusSearch(bool focused) noexcept {
     searchFocused_ = focused;
+    if (!focused) {
+        searchSelectingAll_ = false;
+    }
 }
 
 void EditorAssetBrowserViewState::SetSearchQuery(std::string query) {
     searchQuery_ = std::move(query);
+    searchSelectingAll_ = false;
 }
 
 void EditorAssetBrowserViewState::AppendSearchText(wchar_t character) {
     if (character >= 32 && character < 127) {
+        if (searchSelectingAll_) {
+            searchQuery_.clear();
+            searchSelectingAll_ = false;
+        }
         searchQuery_.push_back(static_cast<char>(character));
     }
 }
 
+void EditorAssetBrowserViewState::InsertSearchText(std::string_view text) {
+    if (searchSelectingAll_) {
+        searchQuery_.clear();
+        searchSelectingAll_ = false;
+    }
+    for (const char character : text) {
+        if (character >= 32 && character < 127) {
+            searchQuery_.push_back(character);
+        }
+    }
+}
+
 void EditorAssetBrowserViewState::BackspaceSearch() {
+    if (searchSelectingAll_) {
+        ClearSearch();
+        return;
+    }
     if (!searchQuery_.empty()) {
         searchQuery_.pop_back();
     }
 }
 
+void EditorAssetBrowserViewState::SelectAllSearch() noexcept {
+    if (searchFocused_) {
+        searchSelectingAll_ = true;
+    }
+}
+
 void EditorAssetBrowserViewState::ClearSearch() {
     searchQuery_.clear();
+    searchSelectingAll_ = false;
 }
 
 void EditorAssetBrowserViewState::SetRecursive(bool recursive) noexcept {

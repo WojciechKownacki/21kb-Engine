@@ -17,6 +17,7 @@ public:
         int x,
         int y,
         const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager,
         const RECT* overlayBounds);
 
     [[nodiscard]] static std::optional<EditorAssetBrowserHit> HitTestContextMenu(

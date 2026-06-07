@@ -1,8 +1,62 @@
 #include "app/EditorAssetBrowserInputHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorTextInputShortcuts.hpp"
+#include "engine/scene/SceneAssets.hpp"
+
+#include <optional>
+#include <string>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool HandleTextEditShortcut(HWND owner, EditorAssetBrowserState& assetBrowser, WPARAM key) {
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        assetBrowser.SelectAllTextEdit();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, assetBrowser.TextEditValue()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, assetBrowser.TextEditValue()));
+        assetBrowser.ClearTextEdit();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            assetBrowser.InsertTextEdit(*text);
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool HandleSearchShortcut(HWND owner, EditorAssetBrowserState& assetBrowser, WPARAM key) {
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        assetBrowser.SelectAllSearch();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, assetBrowser.SearchQuery()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, assetBrowser.SearchQuery()));
+        assetBrowser.ClearSearch();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            assetBrowser.InsertSearchText(*text);
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        return false;
+    }
+    return false;
+}
+
+} // namespace
 
 EditorAssetBrowserInputHandler::EditorAssetBrowserInputHandler(HWND mainWindow, EditorSceneContext& sceneContext) noexcept
     : mainWindow_(mainWindow)
@@ -35,8 +89,8 @@ bool EditorAssetBrowserInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wp
     if (sceneContext_.AssetBrowser().IsDeleteConfirmOpen()) {
         switch (wparam) {
         case VK_RETURN:
-            sceneContext_.AssetBrowser().CloseDeleteConfirm();
             static_cast<void>(sceneContext_.DeleteSelectedAssetBrowserItem());
+            sceneContext_.AssetBrowser().CloseDeleteConfirm();
             Invalidate(messageWindow);
             return true;
         case VK_ESCAPE:
@@ -49,6 +103,10 @@ bool EditorAssetBrowserInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wp
     }
 
     if (sceneContext_.AssetBrowser().IsTextEditing()) {
+        if (HandleTextEditShortcut(messageWindow, sceneContext_.AssetBrowser(), wparam)) {
+            Invalidate(messageWindow);
+            return true;
+        }
         switch (wparam) {
         case VK_BACK:
             sceneContext_.AssetBrowser().BackspaceTextEdit();
@@ -76,22 +134,28 @@ bool EditorAssetBrowserInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wp
             }
             return false;
         }
+        if (sceneContext_.AssetBrowser().IsSelectionFocused() && EditorTextInputShortcuts::Resolve(wparam) == EditorTextInputShortcut::SelectAll) {
+            if (sceneContext_.AssetBrowser().SelectAllContent(sceneContext_.Scene().Assets().Manager())) {
+                Invalidate(messageWindow);
+                return true;
+            }
+        }
         if (wparam == VK_F2 && sceneContext_.BeginAssetRename()) {
             Invalidate(messageWindow);
             return true;
         }
         if (wparam == VK_DELETE && sceneContext_.AssetBrowser().IsSelectionFocused()) {
-            if (sceneContext_.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Folder) {
-                if (sceneContext_.AssetBrowser().OpenDeleteConfirm()) {
-                    Invalidate(messageWindow);
-                    return true;
-                }
-            } else if (sceneContext_.DeleteSelectedAssetBrowserItem()) {
+            if (sceneContext_.AssetBrowser().OpenDeleteConfirm()) {
                 Invalidate(messageWindow);
                 return true;
             }
         }
         return false;
+    }
+
+    if (HandleSearchShortcut(messageWindow, sceneContext_.AssetBrowser(), wparam)) {
+        Invalidate(messageWindow);
+        return true;
     }
 
     switch (wparam) {

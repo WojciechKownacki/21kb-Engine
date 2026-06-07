@@ -114,6 +114,70 @@ void RunSelectionAndTypeCycleTest() {
     kb::editor::tests::Require(!state.TypeFilter().empty(), "Asset browser type cycling should activate first type filter");
 }
 
+void RunMultiSelectionStateTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("AAsset", "ScenePrefab", "/Game/A/AAsset.kbprefab")));
+    static_cast<void>(manager.RegisterAsset(Metadata("BAsset", "ScenePrefab", "/Game/B/BAsset.kbprefab")));
+    static_cast<void>(manager.RegisterAsset(Metadata("CAsset", "ScenePrefab", "/Game/C/CAsset.kbprefab")));
+    static_cast<void>(manager.RegisterAsset(Metadata("RootAsset", "ScenePrefab", "/Game/RootAsset.kbprefab")));
+
+    kb::editor::EditorAssetBrowserState state;
+    static_cast<void>(state.SelectFolder("/Game", manager));
+
+    kb::editor::tests::Require(state.SelectContentFolderAt(0, manager, false, false), "Asset browser should select the first visible content folder");
+    kb::editor::tests::Require(state.SelectContentFolderAt(2, manager, true, false), "Asset browser Ctrl selection should add a visible content folder");
+    std::vector<kb::editor::EditorAssetFolderRow> folders = state.ChildFolderRows(manager);
+    kb::editor::tests::Require(folders.size() == 3, "Asset browser multi-selection test expected three visible folders");
+    kb::editor::tests::Require(folders[0].selected && !folders[1].selected && folders[2].selected, "Asset browser Ctrl folder selection did not preserve existing selection");
+
+    kb::editor::tests::Require(state.SelectContentFolderAt(2, manager, true, false), "Asset browser Ctrl selection should toggle an already selected folder");
+    folders = state.ChildFolderRows(manager);
+    kb::editor::tests::Require(folders[0].selected && !folders[1].selected && !folders[2].selected, "Asset browser Ctrl folder toggle did not remove the clicked folder");
+
+    kb::editor::tests::Require(state.SelectContentFolderAt(0, manager, false, false), "Asset browser should reset folder range anchor");
+    kb::editor::tests::Require(state.SelectContentFolderAt(2, manager, false, true), "Asset browser Shift selection should select a folder range");
+    folders = state.ChildFolderRows(manager);
+    kb::editor::tests::Require(folders[0].selected && folders[1].selected && folders[2].selected, "Asset browser Shift folder range missed visible folders");
+    kb::editor::tests::Require(state.SelectedContentFolder() == folders[2].virtualPath, "Asset browser forward Shift range should make clicked folder primary");
+
+    kb::editor::tests::Require(state.SelectContentFolderAt(2, manager, false, false), "Asset browser should reset backward folder range anchor");
+    kb::editor::tests::Require(state.SelectContentFolderAt(0, manager, false, true), "Asset browser backward Shift selection should select a folder range");
+    folders = state.ChildFolderRows(manager);
+    kb::editor::tests::Require(folders[0].selected && folders[1].selected && folders[2].selected, "Asset browser backward Shift folder range missed visible folders");
+    kb::editor::tests::Require(state.SelectedContentFolder() == folders[0].virtualPath, "Asset browser backward Shift range should make clicked folder primary");
+
+    kb::editor::tests::Require(state.SelectAllContent(manager), "Asset browser Ctrl+A should select visible content");
+    folders = state.ChildFolderRows(manager);
+    const std::vector<kb::editor::EditorAssetItemRow> assets = state.AssetRows(manager);
+    kb::editor::tests::Require(std::ranges::all_of(folders, [](const kb::editor::EditorAssetFolderRow& folder) {
+        return folder.selected;
+    }), "Asset browser Ctrl+A did not select every visible folder");
+    kb::editor::tests::Require(std::ranges::all_of(assets, [](const kb::editor::EditorAssetItemRow& asset) {
+        return asset.selected;
+    }), "Asset browser Ctrl+A did not select every visible asset");
+
+    const std::vector<kb::editor::EditorAssetSelectionSummaryRow> allDeleteRows = state.DeleteTargetRows(manager);
+    kb::editor::tests::Require(allDeleteRows.size() == folders.size() + assets.size(), "Asset browser delete confirmation should list every selected content item");
+    kb::editor::tests::Require(std::ranges::all_of(allDeleteRows, [](const kb::editor::EditorAssetSelectionSummaryRow& row) {
+        return row.checked && !row.key.empty();
+    }), "Asset browser delete confirmation rows should start checked and expose stable keys");
+    kb::editor::tests::Require(std::ranges::any_of(allDeleteRows, [](const kb::editor::EditorAssetSelectionSummaryRow& row) {
+        return row.name == "A" && row.objectType == "Folder";
+    }), "Asset browser delete confirmation should include selected folders");
+    kb::editor::tests::Require(std::ranges::any_of(allDeleteRows, [](const kb::editor::EditorAssetSelectionSummaryRow& row) {
+        return row.name == "RootAsset" && row.objectType == "ScenePrefab";
+    }), "Asset browser delete confirmation should include selected assets");
+    kb::editor::tests::Require(state.ToggleDeleteTargetChecked(allDeleteRows.front().key), "Asset browser delete confirmation should toggle a row checkbox");
+    const std::vector<kb::editor::EditorAssetSelectionSummaryRow> checkedDeleteRows = state.CheckedDeleteTargetRows(manager);
+    kb::editor::tests::Require(checkedDeleteRows.size() + 1 == allDeleteRows.size(), "Asset browser checked delete targets should exclude unchecked rows");
+
+    state.ClearSelection();
+    kb::editor::tests::Require(state.SelectContentFolder("/Game/B", manager), "Asset browser should select a single delete target folder");
+    const std::vector<kb::editor::EditorAssetSelectionSummaryRow> singleDeleteRows = state.DeleteTargetRows(manager);
+    kb::editor::tests::Require(singleDeleteRows.size() == 1, "Asset browser delete confirmation should list one row for one selected object");
+    kb::editor::tests::Require(singleDeleteRows[0].id == "/Game/B" && singleDeleteRows[0].name == "B", "Asset browser single delete row should describe the selected folder");
+}
+
 void RunTextEditStateTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Player", "ScenePrefab", "/Game/Prefabs/Player.kbprefab")));
@@ -127,6 +191,14 @@ void RunTextEditStateTest() {
     kb::editor::tests::Require(state.TextEditValue() == "Gameplay_A", "Asset browser text edit did not accept ASCII input");
     state.BackspaceTextEdit();
     kb::editor::tests::Require(state.TextEditValue() == "Gameplay_", "Asset browser text edit backspace failed");
+    state.SelectAllTextEdit();
+    state.AppendTextEdit(L'Q');
+    kb::editor::tests::Require(state.TextEditValue() == "Q", "Asset browser text edit select-all should replace text on input");
+    state.SelectAllTextEdit();
+    state.BackspaceTextEdit();
+    kb::editor::tests::Require(state.TextEditValue().empty(), "Asset browser text edit select-all backspace should clear text");
+    state.InsertTextEdit("Gameplay");
+    kb::editor::tests::Require(state.TextEditValue() == "Gameplay", "Asset browser text edit insert should accept pasted ASCII input");
     state.CancelTextEdit();
     kb::editor::tests::Require(!state.IsTextEditing(), "Asset browser text edit cancel did not clear edit mode");
 
@@ -134,6 +206,21 @@ void RunTextEditStateTest() {
     static_cast<void>(state.SelectAsset(selected, manager));
     kb::editor::tests::Require(state.BeginRenameSelection(manager), "Asset browser did not enter asset rename mode");
     kb::editor::tests::Require(state.TextEditMode() == kb::editor::EditorAssetTextEditMode::RenameAsset, "Asset browser rename mode did not target selected asset");
+}
+
+void RunSearchTextShortcutStateTest() {
+    kb::editor::EditorAssetBrowserState state;
+    state.FocusSearch(true);
+    state.SetSearchQuery("Camera");
+    state.SelectAllSearch();
+    state.AppendSearchText(L'L');
+    kb::editor::tests::Require(state.SearchQuery() == "L", "Asset browser search select-all should replace text on input");
+    state.SetSearchQuery("Camera");
+    state.SelectAllSearch();
+    state.BackspaceSearch();
+    kb::editor::tests::Require(state.SearchQuery().empty(), "Asset browser search select-all backspace should clear text");
+    state.InsertSearchText("Light");
+    kb::editor::tests::Require(state.SearchQuery() == "Light", "Asset browser search insert should accept pasted ASCII input");
 }
 
 #if defined(_WIN32)
@@ -269,7 +356,9 @@ void RunEditorAssetBrowserTests() {
     RunFolderTreeTest();
     RunFilteringTest();
     RunSelectionAndTypeCycleTest();
+    RunMultiSelectionStateTest();
     RunTextEditStateTest();
+    RunSearchTextShortcutStateTest();
 #if defined(_WIN32)
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();

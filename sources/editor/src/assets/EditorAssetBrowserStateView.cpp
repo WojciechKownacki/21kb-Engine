@@ -31,8 +31,16 @@ void EditorAssetBrowserState::AppendSearchText(wchar_t character) {
     view_.AppendSearchText(character);
 }
 
+void EditorAssetBrowserState::InsertSearchText(std::string_view text) {
+    view_.InsertSearchText(text);
+}
+
 void EditorAssetBrowserState::BackspaceSearch() {
     view_.BackspaceSearch();
+}
+
+void EditorAssetBrowserState::SelectAllSearch() noexcept {
+    view_.SelectAllSearch();
 }
 
 void EditorAssetBrowserState::ClearSearch() {
@@ -176,6 +184,49 @@ void EditorAssetBrowserState::DragContentScrollbar(int y, int trackTravel, int m
 
 void EditorAssetBrowserState::EndContentScrollbarDrag() noexcept {
     view_.EndContentScrollbarDrag();
+}
+
+bool EditorAssetBrowserState::SetDeleteConfirmListScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (deleteConfirmListScrollOffset_ == clamped) {
+        return false;
+    }
+    deleteConfirmListScrollOffset_ = clamped;
+    return true;
+}
+
+void EditorAssetBrowserState::BeginDeleteConfirmListScrollbarDrag(int y) noexcept {
+    deleteConfirmListScrollbarDragging_ = true;
+    deleteConfirmListScrollbarDragY_ = y;
+    deleteConfirmListScrollbarDragStartOffset_ = deleteConfirmListScrollOffset_;
+}
+
+void EditorAssetBrowserState::DragDeleteConfirmListScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    if (!deleteConfirmListScrollbarDragging_) {
+        return;
+    }
+    const int delta = y - deleteConfirmListScrollbarDragY_;
+    static_cast<void>(SetDeleteConfirmListScrollOffset(deleteConfirmListScrollbarDragStartOffset_ + (delta * maxOffset) / std::max(1, trackTravel), maxOffset));
+}
+
+void EditorAssetBrowserState::EndDeleteConfirmListScrollbarDrag() noexcept {
+    deleteConfirmListScrollbarDragging_ = false;
+}
+
+bool EditorAssetBrowserState::IsDeleteTargetChecked(std::string_view key) const {
+    return uncheckedDeleteTargets_.find(std::string(key)) == uncheckedDeleteTargets_.end();
+}
+
+bool EditorAssetBrowserState::ToggleDeleteTargetChecked(std::string_view key) {
+    const std::string normalizedKey(key);
+    if (normalizedKey.empty()) {
+        return false;
+    }
+    const auto [it, inserted] = uncheckedDeleteTargets_.insert(normalizedKey);
+    if (!inserted) {
+        uncheckedDeleteTargets_.erase(it);
+    }
+    return true;
 }
 
 } // namespace kb::editor

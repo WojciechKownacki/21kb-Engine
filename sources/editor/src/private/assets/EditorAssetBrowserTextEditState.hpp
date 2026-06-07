@@ -22,7 +22,10 @@ public:
     void BeginRenameFolder(const std::filesystem::path& virtualFolder, std::string value);
     void SetValue(std::string value);
     void Append(wchar_t character);
+    void Insert(std::string_view text);
     void Backspace();
+    void Clear() noexcept;
+    void SelectAll() noexcept;
     void Cancel() noexcept;
 
 private:

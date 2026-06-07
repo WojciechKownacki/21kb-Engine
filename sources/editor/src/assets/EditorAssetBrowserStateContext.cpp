@@ -87,9 +87,12 @@ void EditorAssetBrowserState::CloseDropActionMenu() noexcept {
 }
 
 bool EditorAssetBrowserState::OpenDeleteConfirm() noexcept {
-    if (selection_.SelectionKind() != EditorAssetBrowserSelectionKind::Folder || !selection_.IsSelectionFocused()) {
+    if (selection_.SelectionKind() == EditorAssetBrowserSelectionKind::None || !selection_.IsSelectionFocused()) {
         return false;
     }
+    deleteConfirmListScrollOffset_ = 0;
+    deleteConfirmListScrollbarDragging_ = false;
+    uncheckedDeleteTargets_.clear();
     deleteConfirm_.Open();
     view_.FocusSearch(false);
     view_.CloseFilterMenu();
@@ -100,6 +103,9 @@ bool EditorAssetBrowserState::OpenDeleteConfirm() noexcept {
 }
 
 void EditorAssetBrowserState::CloseDeleteConfirm() noexcept {
+    deleteConfirmListScrollOffset_ = 0;
+    deleteConfirmListScrollbarDragging_ = false;
+    uncheckedDeleteTargets_.clear();
     deleteConfirm_.Close();
 }
 

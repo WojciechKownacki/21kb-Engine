@@ -67,11 +67,17 @@ public:
     void FocusHierarchySearch(bool focused) noexcept;
     void SetHierarchySearchQuery(std::string query);
     void AppendHierarchySearchText(wchar_t character);
+    void InsertHierarchySearchText(std::string_view text);
     void BackspaceHierarchySearch();
+    void SelectAllHierarchySearch() noexcept;
     void ClearHierarchySearch();
     [[nodiscard]] bool BeginHierarchyRename();
     void AppendHierarchyRenameText(wchar_t character);
+    void InsertHierarchyRenameText(std::string_view text);
+    void SetHierarchyRenameText(std::string text);
     void BackspaceHierarchyRename();
+    void SelectAllHierarchyRename() noexcept;
+    void ClearHierarchyRename() noexcept;
     [[nodiscard]] bool CommitHierarchyRename();
     void CancelHierarchyRename() noexcept;
     [[nodiscard]] bool BeginAssetFolderCreation();
