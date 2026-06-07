@@ -26,11 +26,13 @@ struct GridCamera {
     float z = 0.0F;
 };
 
-constexpr int kLineHalfCount = 160;
+constexpr int kLineHalfCount = 96;
 constexpr float kSpacing = 1.0F;
-constexpr float kFadeStart = 72.0F;
-constexpr float kFadeEnd = 150.0F;
-constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 4);
+constexpr float kFadeStart = 52.0F;
+constexpr float kFadeEnd = 96.0F;
+constexpr float kSegmentLength = 4.0F;
+constexpr int kSegmentsPerLine = static_cast<int>((static_cast<float>(kLineHalfCount * 2) * kSpacing) / kSegmentLength);
+constexpr std::uint32_t kGridVertexCapacity = static_cast<std::uint32_t>((kLineHalfCount * 2 + 1) * 2 * kSegmentsPerLine * 2);
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -76,11 +78,20 @@ void AddLine(
     float z1,
     std::array<float, 3> color,
     const GridCamera& camera) noexcept {
-    if (count + 2U > vertices.size()) {
-        return;
+    for (int segment = 0; segment < kSegmentsPerLine; ++segment) {
+        if (count + 2U > vertices.size()) {
+            return;
+        }
+
+        const float t0 = static_cast<float>(segment) / static_cast<float>(kSegmentsPerLine);
+        const float t1 = static_cast<float>(segment + 1) / static_cast<float>(kSegmentsPerLine);
+        const float sx0 = x0 + (x1 - x0) * t0;
+        const float sz0 = z0 + (z1 - z0) * t0;
+        const float sx1 = x0 + (x1 - x0) * t1;
+        const float sz1 = z0 + (z1 - z0) * t1;
+        vertices[count++] = Vertex(sx0, sz0, color, camera);
+        vertices[count++] = Vertex(sx1, sz1, color, camera);
     }
-    vertices[count++] = Vertex(x0, z0, color, camera);
-    vertices[count++] = Vertex(x1, z1, color, camera);
 }
 
 [[nodiscard]] std::uint32_t BuildGrid(std::array<LineVertex, kGridVertexCapacity>& vertices, const GridCamera& camera) noexcept {
