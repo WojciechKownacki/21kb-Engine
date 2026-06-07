@@ -61,7 +61,7 @@ private:
     kb::scene::Vec3 position_{ 8.0F, 6.0F, -8.0F };
     kb::scene::Vec3 orbitPivot_{ 0.0F, 2.0F, 0.0F };
     float yawDegrees_ = -45.0F;
-    float pitchDegrees_ = -30.0F;
+    float pitchDegrees_ = 30.0F;
     float orbitDistance_ = 6.0F;
     float speed_ = 6.0F;
     float verticalFovDegrees_ = 60.0F;
