@@ -1,8 +1,61 @@
 #include "app/EditorHierarchySearchInputHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorTextInputShortcuts.hpp"
+
+#include <optional>
+#include <string>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool HandleRenameShortcut(HWND owner, EditorSceneContext& sceneContext, WPARAM key) {
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        sceneContext.SelectAllHierarchyRename();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, sceneContext.HierarchyRenameBuffer()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, sceneContext.HierarchyRenameBuffer()));
+        sceneContext.ClearHierarchyRename();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            sceneContext.InsertHierarchyRenameText(*text);
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool HandleSearchShortcut(HWND owner, EditorSceneContext& sceneContext, WPARAM key) {
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        sceneContext.SelectAllHierarchySearch();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, sceneContext.HierarchySearchQuery()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, sceneContext.HierarchySearchQuery()));
+        sceneContext.ClearHierarchySearch();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            sceneContext.InsertHierarchySearchText(*text);
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        return false;
+    }
+    return false;
+}
+
+} // namespace
 
 EditorHierarchySearchInputHandler::EditorHierarchySearchInputHandler(HWND mainWindow, EditorSceneContext& sceneContext) noexcept
     : mainWindow_(mainWindow)
@@ -29,6 +82,10 @@ bool EditorHierarchySearchInputHandler::HandleChar(HWND messageWindow, WPARAM wp
 
 bool EditorHierarchySearchInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wparam) const {
     if (sceneContext_.IsHierarchyRenaming()) {
+        if (HandleRenameShortcut(messageWindow, sceneContext_, wparam)) {
+            Invalidate(messageWindow);
+            return true;
+        }
         switch (wparam) {
         case VK_BACK:
             sceneContext_.BackspaceHierarchyRename();
@@ -57,6 +114,11 @@ bool EditorHierarchySearchInputHandler::HandleKeyDown(HWND messageWindow, WPARAM
             return true;
         }
         return false;
+    }
+
+    if (HandleSearchShortcut(messageWindow, sceneContext_, wparam)) {
+        Invalidate(messageWindow);
+        return true;
     }
 
     if (wparam == VK_BACK) {

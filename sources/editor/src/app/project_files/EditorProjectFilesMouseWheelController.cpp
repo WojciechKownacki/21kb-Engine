@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/ProjectFilesOverlayRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <algorithm>
@@ -49,6 +50,15 @@ bool EditorProjectFilesMouseWheelController::HandleMouseWheel(const RECT& conten
     const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
     const int notches = wheelDelta / WHEEL_DELTA;
     const int direction = notches != 0 ? notches : (wheelDelta > 0 ? 1 : -1);
+
+    const RECT deleteList = ProjectFilesOverlayRenderer::DeleteConfirmListRect(content, state);
+    if (state.IsDeleteConfirmOpen() && PointInRect(deleteList, x, y)) {
+        const int maxOffset = ProjectFilesOverlayRenderer::DeleteConfirmMaxScroll(content, state, manager);
+        static_cast<void>(state.SetDeleteConfirmListScrollOffset(
+            state.DeleteConfirmListScrollOffset() - direction * ProjectFilesOverlayRenderer::DeleteConfirmListRowHeight() * 3,
+            maxOffset));
+        return true;
+    }
 
     if (PointInRect(layout.tree, x, y)) {
         const RECT viewport = EditorAssetBrowserLayout::TreeViewportRect(layout);

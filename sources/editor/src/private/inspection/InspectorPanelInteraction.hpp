@@ -20,7 +20,7 @@ public:
     [[nodiscard]] static bool HandlePointerDrag(EditorSceneContext& sceneContext, int x, int y) noexcept;
     [[nodiscard]] static bool HandlePointerUp(EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static bool HandleChar(EditorSceneContext& sceneContext, wchar_t character);
-    [[nodiscard]] static bool HandleKeyDown(EditorSceneContext& sceneContext, WPARAM key);
+    [[nodiscard]] static bool HandleKeyDown(HWND owner, EditorSceneContext& sceneContext, WPARAM key);
     [[nodiscard]] static bool UpdateHover(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept;
 #endif
 };

@@ -81,7 +81,7 @@ EditorAssetBrowserHit EditorAssetBrowserHitTester::HitTest(
     const kb::assets::AssetManager& manager,
     const RECT* overlayBounds) {
     const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
-    if (const std::optional<EditorAssetBrowserHit> hit = EditorAssetBrowserOverlayHitTester::HitTestDeleteConfirm(content, x, y, state, overlayBounds)) {
+    if (const std::optional<EditorAssetBrowserHit> hit = EditorAssetBrowserOverlayHitTester::HitTestDeleteConfirm(content, x, y, state, manager, overlayBounds)) {
         return *hit;
     }
 

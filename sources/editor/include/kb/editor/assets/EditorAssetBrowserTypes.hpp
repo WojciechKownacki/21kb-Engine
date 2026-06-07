@@ -74,4 +74,12 @@ struct EditorAssetItemRow {
     bool loaded = false;
 };
 
+struct EditorAssetSelectionSummaryRow {
+    std::string key;
+    std::string id;
+    std::string name;
+    std::string objectType;
+    bool checked = true;
+};
+
 } // namespace kb::editor

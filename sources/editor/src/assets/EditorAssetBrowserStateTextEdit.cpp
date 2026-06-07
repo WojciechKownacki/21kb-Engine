@@ -69,8 +69,20 @@ void EditorAssetBrowserState::AppendTextEdit(wchar_t character) {
     textEdit_.Append(character);
 }
 
+void EditorAssetBrowserState::InsertTextEdit(std::string_view text) {
+    textEdit_.Insert(text);
+}
+
 void EditorAssetBrowserState::BackspaceTextEdit() {
     textEdit_.Backspace();
+}
+
+void EditorAssetBrowserState::ClearTextEdit() noexcept {
+    textEdit_.Clear();
+}
+
+void EditorAssetBrowserState::SelectAllTextEdit() noexcept {
+    textEdit_.SelectAll();
 }
 
 void EditorAssetBrowserState::CancelTextEdit() noexcept {

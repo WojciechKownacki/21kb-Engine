@@ -83,24 +83,57 @@ const std::string& InspectorPanelState::EditBuffer() const noexcept {
 void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::string value) {
     editedProperty_ = property;
     editBuffer_ = std::move(value);
+    editSelectingAll_ = false;
     EndFloatDrag();
 }
 
 void InspectorPanelState::AppendText(wchar_t character) {
     if (character >= 32 && character <= 126) {
+        if (editSelectingAll_) {
+            editBuffer_.clear();
+            editSelectingAll_ = false;
+        }
         editBuffer_.push_back(static_cast<char>(character));
     }
 }
 
+void InspectorPanelState::InsertText(std::string_view text) {
+    if (editSelectingAll_) {
+        editBuffer_.clear();
+        editSelectingAll_ = false;
+    }
+    for (const char character : text) {
+        if (character >= 32 && character <= 126) {
+            editBuffer_.push_back(character);
+        }
+    }
+}
+
 void InspectorPanelState::BackspaceText() {
+    if (editSelectingAll_) {
+        ClearText();
+        return;
+    }
     if (!editBuffer_.empty()) {
         editBuffer_.pop_back();
+    }
+}
+
+void InspectorPanelState::ClearText() noexcept {
+    editBuffer_.clear();
+    editSelectingAll_ = false;
+}
+
+void InspectorPanelState::SelectAllText() noexcept {
+    if (IsTextEditing()) {
+        editSelectingAll_ = true;
     }
 }
 
 void InspectorPanelState::EndTextEdit() noexcept {
     editedProperty_ = InspectorPropertyId::None;
     editBuffer_.clear();
+    editSelectingAll_ = false;
 }
 
 bool InspectorPanelState::IsDraggingFloat() const noexcept {

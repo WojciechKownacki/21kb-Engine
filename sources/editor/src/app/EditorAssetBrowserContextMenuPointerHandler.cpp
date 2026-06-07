@@ -68,6 +68,10 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(const RE
         state.OpenContextMenuForBackground(x, y);
         return true;
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
+    case EditorAssetBrowserHitKind::DeleteConfirmListBody:
+    case EditorAssetBrowserHitKind::DeleteConfirmCheckbox:
+    case EditorAssetBrowserHitKind::DeleteConfirmScrollbarThumb:
+    case EditorAssetBrowserHitKind::DeleteConfirmScrollbarTrack:
     case EditorAssetBrowserHitKind::DeleteConfirmAccept:
     case EditorAssetBrowserHitKind::DeleteConfirmCancel:
         return true;

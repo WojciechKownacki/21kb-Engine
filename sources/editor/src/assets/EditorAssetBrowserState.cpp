@@ -98,6 +98,14 @@ bool EditorAssetBrowserState::IsContentScrollbarDragging() const noexcept {
     return view_.IsContentScrollbarDragging();
 }
 
+int EditorAssetBrowserState::DeleteConfirmListScrollOffset() const noexcept {
+    return deleteConfirmListScrollOffset_;
+}
+
+bool EditorAssetBrowserState::IsDeleteConfirmListScrollbarDragging() const noexcept {
+    return deleteConfirmListScrollbarDragging_;
+}
+
 EditorAssetTextEditMode EditorAssetBrowserState::TextEditMode() const noexcept {
     return textEdit_.Mode();
 }

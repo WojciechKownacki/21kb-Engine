@@ -63,6 +63,18 @@ void EditorAssetBrowserTextEditState::Append(wchar_t character) {
     }
 }
 
+void EditorAssetBrowserTextEditState::Insert(std::string_view text) {
+    if (replaceOnInput_) {
+        value_.clear();
+        replaceOnInput_ = false;
+    }
+    for (const char character : text) {
+        if (character >= 32 && character < 127) {
+            value_.push_back(character);
+        }
+    }
+}
+
 void EditorAssetBrowserTextEditState::Backspace() {
     if (replaceOnInput_) {
         value_.clear();
@@ -71,6 +83,17 @@ void EditorAssetBrowserTextEditState::Backspace() {
     }
     if (!value_.empty()) {
         value_.pop_back();
+    }
+}
+
+void EditorAssetBrowserTextEditState::Clear() noexcept {
+    value_.clear();
+    replaceOnInput_ = false;
+}
+
+void EditorAssetBrowserTextEditState::SelectAll() noexcept {
+    if (IsEditing()) {
+        replaceOnInput_ = true;
     }
 }
 

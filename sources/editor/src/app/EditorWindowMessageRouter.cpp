@@ -110,7 +110,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
-        if (InspectorPanelInteraction::HandleKeyDown(context_.sceneContext, wparam)) {
+        if (InspectorPanelInteraction::HandleKeyDown(messageWindow, context_.sceneContext, wparam)) {
             context_.sceneViewport.RequestPresent();
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) {

@@ -11,6 +11,7 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTest
     int x,
     int y,
     const EditorAssetBrowserState& state,
+    const kb::assets::AssetManager& manager,
     const RECT* overlayBounds) {
     if (!state.IsDeleteConfirmOpen()) {
         return std::nullopt;
@@ -23,6 +24,25 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTest
     }
     if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserGeometry::DeleteConfirmCancelRect(dialog), x, y)) {
         return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmCancel };
+    }
+    const RECT list = EditorAssetBrowserGeometry::DeleteConfirmListRect(bounds, state);
+    if (EditorAssetBrowserGeometry::DeleteConfirmListMaxScroll(bounds, state, manager) > 0) {
+        const RECT track = EditorAssetBrowserGeometry::DeleteConfirmListScrollbarTrackRect(bounds, state);
+        const RECT thumb = EditorAssetBrowserGeometry::DeleteConfirmListScrollbarThumbRect(bounds, state, manager);
+        if (EditorAssetBrowserGeometry::Contains(thumb, x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmScrollbarThumb };
+        }
+        if (EditorAssetBrowserGeometry::Contains(track, x, y)) {
+            return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmScrollbarTrack };
+        }
+    }
+    if (EditorAssetBrowserGeometry::Contains(list, x, y)) {
+        if (const std::optional<std::size_t> row = EditorAssetBrowserGeometry::DeleteConfirmListRowAt(bounds, state, manager, x, y)) {
+            if (EditorAssetBrowserGeometry::Contains(EditorAssetBrowserGeometry::DeleteConfirmListCheckboxRect(bounds, state, *row), x, y)) {
+                return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmCheckbox, .index = *row };
+            }
+        }
+        return EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmListBody };
     }
     return EditorAssetBrowserGeometry::Contains(dialog, x, y)
         ? EditorAssetBrowserHit{ .kind = EditorAssetBrowserHitKind::DeleteConfirmBody }

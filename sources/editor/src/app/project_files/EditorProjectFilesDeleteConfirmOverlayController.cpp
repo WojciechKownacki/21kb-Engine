@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserDeleteConfirmPointerHandler.hpp"
 #include "assets/EditorAssetBrowserOverlayHitTester.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
@@ -25,8 +26,9 @@ bool EditorProjectFilesDeleteConfirmOverlayController::HandlePointerDown(int x, 
         x,
         y,
         sceneContext_.AssetBrowser(),
+        sceneContext_.Scene().Assets().Manager(),
         &client);
-    return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(hit.value_or(EditorAssetBrowserHit{}), x, y, sceneContext_);
+    return EditorAssetBrowserDeleteConfirmPointerHandler::HandlePointerDown(client, hit.value_or(EditorAssetBrowserHit{}), x, y, sceneContext_);
 }
 
 } // namespace kb::editor

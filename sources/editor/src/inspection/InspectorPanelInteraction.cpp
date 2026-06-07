@@ -1,6 +1,7 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorTextInputShortcuts.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -10,6 +11,7 @@
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -282,12 +284,32 @@ bool InspectorPanelInteraction::HandleChar(EditorSceneContext& sceneContext, wch
     return true;
 }
 
-bool InspectorPanelInteraction::HandleKeyDown(EditorSceneContext& sceneContext, WPARAM key) {
+bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sceneContext, WPARAM key) {
     if (!sceneContext.Inspector().IsTextEditing()) {
         return false;
     }
 
     InspectorPanelState& inspector = sceneContext.Inspector();
+    switch (EditorTextInputShortcuts::Resolve(key)) {
+    case EditorTextInputShortcut::SelectAll:
+        inspector.SelectAllText();
+        return true;
+    case EditorTextInputShortcut::Copy:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, inspector.EditBuffer()));
+        return true;
+    case EditorTextInputShortcut::Cut:
+        static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(owner, inspector.EditBuffer()));
+        inspector.ClearText();
+        return true;
+    case EditorTextInputShortcut::Paste:
+        if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(owner); text.has_value()) {
+            inspector.InsertText(*text);
+        }
+        return true;
+    case EditorTextInputShortcut::None:
+        break;
+    }
+
     switch (key) {
     case VK_BACK:
         inspector.BackspaceText();
