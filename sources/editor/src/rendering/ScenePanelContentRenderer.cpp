@@ -5,8 +5,8 @@
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include "engine/scene/CameraComponent.hpp"
-#include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "scene/EditorViewportCameraState.hpp"
 
 #include <bx/math.h>
 
@@ -28,59 +28,19 @@ namespace {
     return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
 }
 
-struct CameraBasis {
-    float xx = 1.0F;
-    float xy = 0.0F;
-    float xz = 0.0F;
-    float yx = 0.0F;
-    float yy = 1.0F;
-    float yz = 0.0F;
-    float zx = 0.0F;
-    float zy = 0.0F;
-    float zz = 1.0F;
-};
-
-[[nodiscard]] CameraBasis BasisFromQuat(const kb::scene::Quat& q) noexcept {
-    const float x2 = q.x + q.x;
-    const float y2 = q.y + q.y;
-    const float z2 = q.z + q.z;
-    const float xx = q.x * x2;
-    const float xy = q.x * y2;
-    const float xz = q.x * z2;
-    const float yy = q.y * y2;
-    const float yz = q.y * z2;
-    const float zz = q.z * z2;
-    const float wx = q.w * x2;
-    const float wy = q.w * y2;
-    const float wz = q.w * z2;
-
-    return CameraBasis{
-        .xx = 1.0F - (yy + zz),
-        .xy = xy + wz,
-        .xz = xz - wy,
-        .yx = xy - wz,
-        .yy = 1.0F - (xx + zz),
-        .yz = yz + wx,
-        .zx = xz + wy,
-        .zy = yz - wx,
-        .zz = 1.0F - (xx + yy),
-    };
-}
-
 [[nodiscard]] kb::render::SceneRenderCamera BuildCamera(
-    const kb::scene::Vec3& position,
-    const kb::scene::Quat& rotation,
+    const EditorViewportCameraAxes& axes,
     const kb::scene::CameraComponent& camera,
     std::uint32_t renderWidth,
     std::uint32_t renderHeight) noexcept {
-    const CameraBasis basis = BasisFromQuat(rotation);
+    const kb::scene::Vec3& position = axes.position;
     const bx::Vec3 eye{ position.x, position.y, position.z };
     const bx::Vec3 at{
-        position.x + basis.zx,
-        position.y + basis.zy,
-        position.z + basis.zz,
+        position.x + axes.forward.x,
+        position.y + axes.forward.y,
+        position.z + axes.forward.z,
     };
-    const bx::Vec3 up{ basis.yx, basis.yy, basis.yz };
+    const bx::Vec3 up{ axes.up.x, axes.up.y, axes.up.z };
 
     kb::render::SceneRenderCamera renderCamera{};
     bx::mtxLookAt(renderCamera.view.data(), eye, at, up);
@@ -105,14 +65,16 @@ struct CameraBasis {
     return renderCamera;
 }
 
-[[nodiscard]] kb::render::SceneRenderCamera BuildEditorCamera(std::uint32_t renderWidth, std::uint32_t renderHeight) noexcept {
+[[nodiscard]] kb::render::SceneRenderCamera BuildEditorCamera(
+    const EditorViewportCameraState& viewportCamera,
+    std::uint32_t renderWidth,
+    std::uint32_t renderHeight) noexcept {
     kb::scene::CameraComponent camera{};
-    camera.verticalFovDegrees = 60.0F;
-    camera.nearClip = 0.01F;
-    camera.farClip = 1000.0F;
+    camera.verticalFovDegrees = viewportCamera.VerticalFovDegrees();
+    camera.nearClip = viewportCamera.NearClip();
+    camera.farClip = viewportCamera.FarClip();
     return BuildCamera(
-        kb::scene::Vec3{ 0.0F, 2.0F, -6.0F },
-        kb::scene::Quat{},
+        viewportCamera.Axes(),
         camera,
         renderWidth,
         renderHeight);
@@ -134,7 +96,7 @@ struct CameraBasis {
         .renderHeight = renderHeight,
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
-        .cameraOverride = BuildEditorCamera(renderWidth, renderHeight),
+        .cameraOverride = BuildEditorCamera(sceneContext.ViewportCamera(panelId), renderWidth, renderHeight),
         .selectedEntityIds = std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() },
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = true,
