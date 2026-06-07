@@ -29,9 +29,15 @@ bool EditorSceneViewportMeshDragPreview::Update(
     }
 
     if (!drag.meshScenePreview.IsValid() || !sceneContext.Scene().Entities().IsAlive(drag.meshScenePreview)) {
+        if (!sceneContext.HasPendingSceneEditTransaction()) {
+            if (!sceneContext.BeginSceneEditTransaction("Create Mesh Entity")) {
+                return false;
+            }
+        }
         drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(drag.assetId, hit->groundPosition, false);
         drag.meshScenePreviewCommitted = false;
         if (!drag.meshScenePreview.IsValid()) {
+            sceneContext.CancelSceneEditTransaction();
             return false;
         }
     }
@@ -65,6 +71,9 @@ bool EditorSceneViewportMeshDragPreview::Commit(
         EditorSceneViewportMath::MoveEntityTo(sceneContext.Scene(), drag.meshScenePreview, hit->groundPosition);
         sceneContext.SelectEntity(drag.meshScenePreview);
         drag.meshScenePreviewCommitted = true;
+        if (sceneContext.HasPendingSceneEditTransaction()) {
+            static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        }
         return true;
     }
 
@@ -78,7 +87,11 @@ void EditorSceneViewportMeshDragPreview::Cancel(EditorSceneContext& sceneContext
         return;
     }
 
-    sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
+    if (sceneContext.HasPendingSceneEditTransaction()) {
+        sceneContext.CancelSceneEditTransaction();
+    } else {
+        sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
+    }
     if (sceneContext.SelectedEntity() == drag.meshScenePreview) {
         sceneContext.ClearHierarchySelection();
     }

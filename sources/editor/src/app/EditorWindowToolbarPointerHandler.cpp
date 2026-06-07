@@ -71,6 +71,8 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     int x,
     int y,
     const DockLayout& layout,
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     EditorShellInteractionState& shellInteraction) {
     const EditorMenuRects menu = EditorToolbarRenderer::ResolveMenu(ToRect(layout.menu), shellInteraction.OpenMenu());
     if (const EditorMenuCommand hitMenu = EditorToolbarRenderer::HitTestMenu(menu, x, y); hitMenu != EditorMenuCommand::None) {
@@ -85,10 +87,26 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         return false;
     }
 
-    if (EditorToolbarRenderer::HitTestMenuRow(menu, x, y).has_value()) {
+    if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
+        if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
+            if (*row == 0) {
+                if (sceneContext.UndoSceneCommand()) {
+                    sceneViewport.RequestPresent();
+                }
+            } else if (*row == 1) {
+                if (sceneContext.RedoSceneCommand()) {
+                    sceneViewport.RequestPresent();
+                }
+            } else if (*row == 2) {
+                if (sceneContext.DuplicateSelectedHierarchyEntities()) {
+                    sceneViewport.RequestPresent();
+                }
+            }
+        }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
         shellInteraction.CloseMenu();
         InvalidateMenuChange(mainWindow, layout, oldMenu, EditorMenuCommand::None);
+        InvalidateRect(mainWindow, nullptr, FALSE);
         return true;
     }
 
@@ -171,6 +189,8 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     int x,
     int y,
     EditorDockModel& dockModel,
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction,
     const EditorMetrics& metrics) {
@@ -183,7 +203,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
         return true;
     }
 

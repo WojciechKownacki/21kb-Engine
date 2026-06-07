@@ -14,7 +14,6 @@
 #pragma warning(pop)
 
 #include <cmath>
-#include <string>
 #include <string_view>
 
 namespace kb::editor {
@@ -55,10 +54,10 @@ constexpr int kDropdownRadius = 7;
     return rect;
 }
 
-void DrawMenuText(HDC dc, const RECT& rect, std::string_view label, COLORREF text) {
+void DrawMenuText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT format) {
     SetBkMode(dc, TRANSPARENT);
-    const std::string textValue(label);
-    GdiDrawing::DrawTextBlock(dc, rect, textValue.c_str(), text);
+    SetTextColor(dc, text);
+    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX);
 }
 
 void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
@@ -139,7 +138,6 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     const EditorMenuRects menu = ResolveMenu(rect, interaction.OpenMenu());
     const COLORREF textPrimary = ThemeColor(theme.textPrimary);
     const COLORREF textSecondary = ThemeColor(theme.textSecondary);
-    const COLORREF accent = ThemeColor(theme.accent);
     const COLORREF hoverFill = RGB(34, 39, 48);
     const COLORREF activeFill = RGB(42, 47, 56);
 
@@ -148,12 +146,9 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
         const bool open = interaction.OpenMenu() == descriptor.command;
         const bool hovered = interaction.HoveredMenu() == descriptor.command;
         if (open || hovered) {
-            FillRound(dc, item, open ? activeFill : hoverFill, open ? Blend(accent, RGB(255, 255, 255), 1, 5) : RGB(48, 56, 68), 5);
-            if (open) {
-                GdiDrawing::FillRectColor(dc, RECT{ item.left + 3, item.top, item.right - 3, item.top + 2 }, accent);
-            }
+            FillRound(dc, item, open ? activeFill : hoverFill, RGB(48, 56, 68), 5);
         }
-        DrawMenuText(dc, RECT{ item.left + 12, item.top, item.right, item.bottom }, descriptor.label, open || hovered ? textPrimary : textSecondary);
+        DrawMenuText(dc, item, descriptor.label, open || hovered ? textPrimary : textSecondary, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     if (interaction.OpenMenu() == EditorMenuCommand::None) {
@@ -168,20 +163,18 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     const RECT shadow = OffsetRectCopy(menu.dropdown, 2, 3);
     FillRound(dc, shadow, RGB(0, 0, 0), RGB(0, 0, 0), kDropdownRadius);
     FillRound(dc, menu.dropdown, RGB(19, 22, 28), RGB(78, 91, 115), kDropdownRadius);
-    GdiDrawing::FillRectColor(dc, RECT{ menu.dropdown.left + 1, menu.dropdown.top + 1, menu.dropdown.right - 1, menu.dropdown.top + 3 }, accent);
 
     for (int row = 0; row < 4; ++row) {
         const RECT rowRect = menu.dropdownRows[static_cast<std::size_t>(row)];
-        if ((row % 2) == 1) {
-            GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 1, rowRect.top, rowRect.right - 1, rowRect.bottom }, RGB(22, 25, 31));
-        }
         if (interaction.HoveredMenuRow().has_value() && *interaction.HoveredMenuRow() == row) {
             FillRound(dc, RECT{ rowRect.left + 4, rowRect.top + 3, rowRect.right - 4, rowRect.bottom - 3 }, RGB(37, 44, 55), RGB(56, 68, 86), 5);
         }
-        if (row > 0) {
-            GdiDrawing::FillRectColor(dc, RECT{ rowRect.left + 8, rowRect.top, rowRect.right - 8, rowRect.top + 1 }, RGB(34, 39, 48));
-        }
-        DrawMenuText(dc, RECT{ rowRect.left + 34, rowRect.top, rowRect.right - 8, rowRect.bottom }, EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row), textPrimary);
+        DrawMenuText(
+            dc,
+            RECT{ rowRect.left + 12, rowRect.top, rowRect.right - 12, rowRect.bottom },
+            EditorToolbarLayout::DropdownLabel(interaction.OpenMenu(), row),
+            textPrimary,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
 

@@ -54,7 +54,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (pendingTextEdits.CommitPendingEdits()) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
-    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, playMode_, shellInteraction_, metrics_)) {
+    if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, sceneContext_, sceneViewport_, playMode_, shellInteraction_, metrics_)) {
         return;
     }
     const EditorPanelPointerHitContext panelHit =
@@ -96,6 +96,7 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (hierarchySelection_.HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         sceneContext_.AssetBrowser().FocusSelection(false);
         EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+        sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

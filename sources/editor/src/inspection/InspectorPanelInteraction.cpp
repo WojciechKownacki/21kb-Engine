@@ -231,6 +231,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.kind == InspectorHitKind::FloatField) {
         const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
+        if (!sceneContext.BeginSceneEditTransaction("Edit Transform")) {
+            return true;
+        }
         sceneContext.Inspector().BeginFloatDrag(hit.property, ReadTransformValue(transform, hit.property), x, y);
         return true;
     }
@@ -243,6 +246,7 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     }
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
+        sceneContext.CancelSceneEditTransaction();
         sceneContext.Inspector().EndFloatDrag();
         return true;
     }
@@ -267,6 +271,11 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const bool moved = inspector.FloatDragMoved();
     const float startValue = inspector.DragStartValue();
     inspector.EndFloatDrag();
+    if (moved) {
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    } else {
+        sceneContext.CancelSceneEditTransaction();
+    }
     if (!moved && property != InspectorPropertyId::None) {
         inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
     }
@@ -322,12 +331,18 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         if (sceneContext.Scene().Entities().IsAlive(entity)) {
             const InspectorPropertyId property = inspector.EditedProperty();
             if (property == InspectorPropertyId::EntityName) {
-                sceneContext.Scene().Entities().SetName(entity, inspector.EditBuffer().empty() ? "Entity" : inspector.EditBuffer());
+                if (sceneContext.BeginSceneEditTransaction("Rename Entity")) {
+                    sceneContext.Scene().Entities().SetName(entity, inspector.EditBuffer().empty() ? "Entity" : inspector.EditBuffer());
+                    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                }
             } else if (IsTransformProperty(property)) {
                 const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
                 float value = 0.0F;
                 if (EvaluateMath(inspector.EditBuffer(), ReadTransformValue(transform, property), value)) {
-                    SetTransformValue(sceneContext.Scene(), entity, property, value);
+                    if (sceneContext.BeginSceneEditTransaction("Edit Transform")) {
+                        SetTransformValue(sceneContext.Scene(), entity, property, value);
+                        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                    }
                 }
             }
         }

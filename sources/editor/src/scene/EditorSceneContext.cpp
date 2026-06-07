@@ -9,6 +9,7 @@
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
+#include "scene/EditorSceneCommandController.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
@@ -46,6 +47,15 @@ namespace {
         filtered.push_back(entity);
     }
     return filtered;
+}
+
+[[nodiscard]] bool AnyAlive(const kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> entities) noexcept {
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (scene.Entities().IsAlive(entity)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
@@ -162,6 +172,42 @@ EditorSceneGizmoState& EditorSceneContext::Gizmo() noexcept {
 
 const EditorSceneGizmoState& EditorSceneContext::Gizmo() const noexcept {
     return viewportState_.Gizmo();
+}
+
+bool EditorSceneContext::CanUndoSceneCommand() const noexcept {
+    return commandStack_.CanUndo();
+}
+
+bool EditorSceneContext::CanRedoSceneCommand() const noexcept {
+    return commandStack_.CanRedo();
+}
+
+bool EditorSceneContext::UndoSceneCommand() {
+    static_cast<void>(CommitHierarchyRename());
+    inspector_.EndTextEdit();
+    return SceneCommands().Undo();
+}
+
+bool EditorSceneContext::RedoSceneCommand() {
+    static_cast<void>(CommitHierarchyRename());
+    inspector_.EndTextEdit();
+    return SceneCommands().Redo();
+}
+
+bool EditorSceneContext::BeginSceneEditTransaction(std::string label) {
+    return SceneCommands().BeginTransaction(std::move(label));
+}
+
+bool EditorSceneContext::CommitSceneEditTransaction() {
+    return SceneCommands().CommitTransaction();
+}
+
+void EditorSceneContext::CancelSceneEditTransaction() {
+    SceneCommands().CancelTransaction();
+}
+
+bool EditorSceneContext::HasPendingSceneEditTransaction() const noexcept {
+    return pendingSceneTransactionLabel_.has_value();
 }
 
 kb::scene::SceneEntity EditorSceneContext::SelectedEntity() const noexcept {
@@ -351,10 +397,25 @@ bool EditorSceneContext::CommitHierarchyRename() {
         return false;
     }
 
-    scene_.Entities().SetName(hierarchyRenameEntity_, hierarchyRenameBuffer_.empty() ? "Entity" : hierarchyRenameBuffer_);
-    console_.Info("Hierarchy", "Entity renamed.");
+    const kb::scene::SceneEntity entity = hierarchyRenameEntity_;
+    const std::string name = hierarchyRenameBuffer_.empty() ? "Entity" : hierarchyRenameBuffer_;
+    if (scene_.Entities().Name(entity) == name) {
+        CancelHierarchyRename();
+        return false;
+    }
+
+    const bool renamed = ExecuteSceneCommand("Rename Entity", [this, entity, name]() {
+        if (!scene_.Entities().IsAlive(entity)) {
+            return false;
+        }
+        scene_.Entities().SetName(entity, name);
+        return true;
+    });
+    if (renamed) {
+        console_.Info("Hierarchy", "Entity renamed.");
+    }
     CancelHierarchyRename();
-    return true;
+    return renamed;
 }
 
 void EditorSceneContext::CancelHierarchyRename() noexcept {
@@ -414,21 +475,92 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
         return false;
     }
 
-    bool deleted = false;
     const std::vector<kb::scene::SceneEntity> deleting = hierarchySelection_.SelectedEntities();
-    ClearHierarchySelection();
-    for (kb::scene::SceneEntity entity : deleting) {
-        if (scene_.Entities().IsAlive(entity)) {
-            scene_.Entities().Destroy(entity);
-            deleted = true;
-        }
+    if (!AnyAlive(scene_, deleting)) {
+        ClearHierarchySelection();
+        console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
+        return false;
     }
+
+    const bool deleted = ExecuteSceneCommand("Delete Entity", [this, deleting]() {
+        bool anyDeleted = false;
+        hierarchySelection_.Clear();
+        for (kb::scene::SceneEntity entity : deleting) {
+            if (scene_.Entities().IsAlive(entity)) {
+                scene_.Entities().Destroy(entity);
+                anyDeleted = true;
+            }
+        }
+        return anyDeleted;
+    });
     if (deleted) {
         console_.Info("Hierarchy", "Selected hierarchy entity deleted.");
     } else {
         console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
     }
     return deleted;
+}
+
+bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
+    const std::vector<kb::scene::SceneEntity> selected = hierarchySelection_.SelectedEntities();
+    const std::vector<kb::scene::SceneEntity> duplicating = TopLevelSelectedEntities(scene_, selected);
+    if (duplicating.empty() || !AnyAlive(scene_, duplicating)) {
+        console_.Warning("Hierarchy", "No hierarchy entity was duplicated.");
+        return false;
+    }
+
+    std::vector<kb::scene::SceneEntity> duplicatedEntities;
+    const bool duplicated = ExecuteSceneCommand("Duplicate Entity", [this, duplicating, &duplicatedEntities]() {
+        std::vector<kb::scene::SceneObject> objects;
+        objects.reserve(duplicating.size());
+        for (const kb::scene::SceneEntity entity : duplicating) {
+            if (scene_.Entities().IsAlive(entity)) {
+                objects.push_back(scene_.Entities().Object(entity));
+            }
+        }
+        if (objects.empty()) {
+            return false;
+        }
+
+        const std::vector<kb::scene::SceneObject> duplicates = scene_.Entities().Duplicate(std::span<const kb::scene::SceneObject>{objects.data(), objects.size()});
+        duplicatedEntities.clear();
+        duplicatedEntities.reserve(duplicates.size());
+        for (const kb::scene::SceneObject duplicate : duplicates) {
+            if (duplicate.IsValid() && scene_.Entities().IsAlive(duplicate)) {
+                duplicatedEntities.push_back(duplicate.Entity());
+            }
+        }
+        if (duplicatedEntities.empty()) {
+            return false;
+        }
+
+        const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+        hierarchySelection_.Clear();
+        bool first = true;
+        for (const kb::scene::SceneEntity entity : duplicatedEntities) {
+            for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+                if (rows[rowIndex].entity != entity) {
+                    continue;
+                }
+                static_cast<void>(hierarchySelection_.SelectRow(rows, rowIndex, !first, false));
+                first = false;
+                break;
+            }
+        }
+        if (hierarchySelection_.SelectedEntities().empty()) {
+            SelectEntity(duplicatedEntities.front());
+        } else {
+            assetBrowser_.ClearSelection();
+        }
+        return true;
+    });
+
+    if (duplicated) {
+        console_.Info("Hierarchy", "Selected hierarchy entity duplicated.");
+    } else {
+        console_.Warning("Hierarchy", "No hierarchy entity was duplicated.");
+    }
+    return duplicated;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
@@ -516,7 +648,9 @@ bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
 }
 
 bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
-    if (!EditorSceneHierarchyActions::ToggleVisibility(scene_, entity)) {
+    if (!ExecuteSceneCommand("Toggle Visibility", [this, entity]() {
+            return EditorSceneHierarchyActions::ToggleVisibility(scene_, entity);
+        })) {
         console_.Warning("Hierarchy", "Visibility toggle ignored for invalid entity.");
         return false;
     }
@@ -525,14 +659,29 @@ bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
 }
 
 kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
-    const kb::scene::SceneEntity entity = EditorSceneHierarchyActions::CreateObject(scene_);
-    SelectEntity(entity);
-    console_.Info("Hierarchy", "Entity created.");
-    return entity;
+    kb::scene::SceneEntity created{};
+    if (ExecuteSceneCommand("Create Entity", [this, &created]() {
+            created = EditorSceneHierarchyActions::CreateObject(scene_);
+            if (!created.IsValid()) {
+                return false;
+            }
+            SelectEntity(created);
+            return true;
+        })) {
+        console_.Info("Hierarchy", "Entity created.");
+    }
+    return created;
 }
 
 bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent) {
-    const bool moved = EditorSceneHierarchyActions::Reparent(scene_, child, parent);
+    if (!child.IsValid() || !scene_.Entities().IsAlive(child)) {
+        console_.Warning("Hierarchy", "Entity reparent ignored.");
+        return false;
+    }
+
+    const bool moved = ExecuteSceneCommand("Reparent Entity", [this, child, parent]() {
+        return EditorSceneHierarchyActions::Reparent(scene_, child, parent);
+    });
     if (moved) {
         SelectEntity(child);
         console_.Info("Hierarchy", "Entity reparented.");
@@ -544,19 +693,27 @@ bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene:
 
 bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent) {
     const std::vector<kb::scene::SceneEntity> moving = TopLevelSelectedEntities(scene_, children);
+    if (moving.empty()) {
+        console_.Warning("Hierarchy", "Hierarchy reparent did not move any entity.");
+        return false;
+    }
+
     const std::span<const kb::scene::SceneEntity> movingSpan{ moving.data(), moving.size() };
     if (parent.IsValid() && (ContainsEntity(movingSpan, parent) || HasSelectedAncestor(scene_, parent, movingSpan))) {
         console_.Warning("Hierarchy", "Cannot reparent an entity below itself or a selected descendant.");
         return false;
     }
 
-    bool moved = false;
-    for (const kb::scene::SceneEntity child : moving) {
-        if (child == parent) {
-            continue;
+    const bool moved = ExecuteSceneCommand("Reparent Entities", [this, moving, parent]() {
+        bool anyMoved = false;
+        for (const kb::scene::SceneEntity child : moving) {
+            if (child == parent) {
+                continue;
+            }
+            anyMoved = EditorSceneHierarchyActions::Reparent(scene_, child, parent) || anyMoved;
         }
-        moved = EditorSceneHierarchyActions::Reparent(scene_, child, parent) || moved;
-    }
+        return anyMoved;
+    });
     if (moved) {
         const std::vector<EditorHierarchyRow> rows = HierarchyRows();
         hierarchySelection_.Clear();
@@ -606,12 +763,18 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
 }
 
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
-    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(scene_, path, virtualPath, parent);
-    if (!root.has_value()) {
+    std::optional<kb::scene::SceneEntity> root;
+    if (!ExecuteSceneCommand("Instantiate Prefab", [this, &root, path, virtualPath, parent]() {
+            root = EditorScenePrefabActions::InstantiateAsset(scene_, path, virtualPath, parent);
+            if (!root.has_value()) {
+                return false;
+            }
+            SelectEntity(*root);
+            return true;
+        })) {
         console_.Error("Prefabs", "Prefab instantiation failed: " + path.generic_string());
         return false;
     }
-    SelectEntity(*root);
     console_.Info("Prefabs", "Prefab instantiated: " + path.generic_string());
     return true;
 }
@@ -636,14 +799,31 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
         return {};
     }
 
-    const kb::scene::SceneEntity entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+    kb::scene::SceneEntity entity{};
+    if (!logCreation) {
+        entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+        if (!entity.IsValid()) {
+            console_.Error("Assets", "Mesh entity could not be created: " + metadata->name);
+            return {};
+        }
+        SelectEntity(entity);
+        return entity;
+    }
+
+    const bool created = ExecuteSceneCommand("Create Mesh Entity", [this, assetId, position, metadata, &entity]() {
+        entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+        if (!entity.IsValid()) {
+            return false;
+        }
+        SelectEntity(entity);
+        return true;
+    });
     if (!entity.IsValid()) {
         console_.Error("Assets", "Mesh entity could not be created: " + metadata->name);
         return {};
     }
 
-    SelectEntity(entity);
-    if (logCreation) {
+    if (created && logCreation) {
         console_.Info("Assets", "Mesh entity created: " + metadata->name);
     }
     return entity;
@@ -667,10 +847,37 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
         return false;
     }
 
-    scene_.Components().Behaviours().Set(entity, *behaviour);
-    SelectEntity(entity);
+    if (!ExecuteSceneCommand("Assign Behaviour", [this, entity, behaviour]() {
+            if (!scene_.Entities().IsAlive(entity)) {
+                return false;
+            }
+            scene_.Components().Behaviours().Set(entity, *behaviour);
+            SelectEntity(entity);
+            return true;
+        })) {
+        console_.Error("Scripts", "Behaviour asset assignment failed: " + metadata->name);
+        return false;
+    }
     console_.Info("Scripts", "Behaviour asset assigned: " + metadata->name);
     return true;
+}
+
+EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
+    return EditorSceneCommandController{
+        scene_,
+        commandStack_,
+        console_,
+        viewportState_,
+        hierarchySelection_,
+        assetBrowser_,
+        hierarchyExpansion_,
+        hierarchySearch_,
+        pendingSceneTransactionLabel_,
+    };
+}
+
+bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
+    return SceneCommands().Execute(std::move(label), std::move(mutation));
 }
 
 } // namespace kb::editor

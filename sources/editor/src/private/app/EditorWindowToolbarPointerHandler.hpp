@@ -4,6 +4,8 @@
 #include "app/EditorShellInteractionState.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorSceneBgfxViewport.hpp"
+#include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -24,6 +26,8 @@ public:
         int x,
         int y,
         EditorDockModel& dockModel,
+        EditorSceneContext& sceneContext,
+        EditorSceneBgfxViewport& sceneViewport,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
         const EditorMetrics& metrics);
