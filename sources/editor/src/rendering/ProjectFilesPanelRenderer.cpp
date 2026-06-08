@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/ProjectFilesAssetViewRenderer.hpp"
 #include "rendering/ProjectFilesBottomBarRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -35,7 +36,8 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
 [[nodiscard]] std::string BuildProjectFilesSignature(
     const RECT& content,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager) {
+    const kb::assets::AssetManager& manager,
+    const EditorMeshThumbnailService& meshThumbnails) {
     std::ostringstream out;
     AppendRect(out, content);
     out << "rev=" << manager.Revision()
@@ -67,7 +69,8 @@ void AppendRect(std::ostringstream& out, const RECT& rect) {
         << ";editFolder=" << kb::assets::NormalizeAssetPath(state.TextEditTargetFolder())
         << ";ctxKind=" << static_cast<int>(state.ContextMenuTargetKind())
         << ";ctxFolder=" << kb::assets::NormalizeAssetPath(state.ContextMenuTargetFolder())
-        << ";ctxAsset=" << state.ContextMenuTargetAsset().value;
+        << ";ctxAsset=" << state.ContextMenuTargetAsset().value
+        << ";meshThumbRev=" << meshThumbnails.Revision();
     const std::vector<EditorAssetFolderRow> childFolders = state.ChildFolderRows(manager);
     for (const EditorAssetFolderRow& folder : childFolders) {
         if (folder.selected) {
@@ -165,7 +168,8 @@ void PaintProjectFilesBase(
     const RECT& content,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
-    const kb::assets::AssetManager& manager) {
+    const kb::assets::AssetManager& manager,
+    EditorMeshThumbnailService& meshThumbnails) {
     const EditorAssetBrowserLayoutRects layout = EditorAssetBrowserLayout::Build(content, state.TreeWidth());
 
     ScopedFont bodyFont{ 13, FW_NORMAL };
@@ -177,7 +181,7 @@ void PaintProjectFilesBase(
 
     ProjectFilesToolbarRenderer::Paint(dc, layout, theme, state);
     ProjectFilesTreeRenderer::Paint(dc, layout, theme, state, treeFolders);
-    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, childFolders, assets);
+    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, meshThumbnails, childFolders, assets);
     RECT splitterLine{ layout.tree.right, layout.tree.top, layout.tree.right + 1, layout.bottomBar.top };
     GdiDrawing::FillRectColor(
         dc,
@@ -193,25 +197,31 @@ ProjectFilesRetainedSurface& RetainedSurface() {
     return surface;
 }
 
+EditorMeshThumbnailService& MeshThumbnails() {
+    static EditorMeshThumbnailService service;
+    return service;
+}
+
 } // namespace
 
 void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    EditorMeshThumbnailService& meshThumbnails = MeshThumbnails();
 
     const int width = Width(content);
     const int height = Height(content);
-    const std::string signature = BuildProjectFilesSignature(content, state, manager);
+    const std::string signature = BuildProjectFilesSignature(content, state, manager, meshThumbnails);
     ProjectFilesRetainedSurface& surface = RetainedSurface();
     if (!surface.Matches(width, height, signature)) {
         HDC cachedDc = surface.BeginRender(dc, width, height, signature);
         if (cachedDc != nullptr) {
             const int savedDc = SaveDC(cachedDc);
             SetViewportOrgEx(cachedDc, -content.left, -content.top, nullptr);
-            PaintProjectFilesBase(cachedDc, content, theme, state, manager);
+            PaintProjectFilesBase(cachedDc, content, theme, state, manager, meshThumbnails);
             RestoreDC(cachedDc, savedDc);
         } else {
-            PaintProjectFilesBase(dc, content, theme, state, manager);
+            PaintProjectFilesBase(dc, content, theme, state, manager, meshThumbnails);
         }
     }
     surface.Blit(dc, content);

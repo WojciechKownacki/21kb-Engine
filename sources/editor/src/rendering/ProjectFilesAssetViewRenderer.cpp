@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
+#include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesAssetListRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileRenderer.hpp"
@@ -14,13 +15,14 @@ void ProjectFilesAssetViewRenderer::Paint(
     const EditorAssetBrowserLayoutRects& layout,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
+    EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {
     using Draw = ProjectFilesPanelDrawing;
 
     GdiDrawing::DrawSharpFrame(dc, layout.assetView, Draw::Blend(Draw::Color(theme.panel), Draw::Color(theme.strip), 8), Draw::Color(theme.borderPanel));
     if (state.ViewMode() == EditorAssetViewMode::Tiles) {
-        ProjectFilesAssetTileRenderer::Paint(dc, layout, theme, state, folders, assets);
+        ProjectFilesAssetTileRenderer::Paint(dc, layout, theme, state, meshThumbnails, folders, assets);
     } else {
         ProjectFilesAssetListRenderer::Paint(dc, layout, theme, state, folders, assets);
     }
