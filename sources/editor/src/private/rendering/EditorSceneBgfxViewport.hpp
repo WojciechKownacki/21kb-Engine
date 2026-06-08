@@ -225,7 +225,7 @@ private:
     void ShutdownGpuResources() noexcept;
     void ShutdownSessionFramebuffers() noexcept;
     [[nodiscard]] bool SubmitPendingPaint();
-    [[noreturn]] static void FailRender(const char* reason) noexcept;
+    void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
     [[nodiscard]] bool QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
 
@@ -239,6 +239,8 @@ private:
     HWND paintParent_ = nullptr;
     bool windowClassRegistered_ = false;
     bool presentRequested_ = true;
+    bool renderFailed_ = false;
+    bool renderFailureReported_ = false;
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;

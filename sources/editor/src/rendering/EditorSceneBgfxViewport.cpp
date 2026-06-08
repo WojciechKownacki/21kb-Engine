@@ -166,6 +166,8 @@ void EditorSceneBgfxViewport::Shutdown() {
     pendingPresents_.clear();
     pendingSubmissions_.clear();
     presentRequested_ = true;
+    renderFailed_ = false;
+    renderFailureReported_ = false;
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -181,8 +183,8 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
 }
 
 void EditorSceneBgfxViewport::EndPaintLayout() {
-    if (!SubmitPendingPaint()) {
-        FailRender("Scene render/present failed");
+    if (!renderFailed_ && !SubmitPendingPaint()) {
+        FailRender("Scene render/present failed during queued viewport submit. The editor will stay open, but the scene viewport was disabled.");
     }
 
     hostSurfaceStore_.HideUnpresentedForHost(paintParent_);
@@ -206,6 +208,10 @@ void EditorSceneBgfxViewport::Present(HDC dc, const RECT& rect, const kb::scene:
 void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings) {
     static_cast<void>(theme);
 
+    if (renderFailed_) {
+        return;
+    }
+
     if (parent == nullptr || RectWidth(rect) == 0 || RectHeight(rect) == 0) {
         HideSession(parent, settings.viewportKey);
         return;
@@ -218,7 +224,7 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
     session->presentedInCurrentPaint = true;
 
     if (!RenderAndPresent(dc, rect, *session, scene, settings)) {
-        FailRender("Scene render/present failed");
+        FailRender("Scene render/present failed while queuing viewport present. The editor will stay open, but the scene viewport was disabled.");
     }
 }
 
@@ -448,8 +454,18 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
-    MessageBoxA(nullptr, reason == nullptr ? "Scene render failed" : reason, "21kb Editor - Scene Render Fatal", MB_OK | MB_ICONERROR);
-    std::abort();
+    renderFailed_ = true;
+    pendingPresents_.clear();
+    pendingSubmissions_.clear();
+    ShutdownSessionFramebuffers();
+    hostSurfaceStore_.DestroyWindows();
+
+    if (renderFailureReported_) {
+        return;
+    }
+
+    renderFailureReported_ = true;
+    MessageBoxA(nullptr, reason == nullptr ? "Scene render failed. The editor will stay open, but the scene viewport was disabled." : reason, "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
 }
 
 bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {

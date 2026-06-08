@@ -8,6 +8,7 @@ int main() {
     kb::tests::RunSceneHierarchyTests();
     kb::tests::RunSceneSystemTests();
     kb::tests::RunScenePrefabTests();
+    kb::tests::RunProjectSceneTests();
     kb::tests::RunScriptRuntimeTests();
     kb::tests::RunVisualGraphTests();
     return EXIT_SUCCESS;

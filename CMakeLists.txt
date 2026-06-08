@@ -137,4 +137,5 @@ if(KB_BUILD_EDITOR)
     endif()
 
     add_subdirectory(sources/editor editor)
+    add_subdirectory(sources/hub hub)
 endif()

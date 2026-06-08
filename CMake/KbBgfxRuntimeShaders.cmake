@@ -50,4 +50,10 @@ function(kb_target_copy_bgfx_runtime_shaders target_name)
     if(TARGET kb_renderer_shaders)
         add_dependencies(${target_name} kb_renderer_shaders)
     endif()
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:${target_name}>/shaders"
+        COMMENT "Refresh bgfx shader runtime trees for ${target_name}"
+        VERBATIM
+    )
 endfunction()

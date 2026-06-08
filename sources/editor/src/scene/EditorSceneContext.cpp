@@ -5,6 +5,8 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
@@ -13,6 +15,7 @@
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
+#include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 
 #include <algorithm>
@@ -66,7 +69,16 @@ namespace {
 } // namespace
 
 EditorSceneContext::EditorSceneContext() {
-    std::filesystem::create_directories(EditorProjectPaths::PrefabsRoot());
+    const EditorProjectBootstrapResult project = EditorProjectBootstrap::BootstrapDefaultProject();
+    if (project.succeeded) {
+        project_ = project.descriptor;
+        projectFile_ = project.projectFile;
+        console_.Info("Project", project.created ? "Created project descriptor." : "Loaded project descriptor.");
+    } else {
+        projectFile_ = EditorProjectPaths::ProjectFile();
+        console_.Error("Project", project.error.empty() ? "Project descriptor bootstrap failed." : project.error);
+    }
+
     if (scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
         console_.Info("Project", "Mounted project assets.");
     } else {
@@ -74,7 +86,17 @@ EditorSceneContext::EditorSceneContext() {
     }
     const std::size_t discovered = scene_.Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
-    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+    currentScenePath_ = ResolveDefaultScenePath();
+    std::error_code error;
+    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, currentScenePath_)) {
+        SelectFirstSceneEntityOrClear();
+        console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
+    } else {
+        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+        if (SaveCurrentScene()) {
+            console_.Info("Project", "Created default scene: " + currentScenePath_.generic_string());
+        }
+    }
     console_.Info("Editor", "Editor scene initialized.");
 }
 
@@ -172,6 +194,62 @@ EditorSceneGizmoState& EditorSceneContext::Gizmo() noexcept {
 
 const EditorSceneGizmoState& EditorSceneContext::Gizmo() const noexcept {
     return viewportState_.Gizmo();
+}
+
+const kb::project::ProjectDescriptor& EditorSceneContext::Project() const noexcept {
+    return project_;
+}
+
+const std::filesystem::path& EditorSceneContext::ProjectFile() const noexcept {
+    return projectFile_;
+}
+
+const std::filesystem::path& EditorSceneContext::CurrentScenePath() const noexcept {
+    return currentScenePath_;
+}
+
+bool EditorSceneContext::NewScene() {
+    const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
+    for (const kb::scene::SceneEntity root : roots) {
+        scene_.Entities().Destroy(root);
+    }
+
+    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+    currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
+    ResetSceneEditState();
+    console_.Info("Project", "New scene created: " + currentScenePath_.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::OpenDefaultScene() {
+    const std::filesystem::path defaultScenePath = ResolveDefaultScenePath();
+
+    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, defaultScenePath)) {
+        console_.Error("Project", "Default scene could not be opened: " + defaultScenePath.generic_string());
+        return false;
+    }
+
+    currentScenePath_ = defaultScenePath;
+    SelectFirstSceneEntityOrClear();
+    ResetSceneEditState();
+    console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
+    return true;
+}
+
+bool EditorSceneContext::SaveCurrentScene() {
+    if (currentScenePath_.empty()) {
+        currentScenePath_ = EditorProjectPaths::DefaultScenePath();
+    }
+
+    const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
+    if (!kb::scene::SceneDocumentService::Save(scene_, currentScenePath_, name)) {
+        console_.Error("Project", "Scene could not be saved: " + currentScenePath_.generic_string());
+        return false;
+    }
+
+    static_cast<void>(scene_.Assets().Discover());
+    console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
+    return true;
 }
 
 bool EditorSceneContext::CanUndoSceneCommand() const noexcept {
@@ -878,6 +956,38 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
 
 bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
     return SceneCommands().Execute(std::move(label), std::move(mutation));
+}
+
+void EditorSceneContext::ResetSceneEditState() {
+    commandStack_.Clear();
+    pendingSceneTransactionLabel_.reset();
+    CancelHierarchyRename();
+    inspector_.EndTextEdit();
+    static_cast<void>(scene_.Runtime().Update(0.0F));
+}
+
+void EditorSceneContext::SelectFirstSceneEntityOrClear() noexcept {
+    const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
+    if (roots.empty()) {
+        hierarchySelection_.Clear();
+        return;
+    }
+    hierarchySelection_.SelectEntity(roots.front());
+    assetBrowser_.ClearSelection();
+}
+
+std::filesystem::path EditorSceneContext::ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const {
+    if (const std::optional<std::filesystem::path> physical = scene_.Assets().Manager().Mounts().Resolve(virtualPath)) {
+        return *physical;
+    }
+    return EditorProjectPaths::DefaultScenePath();
+}
+
+std::filesystem::path EditorSceneContext::ResolveDefaultScenePath() const {
+    const std::filesystem::path defaultScene = project_.defaultScene.empty()
+        ? std::filesystem::path{ "/Game/Scenes/Main.21kbscene" }
+        : std::filesystem::path{ project_.defaultScene };
+    return ResolveProjectVirtualPath(defaultScene);
 }
 
 } // namespace kb::editor

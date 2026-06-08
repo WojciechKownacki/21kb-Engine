@@ -88,7 +88,21 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     }
 
     if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
-        if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
+        if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
+            if (*row == 0) {
+                if (sceneContext.NewScene()) {
+                    sceneViewport.RequestPresent();
+                }
+            } else if (*row == 1) {
+                if (sceneContext.OpenDefaultScene()) {
+                    sceneViewport.RequestPresent();
+                }
+            } else if (*row == 2) {
+                if (sceneContext.SaveCurrentScene()) {
+                    sceneViewport.RequestPresent();
+                }
+            }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Edit) {
             if (*row == 0) {
                 if (sceneContext.UndoSceneCommand()) {
                     sceneViewport.RequestPresent();
