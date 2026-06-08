@@ -1,136 +1,60 @@
 #include "engine/project/ProjectDescriptorReader.hpp"
 
-#include "project/ProjectDescriptorFieldCodec.hpp"
+#include "project/ProjectDescriptorBinaryIO.hpp"
 #include "project/ProjectDescriptorFormat.hpp"
+#include "project/ProjectDescriptorIntegrity.hpp"
+#include "project/ProjectDescriptorMetaReader.hpp"
 
-#include <charconv>
-#include <fstream>
+#include <array>
+#include <filesystem>
 #include <string>
-#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace kb::project {
 namespace {
 
-using FieldMap = std::unordered_map<std::string, std::string>;
+using ProjectDescriptorBinaryIO::ByteReader;
+using ProjectDescriptorBinaryIO::ReadAllBytes;
 
-[[nodiscard]] bool ReadLine(std::istream& input, std::string& line) {
-    if (!std::getline(input, line)) {
+[[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& projectPath) {
+    std::filesystem::path metaPath = projectPath;
+    metaPath.replace_extension(".meta");
+    return metaPath;
+}
+
+[[nodiscard]] bool ReadStringList(ByteReader& input, std::uint32_t maxCount, std::vector<std::string>& output) {
+    std::uint32_t count = 0U;
+    if (!input.ReadUInt32(count) || count > maxCount) {
         return false;
     }
-    if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-    }
-    return true;
-}
-
-[[nodiscard]] bool SplitKeyValue(std::string_view line, std::string& key, std::string& value) {
-    const std::size_t separator = line.find('=');
-    if (separator == std::string_view::npos) {
-        return false;
-    }
-    key.assign(line.substr(0, separator));
-    value.assign(line.substr(separator + 1));
-    return !key.empty();
-}
-
-[[nodiscard]] bool ParseUnsigned(std::string_view text, std::size_t& output) {
-    const char* first = text.data();
-    const char* last = text.data() + text.size();
-    const std::from_chars_result result = std::from_chars(first, last, output);
-    return result.ec == std::errc{} && result.ptr == last;
-}
-
-[[nodiscard]] bool ReadFields(std::istream& input, FieldMap& fields) {
-    std::string line;
-    while (ReadLine(input, line)) {
-        std::string key;
+    output.clear();
+    output.reserve(count);
+    for (std::uint32_t index = 0U; index < count; ++index) {
         std::string value;
-        if (!SplitKeyValue(line, key, value) || fields.contains(key)) {
+        if (!input.ReadString(value) || value.empty()) {
             return false;
         }
-        fields.emplace(std::move(key), std::move(value));
+        output.push_back(std::move(value));
     }
     return true;
 }
 
-[[nodiscard]] bool ReadEscapedField(const FieldMap& fields, std::string_view key, std::string& output) {
-    const auto item = fields.find(std::string{ key });
-    if (item == fields.end()) {
-        return false;
-    }
-    std::optional<std::string> value = ProjectDescriptorFieldCodec::Unescape(item->second);
-    if (!value.has_value()) {
-        return false;
-    }
-    output = std::move(*value);
-    return true;
-}
-
-[[nodiscard]] bool ReadOptionalEscapedField(const FieldMap& fields, std::string_view key, std::string& output) {
-    const auto item = fields.find(std::string{ key });
-    if (item == fields.end()) {
-        return true;
-    }
-    std::optional<std::string> value = ProjectDescriptorFieldCodec::Unescape(item->second);
-    if (!value.has_value()) {
-        return false;
-    }
-    output = std::move(*value);
-    return true;
-}
-
-[[nodiscard]] bool ReadSizeField(const FieldMap& fields, std::string_view key, std::size_t& output) {
-    const auto item = fields.find(std::string{ key });
-    return item != fields.end() && ParseUnsigned(item->second, output);
-}
-
-[[nodiscard]] bool ReadBoolField(const FieldMap& fields, std::string_view key, bool& output) {
-    const auto item = fields.find(std::string{ key });
-    if (item == fields.end()) {
-        return false;
-    }
-    if (item->second == "1") {
-        output = true;
-        return true;
-    }
-    if (item->second == "0") {
-        output = false;
-        return true;
-    }
-    return false;
-}
-
-[[nodiscard]] bool ReadTargetPlatforms(const FieldMap& fields, ProjectDescriptor& descriptor) {
-    std::size_t count = 0;
-    if (!ReadSizeField(fields, ProjectDescriptorFormat::TargetPlatformsCountKey, count)) {
-        return false;
-    }
-    descriptor.targetPlatforms.clear();
-    descriptor.targetPlatforms.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        std::string platform;
-        if (!ReadEscapedField(fields, "targetPlatforms." + std::to_string(index), platform)) {
-            return false;
-        }
-        descriptor.targetPlatforms.push_back(std::move(platform));
-    }
-    return true;
-}
-
-[[nodiscard]] bool ReadModules(const FieldMap& fields, ProjectDescriptor& descriptor) {
-    std::size_t count = 0;
-    if (!ReadSizeField(fields, ProjectDescriptorFormat::ModulesCountKey, count)) {
+[[nodiscard]] bool ReadModules(ByteReader& input, ProjectDescriptor& descriptor) {
+    std::uint32_t count = 0U;
+    if (!input.ReadUInt32(count) || count > ProjectDescriptorFormat::MaxModuleCount) {
         return false;
     }
     descriptor.modules.clear();
     descriptor.modules.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        const std::string prefix = "modules." + std::to_string(index) + '.';
+    for (std::uint32_t index = 0U; index < count; ++index) {
         ProjectModuleDescriptor module;
-        if (!ReadEscapedField(fields, prefix + "name", module.name) ||
-            !ReadEscapedField(fields, prefix + "type", module.type) ||
-            !ReadEscapedField(fields, prefix + "loadingPhase", module.loadingPhase)) {
+        if (!input.ReadString(module.name) ||
+            !input.ReadString(module.type) ||
+            !input.ReadString(module.loadingPhase) ||
+            module.name.empty() ||
+            module.type.empty() ||
+            module.loadingPhase.empty()) {
             return false;
         }
         descriptor.modules.push_back(std::move(module));
@@ -138,18 +62,18 @@ using FieldMap = std::unordered_map<std::string, std::string>;
     return true;
 }
 
-[[nodiscard]] bool ReadPlugins(const FieldMap& fields, ProjectDescriptor& descriptor) {
-    std::size_t count = 0;
-    if (!ReadSizeField(fields, ProjectDescriptorFormat::PluginsCountKey, count)) {
+[[nodiscard]] bool ReadPlugins(ByteReader& input, ProjectDescriptor& descriptor) {
+    std::uint32_t count = 0U;
+    if (!input.ReadUInt32(count) || count > ProjectDescriptorFormat::MaxPluginCount) {
         return false;
     }
     descriptor.plugins.clear();
     descriptor.plugins.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        const std::string prefix = "plugins." + std::to_string(index) + '.';
+    for (std::uint32_t index = 0U; index < count; ++index) {
         ProjectPluginReference plugin;
-        if (!ReadEscapedField(fields, prefix + "name", plugin.name) ||
-            !ReadBoolField(fields, prefix + "enabled", plugin.enabled)) {
+        if (!input.ReadString(plugin.name) ||
+            !input.ReadBool(plugin.enabled) ||
+            plugin.name.empty()) {
             return false;
         }
         descriptor.plugins.push_back(std::move(plugin));
@@ -157,48 +81,81 @@ using FieldMap = std::unordered_map<std::string, std::string>;
     return true;
 }
 
+[[nodiscard]] ProjectDescriptorReadResult ValidateMeta(const std::filesystem::path& path, const ProjectDescriptor& descriptor) {
+    const ProjectDescriptorMetaReadResult metaResult = ProjectDescriptorMetaReader::Read(MetaPathFor(path));
+    if (!metaResult.succeeded) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = metaResult.error };
+    }
+
+    const ProjectDescriptorIntegrity integrity = ProjectDescriptorIntegrityService::ComputeFile(path);
+    const ProjectDescriptorMeta& meta = metaResult.meta;
+    if (meta.contentHashFnv1a64 != integrity.contentHashFnv1a64 ||
+        meta.contentChecksumCrc32 != integrity.contentChecksumCrc32 ||
+        meta.byteSize != integrity.byteSize) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor integrity does not match its .meta file." };
+    }
+    if (meta.projectName != descriptor.name ||
+        meta.engineAssociation != descriptor.engineAssociation ||
+        meta.defaultScene != descriptor.defaultScene ||
+        meta.targetPlatformCount != descriptor.targetPlatforms.size() ||
+        meta.moduleCount != descriptor.modules.size() ||
+        meta.pluginCount != descriptor.plugins.size()) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor summary does not match its .meta file." };
+    }
+    if (meta.projectFile.filename() != path.filename()) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor .meta points to a different project file." };
+    }
+    return ProjectDescriptorReadResult{ .succeeded = true, .descriptor = descriptor, .error = {} };
+}
+
 } // namespace
 
 ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem::path& path) {
-    std::ifstream input{ path, std::ios::binary };
-    if (!input.is_open()) {
+    std::vector<std::uint8_t> bytes = ReadAllBytes(path);
+    if (bytes.empty()) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor could not be opened." };
     }
 
-    std::string line;
-    if (!ReadLine(input, line) || line != ProjectDescriptorFormat::Header) {
+    ByteReader input{ std::move(bytes) };
+    std::array<std::uint8_t, ProjectDescriptorFormat::Magic.size()> magic{};
+    std::uint32_t fileVersion = 0U;
+    if (!input.ReadRaw(magic.data(), magic.size()) ||
+        magic != ProjectDescriptorFormat::Magic ||
+        !input.ReadUInt32(fileVersion) ||
+        fileVersion == 0U ||
+        fileVersion > ProjectDescriptor::CurrentFileVersion) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor header is invalid." };
     }
 
-    FieldMap fields;
-    if (!ReadFields(input, fields)) {
-        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains invalid fields." };
-    }
-
     ProjectDescriptor descriptor;
-    std::size_t fileVersion = 0;
-    if (!ReadSizeField(fields, ProjectDescriptorFormat::FileVersionKey, fileVersion) || fileVersion == 0 || fileVersion > ProjectDescriptor::CurrentFileVersion) {
-        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor version is not supported." };
+    descriptor.fileVersion = fileVersion;
+    if (!input.ReadString(descriptor.engineAssociation) ||
+        !input.ReadString(descriptor.name) ||
+        !input.ReadString(descriptor.category) ||
+        !input.ReadString(descriptor.description) ||
+        !input.ReadString(descriptor.contentRoot) ||
+        !input.ReadString(descriptor.defaultScene) ||
+        !input.ReadBool(descriptor.disableEnginePluginsByDefault) ||
+        !ReadStringList(input, ProjectDescriptorFormat::MaxTargetPlatformCount, descriptor.targetPlatforms) ||
+        !ReadModules(input, descriptor) ||
+        !ReadPlugins(input, descriptor)) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor fields are invalid." };
     }
-    descriptor.fileVersion = static_cast<std::uint32_t>(fileVersion);
 
-    if (!ReadEscapedField(fields, ProjectDescriptorFormat::EngineAssociationKey, descriptor.engineAssociation) ||
-        !ReadEscapedField(fields, ProjectDescriptorFormat::NameKey, descriptor.name) ||
-        !ReadOptionalEscapedField(fields, ProjectDescriptorFormat::CategoryKey, descriptor.category) ||
-        !ReadOptionalEscapedField(fields, ProjectDescriptorFormat::DescriptionKey, descriptor.description) ||
-        !ReadEscapedField(fields, ProjectDescriptorFormat::ContentRootKey, descriptor.contentRoot) ||
-        !ReadEscapedField(fields, ProjectDescriptorFormat::DefaultSceneKey, descriptor.defaultScene) ||
-        !ReadBoolField(fields, ProjectDescriptorFormat::DisableEnginePluginsByDefaultKey, descriptor.disableEnginePluginsByDefault) ||
-        !ReadTargetPlatforms(fields, descriptor) ||
-        !ReadModules(fields, descriptor) ||
-        !ReadPlugins(fields, descriptor)) {
+    if (!input.Exhausted()) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains trailing data." };
+    }
+    if (descriptor.engineAssociation.empty() ||
+        descriptor.name.empty() ||
+        descriptor.contentRoot.empty() ||
+        descriptor.defaultScene.empty()) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor is missing required fields." };
     }
 
-    if (descriptor.name.empty() || descriptor.contentRoot.empty()) {
-        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains an empty project name or content root." };
+    ProjectDescriptorReadResult metaValidation = ValidateMeta(path, descriptor);
+    if (!metaValidation.succeeded) {
+        return metaValidation;
     }
-
     return ProjectDescriptorReadResult{ .succeeded = true, .descriptor = std::move(descriptor), .error = {} };
 }
 

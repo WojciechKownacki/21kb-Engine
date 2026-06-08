@@ -714,6 +714,7 @@ if(BUILD_TESTING)
         src/project/EditorProjectBootstrap.cpp
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
+        src/rendering/EditorToolbarLayout.cpp
     )
 
     target_include_directories(kb_editor_tests

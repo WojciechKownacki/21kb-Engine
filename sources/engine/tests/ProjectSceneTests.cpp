@@ -23,6 +23,8 @@ namespace {
 
 constexpr std::array<std::uint8_t, 8U> kSceneMagic{ '2', '1', 'K', 'B', 'S', 'C', 'N', 0 };
 constexpr std::array<std::uint8_t, 8U> kSceneMetaMagic{ '2', '1', 'K', 'B', 'S', 'M', 'T', 0 };
+constexpr std::array<std::uint8_t, 8U> kProjectMagic{ '2', '1', 'K', 'B', 'P', 'R', 'J', 0 };
+constexpr std::array<std::uint8_t, 8U> kProjectMetaMagic{ '2', '1', 'K', 'B', 'P', 'M', 'T', 0 };
 
 [[nodiscard]] std::filesystem::path TempRoot() {
     return std::filesystem::temp_directory_path() / "21kb_engine_project_scene_tests";
@@ -48,6 +50,20 @@ void RunProjectDescriptorRoundTripTest() {
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "GameplayTools", .enabled = true });
 
     Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor was not created");
+    Require(std::filesystem::is_regular_file(projectFile), "Project descriptor file was not written");
+    Require(std::filesystem::is_regular_file(projectFile.parent_path() / "Sample.meta"), "Project descriptor meta file was not written");
+    {
+        std::ifstream projectInput{ projectFile, std::ios::binary };
+        std::array<std::uint8_t, kProjectMagic.size()> magic{};
+        projectInput.read(reinterpret_cast<char*>(magic.data()), static_cast<std::streamsize>(magic.size()));
+        Require(magic == kProjectMagic, "Project descriptor was not written with the binary project magic");
+    }
+    {
+        std::ifstream metaInput{ projectFile.parent_path() / "Sample.meta", std::ios::binary };
+        std::array<std::uint8_t, kProjectMetaMagic.size()> magic{};
+        metaInput.read(reinterpret_cast<char*>(magic.data()), static_cast<std::streamsize>(magic.size()));
+        Require(magic == kProjectMetaMagic, "Project meta was not written with the binary meta magic");
+    }
     const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
     Require(loaded.succeeded, "Project descriptor did not load");
     Require(loaded.descriptor.name == "Sample", "Project descriptor name did not roundtrip");
@@ -55,6 +71,25 @@ void RunProjectDescriptorRoundTripTest() {
     Require(loaded.descriptor.targetPlatforms.size() == 2, "Project descriptor target platforms did not roundtrip");
     Require(!loaded.descriptor.modules.empty() && loaded.descriptor.modules.front().name == "SampleRuntime", "Project descriptor modules did not roundtrip");
     Require(!loaded.descriptor.plugins.empty() && loaded.descriptor.plugins.front().name == "GameplayTools", "Project descriptor plugins did not roundtrip");
+}
+
+void RunProjectDescriptorRejectsChecksumMismatchTest() {
+    CleanTempRoot();
+    const std::filesystem::path projectFile = TempRoot() / "Tamper.21kbproject";
+
+    kb::project::ProjectDescriptor descriptor;
+    descriptor.name = "Tamper";
+    descriptor.category = "Game";
+    descriptor.description = "Tamper descriptor";
+    descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
+    descriptor.targetPlatforms = { "Windows" };
+
+    Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor tamper fixture was not created");
+
+    std::ofstream output{ projectFile, std::ios::binary | std::ios::app };
+    output << "#tampered\n";
+    output.close();
+    Require(!kb::project::ProjectManager::LoadProject(projectFile).succeeded, "Project descriptor accepted mismatched integrity metadata");
 }
 
 void RunSceneDocumentRoundTripTest() {
@@ -192,6 +227,7 @@ void RunSceneAssetRejectsChecksumMismatchTest() {
 
 void RunProjectSceneTests() {
     RunProjectDescriptorRoundTripTest();
+    RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneDocumentAssetDiscoveryTest();

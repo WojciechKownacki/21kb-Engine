@@ -1,75 +1,133 @@
 #include "engine/project/ProjectDescriptorWriter.hpp"
 
-#include "project/ProjectDescriptorFieldCodec.hpp"
+#include "engine/project/ProjectDescriptorMeta.hpp"
+#include "project/ProjectDescriptorBinaryIO.hpp"
 #include "project/ProjectDescriptorFormat.hpp"
+#include "project/ProjectDescriptorIntegrity.hpp"
+#include "project/ProjectDescriptorMetaWriter.hpp"
 
-#include <fstream>
-#include <system_error>
+#include <cstdint>
+#include <filesystem>
+#include <vector>
 
 namespace kb::project {
 namespace {
 
-[[nodiscard]] bool PrepareOutputPath(const std::filesystem::path& path) {
-    if (!path.has_parent_path()) {
-        return true;
+using ProjectDescriptorBinaryIO::WriteBool;
+using ProjectDescriptorBinaryIO::WriteBytesAtomically;
+using ProjectDescriptorBinaryIO::WriteRaw;
+using ProjectDescriptorBinaryIO::WriteString;
+using ProjectDescriptorBinaryIO::WriteUInt32;
+
+[[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& projectPath) {
+    std::filesystem::path metaPath = projectPath;
+    metaPath.replace_extension(".meta");
+    return metaPath;
+}
+
+[[nodiscard]] bool StringFits(std::string_view value) noexcept {
+    return value.size() <= ProjectDescriptorFormat::MaxStringBytes;
+}
+
+[[nodiscard]] bool CanWrite(const ProjectDescriptor& descriptor) {
+    if (descriptor.name.empty() ||
+        descriptor.engineAssociation.empty() ||
+        descriptor.contentRoot.empty() ||
+        descriptor.defaultScene.empty() ||
+        descriptor.targetPlatforms.size() > ProjectDescriptorFormat::MaxTargetPlatformCount ||
+        descriptor.modules.size() > ProjectDescriptorFormat::MaxModuleCount ||
+        descriptor.plugins.size() > ProjectDescriptorFormat::MaxPluginCount) {
+        return false;
     }
 
-    std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
-    return !error;
+    if (!StringFits(descriptor.engineAssociation) ||
+        !StringFits(descriptor.name) ||
+        !StringFits(descriptor.category) ||
+        !StringFits(descriptor.description) ||
+        !StringFits(descriptor.contentRoot) ||
+        !StringFits(descriptor.defaultScene)) {
+        return false;
+    }
+
+    for (const std::string& platform : descriptor.targetPlatforms) {
+        if (platform.empty() || !StringFits(platform)) {
+            return false;
+        }
+    }
+    for (const ProjectModuleDescriptor& module : descriptor.modules) {
+        if (module.name.empty() || module.type.empty() || module.loadingPhase.empty() ||
+            !StringFits(module.name) || !StringFits(module.type) || !StringFits(module.loadingPhase)) {
+            return false;
+        }
+    }
+    for (const ProjectPluginReference& plugin : descriptor.plugins) {
+        if (plugin.name.empty() || !StringFits(plugin.name)) {
+            return false;
+        }
+    }
+    return true;
 }
 
-void WriteField(std::ostream& output, std::string_view key, std::string_view value) {
-    output << key << '=' << ProjectDescriptorFieldCodec::Escape(value) << '\n';
-}
+[[nodiscard]] std::vector<std::uint8_t> Serialize(const ProjectDescriptor& descriptor) {
+    std::vector<std::uint8_t> output;
+    output.reserve(256U + descriptor.targetPlatforms.size() * 24U + descriptor.modules.size() * 72U + descriptor.plugins.size() * 32U);
+    WriteRaw(output, ProjectDescriptorFormat::Magic.data(), ProjectDescriptorFormat::Magic.size());
+    WriteUInt32(output, ProjectDescriptor::CurrentFileVersion);
+    WriteString(output, descriptor.engineAssociation);
+    WriteString(output, descriptor.name);
+    WriteString(output, descriptor.category);
+    WriteString(output, descriptor.description);
+    WriteString(output, descriptor.contentRoot);
+    WriteString(output, descriptor.defaultScene);
+    WriteBool(output, descriptor.disableEnginePluginsByDefault);
 
-void WriteBool(std::ostream& output, std::string_view key, bool value) {
-    output << key << '=' << (value ? 1 : 0) << '\n';
+    WriteUInt32(output, static_cast<std::uint32_t>(descriptor.targetPlatforms.size()));
+    for (const std::string& platform : descriptor.targetPlatforms) {
+        WriteString(output, platform);
+    }
+
+    WriteUInt32(output, static_cast<std::uint32_t>(descriptor.modules.size()));
+    for (const ProjectModuleDescriptor& module : descriptor.modules) {
+        WriteString(output, module.name);
+        WriteString(output, module.type);
+        WriteString(output, module.loadingPhase);
+    }
+
+    WriteUInt32(output, static_cast<std::uint32_t>(descriptor.plugins.size()));
+    for (const ProjectPluginReference& plugin : descriptor.plugins) {
+        WriteString(output, plugin.name);
+        WriteBool(output, plugin.enabled);
+    }
+    return output;
 }
 
 } // namespace
 
 bool ProjectDescriptorWriter::Write(const std::filesystem::path& path, const ProjectDescriptor& descriptor) {
-    if (!PrepareOutputPath(path) || descriptor.name.empty() || descriptor.contentRoot.empty()) {
+    if (!CanWrite(descriptor)) {
         return false;
     }
 
-    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
-    if (!output.is_open()) {
+    const std::vector<std::uint8_t> bytes = Serialize(descriptor);
+    if (!WriteBytesAtomically(path, bytes)) {
         return false;
     }
 
-    output << ProjectDescriptorFormat::Header << '\n';
-    output << ProjectDescriptorFormat::FileVersionKey << '=' << ProjectDescriptor::CurrentFileVersion << '\n';
-    WriteField(output, ProjectDescriptorFormat::EngineAssociationKey, descriptor.engineAssociation);
-    WriteField(output, ProjectDescriptorFormat::NameKey, descriptor.name);
-    WriteField(output, ProjectDescriptorFormat::CategoryKey, descriptor.category);
-    WriteField(output, ProjectDescriptorFormat::DescriptionKey, descriptor.description);
-    WriteField(output, ProjectDescriptorFormat::ContentRootKey, descriptor.contentRoot);
-    WriteField(output, ProjectDescriptorFormat::DefaultSceneKey, descriptor.defaultScene);
-    WriteBool(output, ProjectDescriptorFormat::DisableEnginePluginsByDefaultKey, descriptor.disableEnginePluginsByDefault);
-
-    output << ProjectDescriptorFormat::TargetPlatformsCountKey << '=' << descriptor.targetPlatforms.size() << '\n';
-    for (std::size_t index = 0; index < descriptor.targetPlatforms.size(); ++index) {
-        WriteField(output, "targetPlatforms." + std::to_string(index), descriptor.targetPlatforms[index]);
-    }
-
-    output << ProjectDescriptorFormat::ModulesCountKey << '=' << descriptor.modules.size() << '\n';
-    for (std::size_t index = 0; index < descriptor.modules.size(); ++index) {
-        const std::string prefix = "modules." + std::to_string(index) + '.';
-        WriteField(output, prefix + "name", descriptor.modules[index].name);
-        WriteField(output, prefix + "type", descriptor.modules[index].type);
-        WriteField(output, prefix + "loadingPhase", descriptor.modules[index].loadingPhase);
-    }
-
-    output << ProjectDescriptorFormat::PluginsCountKey << '=' << descriptor.plugins.size() << '\n';
-    for (std::size_t index = 0; index < descriptor.plugins.size(); ++index) {
-        const std::string prefix = "plugins." + std::to_string(index) + '.';
-        WriteField(output, prefix + "name", descriptor.plugins[index].name);
-        WriteBool(output, prefix + "enabled", descriptor.plugins[index].enabled);
-    }
-
-    return output.good();
+    const ProjectDescriptorIntegrity integrity = ProjectDescriptorIntegrityService::ComputeFile(path);
+    const ProjectDescriptorMeta meta{
+        .fileVersion = ProjectDescriptorMeta::CurrentFileVersion,
+        .projectName = descriptor.name,
+        .engineAssociation = descriptor.engineAssociation,
+        .defaultScene = descriptor.defaultScene,
+        .projectFile = path.filename(),
+        .byteSize = integrity.byteSize,
+        .contentHashFnv1a64 = integrity.contentHashFnv1a64,
+        .contentChecksumCrc32 = integrity.contentChecksumCrc32,
+        .targetPlatformCount = static_cast<std::uint32_t>(descriptor.targetPlatforms.size()),
+        .moduleCount = static_cast<std::uint32_t>(descriptor.modules.size()),
+        .pluginCount = static_cast<std::uint32_t>(descriptor.plugins.size()),
+    };
+    return ProjectDescriptorMetaWriter::Write(MetaPathFor(path), meta);
 }
 
 } // namespace kb::project
