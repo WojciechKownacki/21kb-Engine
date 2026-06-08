@@ -9,6 +9,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesDeleteConfirmOverlayWindow.hpp"
 #include "rendering/ProjectFilesFilterMenuOverlayWindow.hpp"
+#include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include <optional>
@@ -39,7 +40,10 @@ struct MainWindowPaintContext {
     };
 }
 
-[[nodiscard]] std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> ResolveViewportLayouts(const DockLayout& layout, const EditorDockModel& dockModel) {
+[[nodiscard]] std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> ResolveViewportLayouts(
+    const DockLayout& layout,
+    const EditorDockModel& dockModel,
+    const EditorSceneContext& sceneContext) {
     std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) {
@@ -52,7 +56,7 @@ struct MainWindowPaintContext {
         const RECT content = ToRect(panelLayout.content);
         layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
             .viewportKey = panelLayout.panelId,
-            .bounds = SceneViewportToolbarRenderer::Resolve(content).renderArea,
+            .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId)).renderArea,
         });
     }
     return layouts;
@@ -72,6 +76,34 @@ struct MainWindowPaintContext {
     return std::nullopt;
 }
 
+struct SceneDropdownContent {
+    RECT content{};
+    std::uint64_t panelId = 0U;
+};
+
+[[nodiscard]] std::optional<SceneDropdownContent> ResolveSceneDropdownContent(
+    const DockLayout& layout,
+    const EditorDockModel& dockModel,
+    const EditorSceneContext& sceneContext) {
+    for (const DockPanelLayout& panelLayout : layout.panels) {
+        if (!panelLayout.active) {
+            continue;
+        }
+        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
+        if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
+            continue;
+        }
+        if (sceneContext.ViewportPreview(panelLayout.panelId).ToolbarDropdown() == EditorViewportToolbarDropdown::None) {
+            continue;
+        }
+        return SceneDropdownContent{
+            .content = ToRect(panelLayout.content),
+            .panelId = panelLayout.panelId,
+        };
+    }
+    return std::nullopt;
+}
+
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<MainWindowPaintContext*>(context);
     const DockLayout layout = paintContext->dockModel->Queries().BuildLayout(
@@ -84,7 +116,8 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->metrics->tabWidth,
         paintContext->metrics->splitterSize,
         paintContext->metrics->panelPadding);
-    const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> viewportLayouts = ResolveViewportLayouts(layout, *paintContext->dockModel);
+    const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> viewportLayouts =
+        ResolveViewportLayouts(layout, *paintContext->dockModel, *paintContext->sceneContext);
     paintContext->sceneViewport->SyncHostSurfaceLayouts(
         paintContext->window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{viewportLayouts.data(), viewportLayouts.size()});
@@ -129,6 +162,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 [[nodiscard]] ProjectFilesFilterMenuOverlayWindow& MainFilterMenuOverlay() {
     static ProjectFilesFilterMenuOverlayWindow overlay;
+    return overlay;
+}
+
+[[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& MainSceneToolbarDropdownOverlay() {
+    static SceneViewportToolbarDropdownOverlayWindow overlay;
     return overlay;
 }
 
@@ -185,6 +223,11 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         }
     } else {
         MainFilterMenuOverlay().Hide();
+    }
+    if (const std::optional<SceneDropdownContent> sceneDropdown = ResolveSceneDropdownContent(layout, dockModel, sceneContext); sceneDropdown.has_value()) {
+        MainSceneToolbarDropdownOverlay().Show(window, sceneDropdown->content, sceneDropdown->panelId, theme, sceneContext);
+    } else {
+        MainSceneToolbarDropdownOverlay().Hide();
     }
 }
 
