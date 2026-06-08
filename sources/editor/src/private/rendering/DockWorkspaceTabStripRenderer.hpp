@@ -1,6 +1,7 @@
 #pragma once
 
 #include "docking/EditorDockModel.hpp"
+#include "docking/DockPointerDrag.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
 
 #if defined(_WIN32)
@@ -14,7 +15,7 @@ namespace kb::editor {
 class DockWorkspaceTabStripRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const;
+    void Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, const EditorTheme& theme) const;
 #endif
 };
 
