@@ -172,10 +172,12 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
         const kb::scene::Vec3 planeNormal{gizmo.centerPlaneNx, gizmo.centerPlaneNy, gizmo.centerPlaneNz};
         const kb::scene::Vec3 startPoint{gizmo.centerStartPx, gizmo.centerStartPy, gizmo.centerStartPz};
         if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, dragStartTarget, planeNormal, currentPoint)) {
+            const kb::scene::Vec3 unsnappedPosition =
+                EditorSceneViewportMath::Add(dragStartTarget, EditorSceneViewportMath::Sub(currentPoint, startPoint));
             EditorSceneViewportMath::MoveEntityTo(
                 sceneContext.Scene(),
                 selected,
-                EditorSceneViewportMath::Add(dragStartTarget, EditorSceneViewportMath::Sub(currentPoint, startPoint)));
+                sceneContext.ViewportPreview(hit->panelId).SnapPosition(unsnappedPosition));
         }
         return true;
     }
@@ -183,7 +185,11 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
     if (gizmo.draggedAxis >= 0) {
         kb::scene::Vec3 delta{};
         if (EditorSceneViewportGizmoDragSolver::AxisDragDelta(*hit, dragStartTarget, gizmo.axisDrag, delta)) {
-            EditorSceneViewportMath::MoveEntityTo(sceneContext.Scene(), selected, EditorSceneViewportMath::Add(dragStartTarget, delta));
+            const kb::scene::Vec3 unsnappedPosition = EditorSceneViewportMath::Add(dragStartTarget, delta);
+            EditorSceneViewportMath::MoveEntityTo(
+                sceneContext.Scene(),
+                selected,
+                sceneContext.ViewportPreview(hit->panelId).SnapPositionAxis(unsnappedPosition, gizmo.draggedAxis));
         }
         return true;
     }
