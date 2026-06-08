@@ -15,6 +15,7 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
     include/engine/project/ProjectDescriptor.hpp
+    include/engine/project/ProjectDescriptorMeta.hpp
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
@@ -183,7 +184,10 @@ add_library(kb_engine STATIC
     src/assets/AssetRuntimeLoadService.cpp
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
-    src/project/ProjectDescriptorFieldCodec.cpp
+    src/project/ProjectDescriptorBinaryIO.cpp
+    src/project/ProjectDescriptorIntegrity.cpp
+    src/project/ProjectDescriptorMetaReader.cpp
+    src/project/ProjectDescriptorMetaWriter.cpp
     src/project/ProjectDescriptorReader.cpp
     src/project/ProjectDescriptorWriter.cpp
     src/project/ProjectManager.cpp
@@ -510,8 +514,11 @@ add_library(kb_engine STATIC
     src/private/assets/AssetLoaderRegistry.hpp
     src/private/assets/AssetPathUtilities.hpp
     src/private/assets/AssetRuntimeLoadService.hpp
-    src/private/project/ProjectDescriptorFieldCodec.hpp
     src/private/project/ProjectDescriptorFormat.hpp
+    src/private/project/ProjectDescriptorBinaryIO.hpp
+    src/private/project/ProjectDescriptorIntegrity.hpp
+    src/private/project/ProjectDescriptorMetaReader.hpp
+    src/private/project/ProjectDescriptorMetaWriter.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp

@@ -2,6 +2,7 @@
 #include "EditorTestSuites.hpp"
 
 #include "docking/EditorDockModel.hpp"
+#include "rendering/EditorToolbarLayout.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
 
@@ -250,6 +251,23 @@ void RunFloatingWindowControlHitTest() {
     kb::editor::tests::Require(hitTester.HitTest(metrics, clientWidth, close.x + close.width, close.y + 1) == kb::editor::FloatingWindowControlKind::None, "Control hit test should reject the exclusive right edge");
 }
 
+void RunMainToolbarTransportButtonsAreVerticallyCenteredTest() {
+#if defined(_WIN32)
+    const RECT toolbarRect{ 0, 24, 1280, 72 };
+    const kb::editor::EditorToolbarRects toolbar = kb::editor::EditorToolbarLayout::ResolveToolbar(toolbarRect);
+    const int toolbarCenterY = toolbarRect.top + ((toolbarRect.bottom - toolbarRect.top) / 2);
+
+    const auto requireCentered = [toolbarCenterY](const RECT& button, const char* message) {
+        const int buttonCenterY = button.top + ((button.bottom - button.top) / 2);
+        kb::editor::tests::Require(buttonCenterY == toolbarCenterY, message);
+    };
+
+    requireCentered(toolbar.playButton, "Play transport button should be vertically centered in the toolbar");
+    requireCentered(toolbar.pauseButton, "Pause transport button should be vertically centered in the toolbar");
+    requireCentered(toolbar.stopButton, "Stop transport button should be vertically centered in the toolbar");
+#endif
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -262,6 +280,7 @@ void RunEditorDockingTests() {
     RunTabStripDropInsertsAtResolvedIndexTest();
     RunSplitterAndFloatingResizeTest();
     RunFloatingWindowControlHitTest();
+    RunMainToolbarTransportButtonsAreVerticallyCenteredTest();
 }
 
 } // namespace kb::editor::tests
