@@ -29,9 +29,9 @@ void RunProfileCycleAndResolutionTest() {
     state.CycleProfile();
     state.CycleProfile();
     const kb::editor::EditorViewportProfile phone = state.Profile();
-    kb::editor::tests::Require(phone.kind == kb::editor::EditorViewportProfileKind::PhonePortrait, "Viewport profile cycle did not select phone portrait");
-    kb::editor::tests::Require(phone.devicePreview, "Phone portrait should be a device preview profile");
-    kb::editor::tests::Require(phone.safeArea.top > 0U && phone.safeArea.bottom > 0U, "Phone portrait should expose safe area insets");
+    kb::editor::tests::Require(phone.kind == kb::editor::EditorViewportProfileKind::PhoneLandscape, "Viewport profile cycle should skip the removed phone portrait profile");
+    kb::editor::tests::Require(phone.devicePreview, "Phone landscape should remain a device preview profile");
+    kb::editor::tests::Require(phone.safeArea.left > 0U && phone.safeArea.right > 0U, "Phone landscape should expose safe area insets");
 }
 
 void RunFitCameraAndCustomTest() {
