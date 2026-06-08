@@ -47,6 +47,7 @@ public:
     [[nodiscard]] EditorViewportCameraState* ActiveViewportCamera() noexcept;
     [[nodiscard]] const EditorViewportCameraState* ActiveViewportCamera() const noexcept;
     void EndViewportCameraNavigation() noexcept;
+    [[nodiscard]] bool CloseViewportToolbarDropdowns() noexcept;
     [[nodiscard]] InspectorPanelState& Inspector() noexcept;
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;

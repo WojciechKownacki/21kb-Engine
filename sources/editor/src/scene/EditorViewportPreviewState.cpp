@@ -154,6 +154,10 @@ float EditorViewportPreviewState::SnapStep() const noexcept {
     return snapStep_;
 }
 
+EditorViewportToolbarDropdown EditorViewportPreviewState::ToolbarDropdown() const noexcept {
+    return toolbarDropdown_;
+}
+
 void EditorViewportPreviewState::SetProfile(EditorViewportProfileKind kind) noexcept {
     profile_ = kind;
 }
@@ -229,10 +233,24 @@ void EditorViewportPreviewState::ToggleSnapEnabled() noexcept {
 
 void EditorViewportPreviewState::CycleGridSpacing() noexcept {
     gridSpacing_ = CycleFloat(kGridSpacings, gridSpacing_);
+    CloseToolbarDropdown();
 }
 
 void EditorViewportPreviewState::CycleSnapStep() noexcept {
     snapStep_ = CycleFloat(kSnapSteps, snapStep_);
+    CloseToolbarDropdown();
+}
+
+void EditorViewportPreviewState::OpenToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept {
+    toolbarDropdown_ = dropdown;
+}
+
+void EditorViewportPreviewState::ToggleToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept {
+    toolbarDropdown_ = toolbarDropdown_ == dropdown ? EditorViewportToolbarDropdown::None : dropdown;
+}
+
+void EditorViewportPreviewState::CloseToolbarDropdown() noexcept {
+    toolbarDropdown_ = EditorViewportToolbarDropdown::None;
 }
 
 kb::scene::Vec3 EditorViewportPreviewState::SnapPosition(kb::scene::Vec3 position) const noexcept {
@@ -316,6 +334,22 @@ const char* EditorViewportGridSpacingLabel(float spacing) noexcept {
 const char* EditorViewportSnapStepLabel(float step) noexcept {
     constexpr std::array<const char*, 6U> labels{ "0.25m", "0.5m", "1m", "2m", "5m", "10m" };
     return StepLabel(kSnapSteps, labels, step);
+}
+
+std::size_t EditorViewportGridSpacingOptionCount() noexcept {
+    return kGridSpacings.size();
+}
+
+float EditorViewportGridSpacingOption(std::size_t index) noexcept {
+    return index < kGridSpacings.size() ? kGridSpacings[index] : kGridSpacings.front();
+}
+
+std::size_t EditorViewportSnapStepOptionCount() noexcept {
+    return kSnapSteps.size();
+}
+
+float EditorViewportSnapStepOption(std::size_t index) noexcept {
+    return index < kSnapSteps.size() ? kSnapSteps[index] : kSnapSteps.front();
 }
 
 } // namespace kb::editor

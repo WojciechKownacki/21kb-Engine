@@ -87,4 +87,16 @@ const EditorSceneGizmoState& EditorSceneViewportStateStore::Gizmo() const noexce
     return gizmo_;
 }
 
+bool EditorSceneViewportStateStore::CloseToolbarDropdowns() noexcept {
+    bool changed = false;
+    for (auto& [key, preview] : previews_) {
+        static_cast<void>(key);
+        if (preview.ToolbarDropdown() != EditorViewportToolbarDropdown::None) {
+            preview.CloseToolbarDropdown();
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 } // namespace kb::editor

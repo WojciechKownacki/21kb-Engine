@@ -62,7 +62,9 @@ std::optional<EditorSceneViewportHit> EditorSceneViewportHitResolver::ResolveRay
         return std::nullopt;
     }
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(panelHit.sceneContent->content);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(
+        panelHit.sceneContent->content,
+        sceneContext.ViewportPreview(panelHit.sceneContent->panelId));
     if (!EditorSceneViewportMath::Contains(sceneRects.renderArea, x, y)) {
         return std::nullopt;
     }
