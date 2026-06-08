@@ -21,11 +21,6 @@ EditorSceneViewportToolbarPointerController::EditorSceneViewportToolbarPointerCo
 bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const EditorResolvedPanelContent& panelContent, int x, int y) {
     const SceneViewportToolbarRects toolbar = SceneViewportToolbarRenderer::Resolve(panelContent.content);
     EditorViewportPreviewState& preview = sceneContext_.ViewportPreview(panelContent.panelId);
-    if (PointInRect(toolbar.profileButton, x, y)) {
-        preview.CycleProfile();
-        sceneViewport_.RequestPresent();
-        return true;
-    }
     if (PointInRect(toolbar.gridToggleButton, x, y)) {
         preview.ToggleGridVisible();
         sceneViewport_.RequestPresent();
