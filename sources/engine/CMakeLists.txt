@@ -14,6 +14,10 @@ add_library(kb_engine STATIC
     include/engine/assets/ImportedAssetHeaderReader.hpp
     include/engine/assets/ImportedAssetLoader.hpp
     include/engine/assets/IAssetLoader.hpp
+    include/engine/project/ProjectDescriptor.hpp
+    include/engine/project/ProjectDescriptorReader.hpp
+    include/engine/project/ProjectDescriptorWriter.hpp
+    include/engine/project/ProjectManager.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/ComponentEvent.hpp
     include/engine/ecs/ComponentFieldAccess.hpp
@@ -68,6 +72,7 @@ add_library(kb_engine STATIC
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneAssets.hpp
+    include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
     include/engine/scene/SceneCameraComponents.hpp
     include/engine/scene/SceneComponentQueries.hpp
@@ -78,6 +83,8 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneHierarchyAccess.hpp
     include/engine/scene/SceneHistory.hpp
     include/engine/scene/SceneLightComponents.hpp
+    include/engine/scene/SceneDocument.hpp
+    include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/SceneObject.hpp
@@ -176,6 +183,10 @@ add_library(kb_engine STATIC
     src/assets/AssetRuntimeLoadService.cpp
     src/assets/ImportedAssetHeaderReader.cpp
     src/assets/ImportedAssetLoader.cpp
+    src/project/ProjectDescriptorFieldCodec.cpp
+    src/project/ProjectDescriptorReader.cpp
+    src/project/ProjectDescriptorWriter.cpp
+    src/project/ProjectManager.cpp
     src/ecs/ComponentRegistry.cpp
     src/ecs/ComponentEventMapper.cpp
     src/ecs/ComponentFieldAccess.cpp
@@ -264,6 +275,13 @@ add_library(kb_engine STATIC
     src/scene/SceneRuntime.cpp
     src/scene/SceneState.cpp
     src/scene/SceneTransformIterationService.cpp
+    src/scene/asset/io/SceneAssetBinaryIO.cpp
+    src/scene/asset/io/SceneAssetIntegrity.cpp
+    src/scene/asset/io/SceneAssetMetaReader.cpp
+    src/scene/asset/io/SceneAssetMetaWriter.cpp
+    src/scene/asset/io/SceneAssetReader.cpp
+    src/scene/asset/io/SceneAssetWriter.cpp
+    src/scene/assets/SceneAssetLoader.cpp
     src/scene/components/SceneCameraApi.cpp
     src/scene/components/SceneCameraStorage.cpp
     src/scene/components/SceneComponentAccess.cpp
@@ -308,6 +326,8 @@ add_library(kb_engine STATIC
     src/scene/hierarchy/SceneHierarchyRootsService.cpp
     src/scene/hierarchy/SceneHierarchyRootCollector.cpp
     src/scene/history/SceneHistoryStack.cpp
+    src/scene/document/SceneDocumentCaptureService.cpp
+    src/scene/document/SceneDocumentService.cpp
     src/scene/modules/components/SceneCameraModule.cpp
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
@@ -490,6 +510,8 @@ add_library(kb_engine STATIC
     src/private/assets/AssetLoaderRegistry.hpp
     src/private/assets/AssetPathUtilities.hpp
     src/private/assets/AssetRuntimeLoadService.hpp
+    src/private/project/ProjectDescriptorFieldCodec.hpp
+    src/private/project/ProjectDescriptorFormat.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
@@ -529,7 +551,16 @@ add_library(kb_engine STATIC
     src/private/scene/SceneRuntimeService.hpp
     src/private/scene/SceneState.hpp
     src/private/scene/SceneTransformService.hpp
+    src/private/scene/assets/SceneAssetLoader.hpp
+    src/private/scene/asset/io/SceneAssetFormat.hpp
+    src/private/scene/asset/io/SceneAssetBinaryIO.hpp
+    src/private/scene/asset/io/SceneAssetIntegrity.hpp
+    src/private/scene/asset/io/SceneAssetMetaReader.hpp
+    src/private/scene/asset/io/SceneAssetMetaWriter.hpp
+    src/private/scene/asset/io/SceneAssetReader.hpp
+    src/private/scene/asset/io/SceneAssetWriter.hpp
     src/private/scene/assets/ScenePrefabAssetLoader.hpp
+    src/private/scene/document/SceneDocumentCaptureService.hpp
     src/private/scene/prefab/ScenePrefabAppliedPropertyBuilder.hpp
     src/private/scene/prefab/ScenePrefabAssetFacade.hpp
     src/private/scene/prefab/ScenePrefabCameraOverrideReporter.hpp
@@ -791,6 +822,7 @@ if(BUILD_TESTING)
         tests/EcsSnapshotTests.cpp
         tests/EcsTestSuites.hpp
         tests/EcsTestTypes.hpp
+        tests/ProjectSceneTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp

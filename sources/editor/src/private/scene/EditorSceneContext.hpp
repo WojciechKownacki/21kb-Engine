@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
@@ -52,6 +53,12 @@ public:
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
+    [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
+    [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
+    [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
+    [[nodiscard]] bool NewScene();
+    [[nodiscard]] bool OpenDefaultScene();
+    [[nodiscard]] bool SaveCurrentScene();
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
     [[nodiscard]] bool UndoSceneCommand();
@@ -126,8 +133,15 @@ public:
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    void ResetSceneEditState();
+    void SelectFirstSceneEntityOrClear() noexcept;
+    [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
+    [[nodiscard]] std::filesystem::path ResolveDefaultScenePath() const;
 
     kb::scene::Scene scene_;
+    kb::project::ProjectDescriptor project_;
+    std::filesystem::path projectFile_;
+    std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;

@@ -71,6 +71,7 @@ add_executable(kb_editor
     src/app/EditorWindowMessageRouter.cpp
     src/app/main.cpp
     src/project/EditorProjectAssetIndex.cpp
+    src/project/EditorProjectBootstrap.cpp
     src/project/EditorProjectPanelHitTester.cpp
     src/project/EditorProjectPaths.cpp
     src/assets/EditorAssetBrowserAssetRows.cpp
@@ -323,6 +324,7 @@ add_executable(kb_editor
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
     src/private/project/EditorProjectAssetIndex.hpp
+    src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
     src/private/project/EditorProjectPaths.hpp
     src/private/rendering/DockDropPreviewRenderer.hpp
@@ -624,6 +626,7 @@ if(BUILD_TESTING)
         tests/EditorAssetBrowserTests.cpp
         tests/EditorViewportPreviewTests.cpp
         tests/EditorDockingTests.cpp
+        tests/EditorProjectTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorCommandStackTests.cpp
         tests/EditorTestSuites.hpp
@@ -708,6 +711,8 @@ if(BUILD_TESTING)
         src/scene/EditorViewportPreviewState.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorShellInteractionState.cpp
+        src/project/EditorProjectBootstrap.cpp
+        src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
     )
 

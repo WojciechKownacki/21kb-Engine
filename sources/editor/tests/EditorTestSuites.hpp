@@ -7,6 +7,7 @@ void RunEditorAssetBrowserTests();
 void RunEditorCommandStackTests();
 void RunEditorViewportPreviewTests();
 void RunEditorDockingTests();
+void RunEditorProjectTests();
 void RunSvgPathTests();
 
 } // namespace kb::editor::tests

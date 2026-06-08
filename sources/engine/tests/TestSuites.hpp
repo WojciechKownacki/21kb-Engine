@@ -7,6 +7,7 @@ void RunEcsRuntimeTests();
 void RunSceneHierarchyTests();
 void RunSceneSystemTests();
 void RunScenePrefabTests();
+void RunProjectSceneTests();
 void RunScriptRuntimeTests();
 void RunVisualGraphTests();
 
