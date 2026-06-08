@@ -233,12 +233,12 @@ LRESULT HubApplication::HandleMessage(HWND window, UINT message, WPARAM wParam, 
 }
 
 void HubApplication::OpenCreateDialog(HWND window) {
-    const std::optional<std::filesystem::path> folder = HubProjectActions::BrowseProjectFolder(window);
-    if (!folder.has_value()) {
+    const std::optional<std::filesystem::path> projectFile = HubProjectActions::BrowseNewProjectFile(window);
+    if (!projectFile.has_value()) {
         return;
     }
 
-    const HubCreateProjectResult result = HubProjectActions::CreateProjectInFolder(*folder);
+    const HubCreateProjectResult result = HubProjectActions::CreateProjectFile(*projectFile);
     if (!result.succeeded) {
         state_.status = result.error;
         MessageBoxW(window, result.error.c_str(), L"21kb Hub", MB_ICONERROR | MB_OK);
