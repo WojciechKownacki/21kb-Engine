@@ -91,15 +91,19 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
         const bgfx::FrameBufferHandle frameBuffer = overlayFinalTarget ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
         const RenderExtent extent = overlayFinalTarget ? desc.finalComposite.extent : desc.target.viewport.extent;
         const RenderViewportRect outputRect = overlayFinalTarget ? desc.finalComposite.outputRect : RenderViewportRect{};
-        const SceneGridPassDesc gridDesc{
-            .viewId = viewportPlan.viewIds.sceneOverlays,
-            .frameBuffer = frameBuffer,
-            .extent = extent,
-            .outputRect = outputRect,
-            .camera = camera,
-            .sceneDepthTexture = desc.target.depthTexture,
-        };
-        static_cast<void>(gridPass_.Submit(gridDesc));
+        if (desc.editorGrid.visible) {
+            const SceneGridPassDesc gridDesc{
+                .viewId = viewportPlan.viewIds.sceneOverlays,
+                .frameBuffer = frameBuffer,
+                .extent = extent,
+                .outputRect = outputRect,
+                .camera = camera,
+                .sceneDepthTexture = desc.target.depthTexture,
+                .minorSpacingMeters = desc.editorGrid.minorSpacingMeters,
+                .majorEvery = desc.editorGrid.majorEvery,
+            };
+            static_cast<void>(gridPass_.Submit(gridDesc));
+        }
         static_cast<void>(gizmoPass_.Submit(SceneGizmoPassDesc{
             .viewId = viewportPlan.viewIds.sceneOverlays,
             .frameBuffer = frameBuffer,
