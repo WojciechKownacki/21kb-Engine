@@ -140,6 +140,11 @@ constexpr float kMinGizmoDepth = 0.25F;
         .selectedEntityIds = std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() },
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = true,
+        .editorGrid = kb::render::RenderSceneSubmitDesc::EditorGridDesc{
+            .minorSpacingMeters = viewportState.GridSpacing(),
+            .majorEvery = viewportState.GridMajorEvery(),
+            .visible = viewportState.GridVisible(),
+        },
         .editorGizmo = gizmo,
         .drawSafeArea = profile.devicePreview,
     };

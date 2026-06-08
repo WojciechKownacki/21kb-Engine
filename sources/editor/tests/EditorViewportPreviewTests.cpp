@@ -50,6 +50,30 @@ void RunFitCameraAndCustomTest() {
     kb::editor::tests::Require(state.RenderHeightForPanel(600U) == 16384U, "Custom viewport height was not clamped");
 }
 
+void RunGridAndSnapStateTest() {
+    kb::editor::EditorViewportPreviewState state;
+    kb::editor::tests::Require(state.GridVisible(), "Viewport grid should be visible by default");
+    kb::editor::tests::Require(!state.SnapEnabled(), "Viewport snap should be disabled by default");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportGridSpacingLabel(state.GridSpacing())) == "1m", "Default grid spacing label is wrong");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportSnapStepLabel(state.SnapStep())) == "1m", "Default snap step label is wrong");
+
+    state.ToggleGridVisible();
+    kb::editor::tests::Require(!state.GridVisible(), "Grid visibility toggle failed");
+    state.CycleGridSpacing();
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportGridSpacingLabel(state.GridSpacing())) == "2m", "Grid spacing cycle failed");
+
+    state.ToggleSnapEnabled();
+    state.SetSnapStep(0.5F);
+    const kb::scene::Vec3 snapped = state.SnapPosition(kb::scene::Vec3{ 1.24F, 1.26F, -1.26F });
+    RequireNear(snapped.x, 1.0F, 0.001F, "SnapPosition did not snap x");
+    RequireNear(snapped.y, 1.5F, 0.001F, "SnapPosition did not snap y");
+    RequireNear(snapped.z, -1.5F, 0.001F, "SnapPosition did not snap z");
+
+    const kb::scene::Vec3 axisSnapped = state.SnapPositionAxis(kb::scene::Vec3{ 1.24F, 1.26F, -1.26F }, 0);
+    RequireNear(axisSnapped.x, 1.0F, 0.001F, "Axis snap did not snap the requested axis");
+    RequireNear(axisSnapped.y, 1.26F, 0.001F, "Axis snap changed an unrelated axis");
+}
+
 void RunViewportCameraAxesTest() {
     kb::editor::EditorViewportCameraState camera;
     const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
@@ -173,6 +197,7 @@ namespace kb::editor::tests {
 void RunEditorViewportPreviewTests() {
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
+    RunGridAndSnapStateTest();
     RunViewportCameraAxesTest();
     RunViewportCameraNavigationTest();
     RunViewportCameraOrbitTest();

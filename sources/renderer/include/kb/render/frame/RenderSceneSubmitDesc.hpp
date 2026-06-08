@@ -122,6 +122,12 @@ struct RenderPostProcessTargetBinding {
 };
 
 struct RenderSceneSubmitDesc {
+    struct EditorGridDesc {
+        float minorSpacingMeters = 1.0F;
+        std::uint32_t majorEvery = 10U;
+        bool visible = true;
+    };
+
     struct EditorGizmoDesc {
         std::array<float, 3> targetPosition{0.0F, 0.0F, 0.0F};
         float worldScale = 1.0F;
@@ -142,6 +148,7 @@ struct RenderSceneSubmitDesc {
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
     bool editorSceneOverlaysEnabled = true;
+    EditorGridDesc editorGrid{};
     EditorGizmoDesc editorGizmo{};
 
     [[nodiscard]] bool IsValid() const noexcept {
