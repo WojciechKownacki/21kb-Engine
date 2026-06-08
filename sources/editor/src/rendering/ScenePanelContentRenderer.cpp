@@ -167,7 +167,7 @@ void ScenePanelContentRenderer::Paint(
         return;
     }
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
     const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
     if (sceneViewportHost != nullptr) {
         sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);

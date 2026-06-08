@@ -1,4 +1,4 @@
-add_executable(kb_editor
+add_executable(kb_editor WIN32
     include/kb/editor/EditorApplication.hpp
     include/kb/editor/assets/EditorAssetBrowserTypes.hpp
     include/kb/editor/docking/DockTypes.hpp
@@ -396,6 +396,7 @@ add_executable(kb_editor
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
+    src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
     src/private/rendering/HierarchyToolbarLayout.hpp
@@ -513,6 +514,7 @@ add_executable(kb_editor
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
+    src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
     src/rendering/ScenePanelContentRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
     src/rendering/SvgPathArcConverter.cpp
@@ -615,7 +617,7 @@ target_link_libraries(kb_editor
         kb_renderer
 )
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)

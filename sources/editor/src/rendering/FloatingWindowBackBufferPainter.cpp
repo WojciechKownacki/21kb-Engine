@@ -6,6 +6,7 @@
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
 namespace kb::editor {
@@ -28,7 +29,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         content.top += paintContext->metrics->floatingChromeHeight;
         const EditorSceneBgfxViewport::HostSurfaceLayout layout{
             .viewportKey = paintContext->panel->id,
-            .bounds = SceneViewportToolbarRenderer::Resolve(content).renderArea,
+            .bounds = SceneViewportToolbarRenderer::Resolve(content, paintContext->sceneContext->ViewportPreview(paintContext->panel->id)).renderArea,
         };
         paintContext->sceneViewport->SyncHostSurfaceLayouts(
             paintContext->window,
@@ -49,6 +50,11 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     }
 }
 
+[[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& FloatingSceneToolbarDropdownOverlay() {
+    static SceneViewportToolbarDropdownOverlayWindow overlay;
+    return overlay;
+}
+
 } // namespace
 
 void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) {
@@ -61,6 +67,14 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);
+    if (panel.kind == DockPanelKind::Scene && sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None) {
+        RECT content{};
+        GetClientRect(window, &content);
+        content.top += metrics.floatingChromeHeight;
+        FloatingSceneToolbarDropdownOverlay().Show(window, content, panel.id, theme, sceneContext);
+    } else {
+        FloatingSceneToolbarDropdownOverlay().Hide();
+    }
     if (panel.kind != DockPanelKind::Console) {
         ConsoleDetailTextOverlay::Hide(window);
     }

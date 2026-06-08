@@ -60,6 +60,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
 
+    if (!panelHit.sceneContent.has_value() && sceneContext_.CloseViewportToolbarDropdowns()) {
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (panelHit.sceneContent.has_value()) {
         EditorSceneViewportToolbarPointerController sceneToolbar(sceneContext_, sceneViewport_);
         if (sceneToolbar.HandlePointerDown(*panelHit.sceneContent, x, y)) {

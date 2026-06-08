@@ -172,6 +172,10 @@ void EditorSceneContext::EndViewportCameraNavigation() noexcept {
     viewportState_.EndCameraNavigation();
 }
 
+bool EditorSceneContext::CloseViewportToolbarDropdowns() noexcept {
+    return viewportState_.CloseToolbarDropdowns();
+}
+
 InspectorPanelState& EditorSceneContext::Inspector() noexcept {
     return inspector_;
 }

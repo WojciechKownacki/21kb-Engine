@@ -56,6 +56,7 @@ public:
 
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
+    [[nodiscard]] bool CloseToolbarDropdowns() noexcept;
 
 private:
     mutable std::unordered_map<std::uint64_t, EditorViewportPreviewState> previews_;
