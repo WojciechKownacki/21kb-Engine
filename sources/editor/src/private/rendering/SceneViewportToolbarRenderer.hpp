@@ -15,7 +15,6 @@ namespace kb::editor {
 
 struct SceneViewportToolbarRects {
     RECT toolbar{};
-    RECT profileButton{};
     RECT gridToggleButton{};
     RECT gridStepButton{};
     RECT snapToggleButton{};
@@ -27,7 +26,7 @@ class SceneViewportToolbarRenderer {
 public:
     SceneViewportToolbarRenderer() = delete;
 
-    static constexpr int Height = 36;
+    static constexpr int Height = 34;
 
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
