@@ -6,6 +6,7 @@ int main() {
     kb::editor::tests::RunEditorAssetBrowserTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
     kb::editor::tests::RunEditorDockingTests();
+    kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunSvgPathTests();
     return 0;
 }
