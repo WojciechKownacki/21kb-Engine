@@ -2,13 +2,17 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
+#include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/ProjectFilesAssetTileFrameRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/ProjectFilesTileTextRenderer.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
+#include "rendering/gdi/ScopedPen.hpp"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace kb::editor {
 namespace {
@@ -29,6 +33,52 @@ using Text = ProjectFilesTileTextRenderer;
     return asset.selected ? RGB(205, 211, 221) : RGB(174, 181, 193);
 }
 
+[[nodiscard]] RECT ThumbnailRect(const RECT& tile, const ProjectFilesAssetTileVisualLayout& visual) noexcept {
+    const int width = Draw::RectWidth(tile);
+    const int availableHeight = std::max(1, static_cast<int>(visual.label.top - tile.top - 11));
+    const int maximumSize = std::max(24, std::min(width - 26, availableHeight));
+    const int size = std::min(maximumSize, 86);
+    const int left = tile.left + (width - size) / 2;
+    const int top = tile.top + std::max(7, (availableHeight - size) / 2 + 5);
+    return RECT{ left, top, left + size, top + size };
+}
+
+void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || target.right <= target.left || target.bottom <= target.top) {
+        return;
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    const int oldMode = SetStretchBltMode(dc, HALFTONE);
+    static_cast<void>(StretchDIBits(
+        dc,
+        target.left,
+        target.top,
+        Draw::RectWidth(target),
+        Draw::RectHeight(target),
+        0,
+        0,
+        image.width,
+        image.height,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+    SetStretchBltMode(dc, oldMode);
+
+    ScopedPen border{ 1, RGB(52, 59, 68) };
+    const ScopedGdiObject selectedPen(dc, border.handle);
+    const ScopedGdiObject selectedBrush(dc, GetStockObject(NULL_BRUSH));
+    Rectangle(dc, target.left, target.top, target.right, target.bottom);
+}
+
 void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetFolderRow& folder, bool highlighted, const EditorAssetBrowserState& state) {
     Frame::Paint(dc, tile, theme, highlighted, highlighted && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
@@ -41,11 +91,15 @@ void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAss
     }
 }
 
-void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state) {
+void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state, EditorMeshThumbnailService& meshThumbnails) {
     Frame::Paint(dc, tile, theme, asset.selected, asset.selected && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
-    Draw::DrawIconWithShadow(dc, visual.icon, HeroIconKind::Cube, AssetIconColor(asset), 2);
+    if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.ThumbnailFor(asset.metadata)) {
+        DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
+    } else {
+        Draw::DrawIconWithShadow(dc, visual.icon, HeroIconKind::Cube, AssetIconColor(asset), 2);
+    }
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());
     } else {
@@ -86,6 +140,7 @@ void ProjectFilesAssetTileRenderer::Paint(
     const EditorAssetBrowserLayoutRects& layout,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
+    EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {
     constexpr int tileGap = 5;
@@ -123,7 +178,7 @@ void ProjectFilesAssetTileRenderer::Paint(
             --relative;
         }
         if (relative >= 0 && relative < static_cast<int>(assets.size())) {
-            DrawAssetTile(dc, tile, theme, assets[static_cast<std::size_t>(relative)], state);
+            DrawAssetTile(dc, tile, theme, assets[static_cast<std::size_t>(relative)], state, meshThumbnails);
         }
     }
     RestoreDC(dc, -1);

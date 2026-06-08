@@ -11,6 +11,7 @@ namespace kb::editor {
 #if defined(_WIN32)
 
 class EditorAssetBrowserState;
+class EditorMeshThumbnailService;
 
 class ProjectFilesAssetViewRenderer {
 public:
@@ -21,6 +22,7 @@ public:
         const EditorAssetBrowserLayoutRects& layout,
         const EditorTheme& theme,
         const EditorAssetBrowserState& state,
+        EditorMeshThumbnailService& meshThumbnails,
         const std::vector<EditorAssetFolderRow>& folders,
         const std::vector<EditorAssetItemRow>& assets);
 };
