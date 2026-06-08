@@ -29,12 +29,13 @@ bool EditorSceneViewportMeshDragPreview::Update(
     }
 
     if (!drag.meshScenePreview.IsValid() || !sceneContext.Scene().Entities().IsAlive(drag.meshScenePreview)) {
+        const kb::scene::Vec3 snappedPosition = sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition);
         if (!sceneContext.HasPendingSceneEditTransaction()) {
             if (!sceneContext.BeginSceneEditTransaction("Create Mesh Entity")) {
                 return false;
             }
         }
-        drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(drag.assetId, hit->groundPosition, false);
+        drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(drag.assetId, snappedPosition, false);
         drag.meshScenePreviewCommitted = false;
         if (!drag.meshScenePreview.IsValid()) {
             sceneContext.CancelSceneEditTransaction();
@@ -42,7 +43,10 @@ bool EditorSceneViewportMeshDragPreview::Update(
         }
     }
 
-    EditorSceneViewportMath::MoveEntityTo(sceneContext.Scene(), drag.meshScenePreview, hit->groundPosition);
+    EditorSceneViewportMath::MoveEntityTo(
+        sceneContext.Scene(),
+        drag.meshScenePreview,
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
     sceneContext.SelectEntity(drag.meshScenePreview);
     return true;
 }
@@ -68,7 +72,10 @@ bool EditorSceneViewportMeshDragPreview::Commit(
     }
 
     if (drag.meshScenePreview.IsValid() && sceneContext.Scene().Entities().IsAlive(drag.meshScenePreview)) {
-        EditorSceneViewportMath::MoveEntityTo(sceneContext.Scene(), drag.meshScenePreview, hit->groundPosition);
+        EditorSceneViewportMath::MoveEntityTo(
+            sceneContext.Scene(),
+            drag.meshScenePreview,
+            sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
         sceneContext.SelectEntity(drag.meshScenePreview);
         drag.meshScenePreviewCommitted = true;
         if (sceneContext.HasPendingSceneEditTransaction()) {
@@ -77,7 +84,10 @@ bool EditorSceneViewportMeshDragPreview::Commit(
         return true;
     }
 
-    drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(drag.assetId, hit->groundPosition, true);
+    drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(
+        drag.assetId,
+        sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition),
+        true);
     drag.meshScenePreviewCommitted = drag.meshScenePreview.IsValid();
     return drag.meshScenePreviewCommitted;
 }

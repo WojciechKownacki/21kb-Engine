@@ -44,6 +44,7 @@ public:
         std::array<std::uint64_t, 1U> selectedEntityIds{};
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;
+        render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         bool drawSafeArea = false;
     };

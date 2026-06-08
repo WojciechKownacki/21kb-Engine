@@ -14,6 +14,8 @@ struct SceneGridPassDesc {
     RenderViewportRect outputRect{};
     const SceneRenderCamera* camera = nullptr;
     bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
+    float minorSpacingMeters = 1.0F;
+    std::uint32_t majorEvery = 10U;
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

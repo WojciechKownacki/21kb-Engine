@@ -30,8 +30,6 @@ struct GridCamera {
 };
 
 constexpr float kPlaneY = 0.0F;
-constexpr float kMinorSpacingMeters = 1.0F;
-constexpr std::uint32_t kMajorEvery = 10U;
 constexpr float kFarFadeStartMeters = 220.0F;
 constexpr float kFarFadeEndMeters = 1600.0F;
 constexpr float kMinorLineWidthPixels = 1.00F;
@@ -127,7 +125,7 @@ constexpr float kAxisAlpha = 0.55F;
     return std::floor(worldCoord / anchorSpacing) * anchorSpacing;
 }
 
-[[nodiscard]] GridCamera CameraFromMatrices(const SceneRenderCamera& camera) noexcept {
+[[nodiscard]] GridCamera CameraFromMatrices(const SceneRenderCamera& camera, float minorSpacingMeters, std::uint32_t majorEvery) noexcept {
     float inverseView[16]{};
     bx::mtxInverse(inverseView, camera.view.data());
 
@@ -141,7 +139,8 @@ constexpr float kAxisAlpha = 0.55F;
     const float nearClip = orthographic ? ExtractOrthoNearClip(camera.projection, homogeneousDepth) : ExtractNearClip(camera.projection);
     const float farClip = orthographic ? ExtractOrthoFarClip(camera.projection, homogeneousDepth) : 0.0F;
 
-    const float majorSpacing = kMinorSpacingMeters * static_cast<float>(kMajorEvery);
+    const float minorSpacing = std::clamp(minorSpacingMeters, 0.01F, 1000.0F);
+    const float majorSpacing = minorSpacing * static_cast<float>(std::clamp(majorEvery, 2U, 1000U));
     const float anchorSpacing = majorSpacing * 10.0F;
     std::array<float, 16> viewProjection{};
     bx::mtxMul(viewProjection.data(), camera.view.data(), camera.projection.data());
@@ -194,7 +193,8 @@ SceneGridPass::~SceneGridPass() {
 }
 
 bool SceneGridPassDesc::IsValid() const noexcept {
-    return extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr;
+    return extent.IsValid() && (!outputRect.extent.IsValid() || outputRect.IsValid()) && camera != nullptr &&
+           std::isfinite(minorSpacingMeters) && minorSpacingMeters > 0.0F && majorEvery >= 2U;
 }
 
 bool SceneGridPass::Initialize() {
@@ -260,9 +260,10 @@ bool SceneGridPass::Submit(const SceneGridPassDesc& desc) const {
         return false;
     }
 
-    const GridCamera camera = CameraFromMatrices(*desc.camera);
-    const float majorSpacing = kMinorSpacingMeters * static_cast<float>(kMajorEvery);
-    const std::array<float, 4> gridParams{ kMinorSpacingMeters, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
+    const float minorSpacing = std::clamp(desc.minorSpacingMeters, 0.01F, 1000.0F);
+    const float majorSpacing = minorSpacing * static_cast<float>(std::clamp(desc.majorEvery, 2U, 1000U));
+    const GridCamera camera = CameraFromMatrices(*desc.camera, minorSpacing, desc.majorEvery);
+    const std::array<float, 4> gridParams{ minorSpacing, majorSpacing, kFarFadeStartMeters, kFarFadeEndMeters };
     const std::array<float, 4> gridWidths{ kMinorLineWidthPixels, kMajorLineWidthPixels, kAxisLineWidthPixels, 0.0F };
     const std::array<float, 4> gridStyle{ kMinorAlpha, kMajorAlpha, kAxisAlpha, 0.0F };
     const bool depthTextureValid = bgfx::isValid(desc.sceneDepthTexture);
