@@ -25,6 +25,7 @@ struct MainWindowPaintContext {
     const EditorMetrics* metrics = nullptr;
     const EditorSceneContext* sceneContext = nullptr;
     const DockDropPreview* preview = nullptr;
+    const DockPointerDrag* dockDrag = nullptr;
     const EditorPointerDragState* drag = nullptr;
     const EditorPlayModeState* playMode = nullptr;
     const EditorShellInteractionState* shellInteraction = nullptr;
@@ -139,6 +140,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         *paintContext->metrics,
         *paintContext->sceneContext,
         nullptr,
+        paintContext->dockDrag,
         *paintContext->playMode,
         *paintContext->shellInteraction,
         presentSceneViewports ? paintContext->sceneViewport : nullptr);
@@ -172,7 +174,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 } // namespace
 
-void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
+void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
     static_cast<void>(renderBackendSettings);
     MainWindowPaintContext context{
         .window = window,
@@ -181,6 +183,7 @@ void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dock
         .metrics = &metrics,
         .sceneContext = &sceneContext,
         .preview = preview,
+        .dockDrag = dockDrag,
         .drag = &drag,
         .playMode = &playMode,
         .shellInteraction = &shellInteraction,
