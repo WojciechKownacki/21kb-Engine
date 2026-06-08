@@ -27,8 +27,8 @@ public:
     [[nodiscard]] static std::filesystem::path DefaultProjectLocation();
     [[nodiscard]] static std::optional<std::filesystem::path> BrowseProjectFile(HWND owner);
     [[nodiscard]] static std::optional<std::filesystem::path> BrowseFolder(HWND owner, const std::filesystem::path& initialFolder);
-    [[nodiscard]] static std::optional<std::filesystem::path> BrowseProjectFolder(HWND owner);
-    [[nodiscard]] static HubCreateProjectResult CreateProjectInFolder(const std::filesystem::path& projectRoot);
+    [[nodiscard]] static std::optional<std::filesystem::path> BrowseNewProjectFile(HWND owner);
+    [[nodiscard]] static HubCreateProjectResult CreateProjectFile(const std::filesystem::path& projectFile);
     [[nodiscard]] static bool LaunchEditor(HWND owner, const std::filesystem::path& projectFile, std::wstring& error);
 };
 
