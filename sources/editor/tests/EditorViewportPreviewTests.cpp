@@ -61,8 +61,23 @@ void RunGridAndSnapStateTest() {
     kb::editor::tests::Require(!state.GridVisible(), "Grid visibility toggle failed");
     state.CycleGridSpacing();
     kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportGridSpacingLabel(state.GridSpacing())) == "2m", "Grid spacing cycle failed");
+    kb::editor::tests::Require(kb::editor::EditorViewportGridSpacingOptionCount() == 6U, "Grid spacing dropdown option count is wrong");
+    state.ToggleToolbarDropdown(kb::editor::EditorViewportToolbarDropdown::GridSpacing);
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::GridSpacing, "Grid spacing dropdown did not open");
+    state.SetGridSpacing(kb::editor::EditorViewportGridSpacingOption(1U));
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::GridSpacing, "Choosing a grid spacing should keep the dropdown open");
+    state.CloseToolbarDropdown();
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::None, "Grid spacing dropdown did not close on explicit dismiss");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportGridSpacingLabel(state.GridSpacing())) == "0.5m", "Grid spacing option selection failed");
 
     state.ToggleSnapEnabled();
+    state.SetSnapStep(0.5F);
+    state.ToggleToolbarDropdown(kb::editor::EditorViewportToolbarDropdown::SnapStep);
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::SnapStep, "Snap dropdown did not open");
+    state.SetSnapStep(kb::editor::EditorViewportSnapStepOption(2U));
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::SnapStep, "Choosing a snap step should keep the dropdown open");
+    state.CloseToolbarDropdown();
+    kb::editor::tests::Require(state.ToolbarDropdown() == kb::editor::EditorViewportToolbarDropdown::None, "Snap dropdown did not close on explicit dismiss");
     state.SetSnapStep(0.5F);
     const kb::scene::Vec3 snapped = state.SnapPosition(kb::scene::Vec3{ 1.24F, 1.26F, -1.26F });
     RequireNear(snapped.x, 1.0F, 0.001F, "SnapPosition did not snap x");

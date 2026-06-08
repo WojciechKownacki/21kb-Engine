@@ -2,6 +2,7 @@
 
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -25,6 +26,12 @@ enum class EditorViewportCameraMode : std::uint8_t {
     EditorCamera,
     GameCamera,
     OverrideCamera,
+};
+
+enum class EditorViewportToolbarDropdown : std::uint8_t {
+    None,
+    GridSpacing,
+    SnapStep,
 };
 
 struct EditorViewportSafeArea {
@@ -56,6 +63,7 @@ public:
     [[nodiscard]] std::uint32_t GridMajorEvery() const noexcept;
     [[nodiscard]] bool SnapEnabled() const noexcept;
     [[nodiscard]] float SnapStep() const noexcept;
+    [[nodiscard]] EditorViewportToolbarDropdown ToolbarDropdown() const noexcept;
 
     void SetProfile(EditorViewportProfileKind kind) noexcept;
     void SetFitMode(EditorViewportFitMode mode) noexcept;
@@ -72,6 +80,9 @@ public:
     void ToggleSnapEnabled() noexcept;
     void CycleGridSpacing() noexcept;
     void CycleSnapStep() noexcept;
+    void OpenToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept;
+    void ToggleToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept;
+    void CloseToolbarDropdown() noexcept;
 
     [[nodiscard]] kb::scene::Vec3 SnapPosition(kb::scene::Vec3 position) const noexcept;
     [[nodiscard]] kb::scene::Vec3 SnapGroundPosition(kb::scene::Vec3 position) const noexcept;
@@ -91,11 +102,16 @@ private:
     std::uint32_t gridMajorEvery_ = 10U;
     bool snapEnabled_ = false;
     float snapStep_ = 1.0F;
+    EditorViewportToolbarDropdown toolbarDropdown_ = EditorViewportToolbarDropdown::None;
 };
 
 [[nodiscard]] const char* EditorViewportFitModeLabel(EditorViewportFitMode mode) noexcept;
 [[nodiscard]] const char* EditorViewportCameraModeLabel(EditorViewportCameraMode mode) noexcept;
 [[nodiscard]] const char* EditorViewportGridSpacingLabel(float spacing) noexcept;
 [[nodiscard]] const char* EditorViewportSnapStepLabel(float step) noexcept;
+[[nodiscard]] std::size_t EditorViewportGridSpacingOptionCount() noexcept;
+[[nodiscard]] float EditorViewportGridSpacingOption(std::size_t index) noexcept;
+[[nodiscard]] std::size_t EditorViewportSnapStepOptionCount() noexcept;
+[[nodiscard]] float EditorViewportSnapStepOption(std::size_t index) noexcept;
 
 } // namespace kb::editor
