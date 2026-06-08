@@ -41,6 +41,7 @@ bool DockDragOperationHandler::Move(
     if (!TabDragThresholdReached(drag, x, y)) {
         return false;
     }
+    drag.manualTabDrag = true;
 
     POINT screen{ x, y };
     ClientToScreen(eventWindow, &screen);
