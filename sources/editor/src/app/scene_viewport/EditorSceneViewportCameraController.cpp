@@ -116,7 +116,9 @@ bool EditorSceneViewportCameraController::HandleMouseWheel(HWND messageWindow, i
         return false;
     }
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(panelHit.sceneContent->content);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(
+        panelHit.sceneContent->content,
+        sceneContext_.ViewportPreview(panelHit.sceneContent->panelId));
     if (!PointInRect(sceneRects.renderArea, x, y)) {
         return false;
     }
@@ -169,7 +171,9 @@ bool EditorSceneViewportCameraController::BeginNavigation(HWND messageWindow, in
         return false;
     }
 
-    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(panelHit.sceneContent->content);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(
+        panelHit.sceneContent->content,
+        sceneContext_.ViewportPreview(panelHit.sceneContent->panelId));
     if (!PointInRect(sceneRects.renderArea, x, y)) {
         return false;
     }

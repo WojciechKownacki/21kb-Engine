@@ -14,7 +14,7 @@ namespace kb::editor {
 class DockWorkspaceTabStripRenderer {
 public:
 #if defined(_WIN32)
-    void Paint(HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const;
+    void Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const;
 #endif
 };
 
