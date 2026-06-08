@@ -27,6 +27,7 @@ struct DockPointerDrag {
     HWND sourceWindow = nullptr;
 #endif
     bool detached = false;
+    bool manualTabDrag = false;
 };
 
 } // namespace kb::editor

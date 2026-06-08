@@ -21,6 +21,7 @@ public:
     void Configure(HWND mainWindow, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows, const EditorMetrics& metrics) noexcept;
 
     [[nodiscard]] const DockDropPreview* DropPreview() const noexcept;
+    [[nodiscard]] const DockPointerDrag* ActiveDrag() const noexcept;
 
     [[nodiscard]] bool HandlePointerDown(HWND window, int x, int y);
     [[nodiscard]] bool HandlePointerMove(HWND window, int x, int y, bool leftButtonDown);

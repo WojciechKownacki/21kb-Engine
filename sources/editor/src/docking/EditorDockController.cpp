@@ -18,6 +18,10 @@ const DockDropPreview* EditorDockController::DropPreview() const noexcept {
     return dropPreview_ ? &*dropPreview_ : nullptr;
 }
 
+const DockPointerDrag* EditorDockController::ActiveDrag() const noexcept {
+    return drag_ ? &*drag_ : nullptr;
+}
+
 bool EditorDockController::HandlePointerDown(HWND window, int x, int y) {
     if (!Ready()) {
         return false;

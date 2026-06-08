@@ -10,7 +10,7 @@
 
 namespace kb::editor {
 
-void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const {
+void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, int width, int height, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport* sceneViewport) const {
     const DockLayout layout = dockModel.Queries().BuildLayout(
         width,
         height,
@@ -26,7 +26,7 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, int width, int height, co
     toolbarRenderer.PaintToolbar(dc, GdiDrawing::ToRect(layout.toolbar), theme, playMode, shellInteraction);
 
     DockWorkspaceChromeRenderer{}.Paint(dc, layout, dockModel, theme);
-    DockWorkspaceTabStripRenderer{}.Paint(parent, dc, layout, dockModel, theme);
+    DockWorkspaceTabStripRenderer{}.Paint(parent, dc, layout, dockModel, dockDrag, theme);
     DockWorkspaceContentRenderer{}.Paint(parent, dc, layout, dockModel, theme, metrics, sceneContext, sceneViewport);
 
     if (preview != nullptr) {

@@ -34,7 +34,7 @@ EditorPaintDispatcher::EditorPaintDispatcher(
 
 void EditorPaintDispatcher::Paint(HWND paintWindow) const {
     if (paintWindow == nullptr || IsMainWindow(paintWindow)) {
-        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
+        renderer_.Paint(mainWindow_, dockModel_, theme_, metrics_, sceneContext_, dockController_.DropPreview(), dockController_.ActiveDrag(), pointerDrag_, renderBackendSettings_, playMode_, shellInteraction_, sceneViewport_);
         return;
     }
 

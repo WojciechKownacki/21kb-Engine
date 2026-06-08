@@ -159,7 +159,7 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
     };
 }
 
-[[nodiscard]] DockRect ResolveAnimatedTabRect(HWND owner, const DockPanelLayout& panelLayout, bool orderChanged) {
+[[nodiscard]] DockRect ResolveAnimatedTabRect(HWND owner, const DockPanelLayout& panelLayout, bool allowAnimation, bool orderChanged) {
     static std::unordered_map<std::uint32_t, TabSlideAnimation> animations;
 
     const ULONGLONG now = GetTickCount64();
@@ -173,6 +173,16 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
             .initialized = true,
             .animating = false,
         };
+        return ToDockRect(target);
+    }
+
+    if (!allowAnimation) {
+        if (!SameRect(animation.target, target) || animation.animating) {
+            animation.start = target;
+            animation.target = target;
+            animation.startTick = now;
+            animation.animating = false;
+        }
         return ToDockRect(target);
     }
 
@@ -232,6 +242,14 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
     return animatedLeaves;
 }
 
+[[nodiscard]] bool AllowsManualTabSlide(const DockPointerDrag* dockDrag, std::uint32_t leafId) noexcept {
+    return dockDrag != nullptr
+        && dockDrag->kind == DockHitKind::Tab
+        && dockDrag->manualTabDrag
+        && !dockDrag->detached
+        && dockDrag->sourceLeafId == leafId;
+}
+
 void PaintRenderedTab(HDC dc, const RenderedTab& tab, const EditorTheme& theme) {
     DrawTabChrome(dc, GdiDrawing::ToRect(tab.layout.tab), tab.layout.active, theme);
     DrawTabContent(dc, tab.layout, *tab.panel, theme);
@@ -239,7 +257,7 @@ void PaintRenderedTab(HDC dc, const RenderedTab& tab, const EditorTheme& theme) 
 
 } // namespace
 
-void DockWorkspaceTabStripRenderer::Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const EditorTheme& theme) const {
+void DockWorkspaceTabStripRenderer::Paint(HWND owner, HDC dc, const DockLayout& layout, const EditorDockModel& dockModel, const DockPointerDrag* dockDrag, const EditorTheme& theme) const {
     ScopedFont titleFont(kTabFontSize, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, titleFont.handle);
     std::vector<RenderedTab> inactiveTabs;
@@ -254,7 +272,8 @@ void DockWorkspaceTabStripRenderer::Paint(HWND owner, HDC dc, const DockLayout& 
 
         DockPanelLayout animatedLayout = panelLayout;
         const auto animateLeaf = animatedLeaves.find(panelLayout.leafId);
-        animatedLayout.tab = ResolveAnimatedTabRect(owner, panelLayout, animateLeaf != animatedLeaves.end() && animateLeaf->second);
+        const bool orderChanged = animateLeaf != animatedLeaves.end() && animateLeaf->second;
+        animatedLayout.tab = ResolveAnimatedTabRect(owner, panelLayout, AllowsManualTabSlide(dockDrag, panelLayout.leafId), orderChanged);
         RenderedTab rendered{
             .layout = animatedLayout,
             .panel = panel,
