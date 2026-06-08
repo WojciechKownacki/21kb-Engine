@@ -59,6 +59,27 @@ namespace {
     return escaped;
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> BrowseNewProjectFileLegacy(HWND owner) {
+    wchar_t fileName[MAX_PATH] = L"NewProject.21kbproject";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = L"21kb Project (*.21kbproject)\0*.21kbproject\0";
+    dialog.lpstrFile = fileName;
+    dialog.nMaxFile = static_cast<DWORD>(std::size(fileName));
+    dialog.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_OVERWRITEPROMPT;
+    dialog.lpstrDefExt = L"21kbproject";
+
+    if (GetSaveFileNameW(&dialog) == FALSE) {
+        return std::nullopt;
+    }
+    std::filesystem::path path{ fileName };
+    if (path.extension() != L".21kbproject") {
+        path.replace_extension(L".21kbproject");
+    }
+    return path;
+}
+
 } // namespace
 
 std::filesystem::path HubProjectActions::DefaultProjectLocation() {
@@ -101,18 +122,24 @@ std::optional<std::filesystem::path> HubProjectActions::BrowseFolder(HWND owner,
     return std::filesystem::path{ path };
 }
 
-std::optional<std::filesystem::path> HubProjectActions::BrowseProjectFolder(HWND owner) {
-    IFileDialog* dialog = nullptr;
-    const HRESULT created = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
+std::optional<std::filesystem::path> HubProjectActions::BrowseNewProjectFile(HWND owner) {
+    IFileSaveDialog* dialog = nullptr;
+    const HRESULT created = CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog));
     if (FAILED(created) || dialog == nullptr) {
-        return BrowseFolder(owner, DefaultProjectLocation());
+        return BrowseNewProjectFileLegacy(owner);
     }
 
     DWORD options = 0;
     if (SUCCEEDED(dialog->GetOptions(&options))) {
-        static_cast<void>(dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST));
+        static_cast<void>(dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_OVERWRITEPROMPT));
     }
-    static_cast<void>(dialog->SetTitle(L"Choose or create a 21kb project folder"));
+    static_cast<void>(dialog->SetTitle(L"Create 21kb project"));
+    static_cast<void>(dialog->SetFileName(L"NewProject.21kbproject"));
+    static_cast<void>(dialog->SetDefaultExtension(L"21kbproject"));
+    const COMDLG_FILTERSPEC filters[] = {
+        { L"21kb Project", L"*.21kbproject" },
+    };
+    static_cast<void>(dialog->SetFileTypes(static_cast<UINT>(std::size(filters)), filters));
 
     IShellItem* initialFolder = nullptr;
     const std::filesystem::path defaultLocation = DefaultProjectLocation();
@@ -143,55 +170,73 @@ std::optional<std::filesystem::path> HubProjectActions::BrowseProjectFolder(HWND
 
     std::filesystem::path path{ filePath };
     CoTaskMemFree(filePath);
+    if (path.extension() != L".21kbproject") {
+        path.replace_extension(L".21kbproject");
+    }
     return path;
 }
 
-HubCreateProjectResult HubProjectActions::CreateProjectInFolder(const std::filesystem::path& projectRoot) {
-    if (projectRoot.empty()) {
+HubCreateProjectResult HubProjectActions::CreateProjectFile(const std::filesystem::path& projectFile) {
+    if (projectFile.empty()) {
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = {}, .error = L"Project file path is empty." };
+    }
+    if (projectFile.extension() != L".21kbproject") {
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project file must use .21kbproject extension." };
+    }
+
+    const std::filesystem::path projectParent = projectFile.parent_path();
+    if (projectParent.empty()) {
         return HubCreateProjectResult{ .succeeded = false, .projectFile = {}, .error = L"Project folder is empty." };
     }
 
-    const std::wstring projectName = HubText::SanitizeProjectName(projectRoot.filename().wstring());
+    const std::wstring projectName = HubText::SanitizeProjectName(projectFile.stem().wstring());
     if (projectName.empty()) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = {}, .error = L"Project folder name is invalid." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project name is invalid." };
     }
 
-    const std::filesystem::path projectFile = projectRoot / (projectName + L".21kbproject");
+    const std::filesystem::path projectRoot = projectParent / projectName;
+    const std::filesystem::path descriptorFile = projectRoot / (projectName + L".21kbproject");
     std::error_code error;
-    if (std::filesystem::exists(projectFile, error) && !error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project descriptor already exists in this folder." };
+    if (std::filesystem::exists(descriptorFile, error) && !error) {
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor already exists in this folder." };
     }
 
     std::filesystem::create_directories(projectRoot, error);
     if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project folder could not be created." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be created." };
     }
 
     const std::filesystem::directory_iterator firstEntry(projectRoot, error);
     if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project folder could not be inspected." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be inspected." };
     }
-    if (firstEntry != std::filesystem::directory_iterator{}) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Choose an empty folder for a new project." };
+    for (std::filesystem::directory_iterator entry = firstEntry; entry != std::filesystem::directory_iterator{}; entry.increment(error)) {
+        if (error) {
+            return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project folder could not be inspected." };
+        }
+        const std::filesystem::path existing = entry->path();
+        if (existing.filename() != L"Assets" && existing != descriptorFile) {
+            return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Choose an empty project name or remove the existing folder first." };
+        }
     }
 
     std::filesystem::create_directories(projectRoot / "Assets" / "Scenes", error);
     if (error) {
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Scene folder could not be created." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Scene folder could not be created." };
     }
     std::filesystem::create_directories(projectRoot / "Assets" / "Prefabs", error);
     if (error) {
         std::filesystem::remove_all(projectRoot / "Assets", error);
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Prefab folder could not be created." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Prefab folder could not be created." };
     }
 
     kb::project::ProjectDescriptor descriptor = MakeDescriptor(projectName);
-    if (!kb::project::ProjectManager::CreateProject(projectFile, descriptor)) {
+    if (!kb::project::ProjectManager::CreateProject(descriptorFile, descriptor)) {
         std::filesystem::remove_all(projectRoot / "Assets", error);
-        return HubCreateProjectResult{ .succeeded = false, .projectFile = projectFile, .error = L"Project descriptor could not be written." };
+        return HubCreateProjectResult{ .succeeded = false, .projectFile = descriptorFile, .error = L"Project descriptor could not be written." };
     }
 
-    return HubCreateProjectResult{ .succeeded = true, .projectFile = projectFile, .error = {} };
+    return HubCreateProjectResult{ .succeeded = true, .projectFile = descriptorFile, .error = {} };
 }
 
 bool HubProjectActions::LaunchEditor(HWND owner, const std::filesystem::path& projectFile, std::wstring& error) {

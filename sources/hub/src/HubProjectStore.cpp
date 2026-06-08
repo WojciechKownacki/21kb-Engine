@@ -128,12 +128,6 @@ std::vector<HubProjectItem> HubProjectStore::Load() {
         AddOrPromote(projects, std::filesystem::path{ line });
     }
 
-    const std::filesystem::path localProject = std::filesystem::current_path() / "Project" / "Project.21kbproject";
-    std::error_code error;
-    if (std::filesystem::is_regular_file(localProject, error) && !error) {
-        AddOrPromote(projects, localProject);
-    }
-
     return projects;
 }
 

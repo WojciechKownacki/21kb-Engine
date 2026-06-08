@@ -8,7 +8,6 @@ namespace {
 
 constexpr int kTransportButtonSize = 36;
 constexpr int kTransportButtonGap = 6;
-constexpr int kTransportVisualOffsetY = 4;
 constexpr int kMenuLeftInset = 10;
 constexpr int kMenuTopInset = 2;
 constexpr int kMenuItemHeightPad = 3;
@@ -36,7 +35,7 @@ constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
 
 [[nodiscard]] RECT ButtonRect(const RECT& toolbar, int left, int size) noexcept {
     const int toolbarHeight = static_cast<int>(toolbar.bottom - toolbar.top);
-    const int top = toolbar.top + std::max(0, (toolbarHeight - size) / 2) + kTransportVisualOffsetY;
+    const int top = toolbar.top + std::max(0, (toolbarHeight - size) / 2);
     return RECT{
         .left = toolbar.left + left,
         .top = top,
