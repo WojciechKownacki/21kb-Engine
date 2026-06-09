@@ -1,6 +1,7 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "platform/win32/EditorSceneFileDialog.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
@@ -93,12 +94,18 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
     if (const std::optional<int> row = EditorToolbarRenderer::HitTestMenuRow(menu, x, y); row.has_value()) {
         if (shellInteraction.OpenMenu() == EditorMenuCommand::File) {
             if (*row == 0) {
-                if (sceneContext.NewScene()) {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"creating a new scene");
+                if (resolution.has_value() && sceneContext.NewScene(*resolution)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 1) {
-                const std::optional<std::filesystem::path> path = EditorSceneFileDialog::Open(mainWindow, EditorProjectPaths::ScenesRoot());
-                if (path.has_value() && sceneContext.OpenScene(*path)) {
+                const std::optional<EditorDirtySceneResolution> resolution =
+                    EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow, sceneContext, L"opening another scene");
+                const std::optional<std::filesystem::path> path = resolution.has_value()
+                    ? EditorSceneFileDialog::Open(mainWindow, EditorProjectPaths::ScenesRoot())
+                    : std::nullopt;
+                if (path.has_value() && sceneContext.OpenScene(*path, *resolution)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {

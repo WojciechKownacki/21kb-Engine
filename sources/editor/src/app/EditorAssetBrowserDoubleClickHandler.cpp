@@ -1,6 +1,7 @@
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "assets/EditorAssetBrowserHitPayloadResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
@@ -40,6 +41,7 @@ namespace {
 } // namespace
 
 EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(
+    HWND owner,
     const RECT& content,
     int x,
     int y,
@@ -61,7 +63,12 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
         if (!metadata.has_value() || !IsSceneDocumentAsset(*metadata)) {
             return EditorAssetBrowserDoubleClickResult::None;
         }
-        return sceneContext.OpenScene(ResolveAssetPath(*metadata, manager))
+        const std::optional<EditorDirtySceneResolution> resolution =
+            EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(owner, sceneContext, L"opening another scene");
+        if (!resolution.has_value()) {
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        return sceneContext.OpenScene(ResolveAssetPath(*metadata, manager), *resolution)
             ? EditorAssetBrowserDoubleClickResult::SceneOpened
             : EditorAssetBrowserDoubleClickResult::None;
     }
