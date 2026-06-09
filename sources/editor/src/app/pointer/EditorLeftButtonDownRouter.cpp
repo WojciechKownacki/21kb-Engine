@@ -47,7 +47,7 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 }
 
 [[nodiscard]] int HierarchyContentHeight(const EditorSceneContext& sceneContext) {
-    return static_cast<int>(sceneContext.HierarchyRows().size()) * kHierarchyRowHeight;
+    return static_cast<int>(sceneContext.HierarchyRowCount()) * kHierarchyRowHeight;
 }
 
 [[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {

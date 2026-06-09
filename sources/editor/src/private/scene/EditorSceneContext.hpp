@@ -16,6 +16,7 @@
 
 #include <string>
 #include <string_view>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -87,7 +88,9 @@ public:
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex) noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept;
 
-    [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
+    [[nodiscard]] const std::vector<EditorHierarchyRow>& HierarchyRows() const;
+    [[nodiscard]] std::size_t HierarchyRowCount() const;
+    [[nodiscard]] const EditorHierarchyRow* HierarchyRowAt(std::size_t rowIndex) const;
     [[nodiscard]] int HierarchyScrollOffset() const noexcept;
     [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
     [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
@@ -156,6 +159,8 @@ public:
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    void InvalidateHierarchyRows() noexcept;
+    void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
     void SelectFirstSceneEntityOrClear() noexcept;
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
@@ -173,6 +178,8 @@ private:
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
+    mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;
+    mutable bool hierarchyRowsDirty_ = true;
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;

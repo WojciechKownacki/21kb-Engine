@@ -60,7 +60,7 @@ void DrawScrollbar(HDC dc, const RECT& listContent, const EditorSceneContext& sc
 } // namespace
 
 void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
-    const std::vector<EditorHierarchyRow> rows = sceneContext.HierarchyRows();
+    const std::vector<EditorHierarchyRow>& rows = sceneContext.HierarchyRows();
 
     GdiDrawing::FillRectColor(dc, content, HierarchyPanelStyle::PanelBackground());
     const RECT listContent = HierarchyPanelToolbarRenderer{}.Paint(dc, content, theme, sceneContext);
@@ -71,19 +71,18 @@ void HierarchyPanelRenderer::Paint(HDC dc, const RECT& content, const EditorThem
     const bool hasScrollbar = contentHeight > viewportHeight;
     const int rowsRight = hasScrollbar ? listContent.right - kHierarchyScrollbarWidth : listContent.right;
 
-    int y = listContent.top - scroll;
-    for (const EditorHierarchyRow& row : rows) {
-        RECT rowRect{ listContent.left, y, rowsRight, y + kHierarchyRowHeight };
-        if (rowRect.bottom <= listContent.top) {
+    if (viewportHeight > 0 && !rows.empty()) {
+        const std::size_t firstRow = static_cast<std::size_t>(scroll / kHierarchyRowHeight);
+        const int firstRowOffset = scroll % kHierarchyRowHeight;
+        const std::size_t visibleRows = static_cast<std::size_t>((viewportHeight + firstRowOffset + kHierarchyRowHeight - 1) / kHierarchyRowHeight);
+        const std::size_t lastRow = std::min(rows.size(), firstRow + visibleRows);
+        int y = listContent.top - firstRowOffset;
+        for (std::size_t rowIndex = firstRow; rowIndex < lastRow; ++rowIndex) {
+            const EditorHierarchyRow& row = rows[rowIndex];
+            RECT rowRect{ listContent.left, y, rowsRight, y + kHierarchyRowHeight };
+            HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext);
             y += kHierarchyRowHeight;
-            continue;
         }
-        if (rowRect.top >= listContent.bottom) {
-            break;
-        }
-
-        HierarchyRowRenderer{}.Paint(dc, rowRect, theme, row, sceneContext);
-        y += kHierarchyRowHeight;
     }
     DrawScrollbar(dc, listContent, sceneContext, contentHeight);
 }

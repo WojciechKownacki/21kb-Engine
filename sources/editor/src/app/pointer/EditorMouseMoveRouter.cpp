@@ -27,7 +27,7 @@ namespace {
 [[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
     const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
     const int viewportHeight = RectHeight(list);
-    const int contentHeight = static_cast<int>(sceneContext.HierarchyRows().size()) * kHierarchyRowHeight;
+    const int contentHeight = static_cast<int>(sceneContext.HierarchyRowCount()) * kHierarchyRowHeight;
     return std::max(0, contentHeight - viewportHeight);
 }
 

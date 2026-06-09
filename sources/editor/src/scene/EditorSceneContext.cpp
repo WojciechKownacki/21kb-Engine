@@ -277,6 +277,7 @@ void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     if (sceneRenderRevision_ == 0U) {
         sceneRenderRevision_ = 1U;
     }
+    InvalidateHierarchyRows();
     sceneRenderFullDirty_ = true;
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
     sceneRenderDirtyEntityIds_.clear();
@@ -441,7 +442,7 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex) noexcept {
 }
 
 bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept {
-    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
     if (IsHierarchyRenaming()) {
         static_cast<void>(CommitHierarchyRename());
     }
@@ -452,8 +453,18 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive,
     return selected;
 }
 
-std::vector<EditorHierarchyRow> EditorSceneContext::HierarchyRows() const {
-    return EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+const std::vector<EditorHierarchyRow>& EditorSceneContext::HierarchyRows() const {
+    RebuildHierarchyRowsIfNeeded();
+    return hierarchyRowsCache_;
+}
+
+std::size_t EditorSceneContext::HierarchyRowCount() const {
+    return HierarchyRows().size();
+}
+
+const EditorHierarchyRow* EditorSceneContext::HierarchyRowAt(std::size_t rowIndex) const {
+    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
+    return rowIndex < rows.size() ? &rows[rowIndex] : nullptr;
 }
 
 int EditorSceneContext::HierarchyScrollOffset() const noexcept {
@@ -526,18 +537,22 @@ void EditorSceneContext::FocusHierarchySearch(bool focused) noexcept {
 
 void EditorSceneContext::SetHierarchySearchQuery(std::string query) {
     hierarchySearch_.SetQuery(std::move(query));
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::AppendHierarchySearchText(wchar_t character) {
     hierarchySearch_.AppendAscii(character);
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::InsertHierarchySearchText(std::string_view text) {
     hierarchySearch_.Insert(text);
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::BackspaceHierarchySearch() {
     hierarchySearch_.Backspace();
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::SelectAllHierarchySearch() noexcept {
@@ -546,6 +561,7 @@ void EditorSceneContext::SelectAllHierarchySearch() noexcept {
 
 void EditorSceneContext::ClearHierarchySearch() {
     hierarchySearch_.Clear();
+    InvalidateHierarchyRows();
 }
 
 bool EditorSceneContext::BeginHierarchyRename() {
@@ -561,6 +577,7 @@ bool EditorSceneContext::BeginHierarchyRename() {
     hierarchyRenameEntity_ = entity;
     hierarchyRenameBuffer_ = scene_.Entities().Name(entity);
     hierarchyRenameSelectingAll_ = true;
+    InvalidateHierarchyRows();
     return true;
 }
 
@@ -574,6 +591,7 @@ void EditorSceneContext::AppendHierarchyRenameText(wchar_t character) {
             hierarchyRenameSelectingAll_ = false;
         }
         hierarchyRenameBuffer_.push_back(static_cast<char>(character));
+        InvalidateHierarchyRows();
     }
 }
 
@@ -590,6 +608,7 @@ void EditorSceneContext::InsertHierarchyRenameText(std::string_view text) {
             hierarchyRenameBuffer_.push_back(character);
         }
     }
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::SetHierarchyRenameText(std::string text) {
@@ -598,6 +617,7 @@ void EditorSceneContext::SetHierarchyRenameText(std::string text) {
     }
     hierarchyRenameBuffer_ = std::move(text);
     hierarchyRenameSelectingAll_ = false;
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::BackspaceHierarchyRename() {
@@ -607,16 +627,19 @@ void EditorSceneContext::BackspaceHierarchyRename() {
     if (hierarchyRenameSelectingAll_) {
         hierarchyRenameBuffer_.clear();
         hierarchyRenameSelectingAll_ = false;
+        InvalidateHierarchyRows();
         return;
     }
     if (!hierarchyRenameBuffer_.empty()) {
         hierarchyRenameBuffer_.pop_back();
     }
+    InvalidateHierarchyRows();
 }
 
 void EditorSceneContext::SelectAllHierarchyRename() noexcept {
     if (IsHierarchyRenaming()) {
         hierarchyRenameSelectingAll_ = true;
+        InvalidateHierarchyRows();
     }
 }
 
@@ -626,6 +649,7 @@ void EditorSceneContext::ClearHierarchyRename() noexcept {
     }
     hierarchyRenameBuffer_.clear();
     hierarchyRenameSelectingAll_ = false;
+    InvalidateHierarchyRows();
 }
 
 bool EditorSceneContext::CommitHierarchyRename() {
@@ -656,9 +680,13 @@ bool EditorSceneContext::CommitHierarchyRename() {
 }
 
 void EditorSceneContext::CancelHierarchyRename() noexcept {
+    const bool changed = hierarchyRenameEntity_.IsValid() || !hierarchyRenameBuffer_.empty() || hierarchyRenameSelectingAll_;
     hierarchyRenameEntity_ = {};
     hierarchyRenameBuffer_.clear();
     hierarchyRenameSelectingAll_ = false;
+    if (changed) {
+        InvalidateHierarchyRows();
+    }
 }
 
 bool EditorSceneContext::BeginAssetFolderCreation() {
@@ -868,12 +896,13 @@ bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path>
 }
 
 bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
-    const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+    const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
     if (rowIndex >= rows.size() || !rows[rowIndex].hasChildren) {
         return false;
     }
 
     hierarchyExpansion_.SetExpanded(rows[rowIndex].entity, !rows[rowIndex].expanded);
+    InvalidateHierarchyRows();
     return true;
 }
 
@@ -945,7 +974,7 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
         return anyMoved;
     });
     if (moved) {
-        const std::vector<EditorHierarchyRow> rows = HierarchyRows();
+        const std::vector<EditorHierarchyRow>& rows = HierarchyRows();
         hierarchySelection_.Clear();
         bool first = true;
         for (const kb::scene::SceneEntity entity : children) {
@@ -1260,11 +1289,25 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
         hierarchySearch_,
         pendingSceneTransactionLabel_,
         sceneRenderRevision_,
+        hierarchyRowsDirty_,
     };
 }
 
 bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
     return SceneCommands().Execute(std::move(label), std::move(mutation));
+}
+
+void EditorSceneContext::InvalidateHierarchyRows() noexcept {
+    hierarchyRowsDirty_ = true;
+}
+
+void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
+    if (!hierarchyRowsDirty_) {
+        return;
+    }
+
+    hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+    hierarchyRowsDirty_ = false;
 }
 
 void EditorSceneContext::ResetSceneEditState() {
