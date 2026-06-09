@@ -272,6 +272,10 @@ const std::vector<std::uint64_t>& EditorSceneContext::SceneRenderDirtyEntityIds(
     return sceneRenderDirtyEntityIds_;
 }
 
+bool EditorSceneContext::SceneDocumentDirty() const noexcept {
+    return sceneDocumentDirty_;
+}
+
 void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     ++sceneRenderRevision_;
     if (sceneRenderRevision_ == 0U) {
@@ -310,7 +314,66 @@ void EditorSceneContext::AcknowledgeSceneRenderSubmitted() noexcept {
     sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
 }
 
+void EditorSceneContext::MarkSceneDocumentDirty() noexcept {
+    sceneDocumentDirty_ = true;
+}
+
+bool EditorSceneContext::SaveDirtySceneDocument(std::string_view reason) {
+    if (!sceneDocumentDirty_) {
+        return true;
+    }
+    if (!SaveCurrentScene()) {
+        console_.Error("Project", "Dirty scene save failed before " + std::string{ reason } + ".");
+        return false;
+    }
+    return true;
+}
+
+bool EditorSceneContext::BeginPlayModeSceneSession() {
+    if (playModeSceneSession_.Active()) {
+        return true;
+    }
+    if (!SaveDirtySceneDocument("entering play mode")) {
+        return false;
+    }
+
+    const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
+    if (!playModeSceneSession_.Begin(scene_, name)) {
+        console_.Error("Play Mode", "Scene snapshot could not be captured.");
+        return false;
+    }
+    console_.Info("Play Mode", "Captured editor scene snapshot.");
+    return true;
+}
+
+bool EditorSceneContext::RestorePlayModeSceneSession() {
+    if (!playModeSceneSession_.Active()) {
+        return true;
+    }
+    if (!playModeSceneSession_.Restore(scene_)) {
+        console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
+        return false;
+    }
+
+    SelectFirstSceneEntityOrClear();
+    ResetSceneEditState();
+    ClearSceneDocumentDirty();
+    console_.Info("Play Mode", "Restored editor scene snapshot.");
+    return true;
+}
+
+bool EditorSceneContext::HasPlayModeSceneSession() const noexcept {
+    return playModeSceneSession_.Active();
+}
+
 bool EditorSceneContext::NewScene() {
+    if (!RestorePlayModeSceneSession()) {
+        return false;
+    }
+    if (!SaveDirtySceneDocument("creating a new scene")) {
+        return false;
+    }
+
     const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
     for (const kb::scene::SceneEntity root : roots) {
         scene_.Entities().Destroy(root);
@@ -319,11 +382,19 @@ bool EditorSceneContext::NewScene() {
     hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
     currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
     ResetSceneEditState();
+    MarkSceneDocumentDirty();
     console_.Info("Project", "New scene created: " + currentScenePath_.generic_string());
     return true;
 }
 
 bool EditorSceneContext::OpenDefaultScene() {
+    if (!RestorePlayModeSceneSession()) {
+        return false;
+    }
+    if (!SaveDirtySceneDocument("opening the default scene")) {
+        return false;
+    }
+
     const std::filesystem::path defaultScenePath = ResolveDefaultScenePath();
 
     if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, defaultScenePath)) {
@@ -334,6 +405,7 @@ bool EditorSceneContext::OpenDefaultScene() {
     currentScenePath_ = defaultScenePath;
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
+    ClearSceneDocumentDirty();
     console_.Info("Project", "Opened scene: " + currentScenePath_.generic_string());
     return true;
 }
@@ -350,6 +422,7 @@ bool EditorSceneContext::SaveCurrentScene() {
     }
 
     static_cast<void>(scene_.Assets().Discover());
+    ClearSceneDocumentDirty();
     console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
     return true;
 }
@@ -758,6 +831,7 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
     auto command = std::make_unique<EditorScenePrefabRemoveCommand>(*this, "Delete Entity", deleting, payloads);
     const bool deleted = commandStack_.Execute(std::move(command));
     if (deleted) {
+        MarkSceneDocumentDirty();
         console_.Info("Hierarchy", "Selected hierarchy entity deleted.");
     } else {
         console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
@@ -786,6 +860,7 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
     const bool duplicated = commandStack_.Execute(std::move(command));
     if (duplicated) {
         SelectHierarchyEntities(duplicateCommand->CreatedEntities());
+        MarkSceneDocumentDirty();
     }
 
     if (duplicated) {
@@ -817,6 +892,7 @@ bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::s
     commandStack_.PushExecuted(std::move(command));
     SelectHierarchyEntities(alive);
     MarkSceneRenderDirty();
+    MarkSceneDocumentDirty();
     scene_.Runtime().SynchronizeTransforms();
     return true;
 }
@@ -1245,6 +1321,7 @@ bool EditorSceneContext::CommitActiveTransformEdit() {
     }
     commandStack_.PushExecuted(std::make_unique<EditorSceneTransformDeltaCommand>(*this, label, std::move(committed)));
     MarkSceneEntitiesRenderDirty(touched);
+    MarkSceneDocumentDirty();
     scene_.Runtime().SynchronizeTransforms();
     return true;
 }
@@ -1289,12 +1366,17 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
         hierarchySearch_,
         pendingSceneTransactionLabel_,
         sceneRenderRevision_,
+        sceneDocumentDirty_,
         hierarchyRowsDirty_,
     };
 }
 
 bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bool()> mutation) {
     return SceneCommands().Execute(std::move(label), std::move(mutation));
+}
+
+void EditorSceneContext::ClearSceneDocumentDirty() noexcept {
+    sceneDocumentDirty_ = false;
 }
 
 void EditorSceneContext::InvalidateHierarchyRows() noexcept {

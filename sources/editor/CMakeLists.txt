@@ -37,6 +37,7 @@ add_executable(kb_editor WIN32
     src/app/EditorPaintDispatcher.cpp
     src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
+    src/app/EditorPlayModeSceneSession.cpp
     src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
     src/app/EditorPointerDragSourceResolver.cpp
@@ -277,6 +278,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPaintDispatcher.hpp
     src/private/app/EditorPendingTextEditCommitter.hpp
     src/private/app/EditorPlayModeState.hpp
+    src/private/app/EditorPlayModeSceneSession.hpp
     src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp
@@ -642,6 +644,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorRuntimeTests.cpp
+        tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
@@ -724,6 +727,7 @@ if(BUILD_TESTING)
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
         src/app/EditorPlayModeState.cpp
+        src/app/EditorPlayModeSceneSession.cpp
         src/app/EditorShellInteractionState.cpp
         src/project/EditorProjectBootstrap.cpp
         src/project/EditorProjectPaths.cpp

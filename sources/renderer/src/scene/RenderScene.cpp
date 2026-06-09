@@ -26,6 +26,7 @@ void RenderScene::Reserve(const RenderSceneReserveDesc& desc) {
         lights_.reserve(desc.lightProxies);
     }
     if (desc.drawGroupKeys > 0U) {
+        drawGroups_.reserve(desc.drawGroupKeys);
         drawGroupLookupScratch_.reserve(desc.drawGroupKeys);
     }
 }
@@ -49,6 +50,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
         proxy.id = AllocateProxyId();
         proxy.desc = desc;
         proxy.dirty = RenderProxyDirtyFlag::All;
+        InvalidateDrawGroups();
         return proxy.id;
     }
 
@@ -56,6 +58,7 @@ RenderProxyId RenderScene::UpsertMesh(const MeshRenderProxyDesc& desc) {
     if (dirty != RenderProxyDirtyFlag::None) {
         proxy.desc = desc;
         proxy.dirty |= dirty;
+        InvalidateDrawGroups();
     }
     return proxy.id;
 }
@@ -97,7 +100,11 @@ RenderProxyId RenderScene::UpsertLight(const LightRenderProxyDesc& desc) {
 }
 
 bool RenderScene::RemoveMesh(std::uint64_t entityId) noexcept {
-    return meshes_.erase(entityId) != 0U;
+    const bool removed = meshes_.erase(entityId) != 0U;
+    if (removed) {
+        InvalidateDrawGroups();
+    }
+    return removed;
 }
 
 bool RenderScene::RemoveCamera(std::uint64_t entityId) noexcept {
@@ -132,6 +139,9 @@ std::uint32_t RenderScene::RemoveMeshesNotInSorted(std::span<const std::uint64_t
         }
         it = meshes_.erase(it);
         ++removed;
+    }
+    if (removed != 0U) {
+        InvalidateDrawGroups();
     }
     return removed;
 }
@@ -212,42 +222,25 @@ std::optional<SceneRenderCamera> RenderScene::BuildPrimaryCamera(std::uint32_t v
     return std::nullopt;
 }
 
+const std::vector<SceneRenderDrawGroup>& RenderScene::DrawGroups() const {
+    RebuildDrawGroupsIfNeeded();
+    return drawGroups_;
+}
+
 void RenderScene::BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const {
-    for (SceneRenderDrawGroup& group : outDrawGroups) {
-        group.instances.clear();
+    outDrawGroups = DrawGroups();
+}
+
+std::size_t RenderScene::DrawGroupCapacity() const noexcept {
+    return drawGroups_.capacity();
+}
+
+std::size_t RenderScene::DrawGroupInstanceCapacity() const noexcept {
+    std::size_t capacity = 0U;
+    for (const SceneRenderDrawGroup& group : drawGroups_) {
+        capacity += group.instances.capacity();
     }
-
-    drawGroupLookupScratch_.clear();
-    drawGroupLookupScratch_.reserve(meshes_.size());
-    std::size_t writeGroupCount = 0U;
-    for (const auto& [entityId, proxy] : meshes_) {
-        const MeshRenderProxyDesc& mesh = proxy.desc;
-        if (!mesh.visible) {
-            static_cast<void>(entityId);
-            continue;
-        }
-
-        const DrawGroupKey key{
-            .meshAssetId = mesh.meshAssetId,
-            .materialAssetId = mesh.materialAssetId,
-        };
-        auto lookupIt = drawGroupLookupScratch_.find(key);
-        if (lookupIt == drawGroupLookupScratch_.end()) {
-            if (writeGroupCount == outDrawGroups.size()) {
-                outDrawGroups.push_back(SceneRenderDrawGroup{});
-            }
-            SceneRenderDrawGroup& group = outDrawGroups[writeGroupCount];
-            group.meshAssetId = mesh.meshAssetId;
-            group.materialAssetId = mesh.materialAssetId;
-            lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
-            ++writeGroupCount;
-        }
-
-        SceneRenderDrawGroup& group = outDrawGroups[lookupIt->second];
-        group.instances.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
-    }
-
-    outDrawGroups.resize(writeGroupCount);
+    return capacity;
 }
 
 std::size_t RenderScene::DrawGroupLookupScratchCapacity() const noexcept {
@@ -282,6 +275,53 @@ void RenderScene::BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t v
 
 RenderProxyId RenderScene::AllocateProxyId() noexcept {
     return RenderProxyId{ nextProxyId_++ };
+}
+
+void RenderScene::InvalidateDrawGroups() noexcept {
+    drawGroupsDirty_ = true;
+}
+
+void RenderScene::RebuildDrawGroupsIfNeeded() const {
+    if (!drawGroupsDirty_) {
+        return;
+    }
+
+    for (SceneRenderDrawGroup& group : drawGroups_) {
+        group.instances.clear();
+    }
+
+    drawGroupLookupScratch_.clear();
+    drawGroupLookupScratch_.reserve(meshes_.size());
+    std::size_t writeGroupCount = 0U;
+    for (const auto& [entityId, proxy] : meshes_) {
+        const MeshRenderProxyDesc& mesh = proxy.desc;
+        if (!mesh.visible) {
+            static_cast<void>(entityId);
+            continue;
+        }
+
+        const DrawGroupKey key{
+            .meshAssetId = mesh.meshAssetId,
+            .materialAssetId = mesh.materialAssetId,
+        };
+        auto lookupIt = drawGroupLookupScratch_.find(key);
+        if (lookupIt == drawGroupLookupScratch_.end()) {
+            if (writeGroupCount == drawGroups_.size()) {
+                drawGroups_.push_back(SceneRenderDrawGroup{});
+            }
+            SceneRenderDrawGroup& group = drawGroups_[writeGroupCount];
+            group.meshAssetId = mesh.meshAssetId;
+            group.materialAssetId = mesh.materialAssetId;
+            lookupIt = drawGroupLookupScratch_.emplace(key, writeGroupCount).first;
+            ++writeGroupCount;
+        }
+
+        SceneRenderDrawGroup& group = drawGroups_[lookupIt->second];
+        group.instances.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
+    }
+
+    drawGroups_.resize(writeGroupCount);
+    drawGroupsDirty_ = false;
 }
 
 } // namespace kb::render

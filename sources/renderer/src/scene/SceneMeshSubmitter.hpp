@@ -10,7 +10,6 @@
 #include <bgfx/bgfx.h>
 
 #include <span>
-#include <vector>
 
 namespace kb::render {
 
@@ -35,7 +34,6 @@ public:
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
         const SceneRenderResourceMap& resourceMap,
-        std::vector<SceneRenderDrawGroup>& drawGroupsScratch,
         MeshPipelineBuildResult& pipelineScratch,
         MeshPassType pass = MeshPassType::BaseOpaque,
         const SceneRenderCamera* camera = nullptr,
@@ -50,7 +48,6 @@ private:
     SceneMeshPassResources passResources_;
     SceneGpuDrivenCullingPass gpuDrivenCullingPass_;
     mutable SceneGpuDrivenFrameResources gpuDrivenFrameResources_;
-    mutable std::vector<SceneRenderDrawGroup> drawGroupsScratch_;
     mutable MeshPipelineBuildResult pipelineScratch_;
 };
 

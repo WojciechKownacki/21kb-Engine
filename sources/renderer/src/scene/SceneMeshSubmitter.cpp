@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -25,14 +26,6 @@ namespace {
         return 16U;
     }
     return 9U;
-}
-
-[[nodiscard]] std::uint32_t DrawGroupInstanceCapacity(std::span<const SceneRenderDrawGroup> drawGroups) noexcept {
-    std::uint32_t capacity = 0U;
-    for (const SceneRenderDrawGroup& group : drawGroups) {
-        capacity += static_cast<std::uint32_t>(group.instances.capacity());
-    }
-    return capacity;
 }
 
 } // namespace
@@ -60,7 +53,6 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     const RenderScene& renderScene,
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
-    std::vector<SceneRenderDrawGroup>& drawGroupsScratch,
     MeshPipelineBuildResult& pipelineScratch,
     MeshPassType pass,
     const SceneRenderCamera* camera,
@@ -69,11 +61,10 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     SceneRenderLightingConfig lightingConfig,
     std::span<const std::uint64_t> selectedEntityIds,
     SceneGpuDrivenFeatureSupport gpuDrivenSupport) noexcept {
-    drawGroupsScratch.reserve(renderScene.MeshProxyCount());
-    renderScene.BuildDrawGroups(drawGroupsScratch);
+    const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
-        .drawGroups = &drawGroupsScratch,
+        .drawGroups = &drawGroups,
         .resources = &resources,
         .resourceMap = &resourceMap,
         .camera = camera,
@@ -84,8 +75,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
         .selectedEntityIds = selectedEntityIds,
         .gpuDrivenSupport = gpuDrivenSupport,
     }, pipelineScratch);
-    pipelineScratch.stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(drawGroupsScratch.capacity());
-    pipelineScratch.stats.meshDrawGroupInstanceScratchCapacity = DrawGroupInstanceCapacity(drawGroupsScratch);
+    pipelineScratch.stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupCapacity());
+    pipelineScratch.stats.meshDrawGroupInstanceScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupInstanceCapacity());
     pipelineScratch.stats.meshDrawGroupLookupCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupLookupScratchCapacity());
     SceneRenderSubmitStats lightingStats{};
     static_cast<void>(SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera));
@@ -137,14 +128,13 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         return stats;
     }
 
-    drawGroupsScratch_.reserve(renderScene.MeshProxyCount());
-    renderScene.BuildDrawGroups(drawGroupsScratch_);
+    const std::vector<SceneRenderDrawGroup>& drawGroups = renderScene.DrawGroups();
     SceneRenderSubmitStats lightingStats{};
     const PackedSceneLighting lighting = SceneLightingPacker::Build(renderScene, lightingStats, lightingConfig, camera);
     const std::array<float, 4> cameraPosition = SceneLightingPacker::CameraPosition(camera);
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = pass,
-        .drawGroups = &drawGroupsScratch_,
+        .drawGroups = &drawGroups,
         .resources = &resources,
         .resourceMap = &resourceMap,
         .camera = camera,
@@ -178,8 +168,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         stats.shadowMapSize = lightingConfig.shadowMapSize;
         stats.shadowFilterSampleCount = ShadowFilterSampleCount(lightingConfig.shadowFilter);
     }
-    stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(drawGroupsScratch_.capacity());
-    stats.meshDrawGroupInstanceScratchCapacity = DrawGroupInstanceCapacity(drawGroupsScratch_);
+    stats.meshDrawGroupScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupCapacity());
+    stats.meshDrawGroupInstanceScratchCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupInstanceCapacity());
     stats.meshDrawGroupLookupCapacity = static_cast<std::uint32_t>(renderScene.DrawGroupLookupScratchCapacity());
     if (stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::ComputeCulling ||
         stats.gpuDrivenFeatureState == SceneGpuDrivenFeatureState::IndirectDrawSubmit ||

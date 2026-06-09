@@ -76,12 +76,14 @@ private:
 
     void QueueDestroy(DeferredDestroyKind kind, std::uint32_t slot) noexcept;
     void ReleaseDeferred(const DeferredDestroyEntry& entry) noexcept;
+    [[nodiscard]] std::uint64_t AllocateResourceVersion() noexcept;
 
     detail::RenderResourceSlotPool<RenderMeshResource> meshes_;
     detail::RenderResourceSlotPool<RenderMaterialResource> materials_;
     detail::RenderResourceSlotPool<RenderTextureResource> textures_;
     std::vector<DeferredDestroyEntry> deferredDestroy_;
     std::uint64_t frameNumber_ = 0;
+    std::uint64_t nextResourceVersion_ = 1;
 };
 
 } // namespace kb::render

@@ -13,6 +13,7 @@
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "inspection/InspectorPanelState.hpp"
+#include "app/EditorPlayModeSceneSession.hpp"
 
 #include <string>
 #include <string_view>
@@ -64,9 +65,15 @@ public:
     [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
     [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
     [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
+    [[nodiscard]] bool SceneDocumentDirty() const noexcept;
     void MarkSceneRenderDirty() noexcept;
     void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
     void AcknowledgeSceneRenderSubmitted() noexcept;
+    void MarkSceneDocumentDirty() noexcept;
+    [[nodiscard]] bool SaveDirtySceneDocument(std::string_view reason);
+    [[nodiscard]] bool BeginPlayModeSceneSession();
+    [[nodiscard]] bool RestorePlayModeSceneSession();
+    [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] bool NewScene();
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool SaveCurrentScene();
@@ -159,6 +166,7 @@ public:
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    void ClearSceneDocumentDirty() noexcept;
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
@@ -189,6 +197,8 @@ private:
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
     bool sceneRenderFullDirty_ = true;
+    bool sceneDocumentDirty_ = false;
+    EditorPlayModeSceneSession playModeSceneSession_;
     int hierarchyScrollOffset_ = 0;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;

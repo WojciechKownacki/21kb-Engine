@@ -163,6 +163,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();
+        static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     }
 }
 

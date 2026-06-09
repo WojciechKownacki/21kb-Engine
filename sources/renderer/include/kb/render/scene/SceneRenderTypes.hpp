@@ -208,6 +208,13 @@ struct SceneRenderSubmitStats {
     std::uint32_t meshDrawGroupInstanceScratchCapacity = 0;
     std::uint32_t meshDrawGroupLookupCapacity = 0;
     std::uint32_t meshCommandLookupCapacity = 0;
+    std::uint32_t meshCachedDrawCommandCount = 0;
+    std::uint32_t meshCachedDrawCommandCapacity = 0;
+    std::uint32_t meshDrawCommandCacheLookupCapacity = 0;
+    std::uint32_t meshDrawCommandCacheHitCount = 0;
+    std::uint32_t meshDrawCommandCacheMissCount = 0;
+    std::uint32_t meshDrawCommandCacheBuildCount = 0;
+    std::uint32_t meshDrawCommandCachePruneCount = 0;
     std::uint32_t meshPipelineScratchInstanceCapacity = 0;
     std::uint32_t gpuDrivenDrawCandidateCount = 0;
     std::uint32_t indirectDrawCandidateCount = 0;
@@ -359,6 +366,13 @@ struct SceneRenderDiagnostics {
     lhs.meshDrawGroupInstanceScratchCapacity += rhs.meshDrawGroupInstanceScratchCapacity;
     lhs.meshDrawGroupLookupCapacity += rhs.meshDrawGroupLookupCapacity;
     lhs.meshCommandLookupCapacity += rhs.meshCommandLookupCapacity;
+    lhs.meshCachedDrawCommandCount += rhs.meshCachedDrawCommandCount;
+    lhs.meshCachedDrawCommandCapacity += rhs.meshCachedDrawCommandCapacity;
+    lhs.meshDrawCommandCacheLookupCapacity += rhs.meshDrawCommandCacheLookupCapacity;
+    lhs.meshDrawCommandCacheHitCount += rhs.meshDrawCommandCacheHitCount;
+    lhs.meshDrawCommandCacheMissCount += rhs.meshDrawCommandCacheMissCount;
+    lhs.meshDrawCommandCacheBuildCount += rhs.meshDrawCommandCacheBuildCount;
+    lhs.meshDrawCommandCachePruneCount += rhs.meshDrawCommandCachePruneCount;
     lhs.meshPipelineScratchInstanceCapacity += rhs.meshPipelineScratchInstanceCapacity;
     lhs.gpuDrivenDrawCandidateCount += rhs.gpuDrivenDrawCandidateCount;
     lhs.indirectDrawCandidateCount += rhs.indirectDrawCandidateCount;

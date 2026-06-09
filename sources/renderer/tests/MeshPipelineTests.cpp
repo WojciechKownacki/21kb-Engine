@@ -8,6 +8,7 @@
 #include "kb/render/scene/SceneGpuDrivenParityValidator.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
+#include "kb/render/scene/batch/SceneMeshBatchBuilder.hpp"
 
 #include <array>
 #include <string_view>
@@ -53,6 +54,276 @@ void RunFramePassKindsMapToMeshPassesTest() {
     Require(MeshPassForRenderPassKind(RenderPassKind::EditorSelectionMask).value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask did not map to SelectionId mesh pass");
     Require(!MeshPassForRenderPassKind(RenderPassKind::PostProcessBloomPrefilter).has_value(), "Post-process pass unexpectedly mapped to a mesh pass");
     Require(!MeshPassForRenderPassKind(RenderPassKind::FinalComposite).has_value(), "FinalComposite unexpectedly mapped to a mesh pass");
+}
+
+void RunSceneMeshBatchBuilderCreatesStableViewsTest() {
+    std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 11U,
+            .materialAssetId = 3U,
+        },
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 7U },
+            },
+        },
+    };
+
+    std::vector<SceneMeshBatch> batches;
+    SceneMeshBatchBuilder::BuildInto(drawGroups, batches);
+
+    Require(batches.size() == 1U, "SceneMeshBatchBuilder did not skip empty draw groups");
+    Require(batches[0].meshAssetId == 42U && batches[0].materialAssetId == 7U, "SceneMeshBatchBuilder did not preserve batch keys");
+    Require(batches[0].sourceDrawGroupIndex == 1U, "SceneMeshBatchBuilder did not preserve source draw group index");
+    Require(batches[0].instances.size() == 2U, "SceneMeshBatchBuilder did not preserve batch instances");
+    Require(batches[0].instances.data() == drawGroups[1].instances.data(), "SceneMeshBatchBuilder copied instances instead of creating a view");
+
+    drawGroups[1].instances[0].entityId = 99U;
+    Require(batches[0].instances[0].entityId == 99U, "SceneMeshBatch view did not reflect source instance storage");
+}
+
+void RunMeshPipelineBuildsFromSceneMeshBatchesTest() {
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 7U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U },
+                SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .materialAssetId = 7U },
+            },
+        },
+    };
+    const std::vector<SceneMeshBatch> batches = SceneMeshBatchBuilder::Build(drawGroups);
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.commands.size() == 1U, "MeshPipeline did not build commands from scene mesh batches");
+    Require(result.commands[0].meshAssetId == 42U, "MeshPipeline batch path did not preserve mesh asset id");
+    Require(result.commands[0].materialAssetId == 7U, "MeshPipeline batch path did not preserve material asset id");
+    Require(result.commands[0].instances.size() == 2U, "MeshPipeline batch path did not preserve instances");
+
+    MeshPipelineBuildResult reusableResult;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.meshBatchScratch.empty(), "MeshPipeline exposed transient batch views after build");
+    Require(reusableResult.meshBatchScratch.capacity() >= 1U, "MeshPipeline draw group adapter did not retain batch scratch capacity");
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 1U, "MeshPipeline did not populate cached draw command templates");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not report cached draw command miss on first build");
+    Require(reusableResult.stats.meshDrawCommandCacheBuildCount == 1U, "MeshPipeline did not report cached draw command build on first build");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.meshBatchScratch.empty(), "MeshPipeline retained stale batch scratch when external batches were provided");
+    Require(!reusableResult.commandLookupScratch.empty(), "MeshPipeline batch path did not use command lookup scratch");
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 1U, "MeshPipeline did not retain cached draw command templates");
+    Require(reusableResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse cached draw command template");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline rebuilt cached draw command template unnecessarily");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::Depth,
+        .meshBatches = &batches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 2U, "MeshPipeline did not keep cached draw command templates for multiple passes");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a depth-pass cached draw command template");
+    Require(reusableResult.stats.meshDrawCommandCachePruneCount == 0U, "MeshPipeline pruned another pass while building depth commands");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 2U, "MeshPipeline did not retain cached draw command templates across pass switches");
+    Require(reusableResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse a cached draw command after another pass was built");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline rebuilt a cached draw command after another pass was built");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{}, reusableResult);
+    Require(reusableResult.commands.empty(), "MeshPipeline retained commands after an empty build input");
+    Require(reusableResult.commandLookupScratch.empty(), "MeshPipeline retained stale command lookup entries after an empty build input");
+
+    const std::vector<SceneMeshBatch> emptyBatches;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &emptyBatches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 1U, "MeshPipeline pruned cached draw commands from another pass after empty batch input");
+    Require(reusableResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not report pruning stale cached draw commands for the current pass");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::Depth,
+        .meshBatches = &emptyBatches,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 0U, "MeshPipeline retained cached draw commands after pruning all pass caches");
+    Require(reusableResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not report pruning the stale cached depth command");
+
+    RenderMeshResource versionedMesh{};
+    versionedMesh.indexCount = 3U;
+    versionedMesh.version = 1U;
+    RenderMaterialResource versionedMaterial{};
+    versionedMaterial.version = 1U;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 1U, "MeshPipeline did not retain a versioned cached draw command");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a versioned cached draw command");
+    Require(reusableResult.stats.meshDrawCommandCacheBuildCount == 1U, "MeshPipeline did not report versioned cached draw command build");
+
+    versionedMaterial.version = 2U;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshCachedDrawCommandCount == 1U, "MeshPipeline did not retain the rebuilt versioned cached draw command");
+    Require(reusableResult.stats.meshDrawCommandCacheHitCount == 0U, "MeshPipeline reused cached draw command after material version changed");
+    Require(reusableResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not rebuild cached draw command after material version changed");
+    Require(reusableResult.stats.meshDrawCommandCacheBuildCount == 1U, "MeshPipeline did not report rebuilt cached draw command after material version changed");
+    Require(reusableResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not prune stale cached draw command after material version changed");
+
+    MeshPipelineBuildResult textureDependencyResult;
+    versionedMaterial.version = 3U;
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0001ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureDependencyResult);
+    Require(textureDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a texture-dependent cached draw command");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureDependencyResult);
+    Require(textureDependencyResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse an unchanged texture-dependent cached draw command");
+    Require(textureDependencyResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline rebuilt an unchanged texture-dependent cached draw command");
+
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0002ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureDependencyResult);
+    Require(textureDependencyResult.stats.meshDrawCommandCacheHitCount == 0U, "MeshPipeline reused cached draw command after material texture dependency changed");
+    Require(textureDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not rebuild cached draw command after material texture dependency changed");
+    Require(textureDependencyResult.stats.meshDrawCommandCacheBuildCount == 1U, "MeshPipeline did not report cached draw command rebuild after material texture dependency changed");
+    Require(textureDependencyResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not prune stale cached draw command after material texture dependency changed");
+
+    MeshPipelineBuildResult textureBindingDependencyResult;
+    SceneRenderResourceMap textureResourceMap;
+    versionedMaterial.albedoTexture = {};
+    versionedMaterial.albedoTextureAssetId = 512U;
+    textureResourceMap.BindTexture(512U, RenderTextureHandle{ 0x0000'0001'0000'0010ULL });
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceMap = &textureResourceMap,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureBindingDependencyResult);
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a texture-binding-dependent cached draw command");
+
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceMap = &textureResourceMap,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureBindingDependencyResult);
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse an unchanged texture-binding-dependent cached draw command");
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline rebuilt an unchanged texture-binding-dependent cached draw command");
+
+    textureResourceMap.BindTexture(512U, RenderTextureHandle{ 0x0000'0001'0000'0011ULL });
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resourceMap = &textureResourceMap,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, textureBindingDependencyResult);
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCacheHitCount == 0U, "MeshPipeline reused cached draw command after texture binding changed");
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not rebuild cached draw command after texture binding changed");
+    Require(textureBindingDependencyResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not prune stale cached draw command after texture binding changed");
+
+    MeshPipelineBuildResult selectionDependencyResult;
+    const std::array<std::uint64_t, 2U> selectedIds{1U, 2U};
+    versionedMaterial.albedoTextureAssetId = 0U;
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0020ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::SelectionId,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .selectedEntityIds = selectedIds,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, selectionDependencyResult);
+    Require(selectionDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a selection cached draw command");
+
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0021ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::SelectionId,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .selectedEntityIds = selectedIds,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, selectionDependencyResult);
+    Require(selectionDependencyResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline rebuilt selection cached draw command after irrelevant texture dependency changed");
+    Require(selectionDependencyResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline reported a selection cache miss for an irrelevant texture dependency change");
+
+    MeshPipelineBuildResult shadowDependencyResult;
+    versionedMaterial.alphaMode = RenderMaterialAlphaMode::Mask;
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0030ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, shadowDependencyResult);
+    Require(shadowDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a shadow cached draw command");
+
+    versionedMaterial.albedoTexture = RenderTextureHandle{ 0x0000'0001'0000'0031ULL };
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::ShadowDepth,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &versionedMesh,
+        .resolvedMaterialResource = &versionedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, shadowDependencyResult);
+    Require(shadowDependencyResult.stats.meshDrawCommandCacheHitCount == 0U, "MeshPipeline reused shadow cached draw command after alpha-mask texture dependency changed");
+    Require(shadowDependencyResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not rebuild shadow cached draw command after alpha-mask texture dependency changed");
+    Require(shadowDependencyResult.stats.meshDrawCommandCachePruneCount == 1U, "MeshPipeline did not prune stale shadow cached draw command after alpha-mask texture dependency changed");
 }
 
 void RunMeshPipelineReportsMissingMeshBindingPerInstanceTest() {
@@ -1092,6 +1363,8 @@ void RunMeshPipelineTests() {
     RunMeshPassTypeNamesResolveTest();
     RunStaticMeshVertexLayoutIsDefinedTest();
     RunFramePassKindsMapToMeshPassesTest();
+    RunSceneMeshBatchBuilderCreatesStableViewsTest();
+    RunMeshPipelineBuildsFromSceneMeshBatchesTest();
     RunMeshPipelineReportsMissingMeshBindingPerInstanceTest();
     RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest();
     RunMeshPipelineBuildIntoReusesCommandInstanceCapacityTest();

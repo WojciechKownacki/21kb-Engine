@@ -5,6 +5,8 @@
 #include "resources/RenderResourceReleaser.hpp"
 #include "resources/RenderTextureResourceBuilder.hpp"
 
+#include <utility>
+
 namespace kb::render {
 namespace {
 
@@ -42,7 +44,9 @@ RenderMeshHandle RenderResourceRegistry::RegisterMesh(const RenderMeshDesc& desc
     }
 
     const std::uint32_t slotIndex = meshes_.Allocate();
-    meshes_.Activate(slotIndex, RenderMeshResourceBuilder::Build(desc, vertexBuffer, indexBuffer));
+    RenderMeshResource resource = RenderMeshResourceBuilder::Build(desc, vertexBuffer, indexBuffer);
+    resource.version = AllocateResourceVersion();
+    meshes_.Activate(slotIndex, std::move(resource));
     return RenderMeshHandle{ detail::MakeRenderHandleValue(slotIndex, meshes_.Generation(slotIndex)) };
 }
 
@@ -63,7 +67,9 @@ void RenderResourceRegistry::DestroyMesh(RenderMeshHandle handle) noexcept {
 
 RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMaterialDesc& desc) {
     const std::uint32_t slotIndex = materials_.Allocate();
-    materials_.Activate(slotIndex, RenderMaterialResourceBuilder::Build(desc));
+    RenderMaterialResource resource = RenderMaterialResourceBuilder::Build(desc);
+    resource.version = AllocateResourceVersion();
+    materials_.Activate(slotIndex, std::move(resource));
     return RenderMaterialHandle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };
 }
 
@@ -93,7 +99,9 @@ RenderTextureHandle RenderResourceRegistry::RegisterTexture2D(const RenderTextur
     }
 
     const std::uint32_t slotIndex = textures_.Allocate();
-    textures_.Activate(slotIndex, RenderTextureResourceBuilder::Build(desc, texture));
+    RenderTextureResource resource = RenderTextureResourceBuilder::Build(desc, texture);
+    resource.version = AllocateResourceVersion();
+    textures_.Activate(slotIndex, std::move(resource));
     return RenderTextureHandle{ detail::MakeRenderHandleValue(slotIndex, textures_.Generation(slotIndex)) };
 }
 
@@ -200,6 +208,14 @@ void RenderResourceRegistry::ReleaseDeferred(const DeferredDestroyEntry& entry) 
         });
         break;
     }
+}
+
+std::uint64_t RenderResourceRegistry::AllocateResourceVersion() noexcept {
+    const std::uint64_t version = nextResourceVersion_++;
+    if (nextResourceVersion_ == 0U) {
+        nextResourceVersion_ = 1U;
+    }
+    return version;
 }
 
 } // namespace kb::render
