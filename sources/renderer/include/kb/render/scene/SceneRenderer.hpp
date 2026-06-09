@@ -9,7 +9,6 @@
 
 #include <memory>
 #include <span>
-#include <vector>
 
 namespace kb::render {
 
@@ -62,7 +61,6 @@ private:
     RenderResourceRegistry resources_;
     SceneRenderResourceMap resourceMap_;
     std::unique_ptr<SceneMeshSubmitter> meshSubmitter_;
-    mutable std::vector<SceneRenderDrawGroup> validationDrawGroupsScratch_;
     mutable MeshPipelineBuildResult validationPipelineScratch_;
     mutable SceneRenderSubmitStats lastSubmitStats_{};
     mutable SceneRenderDiagnostics lastDiagnostics_{};

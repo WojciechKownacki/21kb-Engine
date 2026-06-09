@@ -40,6 +40,8 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 }
 
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
+    static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
+    static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 

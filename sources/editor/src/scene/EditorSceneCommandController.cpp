@@ -29,6 +29,7 @@ EditorSceneCommandController::EditorSceneCommandController(
     EditorHierarchySearchState& hierarchySearch,
     std::optional<std::string>& pendingTransactionLabel,
     std::uint64_t& sceneRenderRevision,
+    bool& sceneDocumentDirty,
     bool& hierarchyRowsDirty) noexcept
     : scene_(scene)
     , commandStack_(commandStack)
@@ -40,6 +41,7 @@ EditorSceneCommandController::EditorSceneCommandController(
     , hierarchySearch_(hierarchySearch)
     , pendingTransactionLabel_(pendingTransactionLabel)
     , sceneRenderRevision_(sceneRenderRevision)
+    , sceneDocumentDirty_(sceneDocumentDirty)
     , hierarchyRowsDirty_(hierarchyRowsDirty) {}
 
 bool EditorSceneCommandController::Undo() {
@@ -49,7 +51,7 @@ bool EditorSceneCommandController::Undo() {
     }
 
     NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged();
+    NotifySceneChanged(true);
     console_.Info("Edit", "Undo.");
     return true;
 }
@@ -61,7 +63,7 @@ bool EditorSceneCommandController::Redo() {
     }
 
     NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged();
+    NotifySceneChanged(true);
     console_.Info("Edit", "Redo.");
     return true;
 }
@@ -86,7 +88,7 @@ bool EditorSceneCommandController::CommitTransaction() {
     commandStack_.PushExecuted(EditorSceneHistoryCommand::CreateRecorded(scene_, *pendingTransactionLabel_));
     pendingTransactionLabel_.reset();
     NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged();
+    NotifySceneChanged(true);
     return true;
 }
 
@@ -94,7 +96,7 @@ void EditorSceneCommandController::CancelTransaction() {
     if (pendingTransactionLabel_.has_value()) {
         static_cast<void>(scene_.History().Undo());
         NormalizeHierarchySelectionAfterSceneRestore();
-        NotifySceneChanged();
+        NotifySceneChanged(false);
     }
     pendingTransactionLabel_.reset();
 }
@@ -112,7 +114,7 @@ bool EditorSceneCommandController::Execute(std::string label, Mutation mutation)
     }
 
     NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged();
+    NotifySceneChanged(true);
     return true;
 }
 
@@ -138,10 +140,13 @@ void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore(
     hierarchySelection_.Clear();
 }
 
-void EditorSceneCommandController::NotifySceneChanged() {
+void EditorSceneCommandController::NotifySceneChanged(bool documentChanged) {
     ++sceneRenderRevision_;
     if (sceneRenderRevision_ == 0U) {
         sceneRenderRevision_ = 1U;
+    }
+    if (documentChanged) {
+        sceneDocumentDirty_ = true;
     }
     hierarchyRowsDirty_ = true;
     scene_.Runtime().SynchronizeTransforms();

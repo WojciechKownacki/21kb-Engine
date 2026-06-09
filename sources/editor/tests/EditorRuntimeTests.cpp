@@ -2,6 +2,7 @@
 
 int main() {
     kb::editor::tests::RunEditorCommandStackTests();
+    kb::editor::tests::RunEditorPlayModeSceneSessionTests();
     kb::editor::tests::RunEditorHierarchyTests();
     kb::editor::tests::RunEditorAssetBrowserTests();
     kb::editor::tests::RunEditorViewportPreviewTests();
