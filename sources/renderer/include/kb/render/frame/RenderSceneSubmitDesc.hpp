@@ -144,6 +144,7 @@ struct RenderSceneSubmitDesc {
     SceneRenderLightingConfig lightingConfig{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
     std::span<const std::uint64_t> selectedEntityIds{};
+    std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;

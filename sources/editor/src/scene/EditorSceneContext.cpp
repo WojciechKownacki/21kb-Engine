@@ -15,6 +15,7 @@
 #include "scene/EditorSceneCommandController.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
+#include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
@@ -63,89 +64,46 @@ namespace {
     return false;
 }
 
-class DuplicateHierarchyEntitiesCommand final : public IEditorCommand {
-public:
-    DuplicateHierarchyEntitiesCommand(EditorSceneContext& context, std::vector<kb::scene::SceneEntity> sourceEntities)
-        : context_(context)
-        , sourceEntities_(std::move(sourceEntities)) {}
+[[nodiscard]] bool SameVec3(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+}
 
-    [[nodiscard]] std::string_view Label() const noexcept override {
-        return "Duplicate Entity";
+[[nodiscard]] bool SameQuat(kb::scene::Quat lhs, kb::scene::Quat rhs) noexcept {
+    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
+}
+
+[[nodiscard]] bool SameTransform(const kb::scene::TransformComponent& lhs, const kb::scene::TransformComponent& rhs) noexcept {
+    return SameVec3(lhs.localPosition, rhs.localPosition) &&
+        SameQuat(lhs.localRotation, rhs.localRotation) &&
+        SameVec3(lhs.localScale, rhs.localScale);
+}
+
+[[nodiscard]] EditorSceneObjectTransformChange* FindTransformChange(
+    std::vector<EditorSceneObjectTransformChange>& changes,
+    kb::scene::SceneEntity entity) noexcept {
+    const auto iter = std::ranges::find_if(changes, [entity](const EditorSceneObjectTransformChange& change) {
+        return change.entity == entity;
+    });
+    return iter == changes.end() ? nullptr : &*iter;
+}
+
+void AppendEntityBranchRenderDirty(
+    const kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    std::vector<std::uint64_t>& dirtyEntityIds) {
+    if (!entity.IsValid()) {
+        return;
     }
-
-    [[nodiscard]] bool Execute() override {
-        return DuplicateFromSources();
+    if (std::ranges::find(dirtyEntityIds, entity.Id()) == dirtyEntityIds.end()) {
+        dirtyEntityIds.push_back(entity.Id());
     }
-
-    [[nodiscard]] bool Undo() override {
-        bool destroyed = false;
-        for (const kb::scene::SceneEntity entity : duplicatedEntities_) {
-            if (context_.Scene().Entities().IsAlive(entity)) {
-                context_.Scene().Entities().Destroy(entity);
-                destroyed = true;
-            }
-        }
-        duplicatedEntities_.clear();
-        SelectFirstAliveSourceOrClear();
-        context_.MarkSceneRenderDirty();
-        context_.Scene().Runtime().SynchronizeTransforms();
-        return destroyed;
+    if (!scene.Entities().IsAlive(entity)) {
+        return;
     }
-
-    [[nodiscard]] bool Redo() override {
-        return DuplicateFromSources();
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(entity)) {
+        AppendEntityBranchRenderDirty(scene, child, dirtyEntityIds);
     }
-
-    [[nodiscard]] const std::vector<kb::scene::SceneEntity>& DuplicatedEntities() const noexcept {
-        return duplicatedEntities_;
-    }
-
-private:
-    [[nodiscard]] bool DuplicateFromSources() {
-        std::vector<kb::scene::SceneObject> objects;
-        objects.reserve(sourceEntities_.size());
-        for (const kb::scene::SceneEntity entity : sourceEntities_) {
-            if (context_.Scene().Entities().IsAlive(entity)) {
-                objects.push_back(context_.Scene().Entities().Object(entity));
-            }
-        }
-        if (objects.empty()) {
-            return false;
-        }
-
-        const std::vector<kb::scene::SceneObject> duplicates =
-            context_.Scene().Entities().Duplicate(std::span<const kb::scene::SceneObject>{objects.data(), objects.size()});
-        duplicatedEntities_.clear();
-        duplicatedEntities_.reserve(duplicates.size());
-        for (const kb::scene::SceneObject duplicate : duplicates) {
-            if (duplicate.IsValid() && context_.Scene().Entities().IsAlive(duplicate)) {
-                duplicatedEntities_.push_back(duplicate.Entity());
-            }
-        }
-        if (duplicatedEntities_.empty()) {
-            return false;
-        }
-
-        context_.SelectEntity(duplicatedEntities_.back());
-        context_.MarkSceneRenderDirty();
-        context_.Scene().Runtime().SynchronizeTransforms();
-        return true;
-    }
-
-    void SelectFirstAliveSourceOrClear() {
-        for (const kb::scene::SceneEntity entity : sourceEntities_) {
-            if (context_.Scene().Entities().IsAlive(entity)) {
-                context_.SelectEntity(entity);
-                return;
-            }
-        }
-        context_.ClearHierarchySelection();
-    }
-
-    EditorSceneContext& context_;
-    std::vector<kb::scene::SceneEntity> sourceEntities_;
-    std::vector<kb::scene::SceneEntity> duplicatedEntities_;
-};
+}
 
 [[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
     const std::string error = manager.LastError();
@@ -302,11 +260,53 @@ std::uint64_t EditorSceneContext::SceneRenderRevision() const noexcept {
     return sceneRenderRevision_;
 }
 
+std::uint64_t EditorSceneContext::SceneRenderDirtyBaseRevision() const noexcept {
+    return sceneRenderDirtyBaseRevision_;
+}
+
+bool EditorSceneContext::SceneRenderFullDirty() const noexcept {
+    return sceneRenderFullDirty_;
+}
+
+const std::vector<std::uint64_t>& EditorSceneContext::SceneRenderDirtyEntityIds() const noexcept {
+    return sceneRenderDirtyEntityIds_;
+}
+
 void EditorSceneContext::MarkSceneRenderDirty() noexcept {
     ++sceneRenderRevision_;
     if (sceneRenderRevision_ == 0U) {
         sceneRenderRevision_ = 1U;
     }
+    sceneRenderFullDirty_ = true;
+    sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
+    sceneRenderDirtyEntityIds_.clear();
+}
+
+void EditorSceneContext::MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities) {
+    if (entities.empty()) {
+        return;
+    }
+    if (!sceneRenderFullDirty_ && sceneRenderDirtyEntityIds_.empty()) {
+        sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
+    }
+
+    ++sceneRenderRevision_;
+    if (sceneRenderRevision_ == 0U) {
+        sceneRenderRevision_ = 1U;
+    }
+
+    if (sceneRenderFullDirty_) {
+        return;
+    }
+    for (const kb::scene::SceneEntity entity : entities) {
+        AppendEntityBranchRenderDirty(scene_, entity, sceneRenderDirtyEntityIds_);
+    }
+}
+
+void EditorSceneContext::AcknowledgeSceneRenderSubmitted() noexcept {
+    sceneRenderFullDirty_ = false;
+    sceneRenderDirtyEntityIds_.clear();
+    sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
 }
 
 bool EditorSceneContext::NewScene() {
@@ -407,6 +407,27 @@ void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
         static_cast<void>(CommitHierarchyRename());
     }
     hierarchySelection_.SelectEntity(selected);
+    assetBrowser_.ClearSelection();
+}
+
+void EditorSceneContext::SelectHierarchyEntities(std::span<const kb::scene::SceneEntity> entities) noexcept {
+    std::vector<kb::scene::SceneEntity> alive;
+    alive.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (scene_.Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
+            alive.push_back(entity);
+        }
+    }
+
+    if (alive.empty()) {
+        ClearHierarchySelection();
+        return;
+    }
+
+    if (hierarchyRenameEntity_.IsValid() && !ContainsEntity(alive, hierarchyRenameEntity_)) {
+        static_cast<void>(CommitHierarchyRename());
+    }
+    hierarchySelection_.SelectEntities(alive);
     assetBrowser_.ClearSelection();
 }
 
@@ -691,24 +712,23 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
         return false;
     }
 
-    const std::vector<kb::scene::SceneEntity> deleting = hierarchySelection_.SelectedEntities();
+    const std::vector<kb::scene::SceneEntity> deleting = TopLevelSelectedEntities(scene_, hierarchySelection_.SelectedEntities());
     if (!AnyAlive(scene_, deleting)) {
         ClearHierarchySelection();
         console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
         return false;
     }
 
-    const bool deleted = ExecuteSceneCommand("Delete Entity", [this, deleting]() {
-        bool anyDeleted = false;
-        hierarchySelection_.Clear();
-        for (kb::scene::SceneEntity entity : deleting) {
-            if (scene_.Entities().IsAlive(entity)) {
-                scene_.Entities().Destroy(entity);
-                anyDeleted = true;
-            }
-        }
-        return anyDeleted;
-    });
+    const std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(
+        *this,
+        std::span<const kb::scene::SceneEntity>{ deleting.data(), deleting.size() });
+    if (payloads.empty()) {
+        console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
+        return false;
+    }
+
+    auto command = std::make_unique<EditorScenePrefabRemoveCommand>(*this, "Delete Entity", deleting, payloads);
+    const bool deleted = commandStack_.Execute(std::move(command));
     if (deleted) {
         console_.Info("Hierarchy", "Selected hierarchy entity deleted.");
     } else {
@@ -725,12 +745,19 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
         return false;
     }
 
-    auto command = std::make_unique<DuplicateHierarchyEntitiesCommand>(*this, duplicating);
-    DuplicateHierarchyEntitiesCommand* duplicateCommand = command.get();
+    const std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(
+        *this,
+        std::span<const kb::scene::SceneEntity>{ duplicating.data(), duplicating.size() });
+    if (payloads.empty()) {
+        console_.Warning("Hierarchy", "No hierarchy entity was duplicated.");
+        return false;
+    }
+
+    auto command = std::make_unique<EditorScenePrefabSpawnCommand>(*this, "Duplicate Entity", payloads);
+    EditorScenePrefabSpawnCommand* duplicateCommand = command.get();
     const bool duplicated = commandStack_.Execute(std::move(command));
     if (duplicated) {
-        hierarchySelection_.SelectEntities(duplicateCommand->DuplicatedEntities());
-        assetBrowser_.ClearSelection();
+        SelectHierarchyEntities(duplicateCommand->CreatedEntities());
     }
 
     if (duplicated) {
@@ -739,6 +766,31 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
         console_.Warning("Hierarchy", "No hierarchy entity was duplicated.");
     }
     return duplicated;
+}
+
+bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities) {
+    const std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(*this, entities);
+    if (payloads.empty() || !AnyAlive(scene_, entities)) {
+        return false;
+    }
+
+    std::vector<kb::scene::SceneEntity> alive;
+    alive.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (scene_.Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
+            alive.push_back(entity);
+        }
+    }
+    if (alive.empty()) {
+        return false;
+    }
+
+    auto command = std::make_unique<EditorScenePrefabSpawnCommand>(*this, std::move(label), payloads, alive);
+    commandStack_.PushExecuted(std::move(command));
+    SelectHierarchyEntities(alive);
+    MarkSceneRenderDirty();
+    scene_.Runtime().SynchronizeTransforms();
+    return true;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
@@ -1041,6 +1093,161 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     return true;
 }
 
+bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
+    if (activeTransformEdit_.Active()) {
+        return false;
+    }
+
+    const kb::scene::SceneEntity primary = SelectedEntity();
+    if (!scene_.Entities().IsAlive(primary)) {
+        return false;
+    }
+
+    std::vector<kb::scene::SceneEntity> editing = TopLevelSelectedEntities(scene_, hierarchySelection_.SelectedEntities());
+    if (editing.empty()) {
+        editing.push_back(primary);
+    } else if (!ContainsEntity(editing, primary)) {
+        editing.clear();
+        editing.push_back(primary);
+    }
+
+    activeTransformEdit_.label = std::move(label);
+    activeTransformEdit_.primary = primary;
+    activeTransformEdit_.changes.clear();
+    activeTransformEdit_.changes.reserve(editing.size());
+    for (const kb::scene::SceneEntity entity : editing) {
+        if (!scene_.Entities().IsAlive(entity) || FindTransformChange(activeTransformEdit_.changes, entity) != nullptr) {
+            continue;
+        }
+        const kb::scene::TransformComponent* transform = scene_.Transforms().TryGet(entity);
+        if (transform == nullptr) {
+            continue;
+        }
+        activeTransformEdit_.changes.push_back(EditorSceneObjectTransformChange{
+            .entity = entity,
+            .before = *transform,
+            .after = *transform,
+        });
+    }
+
+    if (activeTransformEdit_.changes.empty() || FindTransformChange(activeTransformEdit_.changes, primary) == nullptr) {
+        activeTransformEdit_.Clear();
+        return false;
+    }
+    return true;
+}
+
+bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position) {
+    if (!activeTransformEdit_.Active()) {
+        return false;
+    }
+
+    EditorSceneObjectTransformChange* primaryChange = FindTransformChange(activeTransformEdit_.changes, activeTransformEdit_.primary);
+    if (primaryChange == nullptr) {
+        return false;
+    }
+
+    const kb::scene::Vec3 delta{
+        position.x - primaryChange->before.localPosition.x,
+        position.y - primaryChange->before.localPosition.y,
+        position.z - primaryChange->before.localPosition.z,
+    };
+
+    bool changed = false;
+    std::vector<kb::scene::SceneEntity> touched;
+    touched.reserve(activeTransformEdit_.changes.size());
+    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (!scene_.Entities().IsAlive(change.entity)) {
+            continue;
+        }
+        kb::scene::TransformComponent next = change.before;
+        next.localPosition = kb::scene::Vec3{
+            change.before.localPosition.x + delta.x,
+            change.before.localPosition.y + delta.y,
+            change.before.localPosition.z + delta.z,
+        };
+        change.after = next;
+
+        const kb::scene::TransformComponent current = scene_.Transforms().Get(change.entity);
+        if (SameTransform(current, next)) {
+            continue;
+        }
+        scene_.Transforms().Set(change.entity, next);
+        touched.push_back(change.entity);
+        changed = true;
+    }
+
+    if (changed) {
+        MarkSceneEntitiesRenderDirty(touched);
+    }
+    return changed;
+}
+
+bool EditorSceneContext::CommitActiveTransformEdit() {
+    if (!activeTransformEdit_.Active()) {
+        activeTransformEdit_.Clear();
+        return false;
+    }
+
+    std::vector<EditorSceneObjectTransformChange> committed;
+    committed.reserve(activeTransformEdit_.changes.size());
+    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (!scene_.Entities().IsAlive(change.entity)) {
+            continue;
+        }
+        if (const kb::scene::TransformComponent* current = scene_.Transforms().TryGet(change.entity); current != nullptr) {
+            change.after = *current;
+        }
+        if (!SameTransform(change.before, change.after)) {
+            committed.push_back(change);
+        }
+    }
+
+    const std::string label = activeTransformEdit_.label.empty() ? std::string{ "Move Entity" } : activeTransformEdit_.label;
+    activeTransformEdit_.Clear();
+    if (committed.empty()) {
+        return false;
+    }
+
+    std::vector<kb::scene::SceneEntity> touched;
+    touched.reserve(committed.size());
+    for (const EditorSceneObjectTransformChange& change : committed) {
+        touched.push_back(change.entity);
+    }
+    commandStack_.PushExecuted(std::make_unique<EditorSceneTransformDeltaCommand>(*this, label, std::move(committed)));
+    MarkSceneEntitiesRenderDirty(touched);
+    scene_.Runtime().SynchronizeTransforms();
+    return true;
+}
+
+void EditorSceneContext::CancelActiveTransformEdit() noexcept {
+    if (!activeTransformEdit_.Active()) {
+        activeTransformEdit_.Clear();
+        return;
+    }
+
+    bool changed = false;
+    std::vector<kb::scene::SceneEntity> touched;
+    touched.reserve(activeTransformEdit_.changes.size());
+    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (!scene_.Entities().IsAlive(change.entity)) {
+            continue;
+        }
+        scene_.Transforms().Set(change.entity, change.before);
+        touched.push_back(change.entity);
+        changed = true;
+    }
+    activeTransformEdit_.Clear();
+    if (changed) {
+        MarkSceneEntitiesRenderDirty(touched);
+        scene_.Runtime().SynchronizeTransforms();
+    }
+}
+
+bool EditorSceneContext::HasActiveTransformEdit() const noexcept {
+    return activeTransformEdit_.Active();
+}
+
 EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
     return EditorSceneCommandController{
         scene_,
@@ -1063,6 +1270,7 @@ bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bo
 void EditorSceneContext::ResetSceneEditState() {
     commandStack_.Clear();
     pendingSceneTransactionLabel_.reset();
+    activeTransformEdit_.Clear();
     CancelHierarchyRename();
     inspector_.EndTextEdit();
     MarkSceneRenderDirty();
