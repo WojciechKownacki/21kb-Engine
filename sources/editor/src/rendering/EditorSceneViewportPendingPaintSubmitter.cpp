@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/EditorSceneViewportGeometry.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
 
 #include <span>
 
@@ -97,6 +98,20 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     if (!submitted) {
         return false;
     }
+    for (const PendingPresent& present : viewport_.pendingPresents_) {
+        if (present.session != nullptr) {
+            present.session->submittedSceneRevision = present.settings.sceneRevision;
+        }
+    }
+    const render::SceneRenderSubmitStats stats = viewport_.renderer_.LastSceneSubmitStats();
+    SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
+        .submittedDrawCalls = stats.submittedDrawCallCount,
+        .submittedMeshes = stats.submittedMeshCount,
+        .gpuDispatches = stats.gpuCullingDispatchCount,
+        .gpuDrivenActive = stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::Disabled &&
+            stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::CpuValidationOnly,
+    });
+    SceneViewportToolbarRenderer::RecordPresentedFrame();
     return true;
 }
 

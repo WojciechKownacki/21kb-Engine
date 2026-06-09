@@ -21,12 +21,8 @@
 namespace kb::render {
 namespace {
 
-[[nodiscard]] std::array<float, 4> StableInstanceColor(std::uint64_t entityId, std::uint64_t materialAssetId) noexcept {
-    const std::uint64_t seed = materialAssetId != 0U ? materialAssetId : entityId;
-    const float r = 0.35F + (static_cast<float>((seed >> 0U) & 0xFFU) / 255.0F) * 0.45F;
-    const float g = 0.35F + (static_cast<float>((seed >> 8U) & 0xFFU) / 255.0F) * 0.45F;
-    const float b = 0.35F + (static_cast<float>((seed >> 16U) & 0xFFU) / 255.0F) * 0.45F;
-    return { r, g, b, 1.0F };
+[[nodiscard]] std::array<float, 4> NeutralInstanceColor() noexcept {
+    return { 0.76F, 0.80F, 0.86F, 1.0F };
 }
 
 [[nodiscard]] std::uint32_t CopyMaterialSlotOverrides(
@@ -123,7 +119,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
         .materialSlotAssetIds = materialSlotAssetIds,
         .materialSlotOverrideCount = materialSlotOverrideCount,
         .model = SceneTransformMatrices::Model(renderTransform),
-        .color = StableInstanceColor(entity.Id(), renderer.materialAssetId),
+        .color = NeutralInstanceColor(),
         .visible = IsVisible(*sync->scene, entity),
         .castsShadow = renderer.castsShadow,
         .receivesShadow = renderer.receivesShadow,

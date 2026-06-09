@@ -34,7 +34,10 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
         desc.shadowMap.Size(),
         &shadowSetup.camera,
         desc.sceneDesc.drawBudget,
-        desc.lightingConfig);
+        desc.lightingConfig,
+        nullptr,
+        {},
+        &desc.gpuDrivenSupport);
 
     SceneRenderSubmitStats shadowStats = desc.sceneRenderer.LastSubmitStats();
     shadowStats.shadowLightEntityId = shadowSetup.lightEntityId;

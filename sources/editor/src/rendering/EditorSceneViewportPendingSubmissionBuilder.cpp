@@ -29,7 +29,7 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
     }
 
     ViewportSession& session = *present.session;
-    if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight)) {
+    if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled)) {
         return false;
     }
 
@@ -44,13 +44,18 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
 bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
     ViewportSession& session,
     std::uint32_t renderWidth,
-    std::uint32_t renderHeight) {
+    std::uint32_t renderHeight,
+    bool postProcessEnabled) {
     const render::RenderExtent renderExtent{renderWidth, renderHeight};
     if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
             .extent = renderExtent,
             .colorPolicy = render::SceneColorFormatPolicy::Auto,
         })) {
         return false;
+    }
+    if (!postProcessEnabled) {
+        session.postProcessTargets.Shutdown();
+        return true;
     }
     return session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
         .extent = renderExtent,
@@ -76,7 +81,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
                 .viewportIndex = session.viewportIndex,
             },
         },
-        .postProcess = session.postProcessTargets.Binding(),
+        .postProcess = present.settings.postProcessEnabled ? session.postProcessTargets.Binding() : render::RenderPostProcessTargetBinding{},
         .finalComposite = render::RenderFinalCompositeTargetBinding{
             .frameBuffer = surface.presentTarget.FrameBuffer(),
             .extent = surfaceExtent,
@@ -85,9 +90,16 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
             .clearTarget = clearTarget,
         },
         .cameraOverride = present.settings.cameraOverride,
+        .meshPassMode = present.settings.meshPassMode,
         .selectedEntityIds = SelectedEntitySpan(session),
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
+        .shadowPassEnabled = present.settings.shadowPassEnabled,
+        .postProcessEnabled = present.settings.postProcessEnabled,
+        .selectionMaskEnabled = present.settings.selectionMaskEnabled,
+        .selectionOutlineEnabled = present.settings.selectionOutlineEnabled,
+        .gpuDrivenRuntimeDispatchEnabled = present.settings.gpuDrivenRuntimeDispatchEnabled,
+        .synchronizeScene = session.submittedSceneRevision != present.settings.sceneRevision,
         .editorGrid = present.settings.editorGrid,
         .editorGizmo = present.settings.editorGizmo,
     };

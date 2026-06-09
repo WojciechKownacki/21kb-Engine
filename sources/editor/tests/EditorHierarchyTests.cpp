@@ -19,6 +19,7 @@
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 
+#include <array>
 #include <string>
 #include <filesystem>
 #include <optional>
@@ -181,6 +182,17 @@ void RunHierarchySelectionModelTest() {
     kb::editor::tests::Require(selection.SelectRow(rows, 0, false, false), "Hierarchy single selection after preserved selection failed");
     kb::editor::tests::Require(selection.SelectedEntities().size() == 1, "Pointer down on a non-selected row should still collapse selection");
     kb::editor::tests::Require(selection.IsSelected(rows[0].entity), "Collapsed selection should select the clicked row");
+
+    const std::array<kb::scene::SceneEntity, 3> batch{
+        kb::scene::SceneEntity{ 11U },
+        kb::scene::SceneEntity{ 12U },
+        kb::scene::SceneEntity{ 13U },
+    };
+    selection.SelectEntities(batch);
+    kb::editor::tests::Require(selection.SelectedEntities().size() == batch.size(), "Batch selection should select every valid entity");
+    kb::editor::tests::Require(selection.Primary() == batch.back(), "Batch selection should make the last entity primary");
+    kb::editor::tests::Require(selection.IsSelected(batch.front()), "Batch selection missed the first entity");
+    kb::editor::tests::Require(selection.IsSelected(batch.back()), "Batch selection missed the last entity");
 }
 
 void RunRowBuilderMarksOnlyPrefabRootsTest() {

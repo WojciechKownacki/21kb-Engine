@@ -16,8 +16,63 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "rendering/HierarchyToolbarLayout.hpp"
+#include "scene/EditorHierarchyMetrics.hpp"
+
+#include <algorithm>
 
 namespace kb::editor {
+namespace {
+
+constexpr int kHierarchyScrollbarWidth = 12;
+constexpr int kHierarchyScrollbarInset = 3;
+constexpr int kHierarchyScrollbarMinThumb = 24;
+
+[[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] int RectHeight(const RECT& rect) noexcept {
+    return std::max(0L, rect.bottom - rect.top);
+}
+
+[[nodiscard]] RECT HierarchyScrollbarTrack(const RECT& hierarchyContent) noexcept {
+    const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
+    return RECT{
+        .left = list.right - kHierarchyScrollbarWidth,
+        .top = list.top + kHierarchyScrollbarInset,
+        .right = list.right - kHierarchyScrollbarInset,
+        .bottom = list.bottom - kHierarchyScrollbarInset,
+    };
+}
+
+[[nodiscard]] int HierarchyContentHeight(const EditorSceneContext& sceneContext) {
+    return static_cast<int>(sceneContext.HierarchyRows().size()) * kHierarchyRowHeight;
+}
+
+[[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
+    const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
+    return std::max(0, HierarchyContentHeight(sceneContext) - RectHeight(list));
+}
+
+[[nodiscard]] RECT HierarchyScrollbarThumb(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
+    const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
+    const RECT track = HierarchyScrollbarTrack(hierarchyContent);
+    const int viewportHeight = RectHeight(list);
+    const int contentHeight = HierarchyContentHeight(sceneContext);
+    const int trackHeight = RectHeight(track);
+    if (trackHeight <= 0 || contentHeight <= viewportHeight) {
+        return {};
+    }
+
+    const int thumbHeight = std::clamp((trackHeight * viewportHeight) / std::max(1, contentHeight), kHierarchyScrollbarMinThumb, trackHeight);
+    const int maxOffset = std::max(1, contentHeight - viewportHeight);
+    const int travel = std::max(0, trackHeight - thumbHeight);
+    const int thumbTop = track.top + (travel * std::clamp(sceneContext.HierarchyScrollOffset(), 0, maxOffset)) / maxOffset;
+    return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
+}
+
+} // namespace
 
 EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
     HWND mainWindow,
@@ -99,6 +154,28 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
     EditorPointerDragInteraction::CaptureIfActive(messageWindow, pointerDrag_);
 
+    if (panelHit.hierarchyContent.has_value()) {
+        const int maxOffset = HierarchyMaxScroll(*panelHit.hierarchyContent, sceneContext_);
+        if (maxOffset > 0) {
+            const RECT track = HierarchyScrollbarTrack(*panelHit.hierarchyContent);
+            const RECT thumb = HierarchyScrollbarThumb(*panelHit.hierarchyContent, sceneContext_);
+            if (PointInRect(thumb, x, y)) {
+                sceneContext_.BeginHierarchyScrollbarDrag(y);
+                SetCapture(messageWindow);
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+            if (PointInRect(track, x, y)) {
+                const int page = std::max(kHierarchyRowHeight, RectHeight(HierarchyToolbarLayout::Resolve(*panelHit.hierarchyContent).listContent) - kHierarchyRowHeight);
+                static_cast<void>(sceneContext_.SetHierarchyScrollOffset(
+                    sceneContext_.HierarchyScrollOffset() + (y < thumb.top ? -page : page),
+                    maxOffset));
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                return;
+            }
+        }
+    }
+
     if (hierarchySelection_.HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         sceneContext_.AssetBrowser().FocusSelection(false);
         EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
@@ -134,7 +211,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (inspectorPointer.ShouldCaptureMouse()) {
             SetCapture(messageWindow);
         }
-        sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

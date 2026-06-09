@@ -22,6 +22,15 @@ constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
 
+struct SceneViewportRenderProfileDesc {
+    kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
+    bool shadowPassEnabled = false;
+    bool postProcessEnabled = false;
+    bool selectionMaskEnabled = false;
+    bool selectionOutlineEnabled = false;
+    bool gpuDrivenRuntimeDispatchEnabled = false;
+};
+
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
     return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
 }
@@ -106,6 +115,39 @@ constexpr float kMinGizmoDepth = 0.25F;
         renderHeight);
 }
 
+[[nodiscard]] SceneViewportRenderProfileDesc RenderProfileDesc(EditorViewportRenderProfile profile) noexcept {
+    switch (profile) {
+    case EditorViewportRenderProfile::Interactive:
+        return SceneViewportRenderProfileDesc{
+            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly,
+            .shadowPassEnabled = false,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+            .gpuDrivenRuntimeDispatchEnabled = false,
+        };
+    case EditorViewportRenderProfile::Lit:
+        return SceneViewportRenderProfileDesc{
+            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = false,
+            .selectionMaskEnabled = false,
+            .selectionOutlineEnabled = false,
+            .gpuDrivenRuntimeDispatchEnabled = false,
+        };
+    case EditorViewportRenderProfile::GamePreview:
+        return SceneViewportRenderProfileDesc{
+            .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+            .shadowPassEnabled = true,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = true,
+            .selectionOutlineEnabled = true,
+            .gpuDrivenRuntimeDispatchEnabled = true,
+        };
+    }
+    return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
+}
+
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildViewportPresentSettings(
     const EditorSceneContext& sceneContext,
     std::uint32_t panelId,
@@ -114,6 +156,7 @@ constexpr float kMinGizmoDepth = 0.25F;
     const SceneViewportToolbarRects& sceneRects) {
     static_cast<void>(panelKind);
     const EditorViewportProfile profile = viewportState.Profile();
+    const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
@@ -146,11 +189,38 @@ constexpr float kMinGizmoDepth = 0.25F;
             .visible = viewportState.GridVisible(),
         },
         .editorGizmo = gizmo,
+        .meshPassMode = renderProfile.meshPassMode,
+        .shadowPassEnabled = renderProfile.shadowPassEnabled,
+        .postProcessEnabled = renderProfile.postProcessEnabled,
+        .selectionMaskEnabled = renderProfile.selectionMaskEnabled,
+        .selectionOutlineEnabled = renderProfile.selectionOutlineEnabled,
+        .gpuDrivenRuntimeDispatchEnabled = renderProfile.gpuDrivenRuntimeDispatchEnabled,
         .drawSafeArea = profile.devicePreview,
+        .sceneRevision = sceneContext.SceneRenderRevision(),
     };
 }
 
 } // namespace
+
+void ScenePanelContentRenderer::PresentViewport(
+    EditorSceneBgfxViewport& sceneViewport,
+    HWND sceneViewportHost,
+    const RECT& content,
+    const DockPanel& panel,
+    const EditorSceneContext& sceneContext) {
+    if (sceneViewportHost == nullptr) {
+        return;
+    }
+
+    const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
+    const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
+
+    sceneViewport.BeginPaintLayout(sceneViewportHost);
+    sceneViewport.Present(sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), settings);
+    sceneViewport.EndPaintLayout();
+    sceneViewport.ClearPresentRequest();
+}
 
 void ScenePanelContentRenderer::Paint(
     HDC dc,

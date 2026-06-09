@@ -22,6 +22,8 @@ public:
     [[nodiscard]] static bool HandleChar(EditorSceneContext& sceneContext, wchar_t character);
     [[nodiscard]] static bool HandleKeyDown(HWND owner, EditorSceneContext& sceneContext, WPARAM key);
     [[nodiscard]] static bool UpdateHover(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept;
+    [[nodiscard]] static bool HandleMouseWheel(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int wheelDelta) noexcept;
+    [[nodiscard]] static bool HandleDoubleClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept;
 #endif
 };
 

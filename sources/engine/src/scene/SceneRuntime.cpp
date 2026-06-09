@@ -27,6 +27,11 @@ void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSyst
     SceneAccess::State(scene).sceneSystemScheduler.Add(std::move(system), scene);
 }
 
+void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
+    SceneState& state = SceneAccess::State(scene);
+    SynchronizeTransformHierarchy(state.world, state.components);
+}
+
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
     SynchronizeTransformHierarchy(state.world, state.components);

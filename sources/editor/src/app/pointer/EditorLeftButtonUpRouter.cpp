@@ -31,11 +31,23 @@ EditorLeftButtonUpRouter::EditorLeftButtonUpRouter(
     , metrics_(metrics) {}
 
 void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
+    static_cast<void>(x);
+    static_cast<void>(y);
     shellInteraction_.ClearPressedTransport();
+    if (sceneContext_.IsHierarchyScrollbarDragging()) {
+        sceneContext_.EndHierarchyScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     EditorInspectorPointerController inspectorPointer(sceneContext_);
+    const bool wasDraggingMeshPreview = sceneContext_.Inspector().IsDraggingMeshPreview();
     if (inspectorPointer.HandlePointerUp()) {
         ReleaseCapture();
-        sceneViewport_.RequestPresent();
+        if (!wasDraggingMeshPreview) {
+            sceneViewport_.RequestPresent();
+        }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

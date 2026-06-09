@@ -4,8 +4,12 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconKind.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/gdi/ScopedFont.hpp"
+#include "rendering/gdi/ScopedGdiObject.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <string_view>
 
 namespace kb::editor {
@@ -15,8 +19,11 @@ constexpr int kToolbarPaddingX = 8;
 constexpr int kButtonGap = 4;
 constexpr int kGroupGap = 10;
 constexpr int kButtonHeight = 24;
+constexpr int kFpsCounterWidth = 66;
+constexpr int kRenderStatsWidth = 136;
 constexpr int kIconButtonWidth = 34;
 constexpr int kValueButtonWidth = 70;
+constexpr int kProfileButtonWidth = 104;
 constexpr int kButtonRadius = 6;
 constexpr int kIconSize = 15;
 constexpr int kChevronSize = 10;
@@ -127,6 +134,110 @@ void DrawDivider(HDC dc, const RECT& toolbar, int x, const EditorTheme& theme) {
     return Blend(GdiDrawing::ToColorRef(theme.toolbar), RGB(0, 0, 0), 1, 6);
 }
 
+struct SceneViewportFpsMeter {
+    std::chrono::steady_clock::time_point windowStart{};
+    std::chrono::steady_clock::time_point lastFrame{};
+    int frames = 0;
+    int fps = 0;
+    bool initialized = false;
+};
+
+[[nodiscard]] SceneViewportFpsMeter& FpsMeter() noexcept {
+    static SceneViewportFpsMeter meter;
+    return meter;
+}
+
+[[nodiscard]] int CurrentPresentedFps() noexcept {
+    using Clock = std::chrono::steady_clock;
+    using Seconds = std::chrono::duration<double>;
+
+    const SceneViewportFpsMeter& meter = FpsMeter();
+    if (!meter.initialized) {
+        return 0;
+    }
+
+    const Clock::time_point now = Clock::now();
+    if (Seconds(now - meter.lastFrame).count() > 0.75) {
+        return 0;
+    }
+    return meter.fps;
+}
+
+void RecordPresentedFpsFrame() noexcept {
+    using Clock = std::chrono::steady_clock;
+    using Seconds = std::chrono::duration<double>;
+
+    SceneViewportFpsMeter& meter = FpsMeter();
+    const Clock::time_point now = Clock::now();
+    if (!meter.initialized) {
+        meter.windowStart = now;
+        meter.lastFrame = now;
+        meter.frames = 1;
+        meter.initialized = true;
+        return;
+    }
+
+    ++meter.frames;
+    meter.lastFrame = now;
+    const double elapsed = Seconds(now - meter.windowStart).count();
+    if (elapsed >= 0.5) {
+        meter.fps = std::max(0, static_cast<int>((static_cast<double>(meter.frames) / elapsed) + 0.5));
+        meter.windowStart = now;
+        meter.frames = 0;
+    }
+}
+
+void DrawFpsCounter(HDC dc, RECT rect, const EditorTheme& theme) {
+    const COLORREF fill = Blend(ToolbarRowColor(theme), RGB(0, 0, 0), 1, 5);
+    const COLORREF border = Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
+    FillRound(dc, rect, fill, border, kButtonRadius);
+
+    char text[16]{};
+    const int fps = CurrentPresentedFps();
+    if (fps > 0) {
+        std::snprintf(text, sizeof(text), "FPS %d", fps);
+    } else {
+        std::snprintf(text, sizeof(text), "FPS --");
+    }
+
+    ScopedFont font(11, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    const int previousBkMode = SetBkMode(dc, TRANSPARENT);
+    const COLORREF previousTextColor = SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
+    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    SetTextColor(dc, previousTextColor);
+    SetBkMode(dc, previousBkMode);
+}
+
+[[nodiscard]] SceneViewportToolbarRenderStats& LastRenderStats() noexcept {
+    static SceneViewportToolbarRenderStats stats;
+    return stats;
+}
+
+void DrawRenderStats(HDC dc, RECT rect, const EditorTheme& theme) {
+    const COLORREF fill = Blend(ToolbarRowColor(theme), RGB(0, 0, 0), 1, 5);
+    const COLORREF border = Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
+    FillRound(dc, rect, fill, border, kButtonRadius);
+
+    const SceneViewportToolbarRenderStats stats = LastRenderStats();
+    char text[48]{};
+    std::snprintf(
+        text,
+        sizeof(text),
+        "DC %u | M %u | GPU %s",
+        stats.submittedDrawCalls,
+        stats.submittedMeshes,
+        stats.gpuDrivenActive || stats.gpuDispatches != 0U ? "on" : "off");
+
+    ScopedFont font(11, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    const int previousBkMode = SetBkMode(dc, TRANSPARENT);
+    const COLORREF previousTextColor = SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
+    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    SetTextColor(dc, previousTextColor);
+    SetBkMode(dc, previousBkMode);
+}
+
 } // namespace
 
 SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& content) noexcept {
@@ -140,6 +251,11 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
     rects.toolbar.bottom = rects.toolbar.top + Height;
     rects.row = rects.toolbar;
     int cursor = rects.toolbar.left + kToolbarPaddingX;
+    rects.fpsCounter = ButtonRect(rects.row, cursor, kFpsCounterWidth);
+    rects.renderStats = ButtonRect(rects.row, cursor, kRenderStatsWidth);
+    AddGroupGap(cursor);
+    rects.renderProfileButton = ButtonRect(rects.row, cursor, kProfileButtonWidth);
+    AddGroupGap(cursor);
     rects.gridToggleButton = ButtonRect(rects.row, cursor, kIconButtonWidth);
     rects.gridStepButton = ButtonRect(rects.row, cursor, kValueButtonWidth);
     AddGroupGap(cursor);
@@ -170,10 +286,22 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
     return rects;
 }
 
+void SceneViewportToolbarRenderer::RecordPresentedFrame() noexcept {
+    RecordPresentedFpsFrame();
+}
+
+void SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept {
+    LastRenderStats() = stats;
+}
+
 void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state) {
     const SceneViewportToolbarRects rects = Resolve(content, state);
     GdiDrawing::FillRectColor(dc, rects.row, ToolbarRowColor(theme));
 
+    DrawFpsCounter(dc, rects.fpsCounter, theme);
+    DrawRenderStats(dc, rects.renderStats, theme);
+    DrawValueButton(dc, rects.renderProfileButton, HeroIconKind::Gamepad2, EditorViewportRenderProfileLabel(state.RenderProfile()), theme);
+    DrawDivider(dc, rects.toolbar, rects.renderProfileButton.right + 7, theme);
     DrawIconButton(dc, rects.gridToggleButton, HeroIconKind::Eye, theme, state.GridVisible());
     DrawValueButton(dc, rects.gridStepButton, HeroIconKind::AdjustmentsHorizontal, EditorViewportGridSpacingLabel(state.GridSpacing()), theme);
     DrawDivider(dc, rects.toolbar, rects.gridStepButton.right + 7, theme);

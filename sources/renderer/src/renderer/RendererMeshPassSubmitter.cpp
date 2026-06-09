@@ -22,7 +22,9 @@ void RendererMeshPassSubmitter::SubmitViewportPass(
         desc.sceneCamera,
         desc.sceneDesc.drawBudget,
         desc.lightingConfig,
-        shadowMap);
+        shadowMap,
+        {},
+        &desc.gpuDrivenSupport);
     desc.aggregateSubmitStats += desc.sceneRenderer.LastSubmitStats();
     desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
@@ -48,7 +50,8 @@ void RendererMeshPassSubmitter::SubmitSelectionMask(const RendererMeshPassSubmit
         desc.sceneDesc.drawBudget,
         desc.lightingConfig,
         nullptr,
-        desc.sceneDesc.selectedEntityIds);
+        desc.sceneDesc.selectedEntityIds,
+        &desc.gpuDrivenSupport);
     desc.diagnostics += desc.sceneRenderer.LastDiagnostics();
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
         .viewportId = desc.sceneDesc.target.viewport.id.value,

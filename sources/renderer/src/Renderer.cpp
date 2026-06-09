@@ -305,7 +305,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
     RenderScene& renderScene = RenderSceneFor(scene);
-    renderSceneSynchronizer_->Sync(scene, renderScene);
+    if (desc.synchronizeScene) {
+        renderSceneSynchronizer_->Sync(scene, renderScene);
+    }
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
         .renderScene = renderScene,
@@ -317,7 +319,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .unresolvedMaterialTexturePathCount = lastUnresolvedMaterialTexturePathCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
-    const SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
+    SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
+    if (!desc.shadowPassEnabled) {
+        effectiveLightingConfig.shadowsEnabled = false;
+    }
+    SceneGpuDrivenFeatureSupport effectiveGpuDrivenSupport = sceneRenderer_->GpuDrivenRuntimeSupport();
+    if (!desc.gpuDrivenRuntimeDispatchEnabled) {
+        effectiveGpuDrivenSupport = SceneGpuDrivenFeatureSupport{};
+    }
     const SceneRenderShadowMapBinding shadowBinding = RendererShadowSubmitter::Submit(RendererShadowSubmitDesc{
         .renderScene = renderScene,
         .sceneRenderer = *sceneRenderer_,
@@ -325,6 +334,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .sceneDesc = desc,
         .viewportPlan = viewportPlan,
         .lightingConfig = effectiveLightingConfig,
+        .gpuDrivenSupport = effectiveGpuDrivenSupport,
         .aggregateSubmitStats = lastSceneSubmitStats_,
         .diagnostics = lastSceneDiagnostics_,
         .passSubmitStats = lastScenePassSubmitStats_,
@@ -353,6 +363,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .lightingConfig = effectiveLightingConfig,
         .width = width,
         .height = height,
+        .gpuDrivenSupport = effectiveGpuDrivenSupport,
         .aggregateSubmitStats = lastSceneSubmitStats_,
         .diagnostics = lastSceneDiagnostics_,
         .passSubmitStats = lastScenePassSubmitStats_,
@@ -372,63 +383,90 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             MeshPassType::BaseTransparent,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
     }
-    editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
-    const RendererMeshPassSubmitDesc selectionMaskSubmitDesc{
-        .sceneRenderer = *sceneRenderer_,
-        .renderScene = renderScene,
-        .sceneDesc = desc,
-        .viewportPlan = viewportPlan,
-        .sceneCamera = overlayCamera,
-        .lightingConfig = effectiveLightingConfig,
-        .width = width,
-        .height = height,
-        .aggregateSubmitStats = lastSceneSubmitStats_,
-        .diagnostics = lastSceneDiagnostics_,
-        .passSubmitStats = lastScenePassSubmitStats_,
-    };
-    RendererMeshPassSubmitter::SubmitSelectionMask(selectionMaskSubmitDesc);
+    if (desc.selectionMaskEnabled) {
+        editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
+        const RendererMeshPassSubmitDesc selectionMaskSubmitDesc{
+            .sceneRenderer = *sceneRenderer_,
+            .renderScene = renderScene,
+            .sceneDesc = desc,
+            .viewportPlan = viewportPlan,
+            .sceneCamera = overlayCamera,
+            .lightingConfig = effectiveLightingConfig,
+            .width = width,
+            .height = height,
+            .gpuDrivenSupport = effectiveGpuDrivenSupport,
+            .aggregateSubmitStats = lastSceneSubmitStats_,
+            .diagnostics = lastSceneDiagnostics_,
+            .passSubmitStats = lastScenePassSubmitStats_,
+        };
+        RendererMeshPassSubmitter::SubmitSelectionMask(selectionMaskSubmitDesc);
+    }
 
-    if (desc.finalComposite.enabled && finalCompositePass_ != nullptr && scenePostProcessRenderer_ != nullptr) {
-        PostProcessOutput postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
-            .sceneColor = desc.target.colorTexture,
-            .selectionMask = desc.postProcess.selectionMaskTexture,
-            .outputFrameBuffer = desc.postProcess.finalFrameBuffer,
-            .outputColor = desc.postProcess.finalTexture,
+    if (desc.finalComposite.enabled && finalCompositePass_ != nullptr) {
+        PostProcessOutput postProcessOutput{
+            .color = desc.target.colorTexture,
             .extent = desc.target.viewport.extent,
-        });
+            .producer = PostProcessPassKind::IdentityCopy,
+            .colorSpace = PostProcessColorSpace::SceneHdr,
+            .enabledPassCount = 0U,
+            .passthrough = true,
+            .gpuSubmitted = false,
+            .sceneHdrPreserved = true,
+            .tonemapEnabled = true,
+        };
+        bgfx::TextureHandle scenePostProcessOutput = desc.target.colorTexture;
+        if (desc.postProcessEnabled) {
+            if (scenePostProcessRenderer_ == nullptr) {
+                return false;
+            }
+            postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
+                .sceneColor = desc.target.colorTexture,
+                .selectionMask = desc.postProcess.selectionMaskTexture,
+                .outputFrameBuffer = desc.postProcess.finalFrameBuffer,
+                .outputColor = desc.postProcess.finalTexture,
+                .extent = desc.target.viewport.extent,
+            });
+        }
         if (!postProcessOutput.IsValid()) {
             return false;
         }
-        lastSceneExposureStats_.push_back(RendererExposureSubmitter::Submit(
-            sceneExposureMeter_,
-            postProcessOutput,
-            desc,
-            viewportPlan,
-            renderScene,
-            effectiveLightingConfig,
-            lastCompletedFrame_));
+        if (desc.postProcessEnabled) {
+            lastSceneExposureStats_.push_back(RendererExposureSubmitter::Submit(
+                sceneExposureMeter_,
+                postProcessOutput,
+                desc,
+                viewportPlan,
+                renderScene,
+                effectiveLightingConfig,
+                lastCompletedFrame_));
 
-        TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
-        const bgfx::TextureHandle scenePostProcessOutput = RendererPostProcessSubmitter::Submit(RendererPostProcessSubmitDesc{
-            .postProcessRenderer = *scenePostProcessRenderer_,
-            .sceneDesc = desc,
-            .viewportPlan = viewportPlan,
-            .postProcessOutput = postProcessOutput,
-            .sceneCamera = sceneCamera,
-            .jitter = jitter,
-            .frameIndex = frameIndex,
-            .temporalExtent = temporalState.extent,
-            .previousViewProjection = temporalState.previousViewProjection,
-            .hasTemporalHistory = temporalState.hasHistory,
-        });
-        if (!bgfx::isValid(scenePostProcessOutput)) {
-            return false;
+            TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+            scenePostProcessOutput = RendererPostProcessSubmitter::Submit(RendererPostProcessSubmitDesc{
+                .postProcessRenderer = *scenePostProcessRenderer_,
+                .sceneDesc = desc,
+                .viewportPlan = viewportPlan,
+                .postProcessOutput = postProcessOutput,
+                .sceneCamera = sceneCamera,
+                .jitter = jitter,
+                .frameIndex = frameIndex,
+                .temporalExtent = temporalState.extent,
+                .previousViewProjection = temporalState.previousViewProjection,
+                .hasTemporalHistory = temporalState.hasHistory,
+            });
+            if (!bgfx::isValid(scenePostProcessOutput)) {
+                return false;
+            }
         }
         if (!RendererFinalCompositeSubmitter::Submit(*finalCompositePass_, viewportPlan, desc, postProcessOutput, scenePostProcessOutput)) {
             return false;
         }
 
-        RendererEditorOverlaySubmitter::Submit(editorPassSubmitter_, viewportPlan, desc, overlayCamera, postProcessOutput.selectionOutlineEnabled);
+        RendererEditorOverlaySubmitter::Submit(
+            editorPassSubmitter_,
+            viewportPlan,
+            desc,
+            overlayCamera,
+            desc.selectionOutlineEnabled && postProcessOutput.selectionOutlineEnabled);
         return true;
     }
 

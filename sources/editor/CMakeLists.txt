@@ -351,6 +351,10 @@ add_executable(kb_editor WIN32
     src/private/rendering/FloatingWindowControlRenderer.hpp
     src/private/rendering/GdiBackBufferRenderer.hpp
     src/private/rendering/EditorGdiRenderer.hpp
+    src/private/rendering/EditorMeshPreviewRasterizer.hpp
+    src/private/rendering/EditorMeshPreviewService.hpp
+    src/private/rendering/EditorMeshPreviewTypes.hpp
+    src/private/rendering/EditorMeshThumbnailDiskCache.hpp
     src/private/rendering/EditorMeshThumbnailService.hpp
     src/private/rendering/GdiDrawing.hpp
     src/private/rendering/GdiResources.hpp
@@ -472,6 +476,9 @@ add_executable(kb_editor WIN32
     src/rendering/EditorTabIndicatorPainter.cpp
     src/rendering/EditorToolbarLayout.cpp
     src/rendering/EditorToolbarRenderer.cpp
+    src/rendering/EditorMeshPreviewRasterizer.cpp
+    src/rendering/EditorMeshPreviewService.cpp
+    src/rendering/EditorMeshThumbnailDiskCache.cpp
     src/rendering/EditorMeshThumbnailService.cpp
     src/rendering/ConsoleDetailTextOverlay.cpp
     src/rendering/FloatingEditorWindowRenderer.cpp

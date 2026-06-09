@@ -216,6 +216,23 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().ToggleCollapsed(hit.section);
         return true;
     }
+    if (hit.kind == InspectorHitKind::MeshPreviewToolbarButton) {
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.property == InspectorPropertyId::MeshPreviewReset) {
+            sceneContext.Inspector().ResetMeshPreview();
+        } else if (hit.property == InspectorPropertyId::MeshPreviewFit) {
+            sceneContext.Inspector().FitMeshPreview();
+        } else if (hit.property == InspectorPropertyId::MeshPreviewRenderMode) {
+            sceneContext.Inspector().CycleMeshPreviewRenderMode();
+        } else if (hit.property == InspectorPropertyId::MeshPreviewLightPreset) {
+            sceneContext.Inspector().CycleMeshPreviewLightPreset();
+        }
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::MeshPreview) {
+        sceneContext.Inspector().BeginMeshPreviewDrag(x, y);
+        return true;
+    }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
     }
@@ -241,6 +258,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 }
 
 bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneContext, int x, int y) noexcept {
+    if (sceneContext.Inspector().IsDraggingMeshPreview()) {
+        sceneContext.Inspector().DragMeshPreview(x, y);
+        return true;
+    }
     if (!sceneContext.Inspector().IsDraggingFloat()) {
         return false;
     }
@@ -263,6 +284,10 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
 }
 
 bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext) noexcept {
+    if (sceneContext.Inspector().IsDraggingMeshPreview()) {
+        sceneContext.Inspector().EndMeshPreviewDrag();
+        return true;
+    }
     if (!sceneContext.Inspector().IsDraggingFloat()) {
         return false;
     }
@@ -356,6 +381,22 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
 
 bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept {
     return sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property);
+}
+
+bool InspectorPanelInteraction::HandleMouseWheel(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int wheelDelta) noexcept {
+    if (hit.kind != InspectorHitKind::MeshPreview) {
+        return false;
+    }
+    const float direction = wheelDelta > 0 ? 0.10F : -0.10F;
+    return sceneContext.Inspector().ZoomMeshPreview(direction);
+}
+
+bool InspectorPanelInteraction::HandleDoubleClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept {
+    if (hit.kind != InspectorHitKind::MeshPreview) {
+        return false;
+    }
+    sceneContext.Inspector().ResetMeshPreview();
+    return true;
 }
 
 } // namespace kb::editor

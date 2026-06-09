@@ -21,6 +21,7 @@ namespace {
 
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
+constexpr std::uint64_t kEditorSceneAssetDiscoveryIntervalFrames = 600ULL;
 constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
@@ -228,6 +229,10 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
     }
 }
 
+void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings) {
+    Present(nullptr, parent, rect, scene, EditorTheme{}, settings);
+}
+
 void EditorSceneBgfxViewport::Hide() noexcept {
     sessionStore_.MarkAllNotPresented();
 }
@@ -310,6 +315,7 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
     }
 
     bool needsPositionUpdate = !RectEquals(surface.rect, rect);
+    bool needsRegionUpdate = needsPositionUpdate;
     if (surface.window == nullptr || IsWindow(surface.window) == 0) {
         surface.window = CreateWindowExW(
             0,
@@ -328,10 +334,12 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             return false;
         }
         needsPositionUpdate = false;
+        needsRegionUpdate = true;
     } else if (GetParent(surface.window) != surface.host) {
         ShowWindow(surface.window, SW_HIDE);
         SetParent(surface.window, surface.host);
         needsPositionUpdate = true;
+        needsRegionUpdate = true;
     }
 
     if (needsPositionUpdate) {
@@ -345,13 +353,15 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS);
     }
 
-    HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, std::span<const RECT>{&rect, 1U});
-    if (combinedRegion == nullptr) {
-        return false;
-    }
-    if (SetWindowRgn(surface.window, combinedRegion, FALSE) == 0) {
-        DeleteObject(combinedRegion);
-        return false;
+    if (needsRegionUpdate) {
+        HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, std::span<const RECT>{&rect, 1U});
+        if (combinedRegion == nullptr) {
+            return false;
+        }
+        if (SetWindowRgn(surface.window, combinedRegion, FALSE) == 0) {
+            DeleteObject(combinedRegion);
+            return false;
+        }
     }
 
     surface.rect = rect;
@@ -372,9 +382,9 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
 
     Win32Surface surface(contextWindow_);
     render::DisplayConfig config{};
-    config.syncMode = render::DisplaySyncMode::VSync;
-    config.targetFps = 120;
-    config.flushAfterRender = true;
+    config.syncMode = render::DisplaySyncMode::Uncapped;
+    config.targetFps = 180;
+    config.flushAfterRender = false;
     bgfx::RendererType::Enum supportedBackends[bgfx::RendererType::Count]{};
     const std::uint8_t supportedBackendCount = bgfx::getSupportedRenderers(static_cast<std::uint8_t>(bgfx::RendererType::Count), supportedBackends);
     const bgfx::RendererType::Enum preferredBackend = EditorBgfxBackendSelector::Resolve(supportedBackends, supportedBackendCount, backendSettings_);
@@ -384,6 +394,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
         return false;
     }
 
+    renderer_.SetRuntimeAssetDiscoveryIntervalFrames(kEditorSceneAssetDiscoveryIntervalFrames);
     rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->Generation();
     return true;
 }
@@ -537,9 +548,6 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         PAINTSTRUCT paint{};
         BeginPaint(window, &paint);
         EndPaint(window, &paint);
-        if (viewport != nullptr) {
-            viewport->RequestPresent();
-        }
         return 0;
     }
     case WM_NCDESTROY:

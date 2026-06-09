@@ -3,6 +3,10 @@
 #if defined(_WIN32)
 #include "app/EditorAssetBrowserPointerHandler.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "app/inspector/EditorInspectorPointerController.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+
+#include <optional>
 
 namespace kb::editor {
 
@@ -19,6 +23,13 @@ EditorLeftButtonDoubleClickRouter::EditorLeftButtonDoubleClickRouter(
     , metrics_(metrics) {}
 
 bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y) {
+    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    EditorInspectorPointerController inspectorPointer(sceneContext_);
+    if (inspectorContent.has_value() && inspectorPointer.HandleDoubleClick(*inspectorContent, x, y)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return true;
+    }
+
     if (!EditorAssetBrowserPointerHandler::HandleDoubleClick(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         return false;
     }

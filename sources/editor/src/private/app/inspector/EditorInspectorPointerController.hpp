@@ -20,6 +20,8 @@ public:
     [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y);
     [[nodiscard]] bool HandlePointerDrag(int x, int y);
     [[nodiscard]] bool HandlePointerUp();
+    [[nodiscard]] bool HandleMouseWheel(const RECT& content, int x, int y, int wheelDelta);
+    [[nodiscard]] bool HandleDoubleClick(const RECT& content, int x, int y);
     [[nodiscard]] bool UpdateHover(const RECT& content, int x, int y);
     [[nodiscard]] bool UpdateHoverOrClear(const std::optional<RECT>& content, int x, int y);
     [[nodiscard]] bool Contains(const std::optional<RECT>& content, int x, int y) const noexcept;
