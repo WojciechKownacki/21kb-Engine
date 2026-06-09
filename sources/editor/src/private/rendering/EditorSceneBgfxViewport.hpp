@@ -54,6 +54,9 @@ public:
         bool gpuDrivenRuntimeDispatchEnabled = true;
         bool drawSafeArea = false;
         std::uint64_t sceneRevision = 1U;
+        std::uint64_t sceneDirtyBaseRevision = 1U;
+        bool sceneFullSyncRequired = true;
+        std::vector<std::uint64_t> dirtySceneEntityIds;
     };
 
     struct HostSurfaceLayout {

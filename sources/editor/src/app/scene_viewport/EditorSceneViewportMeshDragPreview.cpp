@@ -4,7 +4,9 @@
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
 #include "engine/scene/SceneEntities.hpp"
 
+#include <array>
 #include <optional>
+#include <span>
 
 namespace kb::editor {
 
@@ -30,18 +32,13 @@ bool EditorSceneViewportMeshDragPreview::Update(
 
     if (!drag.meshScenePreview.IsValid() || !sceneContext.Scene().Entities().IsAlive(drag.meshScenePreview)) {
         const kb::scene::Vec3 snappedPosition = sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition);
-        if (!sceneContext.HasPendingSceneEditTransaction()) {
-            if (!sceneContext.BeginSceneEditTransaction("Create Mesh Entity")) {
-                return false;
-            }
-        }
         drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(drag.assetId, snappedPosition, false);
         drag.meshScenePreviewCommitted = false;
         if (!drag.meshScenePreview.IsValid()) {
-            sceneContext.CancelSceneEditTransaction();
             return false;
         }
-        sceneContext.MarkSceneRenderDirty();
+        const std::array<kb::scene::SceneEntity, 1U> created{ drag.meshScenePreview };
+        sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ created.data(), created.size() });
     }
 
     EditorSceneViewportMath::MoveEntityTo(
@@ -49,7 +46,8 @@ bool EditorSceneViewportMeshDragPreview::Update(
         drag.meshScenePreview,
         sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
     sceneContext.SelectEntity(drag.meshScenePreview);
-    sceneContext.MarkSceneRenderDirty();
+    const std::array<kb::scene::SceneEntity, 1U> moved{ drag.meshScenePreview };
+    sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ moved.data(), moved.size() });
     return true;
 }
 
@@ -79,19 +77,32 @@ bool EditorSceneViewportMeshDragPreview::Commit(
             drag.meshScenePreview,
             sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
         sceneContext.SelectEntity(drag.meshScenePreview);
-        sceneContext.MarkSceneRenderDirty();
-        drag.meshScenePreviewCommitted = true;
-        if (sceneContext.HasPendingSceneEditTransaction()) {
-            static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        const std::array<kb::scene::SceneEntity, 1U> created{ drag.meshScenePreview };
+        sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ created.data(), created.size() });
+        drag.meshScenePreviewCommitted = sceneContext.AdoptCreatedHierarchyEntities(
+            "Create Mesh Entity",
+            std::span<const kb::scene::SceneEntity>{ created.data(), created.size() });
+        if (!drag.meshScenePreviewCommitted) {
+            sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
+            drag.meshScenePreview = {};
+            sceneContext.MarkSceneRenderDirty();
         }
-        return true;
+        return drag.meshScenePreviewCommitted;
     }
 
     drag.meshScenePreview = sceneContext.CreateMeshAssetEntity(
         drag.assetId,
         sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition),
-        true);
-    drag.meshScenePreviewCommitted = drag.meshScenePreview.IsValid();
+        false);
+    const std::array<kb::scene::SceneEntity, 1U> created{ drag.meshScenePreview };
+    drag.meshScenePreviewCommitted = drag.meshScenePreview.IsValid() && sceneContext.AdoptCreatedHierarchyEntities(
+        "Create Mesh Entity",
+        std::span<const kb::scene::SceneEntity>{ created.data(), created.size() });
+    if (!drag.meshScenePreviewCommitted && drag.meshScenePreview.IsValid() && sceneContext.Scene().Entities().IsAlive(drag.meshScenePreview)) {
+        sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
+        drag.meshScenePreview = {};
+        sceneContext.MarkSceneRenderDirty();
+    }
     return drag.meshScenePreviewCommitted;
 }
 
@@ -100,11 +111,7 @@ void EditorSceneViewportMeshDragPreview::Cancel(EditorSceneContext& sceneContext
         return;
     }
 
-    if (sceneContext.HasPendingSceneEditTransaction()) {
-        sceneContext.CancelSceneEditTransaction();
-    } else {
-        sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
-    }
+    sceneContext.Scene().Entities().Destroy(drag.meshScenePreview);
     if (sceneContext.SelectedEntity() == drag.meshScenePreview) {
         sceneContext.ClearHierarchySelection();
     }

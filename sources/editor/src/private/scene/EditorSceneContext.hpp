@@ -10,6 +10,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
+#include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "inspection/InspectorPanelState.hpp"
 
@@ -59,7 +60,12 @@ public:
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
     [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
+    [[nodiscard]] std::uint64_t SceneRenderDirtyBaseRevision() const noexcept;
+    [[nodiscard]] bool SceneRenderFullDirty() const noexcept;
+    [[nodiscard]] const std::vector<std::uint64_t>& SceneRenderDirtyEntityIds() const noexcept;
     void MarkSceneRenderDirty() noexcept;
+    void MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity> entities);
+    void AcknowledgeSceneRenderSubmitted() noexcept;
     [[nodiscard]] bool NewScene();
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool SaveCurrentScene();
@@ -76,6 +82,7 @@ public:
     [[nodiscard]] const std::vector<kb::scene::SceneEntity>& SelectedHierarchyEntities() const noexcept;
     [[nodiscard]] bool IsHierarchyEntitySelected(kb::scene::SceneEntity entity) const noexcept;
     void SelectEntity(kb::scene::SceneEntity entity) noexcept;
+    void SelectHierarchyEntities(std::span<const kb::scene::SceneEntity> entities) noexcept;
     void ClearHierarchySelection() noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex) noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept;
@@ -119,6 +126,7 @@ public:
     [[nodiscard]] bool DeleteSelectedAssetBrowserItem();
     [[nodiscard]] bool DeleteSelectedHierarchyEntity() noexcept;
     [[nodiscard]] bool DuplicateSelectedHierarchyEntities();
+    [[nodiscard]] bool AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities);
     [[nodiscard]] bool DeleteAssetBrowserItem(kb::assets::AssetId id);
     [[nodiscard]] bool DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder);
@@ -139,6 +147,11 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
+    [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
+    [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
+    [[nodiscard]] bool CommitActiveTransformEdit();
+    void CancelActiveTransformEdit() noexcept;
+    [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
 
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
@@ -164,7 +177,11 @@ private:
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
     std::optional<std::string> pendingSceneTransactionLabel_;
+    EditorSceneActiveTransformEdit activeTransformEdit_;
     std::uint64_t sceneRenderRevision_ = 1U;
+    std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
+    std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;
+    bool sceneRenderFullDirty_ = true;
     int hierarchyScrollOffset_ = 0;
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;

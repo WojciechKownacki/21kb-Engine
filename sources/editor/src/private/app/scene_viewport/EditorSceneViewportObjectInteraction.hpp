@@ -64,7 +64,25 @@ public:
         EditorSceneContext& sceneContext,
         bool leftButtonDown);
 
+    [[nodiscard]] static bool TickGizmoDrag(
+        HWND mainWindow,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
+    [[nodiscard]] static bool EndGizmoDrag(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        int y,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
     [[nodiscard]] static bool EndGizmoDrag(EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static bool CancelGizmoDrag(EditorSceneContext& sceneContext) noexcept;
 
     [[nodiscard]] static bool SelectAt(
         HWND sourceWindow,

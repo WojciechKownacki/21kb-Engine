@@ -52,7 +52,7 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
-    if (EditorSceneViewportObjectInteraction::EndGizmoDrag(sceneContext_)) {
+    if (EditorSceneViewportObjectInteraction::EndGizmoDrag(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
         ReleaseCapture();
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

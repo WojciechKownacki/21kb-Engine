@@ -435,6 +435,8 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
+    src/private/scene/EditorSceneObjectEditCommands.hpp
+    src/private/scene/EditorSceneObjectEditTypes.hpp
     src/private/scene/EditorScenePrefabActions.hpp
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
@@ -555,6 +557,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
+    src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
