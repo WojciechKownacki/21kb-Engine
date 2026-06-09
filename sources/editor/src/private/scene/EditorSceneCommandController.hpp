@@ -36,7 +36,8 @@ public:
         EditorHierarchyExpansionState& hierarchyExpansion,
         EditorHierarchySearchState& hierarchySearch,
         std::optional<std::string>& pendingTransactionLabel,
-        std::uint64_t& sceneRenderRevision) noexcept;
+        std::uint64_t& sceneRenderRevision,
+        bool& hierarchyRowsDirty) noexcept;
 
     [[nodiscard]] bool Undo();
     [[nodiscard]] bool Redo();
@@ -60,6 +61,7 @@ private:
     EditorHierarchySearchState& hierarchySearch_;
     std::optional<std::string>& pendingTransactionLabel_;
     std::uint64_t& sceneRenderRevision_;
+    bool& hierarchyRowsDirty_;
 };
 
 } // namespace kb::editor
