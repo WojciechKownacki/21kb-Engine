@@ -38,6 +38,7 @@ add_executable(kb_editor WIN32
     src/app/EditorPendingTextEditCommitter.cpp
     src/app/EditorPlayModeState.cpp
     src/app/EditorPlayModeSceneSession.cpp
+    src/app/EditorSceneLifecycleGuard.cpp
     src/app/EditorShellInteractionState.cpp
     src/app/EditorPointerDragInteraction.cpp
     src/app/EditorPointerDragSourceResolver.cpp
@@ -279,6 +280,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPendingTextEditCommitter.hpp
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorPlayModeSceneSession.hpp
+    src/private/app/EditorSceneLifecycleGuard.hpp
     src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp
@@ -323,6 +325,7 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorPanelTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
+    src/private/platform/win32/EditorSceneDirtyPrompt.hpp
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
@@ -453,6 +456,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
