@@ -33,6 +33,7 @@ EditorLeftButtonUpRouter::EditorLeftButtonUpRouter(
 void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     static_cast<void>(x);
     static_cast<void>(y);
+    shellInteraction_.ClearPressedSave();
     shellInteraction_.ClearPressedTransport();
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         sceneContext_.EndHierarchyScrollbarDrag();

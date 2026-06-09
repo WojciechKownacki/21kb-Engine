@@ -8,6 +8,7 @@ enum class EditorEditCommand {
     Undo,
     Redo,
     Duplicate,
+    Save,
 };
 
 class EditorEditCommandPolicy {
