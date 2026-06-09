@@ -134,4 +134,16 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
     };
 }
 
+SceneMeshShadowMaterialBinding SceneMeshMaterialBindingResolver::ResolveShadow(
+    const RenderMaterialResource* material,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap,
+    SceneMeshMaterialBindingFallbacks fallbacks) noexcept {
+    return SceneMeshShadowMaterialBinding{
+        .albedoTexture = ResolveAlbedoTexture(material, resources, resourceMap, fallbacks.whiteTexture),
+        .params = MaterialParams(material),
+        .flags = MaterialFlags(material),
+    };
+}
+
 } // namespace kb::render

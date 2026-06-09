@@ -40,10 +40,10 @@ bool MeshPipelinePassPolicy::CanEverContain(
 
 std::uint32_t MeshPipelinePassPolicy::CountCandidateInstances(
     MeshPassType pass,
-    const SceneRenderDrawGroup& group,
+    const SceneMeshBatch& batch,
     std::span<const std::uint64_t> selectedEntityIds) noexcept {
     std::uint32_t count = 0U;
-    for (const SceneRenderMeshInstance& instance : group.instances) {
+    for (const SceneRenderMeshInstance& instance : batch.instances) {
         count += CanEverContain(pass, instance, selectedEntityIds) ? 1U : 0U;
     }
     return count;

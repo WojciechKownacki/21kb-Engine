@@ -185,19 +185,6 @@ void SetTransformValue(kb::scene::Scene& scene, kb::scene::SceneEntity entity, I
     scene.Transforms().Set(entity, transform);
 }
 
-void ToggleBool(kb::scene::Scene& scene, kb::scene::SceneEntity entity, InspectorPropertyId property) {
-    switch (property) {
-    case InspectorPropertyId::EntityVisible: {
-        kb::scene::VisibilityComponent visibility = scene.Components().Visibility().Get(entity);
-        visibility.visible = !visibility.visible;
-        scene.Components().Visibility().Set(entity, visibility);
-        break;
-    }
-    default:
-        break;
-    }
-}
-
 [[nodiscard]] bool IsTransformProperty(InspectorPropertyId property) noexcept {
     return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ ||
         property == InspectorPropertyId::RotationX || property == InspectorPropertyId::RotationY || property == InspectorPropertyId::RotationZ ||
@@ -245,7 +232,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.kind == InspectorHitKind::BoolField) {
         sceneContext.Inspector().EndTextEdit();
-        ToggleBool(sceneContext.Scene(), entity, hit.property);
+        if (hit.property == InspectorPropertyId::EntityVisible) {
+            static_cast<void>(sceneContext.ToggleEntityVisibility(entity));
+        }
         return true;
     }
     if (hit.kind == InspectorHitKind::FloatField) {

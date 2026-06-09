@@ -53,6 +53,10 @@ add_library(kb_renderer STATIC
     include/kb/render/scene/SceneGpuDrivenFrameResources.hpp
     include/kb/render/scene/SceneGpuDrivenParityValidator.hpp
     include/kb/render/scene/MeshPipeline.hpp
+    include/kb/render/scene/MeshPassType.hpp
+    include/kb/render/scene/batch/SceneMeshBatch.hpp
+    include/kb/render/scene/batch/SceneMeshBatchBuilder.hpp
+    include/kb/render/scene/cache/SceneCachedDrawCommand.hpp
     include/kb/render/scene/RenderInstanceBuffer.hpp
     include/kb/render/scene/RenderProxyId.hpp
     include/kb/render/scene/RenderScene.hpp
@@ -181,6 +185,14 @@ add_library(kb_renderer STATIC
     src/scene/SceneGpuDrivenCullingPass.cpp
     src/scene/SceneGpuDrivenFrameResources.cpp
     src/scene/MeshPipeline.cpp
+    src/scene/batch/SceneMeshBatchBuilder.cpp
+    src/scene/batch/SceneMeshBatchSourceResolver.cpp
+    src/scene/batch/SceneMeshBatchSourceResolver.hpp
+    src/scene/cache/SceneCachedDrawCommand.cpp
+    src/scene/cache/SceneCachedDrawCommandMaterializer.cpp
+    src/scene/cache/SceneCachedDrawCommandMaterializer.hpp
+    src/scene/cache/SceneMaterialTextureDependencySignature.cpp
+    src/scene/cache/SceneMaterialTextureDependencySignature.hpp
     src/scene/RenderInstanceBuffer.cpp
     src/scene/RenderScene.cpp
     src/scene/RenderSceneProxyConverters.cpp
@@ -204,6 +216,8 @@ add_library(kb_renderer STATIC
     src/scene/pipeline/MeshPipelineResourceResolver.hpp
     src/scene/pipeline/MeshPipelineVisibility.cpp
     src/scene/pipeline/MeshPipelineVisibility.hpp
+    src/scene/pass/MeshPassProcessor.cpp
+    src/scene/pass/MeshPassProcessor.hpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.cpp
     src/scene/submit/SceneMeshDrawCommandSubmitter.hpp
     src/scene/submit/SceneMeshMaterialBindingResolver.cpp

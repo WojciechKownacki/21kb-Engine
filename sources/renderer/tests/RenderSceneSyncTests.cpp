@@ -406,6 +406,80 @@ void RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest() {
     Require(repeatedGroup->instances.size() == repeatedInstanceCount, "RenderScene did not coalesce repeated mesh/material instances");
 }
 
+void RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest() {
+    RenderScene renderScene;
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 42U,
+        .materialAssetId = 7U,
+        .visible = true,
+    }));
+
+    const std::vector<SceneRenderDrawGroup>& initialGroups = renderScene.DrawGroups();
+    Require(initialGroups.size() == 1U && initialGroups[0].instances.size() == 1U, "RenderScene draw group cache setup failed");
+    const SceneRenderDrawGroup* initialData = initialGroups.data();
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 42U,
+        .materialAssetId = 7U,
+        .visible = true,
+    }));
+    const std::vector<SceneRenderDrawGroup>& sameMeshGroups = renderScene.DrawGroups();
+    Require(sameMeshGroups.data() == initialData, "RenderScene rebuilt draw groups after an unchanged mesh upsert");
+
+    static_cast<void>(renderScene.UpsertCamera(CameraRenderProxyDesc{
+        .entityId = 10U,
+        .primary = true,
+    }));
+    static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+        .entityId = 20U,
+        .visible = true,
+    }));
+    const std::vector<SceneRenderDrawGroup>& unchangedGroups = renderScene.DrawGroups();
+    Require(unchangedGroups.data() == initialData, "RenderScene rebuilt draw groups for non-mesh proxy changes");
+    Require(unchangedGroups.size() == 1U && unchangedGroups[0].instances.size() == 1U, "RenderScene draw group cache changed after non-mesh proxy changes");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 42U,
+        .materialAssetId = 7U,
+        .visible = false,
+    }));
+    const std::vector<SceneRenderDrawGroup>& hiddenGroups = renderScene.DrawGroups();
+    Require(hiddenGroups.empty(), "RenderScene did not invalidate cached draw groups after mesh visibility changed");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 99U,
+        .materialAssetId = 7U,
+        .visible = true,
+    }));
+    const std::vector<SceneRenderDrawGroup>& changedGroups = renderScene.DrawGroups();
+    Require(changedGroups.size() == 1U && changedGroups[0].meshAssetId == 99U, "RenderScene did not refresh cached draw groups after mesh asset changed");
+
+    static_cast<void>(renderScene.UpsertMesh(MeshRenderProxyDesc{
+        .entityId = 1U,
+        .meshAssetId = 99U,
+        .materialAssetId = 13U,
+        .visible = true,
+    }));
+    const std::vector<SceneRenderDrawGroup>& materialGroups = renderScene.DrawGroups();
+    Require(materialGroups.size() == 1U && materialGroups[0].materialAssetId == 13U, "RenderScene did not refresh cached draw groups after material asset changed");
+
+    MeshRenderProxyDesc transformedMesh{
+        .entityId = 1U,
+        .meshAssetId = 99U,
+        .materialAssetId = 13U,
+        .visible = true,
+    };
+    transformedMesh.model[12] = 3.0F;
+    static_cast<void>(renderScene.UpsertMesh(transformedMesh));
+    const std::vector<SceneRenderDrawGroup>& transformedGroups = renderScene.DrawGroups();
+    Require(transformedGroups.size() == 1U && transformedGroups[0].instances.size() == 1U, "RenderScene lost the draw group after mesh transform changed");
+    Require(transformedGroups[0].instances[0].model[12] == 3.0F, "RenderScene did not refresh cached draw group instances after mesh transform changed");
+}
+
 void RunRenderSceneReserveAndStatsExposeProxyCapacityTest() {
     RenderScene renderScene;
     renderScene.Reserve(RenderSceneReserveDesc{
@@ -648,6 +722,13 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     first.meshDrawGroupInstanceScratchCapacity = 10U;
     first.meshDrawGroupLookupCapacity = 6U;
     first.meshCommandLookupCapacity = 9U;
+    first.meshCachedDrawCommandCount = 2U;
+    first.meshCachedDrawCommandCapacity = 4U;
+    first.meshDrawCommandCacheLookupCapacity = 5U;
+    first.meshDrawCommandCacheHitCount = 6U;
+    first.meshDrawCommandCacheMissCount = 1U;
+    first.meshDrawCommandCacheBuildCount = 1U;
+    first.meshDrawCommandCachePruneCount = 2U;
     first.meshPipelineScratchInstanceCapacity = 8U;
     first.gpuDrivenDrawCandidateCount = 2U;
     first.indirectDrawCandidateCount = 1U;
@@ -694,6 +775,13 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     second.meshDrawGroupInstanceScratchCapacity = 12U;
     second.meshDrawGroupLookupCapacity = 11U;
     second.meshCommandLookupCapacity = 13U;
+    second.meshCachedDrawCommandCount = 3U;
+    second.meshCachedDrawCommandCapacity = 8U;
+    second.meshDrawCommandCacheLookupCapacity = 7U;
+    second.meshDrawCommandCacheHitCount = 4U;
+    second.meshDrawCommandCacheMissCount = 2U;
+    second.meshDrawCommandCacheBuildCount = 2U;
+    second.meshDrawCommandCachePruneCount = 3U;
     second.meshPipelineScratchInstanceCapacity = 16U;
     second.gpuDrivenDrawCandidateCount = 5U;
     second.indirectDrawCandidateCount = 4U;
@@ -740,6 +828,13 @@ void RunSceneRenderSubmitStatsAggregateFrameSubmissionsTest() {
     Require(first.meshDrawGroupInstanceScratchCapacity == 22U, "SceneRenderSubmitStats did not aggregate draw group instance scratch capacity");
     Require(first.meshDrawGroupLookupCapacity == 17U, "SceneRenderSubmitStats did not aggregate draw group lookup capacity");
     Require(first.meshCommandLookupCapacity == 22U, "SceneRenderSubmitStats did not aggregate command lookup capacity");
+    Require(first.meshCachedDrawCommandCount == 5U, "SceneRenderSubmitStats did not aggregate cached draw command count");
+    Require(first.meshCachedDrawCommandCapacity == 12U, "SceneRenderSubmitStats did not aggregate cached draw command capacity");
+    Require(first.meshDrawCommandCacheLookupCapacity == 12U, "SceneRenderSubmitStats did not aggregate draw command cache lookup capacity");
+    Require(first.meshDrawCommandCacheHitCount == 10U, "SceneRenderSubmitStats did not aggregate draw command cache hits");
+    Require(first.meshDrawCommandCacheMissCount == 3U, "SceneRenderSubmitStats did not aggregate draw command cache misses");
+    Require(first.meshDrawCommandCacheBuildCount == 3U, "SceneRenderSubmitStats did not aggregate draw command cache builds");
+    Require(first.meshDrawCommandCachePruneCount == 5U, "SceneRenderSubmitStats did not aggregate draw command cache prunes");
     Require(first.meshPipelineScratchInstanceCapacity == 24U, "SceneRenderSubmitStats did not aggregate scratch instance capacity");
     Require(first.gpuDrivenDrawCandidateCount == 7U, "SceneRenderSubmitStats did not aggregate GPU-driven CPU candidate count");
     Require(first.indirectDrawCandidateCount == 5U, "SceneRenderSubmitStats did not aggregate indirect draw candidate count");
@@ -1407,6 +1502,7 @@ void RunRenderSceneSyncTests() {
     RunRenderResourceMapRequiresExplicitBindingsTest();
     RunRenderSceneBuildsMeshMaterialDrawGroupsTest();
     RunRenderSceneBuildsLargeMeshMaterialDrawGroupsTest();
+    RunRenderSceneCachesDrawGroupsUntilMeshStateChangesTest();
     RunRenderSceneReserveAndStatsExposeProxyCapacityTest();
     RunEcsSyncPropagatesMaterialSlotOverridesTest();
     RunEcsSyncScratchCapacityIsReusableAndVisibleTest();

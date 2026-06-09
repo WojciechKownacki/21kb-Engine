@@ -3,6 +3,7 @@
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
+#include "kb/render/scene/batch/SceneMeshBatch.hpp"
 
 #include <cstdint>
 #include <span>
@@ -18,9 +19,9 @@ class MeshPipelineResourceResolver {
 public:
     MeshPipelineResourceResolver() = delete;
 
-    [[nodiscard]] static MeshPipelineResolvedMesh ResolveMeshGroup(
+    [[nodiscard]] static MeshPipelineResolvedMesh ResolveMeshBatch(
         MeshPassType pass,
-        const SceneRenderDrawGroup& group,
+        const SceneMeshBatch& batch,
         std::uint32_t passInstanceCount,
         const RenderResourceRegistry& resources,
         const SceneRenderResourceMap& resourceMap,
@@ -44,7 +45,7 @@ public:
         SceneRenderSubmitStats& stats,
         SceneRenderDiagnostics* diagnostics) noexcept;
     [[nodiscard]] static std::uint64_t MaterialAssetForSectionInstance(
-        const SceneRenderDrawGroup& group,
+        const SceneMeshBatch& batch,
         const SceneRenderMeshInstance& instance,
         const RenderMeshResource* meshResource,
         const RenderMeshSection& section) noexcept;

@@ -220,28 +220,37 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
 
 bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& desc) const noexcept {
     const RenderMaterialResource* material = desc.command.materialResource;
-    const SceneMeshMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::Resolve(
-        material,
-        desc.resources,
-        desc.resourceMap,
-        SceneMeshMaterialBindingFallbacks{
-            .whiteTexture = fallbackWhiteTexture_,
-            .normalTexture = fallbackNormalTexture_,
-            .blackTexture = fallbackBlackTexture_,
-        });
-    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
-    bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
-    bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
-
-    if (desc.pass == MeshPassType::ShadowDepth) {
-        return shadowProgram_;
-    }
-
     if (IsSelectionPass(desc.pass)) {
         const std::array<float, 16> disabledShadowViewProj{};
         bgfx::setUniform(shadowViewProjUniform_, disabledShadowViewProj.data());
         return selectionProgram_;
     }
+
+    const SceneMeshMaterialBindingFallbacks fallbacks{
+        .whiteTexture = fallbackWhiteTexture_,
+        .normalTexture = fallbackNormalTexture_,
+        .blackTexture = fallbackBlackTexture_,
+    };
+    if (desc.pass == MeshPassType::ShadowDepth) {
+        const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
+            material,
+            desc.resources,
+            desc.resourceMap,
+            fallbacks);
+        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+        bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
+        bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
+        return shadowProgram_;
+    }
+
+    const SceneMeshMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::Resolve(
+        material,
+        desc.resources,
+        desc.resourceMap,
+        fallbacks);
+    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+    bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
+    bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
 
     const std::array<float, 4> disabledShadowParams{};
     bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);

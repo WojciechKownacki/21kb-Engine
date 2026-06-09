@@ -141,11 +141,14 @@ struct TransportClickResult {
            (command == EditorTransportCommand::Stop && (playMode.IsPlaying() || playMode.IsPaused()));
 }
 
-[[nodiscard]] TransportClickResult ExecuteTransportCommand(EditorTransportCommand command, EditorPlayModeState& playMode) noexcept {
+[[nodiscard]] TransportClickResult ExecuteTransportCommand(EditorTransportCommand command, EditorPlayModeState& playMode, EditorSceneContext& sceneContext) {
     switch (command) {
     case EditorTransportCommand::Play:
         if (playMode.Mode() != EditorPlayMode::Stopped) {
             return {.handled = true, .invalidates = true};
+        }
+        if (!sceneContext.BeginPlayModeSceneSession()) {
+            return {.handled = true, .invalidates = false};
         }
         playMode.Play();
         return {.handled = true, .invalidates = true};
@@ -154,6 +157,7 @@ struct TransportClickResult {
             return {.handled = true, .invalidates = false};
         }
         playMode.Stop();
+        static_cast<void>(sceneContext.RestorePlayModeSceneSession());
         return {.handled = true, .invalidates = true};
     case EditorTransportCommand::Pause:
         if (!TransportCommandEnabled(command, playMode)) {
@@ -176,6 +180,7 @@ struct TransportClickResult {
     int x,
     int y,
     const DockLayout& layout,
+    EditorSceneContext& sceneContext,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction) {
     const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout.toolbar));
@@ -188,7 +193,7 @@ struct TransportClickResult {
         static_cast<void>(shellInteraction.SetPressedTransport(transport));
     }
 
-    const TransportClickResult result = ExecuteTransportCommand(transport, playMode);
+    const TransportClickResult result = ExecuteTransportCommand(transport, playMode, sceneContext);
     if (result.invalidates) {
         InvalidateToolbar(mainWindow, layout);
     }
@@ -221,7 +226,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return true;
     }
 
-    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, playMode, shellInteraction);
+    return HandleTransportLeftButtonDown(mainWindow, x, y, *layout, sceneContext, playMode, shellInteraction);
 }
 
 bool EditorWindowToolbarPointerHandler::HandleMouseMove(
