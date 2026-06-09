@@ -2,8 +2,11 @@
 
 #include "kb/render/resources/RenderHandles.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/scene/MeshPassType.hpp"
 #include "kb/render/scene/SceneGpuDrivenFrameResources.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "kb/render/scene/batch/SceneMeshBatch.hpp"
+#include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -17,16 +20,6 @@ namespace kb::render {
 class RenderResourceRegistry;
 class SceneRenderResourceMap;
 enum class RenderPassKind : std::uint8_t;
-
-enum class MeshPassType : std::uint8_t {
-    Depth,
-    BaseOpaque,
-    BaseTransparent,
-    ShadowDepth,
-    SelectionId,
-    EditorSelection,
-    Gizmo,
-};
 
 [[nodiscard]] const char* MeshPassTypeName(MeshPassType pass) noexcept;
 [[nodiscard]] std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexcept;
@@ -59,6 +52,7 @@ struct MeshDrawCommand {
 
 struct MeshPipelineBuildDesc {
     MeshPassType pass = MeshPassType::BaseOpaque;
+    const std::vector<SceneMeshBatch>* meshBatches = nullptr;
     const std::vector<SceneRenderDrawGroup>* drawGroups = nullptr;
     const RenderResourceRegistry* resources = nullptr;
     const SceneRenderResourceMap* resourceMap = nullptr;
@@ -87,6 +81,9 @@ struct MeshCommandLookupKeyHash {
 
 struct MeshPipelineBuildResult {
     std::vector<MeshDrawCommand> commands;
+    // Transient adapter storage for draw-group input. Cleared before BuildInto returns because batches contain spans.
+    std::vector<SceneMeshBatch> meshBatchScratch;
+    SceneCachedDrawCommandStore drawCommandCache;
     std::vector<SceneGpuDrivenInputRecord> gpuDrivenInputRecords;
     std::vector<SceneGpuDrivenInstanceValidationRecord> gpuDrivenCpuValidationRecords;
     std::unordered_map<MeshCommandLookupKey, std::size_t, MeshCommandLookupKeyHash> commandLookupScratch;

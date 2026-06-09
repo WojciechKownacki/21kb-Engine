@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/scene/MeshPipeline.hpp"
+#include "kb/render/scene/batch/SceneMeshBatch.hpp"
 
 #include <cstdint>
 #include <span>
@@ -17,7 +18,7 @@ public:
         std::span<const std::uint64_t> selectedEntityIds) noexcept;
     [[nodiscard]] static std::uint32_t CountCandidateInstances(
         MeshPassType pass,
-        const SceneRenderDrawGroup& group,
+        const SceneMeshBatch& batch,
         std::span<const std::uint64_t> selectedEntityIds) noexcept;
     [[nodiscard]] static bool Accepts(
         MeshPassType pass,

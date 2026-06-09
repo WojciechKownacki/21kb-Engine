@@ -2,20 +2,27 @@
 
 #if defined(_WIN32)
 #include "kb/editor/docking/DockTypes.hpp"
+#include "scene/EditorSceneContext.hpp"
 
 namespace kb::editor {
 
-EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, bool& running, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows) noexcept
+EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, bool& running, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows, EditorSceneContext& sceneContext) noexcept
     : mainWindow_(mainWindow)
     , running_(running)
     , dockModel_(dockModel)
-    , floatingWindows_(floatingWindows) {}
+    , floatingWindows_(floatingWindows)
+    , sceneContext_(sceneContext) {}
 
 LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (const std::uint32_t panelId = floatingWindows_.Queries().PanelId(messageWindow); panelId != 0) {
         floatingWindows_.Commands().Destroy(panelId);
         dockModel_.Commands().DockPanelTo(panelId, DockDropPreview{ .zone = DockDropZone::Bottom });
         InvalidateRect(mainWindow_, nullptr, FALSE);
+        return 0;
+    }
+
+    static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
+    if (!sceneContext_.SaveDirtySceneDocument("application close")) {
         return 0;
     }
 

@@ -211,6 +211,7 @@ struct RenderMeshResource {
     bool gpuCullingEnabled = false;
     bool indirectDrawsEnabled = false;
     bool meshletCullingEnabled = false;
+    std::uint64_t version = 0;
 };
 
 [[nodiscard]] bgfx::VertexLayout RenderStaticMeshVertexLayout();
@@ -323,6 +324,7 @@ struct RenderMaterialResource {
     RenderTextureHandle anisotropyTexture{};
     RenderTextureHandle decalTexture{};
     RenderTextureHandle layerMaskTexture{};
+    std::uint64_t version = 0;
 };
 
 struct RenderTextureDesc {
@@ -338,6 +340,7 @@ struct RenderTextureResource {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
+    std::uint64_t version = 0;
 };
 
 } // namespace kb::render

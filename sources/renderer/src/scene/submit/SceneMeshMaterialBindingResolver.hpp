@@ -18,6 +18,12 @@ struct SceneMeshMaterialBinding {
     std::array<float, 4> flags{};
 };
 
+struct SceneMeshShadowMaterialBinding {
+    bgfx::TextureHandle albedoTexture = BGFX_INVALID_HANDLE;
+    std::array<float, 4> params{};
+    std::array<float, 4> flags{};
+};
+
 struct SceneMeshMaterialBindingFallbacks {
     bgfx::TextureHandle whiteTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle normalTexture = BGFX_INVALID_HANDLE;
@@ -29,6 +35,11 @@ public:
     SceneMeshMaterialBindingResolver() = delete;
 
     [[nodiscard]] static SceneMeshMaterialBinding Resolve(
+        const RenderMaterialResource* material,
+        const RenderResourceRegistry& resources,
+        const SceneRenderResourceMap& resourceMap,
+        SceneMeshMaterialBindingFallbacks fallbacks) noexcept;
+    [[nodiscard]] static SceneMeshShadowMaterialBinding ResolveShadow(
         const RenderMaterialResource* material,
         const RenderResourceRegistry& resources,
         const SceneRenderResourceMap& resourceMap,

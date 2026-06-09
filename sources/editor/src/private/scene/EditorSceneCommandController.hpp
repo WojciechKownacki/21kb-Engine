@@ -37,6 +37,7 @@ public:
         EditorHierarchySearchState& hierarchySearch,
         std::optional<std::string>& pendingTransactionLabel,
         std::uint64_t& sceneRenderRevision,
+        bool& sceneDocumentDirty,
         bool& hierarchyRowsDirty) noexcept;
 
     [[nodiscard]] bool Undo();
@@ -49,7 +50,7 @@ public:
 private:
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
     void NormalizeHierarchySelectionAfterSceneRestore();
-    void NotifySceneChanged();
+    void NotifySceneChanged(bool documentChanged);
 
     kb::scene::Scene& scene_;
     EditorCommandStack& commandStack_;
@@ -61,6 +62,7 @@ private:
     EditorHierarchySearchState& hierarchySearch_;
     std::optional<std::string>& pendingTransactionLabel_;
     std::uint64_t& sceneRenderRevision_;
+    bool& sceneDocumentDirty_;
     bool& hierarchyRowsDirty_;
 };
 
