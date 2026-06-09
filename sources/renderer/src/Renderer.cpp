@@ -307,6 +307,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RenderScene& renderScene = RenderSceneFor(scene);
     if (desc.synchronizeScene) {
         renderSceneSynchronizer_->Sync(scene, renderScene);
+    } else if (!desc.dirtySceneEntityIds.empty()) {
+        renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
     }
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),

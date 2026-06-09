@@ -197,6 +197,9 @@ struct SceneViewportRenderProfileDesc {
         .gpuDrivenRuntimeDispatchEnabled = renderProfile.gpuDrivenRuntimeDispatchEnabled,
         .drawSafeArea = profile.devicePreview,
         .sceneRevision = sceneContext.SceneRenderRevision(),
+        .sceneDirtyBaseRevision = sceneContext.SceneRenderDirtyBaseRevision(),
+        .sceneFullSyncRequired = sceneContext.SceneRenderFullDirty(),
+        .dirtySceneEntityIds = sceneContext.SceneRenderDirtyEntityIds(),
     };
 }
 
