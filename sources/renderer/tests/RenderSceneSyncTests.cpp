@@ -20,6 +20,8 @@
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
 
 #include <algorithm>
+#include <array>
+#include <span>
 #include <vector>
 
 namespace kb::render::tests {
@@ -163,6 +165,62 @@ void RunTracksUpdatesWithoutReplacingProxyTest() {
     renderScene.BuildSnapshotInto(1280, 720, snapshot);
     Require(snapshot.meshes.size() == 1U, "RenderScene update snapshot lost the mesh");
     Require(NearlyEqual(snapshot.meshes[0].model[12], 4.0F), "RenderScene update did not publish transform X in the same sync");
+}
+
+void RunSyncEntitiesUpdatesOnlyRequestedProxyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity first = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "First",
+        .transform = TransformAt(1.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(first, kb::scene::MeshRendererComponent{ .meshAssetId = 10U });
+
+    const kb::scene::SceneEntity second = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Second",
+        .transform = TransformAt(2.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(second, kb::scene::MeshRendererComponent{ .meshAssetId = 20U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    const RenderProxyId firstProxyId = renderScene.FindMeshByEntity(first.Id())->id;
+    const RenderProxyId secondProxyId = renderScene.FindMeshByEntity(second.Id())->id;
+    renderScene.ClearDirty();
+
+    scene.Transforms().Set(first, TransformAt(11.0F, 0.0F, 0.0F));
+    scene.Transforms().Set(second, TransformAt(22.0F, 0.0F, 0.0F));
+    const std::array<std::uint64_t, 1U> dirty{ first.Id() };
+    synchronizer.SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ dirty.data(), dirty.size() });
+
+    const MeshRenderProxy* firstProxy = renderScene.FindMeshByEntity(first.Id());
+    const MeshRenderProxy* secondProxy = renderScene.FindMeshByEntity(second.Id());
+    Require(firstProxy != nullptr && firstProxy->id == firstProxyId, "Incremental sync lost the requested mesh proxy");
+    Require(secondProxy != nullptr && secondProxy->id == secondProxyId, "Incremental sync lost an untouched mesh proxy");
+    Require(HasDirtyFlag(firstProxy->dirty, RenderProxyDirtyFlag::Transform), "Incremental sync did not dirty the requested transform");
+    Require(secondProxy->dirty == RenderProxyDirtyFlag::None, "Incremental sync dirtied an untouched proxy");
+    Require(NearlyEqual(firstProxy->desc.model[12], 11.0F), "Incremental sync did not update requested mesh transform");
+    Require(NearlyEqual(secondProxy->desc.model[12], 2.0F), "Incremental sync updated an entity that was not requested");
+}
+
+void RunSyncEntitiesRemovesDestroyedProxyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    Require(renderScene.FindMeshByEntity(mesh.Id()) != nullptr, "Incremental delete setup did not create mesh proxy");
+
+    scene.Entities().Destroy(mesh);
+    const std::array<std::uint64_t, 1U> dirty{ mesh.Id() };
+    synchronizer.SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ dirty.data(), dirty.size() });
+
+    Require(renderScene.FindMeshByEntity(mesh.Id()) == nullptr, "Incremental sync kept a destroyed mesh proxy");
 }
 
 void RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest() {
@@ -1342,6 +1400,8 @@ void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
+    RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
+    RunSyncEntitiesRemovesDestroyedProxyTest();
     RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest();
     RunDeletesRemovedComponentsAndEntitiesTest();
     RunRenderResourceMapRequiresExplicitBindingsTest();

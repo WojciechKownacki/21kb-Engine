@@ -41,7 +41,25 @@ public:
         EditorSceneContext& sceneContext,
         bool leftButtonDown);
 
+    [[nodiscard]] static bool TickActiveDrag(
+        HWND mainWindow,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
+    [[nodiscard]] static bool EndDrag(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        int y,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
     [[nodiscard]] static bool EndDrag(EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static bool CancelDrag(EditorSceneContext& sceneContext) noexcept;
 
 private:
     [[nodiscard]] static bool UpdateActiveDrag(

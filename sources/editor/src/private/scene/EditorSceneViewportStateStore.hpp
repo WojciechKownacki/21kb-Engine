@@ -19,6 +19,11 @@ struct EditorSceneGizmoState {
     int hoveredAxis = -1;
     int draggedAxis = -1;
     bool centerDrag = false;
+    std::uintptr_t pendingDragSourceWindow = 0U;
+    int pendingDragX = 0;
+    int pendingDragY = 0;
+    bool pendingDragLeftButtonDown = false;
+    bool pendingDragUpdate = false;
     float dragStartTargetX = 0.0F;
     float dragStartTargetY = 0.0F;
     float dragStartTargetZ = 0.0F;
@@ -32,6 +37,32 @@ struct EditorSceneGizmoState {
 
     [[nodiscard]] bool IsDragging() const noexcept {
         return draggedAxis >= 0 || centerDrag;
+    }
+
+    void QueueDragPointer(std::uintptr_t sourceWindow, int x, int y, bool leftButtonDown) noexcept {
+        pendingDragSourceWindow = sourceWindow;
+        pendingDragX = x;
+        pendingDragY = y;
+        pendingDragLeftButtonDown = leftButtonDown;
+        pendingDragUpdate = true;
+    }
+
+    [[nodiscard]] bool ConsumeDragPointer(std::uintptr_t& sourceWindow, int& x, int& y, bool& leftButtonDown) noexcept {
+        if (!pendingDragUpdate) {
+            return false;
+        }
+        pendingDragUpdate = false;
+        sourceWindow = pendingDragSourceWindow;
+        x = pendingDragX;
+        y = pendingDragY;
+        leftButtonDown = pendingDragLeftButtonDown;
+        return true;
+    }
+
+    void ClearDragPointer() noexcept {
+        pendingDragUpdate = false;
+        pendingDragLeftButtonDown = false;
+        pendingDragSourceWindow = 0U;
     }
 };
 

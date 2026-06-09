@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include <algorithm>
+#include <span>
 
 namespace kb::editor {
 namespace {
@@ -70,6 +71,15 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
     bool clearTarget) {
     const render::RenderExtent renderExtent{present.renderWidth, present.renderHeight};
     const render::RenderExtent surfaceExtent{RectWidth(surface.rect), RectHeight(surface.rect)};
+    const bool sceneChanged = session.submittedSceneRevision != present.settings.sceneRevision;
+    const bool canUseIncrementalSceneSync = sceneChanged &&
+        !present.settings.sceneFullSyncRequired &&
+        !present.settings.dirtySceneEntityIds.empty() &&
+        session.submittedSceneRevision >= present.settings.sceneDirtyBaseRevision;
+    const bool fullSceneSyncRequired = session.submittedSceneRevision == 0U || (sceneChanged && !canUseIncrementalSceneSync);
+    const std::span<const std::uint64_t> dirtySceneEntityIds = canUseIncrementalSceneSync
+        ? std::span<const std::uint64_t>{ present.settings.dirtySceneEntityIds.data(), present.settings.dirtySceneEntityIds.size() }
+        : std::span<const std::uint64_t>{};
     return render::RenderSceneSubmitDesc{
         .target = render::RenderSceneTargetBinding{
             .frameBuffer = session.sceneTarget.FrameBuffer(),
@@ -92,6 +102,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .cameraOverride = present.settings.cameraOverride,
         .meshPassMode = present.settings.meshPassMode,
         .selectedEntityIds = SelectedEntitySpan(session),
+        .dirtySceneEntityIds = dirtySceneEntityIds,
         .clearRgba = kSceneSubmitClearRgba,
         .editorSceneOverlaysEnabled = present.settings.editorSceneOverlaysEnabled,
         .shadowPassEnabled = present.settings.shadowPassEnabled,
@@ -99,7 +110,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .selectionMaskEnabled = present.settings.selectionMaskEnabled,
         .selectionOutlineEnabled = present.settings.selectionOutlineEnabled,
         .gpuDrivenRuntimeDispatchEnabled = present.settings.gpuDrivenRuntimeDispatchEnabled,
-        .synchronizeScene = session.submittedSceneRevision != present.settings.sceneRevision,
+        .synchronizeScene = fullSceneSyncRequired,
         .editorGrid = present.settings.editorGrid,
         .editorGizmo = present.settings.editorGizmo,
     };

@@ -8,10 +8,12 @@
 #include "engine/scene/VisibilityComponent.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -248,7 +250,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.kind == InspectorHitKind::FloatField) {
         const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
-        if (!sceneContext.BeginSceneEditTransaction("Edit Transform")) {
+        if (!sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
             return true;
         }
         sceneContext.Inspector().BeginFloatDrag(hit.property, ReadTransformValue(transform, hit.property), x, y);
@@ -267,7 +269,7 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     }
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
-        sceneContext.CancelSceneEditTransaction();
+        sceneContext.CancelActiveTransformEdit();
         sceneContext.Inspector().EndFloatDrag();
         return true;
     }
@@ -280,6 +282,8 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     sceneContext.Inspector().MarkFloatDragMoved();
     const float delta = static_cast<float>(dx - dy) * StepFor(property) * 0.08F;
     SetTransformValue(sceneContext.Scene(), entity, property, sceneContext.Inspector().DragStartValue() + delta);
+    const std::array<kb::scene::SceneEntity, 1U> touched{ entity };
+    sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ touched.data(), touched.size() });
     return true;
 }
 
@@ -297,9 +301,9 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const float startValue = inspector.DragStartValue();
     inspector.EndFloatDrag();
     if (moved) {
-        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+        static_cast<void>(sceneContext.CommitActiveTransformEdit());
     } else {
-        sceneContext.CancelSceneEditTransaction();
+        sceneContext.CancelActiveTransformEdit();
     }
     if (!moved && property != InspectorPropertyId::None) {
         inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
@@ -364,9 +368,11 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                 const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
                 float value = 0.0F;
                 if (EvaluateMath(inspector.EditBuffer(), ReadTransformValue(transform, property), value)) {
-                    if (sceneContext.BeginSceneEditTransaction("Edit Transform")) {
+                    if (sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
                         SetTransformValue(sceneContext.Scene(), entity, property, value);
-                        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+                        const std::array<kb::scene::SceneEntity, 1U> touched{ entity };
+                        sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ touched.data(), touched.size() });
+                        static_cast<void>(sceneContext.CommitActiveTransformEdit());
                     }
                 }
             }

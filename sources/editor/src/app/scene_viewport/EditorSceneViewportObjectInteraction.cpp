@@ -62,8 +62,33 @@ bool EditorSceneViewportObjectInteraction::UpdateGizmoDragOrHover(
     return EditorSceneViewportGizmoInteraction::UpdateDragOrHover(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
 }
 
+bool EditorSceneViewportObjectInteraction::TickGizmoDrag(
+    HWND mainWindow,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    return EditorSceneViewportGizmoInteraction::TickActiveDrag(mainWindow, dockModel, floatingWindows, metrics, sceneContext);
+}
+
+bool EditorSceneViewportObjectInteraction::EndGizmoDrag(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    return EditorSceneViewportGizmoInteraction::EndDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
+}
+
 bool EditorSceneViewportObjectInteraction::EndGizmoDrag(EditorSceneContext& sceneContext) noexcept {
     return EditorSceneViewportGizmoInteraction::EndDrag(sceneContext);
+}
+
+bool EditorSceneViewportObjectInteraction::CancelGizmoDrag(EditorSceneContext& sceneContext) noexcept {
+    return EditorSceneViewportGizmoInteraction::CancelDrag(sceneContext);
 }
 
 bool EditorSceneViewportObjectInteraction::SelectAt(

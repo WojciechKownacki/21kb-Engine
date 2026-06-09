@@ -78,6 +78,21 @@ void InvalidateSceneToolbar(HWND window, const RECT& content, const EditorViewpo
     return true;
 }
 
+void CoalesceConsecutiveMouseMoveMessages(MSG& message) noexcept {
+    if (message.message != WM_MOUSEMOVE) {
+        return;
+    }
+
+    MSG next{};
+    while (PeekMessageW(&next, nullptr, 0, 0, PM_NOREMOVE) != 0) {
+        if (next.message != WM_MOUSEMOVE || next.hwnd != message.hwnd) {
+            return;
+        }
+        static_cast<void>(PeekMessageW(&next, nullptr, 0, 0, PM_REMOVE));
+        message = next;
+    }
+}
+
 [[nodiscard]] bool PresentScenePanel(EditorApplicationState& state, HWND host, const DockPanel& panel, const RECT& content, bool refreshToolbar) {
     if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
         return false;
@@ -133,7 +148,11 @@ void InvalidateSceneToolbar(HWND window, const RECT& content, const EditorViewpo
     const bool refreshToolbar = ShouldRefreshSceneToolbars();
     const bool mainPresented = PresentMainScenePanels(state, refreshToolbar);
     const bool floatingPresented = PresentFloatingScenePanels(state, refreshToolbar);
-    return mainPresented || floatingPresented;
+    const bool presented = mainPresented || floatingPresented;
+    if (presented) {
+        state.sceneContext.AcknowledgeSceneRenderSubmitted();
+    }
+    return presented;
 }
 
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
@@ -160,7 +179,17 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         }.TickActiveNavigation(deltaSeconds);
     }
 
-    return PresentVisibleScenePanels(state) || navigationChanged;
+    const bool gizmoChanged = EditorSceneViewportObjectInteraction::TickGizmoDrag(
+        state.window,
+        state.dockModel,
+        state.floatingWindows,
+        state.metrics,
+        state.sceneContext);
+    if (gizmoChanged) {
+        state.sceneViewport.RequestPresent();
+    }
+
+    return PresentVisibleScenePanels(state) || navigationChanged || gizmoChanged;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {
@@ -219,6 +248,7 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
                 state.running = false;
                 break;
             }
+            CoalesceConsecutiveMouseMoveMessages(message);
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }

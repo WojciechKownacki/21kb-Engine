@@ -10,6 +10,7 @@
 #include "app/EditorWindowPointerMessageDispatcher.hpp"
 #include "app/EditorWindowResizeHandler.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
+#include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "inspection/InspectorPanelInteraction.hpp"
 
 namespace kb::editor {
@@ -62,6 +63,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.sceneContext,
             context_.sceneViewport,
         }.Cancel(messageWindow);
+        static_cast<void>(EditorSceneViewportObjectInteraction::CancelGizmoDrag(context_.sceneContext));
         context_.dockController.CancelDrag();
         context_.pointerDrag.Clear();
         context_.shellInteraction.ClearPressedTransport();
@@ -80,6 +82,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
                 context_.sceneContext,
                 context_.sceneViewport,
             }.Cancel(messageWindow);
+            static_cast<void>(EditorSceneViewportObjectInteraction::CancelGizmoDrag(context_.sceneContext));
         }
         const bool captureStayedInEditor = newCapture == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(newCapture);
         if (!captureStayedInEditor) {
