@@ -7,6 +7,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
@@ -19,6 +20,7 @@
 #include "project/EditorProjectPaths.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -60,6 +62,90 @@ namespace {
     }
     return false;
 }
+
+class DuplicateHierarchyEntitiesCommand final : public IEditorCommand {
+public:
+    DuplicateHierarchyEntitiesCommand(EditorSceneContext& context, std::vector<kb::scene::SceneEntity> sourceEntities)
+        : context_(context)
+        , sourceEntities_(std::move(sourceEntities)) {}
+
+    [[nodiscard]] std::string_view Label() const noexcept override {
+        return "Duplicate Entity";
+    }
+
+    [[nodiscard]] bool Execute() override {
+        return DuplicateFromSources();
+    }
+
+    [[nodiscard]] bool Undo() override {
+        bool destroyed = false;
+        for (const kb::scene::SceneEntity entity : duplicatedEntities_) {
+            if (context_.Scene().Entities().IsAlive(entity)) {
+                context_.Scene().Entities().Destroy(entity);
+                destroyed = true;
+            }
+        }
+        duplicatedEntities_.clear();
+        SelectFirstAliveSourceOrClear();
+        context_.MarkSceneRenderDirty();
+        context_.Scene().Runtime().SynchronizeTransforms();
+        return destroyed;
+    }
+
+    [[nodiscard]] bool Redo() override {
+        return DuplicateFromSources();
+    }
+
+    [[nodiscard]] const std::vector<kb::scene::SceneEntity>& DuplicatedEntities() const noexcept {
+        return duplicatedEntities_;
+    }
+
+private:
+    [[nodiscard]] bool DuplicateFromSources() {
+        std::vector<kb::scene::SceneObject> objects;
+        objects.reserve(sourceEntities_.size());
+        for (const kb::scene::SceneEntity entity : sourceEntities_) {
+            if (context_.Scene().Entities().IsAlive(entity)) {
+                objects.push_back(context_.Scene().Entities().Object(entity));
+            }
+        }
+        if (objects.empty()) {
+            return false;
+        }
+
+        const std::vector<kb::scene::SceneObject> duplicates =
+            context_.Scene().Entities().Duplicate(std::span<const kb::scene::SceneObject>{objects.data(), objects.size()});
+        duplicatedEntities_.clear();
+        duplicatedEntities_.reserve(duplicates.size());
+        for (const kb::scene::SceneObject duplicate : duplicates) {
+            if (duplicate.IsValid() && context_.Scene().Entities().IsAlive(duplicate)) {
+                duplicatedEntities_.push_back(duplicate.Entity());
+            }
+        }
+        if (duplicatedEntities_.empty()) {
+            return false;
+        }
+
+        context_.SelectEntity(duplicatedEntities_.back());
+        context_.MarkSceneRenderDirty();
+        context_.Scene().Runtime().SynchronizeTransforms();
+        return true;
+    }
+
+    void SelectFirstAliveSourceOrClear() {
+        for (const kb::scene::SceneEntity entity : sourceEntities_) {
+            if (context_.Scene().Entities().IsAlive(entity)) {
+                context_.SelectEntity(entity);
+                return;
+            }
+        }
+        context_.ClearHierarchySelection();
+    }
+
+    EditorSceneContext& context_;
+    std::vector<kb::scene::SceneEntity> sourceEntities_;
+    std::vector<kb::scene::SceneEntity> duplicatedEntities_;
+};
 
 [[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
     const std::string error = manager.LastError();
@@ -212,6 +298,17 @@ const std::filesystem::path& EditorSceneContext::CurrentScenePath() const noexce
     return currentScenePath_;
 }
 
+std::uint64_t EditorSceneContext::SceneRenderRevision() const noexcept {
+    return sceneRenderRevision_;
+}
+
+void EditorSceneContext::MarkSceneRenderDirty() noexcept {
+    ++sceneRenderRevision_;
+    if (sceneRenderRevision_ == 0U) {
+        sceneRenderRevision_ = 1U;
+    }
+}
+
 bool EditorSceneContext::NewScene() {
     const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
     for (const kb::scene::SceneEntity root : roots) {
@@ -336,6 +433,43 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive,
 
 std::vector<EditorHierarchyRow> EditorSceneContext::HierarchyRows() const {
     return EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+}
+
+int EditorSceneContext::HierarchyScrollOffset() const noexcept {
+    return hierarchyScrollOffset_;
+}
+
+bool EditorSceneContext::IsHierarchyScrollbarDragging() const noexcept {
+    return hierarchyScrollbarDragging_;
+}
+
+bool EditorSceneContext::SetHierarchyScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (hierarchyScrollOffset_ == clamped) {
+        return false;
+    }
+    hierarchyScrollOffset_ = clamped;
+    return true;
+}
+
+void EditorSceneContext::BeginHierarchyScrollbarDrag(int y) noexcept {
+    hierarchyScrollbarDragging_ = true;
+    hierarchyScrollbarDragY_ = y;
+    hierarchyScrollbarDragStartOffset_ = hierarchyScrollOffset_;
+}
+
+void EditorSceneContext::DragHierarchyScrollbar(int y, int trackTravel, int maxOffset) noexcept {
+    if (!hierarchyScrollbarDragging_) {
+        return;
+    }
+
+    const int delta = y - hierarchyScrollbarDragY_;
+    const int offsetDelta = trackTravel <= 0 || maxOffset <= 0 ? 0 : (delta * maxOffset) / trackTravel;
+    static_cast<void>(SetHierarchyScrollOffset(hierarchyScrollbarDragStartOffset_ + offsetDelta, maxOffset));
+}
+
+void EditorSceneContext::EndHierarchyScrollbarDrag() noexcept {
+    hierarchyScrollbarDragging_ = false;
 }
 
 std::string_view EditorSceneContext::HierarchySearchQuery() const noexcept {
@@ -591,51 +725,13 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
         return false;
     }
 
-    std::vector<kb::scene::SceneEntity> duplicatedEntities;
-    const bool duplicated = ExecuteSceneCommand("Duplicate Entity", [this, duplicating, &duplicatedEntities]() {
-        std::vector<kb::scene::SceneObject> objects;
-        objects.reserve(duplicating.size());
-        for (const kb::scene::SceneEntity entity : duplicating) {
-            if (scene_.Entities().IsAlive(entity)) {
-                objects.push_back(scene_.Entities().Object(entity));
-            }
-        }
-        if (objects.empty()) {
-            return false;
-        }
-
-        const std::vector<kb::scene::SceneObject> duplicates = scene_.Entities().Duplicate(std::span<const kb::scene::SceneObject>{objects.data(), objects.size()});
-        duplicatedEntities.clear();
-        duplicatedEntities.reserve(duplicates.size());
-        for (const kb::scene::SceneObject duplicate : duplicates) {
-            if (duplicate.IsValid() && scene_.Entities().IsAlive(duplicate)) {
-                duplicatedEntities.push_back(duplicate.Entity());
-            }
-        }
-        if (duplicatedEntities.empty()) {
-            return false;
-        }
-
-        const std::vector<EditorHierarchyRow> rows = HierarchyRows();
-        hierarchySelection_.Clear();
-        bool first = true;
-        for (const kb::scene::SceneEntity entity : duplicatedEntities) {
-            for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
-                if (rows[rowIndex].entity != entity) {
-                    continue;
-                }
-                static_cast<void>(hierarchySelection_.SelectRow(rows, rowIndex, !first, false));
-                first = false;
-                break;
-            }
-        }
-        if (hierarchySelection_.SelectedEntities().empty()) {
-            SelectEntity(duplicatedEntities.front());
-        } else {
-            assetBrowser_.ClearSelection();
-        }
-        return true;
-    });
+    auto command = std::make_unique<DuplicateHierarchyEntitiesCommand>(*this, duplicating);
+    DuplicateHierarchyEntitiesCommand* duplicateCommand = command.get();
+    const bool duplicated = commandStack_.Execute(std::move(command));
+    if (duplicated) {
+        hierarchySelection_.SelectEntities(duplicateCommand->DuplicatedEntities());
+        assetBrowser_.ClearSelection();
+    }
 
     if (duplicated) {
         console_.Info("Hierarchy", "Selected hierarchy entity duplicated.");
@@ -889,6 +985,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
             return {};
         }
         SelectEntity(entity);
+        MarkSceneRenderDirty();
         return entity;
     }
 
@@ -955,6 +1052,7 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
         hierarchyExpansion_,
         hierarchySearch_,
         pendingSceneTransactionLabel_,
+        sceneRenderRevision_,
     };
 }
 
@@ -967,7 +1065,8 @@ void EditorSceneContext::ResetSceneEditState() {
     pendingSceneTransactionLabel_.reset();
     CancelHierarchyRename();
     inspector_.EndTextEdit();
-    static_cast<void>(scene_.Runtime().Update(0.0F));
+    MarkSceneRenderDirty();
+    scene_.Runtime().SynchronizeTransforms();
 }
 
 void EditorSceneContext::SelectFirstSceneEntityOrClear() noexcept {

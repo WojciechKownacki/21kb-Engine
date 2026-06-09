@@ -126,6 +126,10 @@ EditorViewportCameraMode EditorViewportPreviewState::CameraMode() const noexcept
     return cameraMode_;
 }
 
+EditorViewportRenderProfile EditorViewportPreviewState::RenderProfile() const noexcept {
+    return renderProfile_;
+}
+
 std::uint32_t EditorViewportPreviewState::CustomWidth() const noexcept {
     return customWidth_;
 }
@@ -168,6 +172,10 @@ void EditorViewportPreviewState::SetFitMode(EditorViewportFitMode mode) noexcept
 
 void EditorViewportPreviewState::SetCameraMode(EditorViewportCameraMode mode) noexcept {
     cameraMode_ = mode;
+}
+
+void EditorViewportPreviewState::SetRenderProfile(EditorViewportRenderProfile profile) noexcept {
+    renderProfile_ = profile;
 }
 
 void EditorViewportPreviewState::SetCustomResolution(std::uint32_t width, std::uint32_t height) noexcept {
@@ -219,6 +227,20 @@ void EditorViewportPreviewState::CycleCameraMode() noexcept {
         break;
     case EditorViewportCameraMode::OverrideCamera:
         cameraMode_ = EditorViewportCameraMode::EditorCamera;
+        break;
+    }
+}
+
+void EditorViewportPreviewState::CycleRenderProfile() noexcept {
+    switch (renderProfile_) {
+    case EditorViewportRenderProfile::Interactive:
+        renderProfile_ = EditorViewportRenderProfile::Lit;
+        break;
+    case EditorViewportRenderProfile::Lit:
+        renderProfile_ = EditorViewportRenderProfile::GamePreview;
+        break;
+    case EditorViewportRenderProfile::GamePreview:
+        renderProfile_ = EditorViewportRenderProfile::Interactive;
         break;
     }
 }
@@ -324,6 +346,18 @@ const char* EditorViewportCameraModeLabel(EditorViewportCameraMode mode) noexcep
         return "Override Cam";
     }
     return "Game Cam";
+}
+
+const char* EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile) noexcept {
+    switch (profile) {
+    case EditorViewportRenderProfile::Interactive:
+        return "Interactive";
+    case EditorViewportRenderProfile::Lit:
+        return "Lit";
+    case EditorViewportRenderProfile::GamePreview:
+        return "Game";
+    }
+    return "Interactive";
 }
 
 const char* EditorViewportGridSpacingLabel(float spacing) noexcept {

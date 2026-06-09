@@ -3,6 +3,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 
 #include <functional>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -34,7 +35,8 @@ public:
         EditorAssetBrowserState& assetBrowser,
         EditorHierarchyExpansionState& hierarchyExpansion,
         EditorHierarchySearchState& hierarchySearch,
-        std::optional<std::string>& pendingTransactionLabel) noexcept;
+        std::optional<std::string>& pendingTransactionLabel,
+        std::uint64_t& sceneRenderRevision) noexcept;
 
     [[nodiscard]] bool Undo();
     [[nodiscard]] bool Redo();
@@ -57,6 +59,7 @@ private:
     EditorHierarchyExpansionState& hierarchyExpansion_;
     EditorHierarchySearchState& hierarchySearch_;
     std::optional<std::string>& pendingTransactionLabel_;
+    std::uint64_t& sceneRenderRevision_;
 };
 
 } // namespace kb::editor

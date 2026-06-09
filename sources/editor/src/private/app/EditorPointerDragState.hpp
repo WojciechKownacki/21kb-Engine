@@ -30,6 +30,9 @@ struct EditorPointerDragState {
     bool assetAddsBehaviour = false;
     kb::scene::SceneEntity meshScenePreview{};
     bool meshScenePreviewCommitted = false;
+    bool meshPreviewUpdatePending = false;
+    void* dragSourceWindow = nullptr;
+    bool overlayDirty = false;
     bool dragging = false;
     int startX = 0;
     int startY = 0;
@@ -58,6 +61,9 @@ struct EditorPointerDragState {
         assetAddsBehaviour = false;
         meshScenePreview = {};
         meshScenePreviewCommitted = false;
+        meshPreviewUpdatePending = false;
+        dragSourceWindow = nullptr;
+        overlayDirty = false;
         dragging = false;
         startX = 0;
         startY = 0;

@@ -34,12 +34,14 @@ public:
     [[nodiscard]] bool HandleButtonUp(HWND messageWindow);
     [[nodiscard]] bool HandleMouseWheel(HWND messageWindow, int x, int y, int wheelDelta);
     [[nodiscard]] bool HandleTimer(HWND messageWindow, WPARAM timerId);
+    [[nodiscard]] bool TickActiveNavigation(float deltaSeconds);
     void Cancel(HWND messageWindow) noexcept;
 
 private:
     [[nodiscard]] bool BeginNavigation(HWND messageWindow, int x, int y, bool left, bool right, bool middle);
-    [[nodiscard]] bool ApplyActivePointerMove(HWND messageWindow, int x, int y);
+    [[nodiscard]] bool QueueActivePointerMove(HWND messageWindow, int x, int y);
     [[nodiscard]] bool ApplyActiveKeyboardFlight(HWND messageWindow, float deltaSeconds);
+    void InvalidateActiveToolbar(HWND messageWindow) const noexcept;
     void StartCapture(HWND messageWindow) noexcept;
     void StopCapture(HWND messageWindow) noexcept;
 
