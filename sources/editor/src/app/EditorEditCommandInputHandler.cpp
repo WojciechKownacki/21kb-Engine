@@ -25,6 +25,8 @@ namespace {
         return EditorEditCommand::Redo;
     case 'D':
         return EditorEditCommand::Duplicate;
+    case 'S':
+        return EditorEditCommand::Save;
     default:
         return std::nullopt;
     }

@@ -28,6 +28,8 @@
 namespace kb::editor {
 namespace {
 
+constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
+
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
     return std::ranges::find(entities, entity) != entities.end();
 }
@@ -108,6 +110,13 @@ void AppendEntityBranchRenderDirty(
 [[nodiscard]] std::string AssetErrorOr(const kb::assets::AssetManager& manager, const char* fallback) {
     const std::string error = manager.LastError();
     return error.empty() ? std::string{ fallback } : error;
+}
+
+[[nodiscard]] std::filesystem::path EnsureSceneDocumentExtension(std::filesystem::path path) {
+    if (path.extension() != kSceneDocumentExtension) {
+        path.replace_extension(kSceneDocumentExtension);
+    }
+    return path;
 }
 
 } // namespace
@@ -388,21 +397,25 @@ bool EditorSceneContext::NewScene() {
 }
 
 bool EditorSceneContext::OpenDefaultScene() {
+    return OpenScene(ResolveDefaultScenePath());
+}
+
+bool EditorSceneContext::OpenScene(const std::filesystem::path& path) {
     if (!RestorePlayModeSceneSession()) {
         return false;
     }
-    if (!SaveDirtySceneDocument("opening the default scene")) {
+    if (!SaveDirtySceneDocument("opening a scene")) {
         return false;
     }
 
-    const std::filesystem::path defaultScenePath = ResolveDefaultScenePath();
+    const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path);
 
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, defaultScenePath)) {
-        console_.Error("Project", "Default scene could not be opened: " + defaultScenePath.generic_string());
+    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, scenePath)) {
+        console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string());
         return false;
     }
 
-    currentScenePath_ = defaultScenePath;
+    currentScenePath_ = scenePath;
     SelectFirstSceneEntityOrClear();
     ResetSceneEditState();
     ClearSceneDocumentDirty();
@@ -415,12 +428,34 @@ bool EditorSceneContext::SaveCurrentScene() {
         currentScenePath_ = EditorProjectPaths::DefaultScenePath();
     }
 
-    const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
-    if (!kb::scene::SceneDocumentService::Save(scene_, currentScenePath_, name)) {
-        console_.Error("Project", "Scene could not be saved: " + currentScenePath_.generic_string());
+    return SaveSceneToPath(currentScenePath_);
+}
+
+bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
+    if (!RestorePlayModeSceneSession()) {
+        return false;
+    }
+    return SaveSceneToPath(path);
+}
+
+bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
+    const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path.empty() ? EditorProjectPaths::DefaultScenePath() : path);
+    std::error_code error;
+    if (!scenePath.parent_path().empty()) {
+        std::filesystem::create_directories(scenePath.parent_path(), error);
+        if (error) {
+            console_.Error("Project", "Scene directory could not be created: " + scenePath.parent_path().generic_string());
+            return false;
+        }
+    }
+
+    const std::string name = scenePath.stem().string().empty() ? std::string{ "Main" } : scenePath.stem().string();
+    if (!kb::scene::SceneDocumentService::Save(scene_, scenePath, name)) {
+        console_.Error("Project", "Scene could not be saved: " + scenePath.generic_string());
         return false;
     }
 
+    currentScenePath_ = scenePath;
     static_cast<void>(scene_.Assets().Discover());
     ClearSceneDocumentDirty();
     console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
