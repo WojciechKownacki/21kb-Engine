@@ -155,7 +155,11 @@ public:
 
     void ClearDirty() noexcept;
     [[nodiscard]] std::optional<SceneRenderCamera> BuildPrimaryCamera(std::uint32_t viewportWidth, std::uint32_t viewportHeight) const;
+    // The returned cache is refreshed lazily and remains stable until the next mesh proxy mutation.
+    [[nodiscard]] const std::vector<SceneRenderDrawGroup>& DrawGroups() const;
     void BuildDrawGroups(std::vector<SceneRenderDrawGroup>& outDrawGroups) const;
+    [[nodiscard]] std::size_t DrawGroupCapacity() const noexcept;
+    [[nodiscard]] std::size_t DrawGroupInstanceCapacity() const noexcept;
     [[nodiscard]] std::size_t DrawGroupLookupScratchCapacity() const noexcept;
     void BuildSnapshotInto(std::uint32_t viewportWidth, std::uint32_t viewportHeight, SceneRenderSnapshot& outSnapshot) const;
 
@@ -172,12 +176,16 @@ private:
     };
 
     [[nodiscard]] RenderProxyId AllocateProxyId() noexcept;
+    void InvalidateDrawGroups() noexcept;
+    void RebuildDrawGroupsIfNeeded() const;
 
     MeshProxyMap meshes_;
     CameraProxyMap cameras_;
     LightProxyMap lights_;
+    mutable std::vector<SceneRenderDrawGroup> drawGroups_;
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;
+    mutable bool drawGroupsDirty_ = true;
 };
 
 } // namespace kb::render

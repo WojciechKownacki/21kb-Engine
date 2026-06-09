@@ -29,14 +29,14 @@ void EmitPassDiagnostics(
     SceneRenderDiagnosticKind kind,
     SceneRenderDiagnosticSeverity severity,
     MeshPassType pass,
-    const SceneRenderDrawGroup& group,
+    const SceneMeshBatch& batch,
     std::uint64_t materialAssetId,
     std::span<const std::uint64_t> selectedEntityIds) {
     if (diagnostics == nullptr) {
         return;
     }
 
-    for (const SceneRenderMeshInstance& instance : group.instances) {
+    for (const SceneRenderMeshInstance& instance : batch.instances) {
         if (!MeshPipelinePassPolicy::CanEverContain(pass, instance, selectedEntityIds)) {
             continue;
         }
@@ -44,7 +44,7 @@ void EmitPassDiagnostics(
             .severity = severity,
             .kind = kind,
             .entityId = instance.entityId,
-            .meshAssetId = group.meshAssetId,
+            .meshAssetId = batch.meshAssetId,
             .materialAssetId = materialAssetId,
             .instanceCount = 1U,
         });
@@ -73,21 +73,21 @@ void EmitInstanceDiagnostic(
 
 } // namespace
 
-MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshGroup(
+MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
     MeshPassType pass,
-    const SceneRenderDrawGroup& group,
+    const SceneMeshBatch& batch,
     std::uint32_t passInstanceCount,
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
     SceneRenderSubmitStats& stats,
     SceneRenderDiagnostics* diagnostics,
     std::span<const std::uint64_t> selectedEntityIds) noexcept {
-    const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(group.meshAssetId);
+    const RenderMeshHandle meshHandle = resourceMap.ResolveMesh(batch.meshAssetId);
     if (!meshHandle.IsValid()) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshBindingCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, pass, group, group.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshBinding, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
         return {};
     }
 
@@ -96,14 +96,14 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshGroup(
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.missingMeshResourceCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, group, group.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
         return {};
     }
     if (!IsSceneMeshVertexFormatSupported(meshResource->vertexFormat)) {
         stats.visibleMeshCount += passInstanceCount;
         ++stats.visibleDrawGroupCount;
         stats.unsupportedMeshVertexFormatCount += passInstanceCount;
-        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, group, group.materialAssetId, selectedEntityIds);
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
         return {};
     }
 
@@ -188,7 +188,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
 }
 
 std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
-    const SceneRenderDrawGroup& group,
+    const SceneMeshBatch& batch,
     const SceneRenderMeshInstance& instance,
     const RenderMeshResource* meshResource,
     const RenderMeshSection& section) noexcept {
@@ -197,8 +197,8 @@ std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
         instance.materialSlotAssetIds[section.materialSlot] != 0U) {
         return instance.materialSlotAssetIds[section.materialSlot];
     }
-    if (group.materialAssetId != 0U) {
-        return group.materialAssetId;
+    if (batch.materialAssetId != 0U) {
+        return batch.materialAssetId;
     }
     if (meshResource == nullptr || section.materialSlot >= meshResource->materialSlots.size()) {
         return 0U;

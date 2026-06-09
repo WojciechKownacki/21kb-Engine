@@ -66,6 +66,8 @@ void RunMaterialHandlesAreGenerationalTest() {
 
     const RenderMaterialResource* material = registry.FindMaterial(first);
     Require(material != nullptr, "RenderResourceRegistry could not resolve a live material");
+    const std::uint64_t firstVersion = material->version;
+    Require(firstVersion != 0U, "RenderResourceRegistry did not assign material resource version");
     Require(NearlyEqual(material->baseColor[0], 0.25F), "RenderResourceRegistry did not preserve material base color");
     Require(NearlyEqual(material->emissiveColor[2], 0.3F), "RenderResourceRegistry did not preserve material emissive color");
     Require(NearlyEqual(material->metallicFactor, 0.6F), "RenderResourceRegistry did not preserve material metallic factor");
@@ -108,7 +110,9 @@ void RunMaterialHandlesAreGenerationalTest() {
     Require(second.Index() == first.Index(), "RenderResourceRegistry should reuse released material slots");
     Require(second.Generation() != first.Generation(), "RenderResourceRegistry reused a slot without changing generation");
     Require(registry.FindMaterial(first) == nullptr, "Stale material handle resolved after slot reuse");
-    Require(registry.FindMaterial(second) != nullptr, "New material handle did not resolve after slot reuse");
+    const RenderMaterialResource* secondMaterial = registry.FindMaterial(second);
+    Require(secondMaterial != nullptr, "New material handle did not resolve after slot reuse");
+    Require(secondMaterial->version != firstVersion, "RenderResourceRegistry reused a material resource version after slot reuse");
 }
 
 void RunMaterialReloadInvalidatesStaleSceneBindingTest() {
