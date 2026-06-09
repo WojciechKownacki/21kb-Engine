@@ -36,18 +36,9 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
             std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{&layout, 1U});
     }
 
-    const bool presentSceneViewport = viewportPanel && paintContext->sceneViewport->PresentRequested();
-    if (presentSceneViewport) {
-        paintContext->sceneViewport->BeginPaintLayout(paintContext->window);
-    }
-
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, presentSceneViewport ? paintContext->sceneViewport : nullptr);
-
-    if (presentSceneViewport) {
-        paintContext->sceneViewport->EndPaintLayout();
-    }
+    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, nullptr);
 }
 
 [[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& FloatingSceneToolbarDropdownOverlay() {

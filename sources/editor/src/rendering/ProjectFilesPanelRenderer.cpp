@@ -197,17 +197,12 @@ ProjectFilesRetainedSurface& RetainedSurface() {
     return surface;
 }
 
-EditorMeshThumbnailService& MeshThumbnails() {
-    static EditorMeshThumbnailService service;
-    return service;
-}
-
 } // namespace
 
 void ProjectFilesPanelRenderer::Paint(HDC dc, const RECT& content, const RECT& overlayBounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
-    EditorMeshThumbnailService& meshThumbnails = MeshThumbnails();
+    EditorMeshThumbnailService& meshThumbnails = EditorMeshThumbnailCache();
 
     const int width = Width(content);
     const int height = Height(content);

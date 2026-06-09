@@ -50,6 +50,23 @@ void RunFitCameraAndCustomTest() {
     kb::editor::tests::Require(state.RenderHeightForPanel(600U) == 16384U, "Custom viewport height was not clamped");
 }
 
+void RunRenderProfileCycleTest() {
+    kb::editor::EditorViewportPreviewState state;
+    kb::editor::tests::Require(state.RenderProfile() == kb::editor::EditorViewportRenderProfile::Interactive, "Viewport render profile should default to Interactive");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportRenderProfileLabel(state.RenderProfile())) == "Interactive", "Interactive render profile label is wrong");
+
+    state.CycleRenderProfile();
+    kb::editor::tests::Require(state.RenderProfile() == kb::editor::EditorViewportRenderProfile::Lit, "Viewport render profile cycle did not select Lit");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportRenderProfileLabel(state.RenderProfile())) == "Lit", "Lit render profile label is wrong");
+
+    state.CycleRenderProfile();
+    kb::editor::tests::Require(state.RenderProfile() == kb::editor::EditorViewportRenderProfile::GamePreview, "Viewport render profile cycle did not select GamePreview");
+    kb::editor::tests::Require(std::string_view(kb::editor::EditorViewportRenderProfileLabel(state.RenderProfile())) == "Game", "Game render profile label is wrong");
+
+    state.CycleRenderProfile();
+    kb::editor::tests::Require(state.RenderProfile() == kb::editor::EditorViewportRenderProfile::Interactive, "Viewport render profile cycle did not wrap to Interactive");
+}
+
 void RunGridAndSnapStateTest() {
     kb::editor::EditorViewportPreviewState state;
     kb::editor::tests::Require(state.GridVisible(), "Viewport grid should be visible by default");
@@ -212,6 +229,7 @@ namespace kb::editor::tests {
 void RunEditorViewportPreviewTests() {
     RunProfileCycleAndResolutionTest();
     RunFitCameraAndCustomTest();
+    RunRenderProfileCycleTest();
     RunGridAndSnapStateTest();
     RunViewportCameraAxesTest();
     RunViewportCameraNavigationTest();
