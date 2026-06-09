@@ -22,7 +22,7 @@ class EditorAssetBrowserDoubleClickHandler {
 public:
     EditorAssetBrowserDoubleClickHandler() = delete;
 
-    [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(const RECT& content, int x, int y, EditorSceneContext& sceneContext);
+    [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(HWND owner, const RECT& content, int x, int y, EditorSceneContext& sceneContext);
 };
 
 #endif

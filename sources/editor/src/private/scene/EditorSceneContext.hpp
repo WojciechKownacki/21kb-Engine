@@ -29,6 +29,11 @@ namespace kb::editor {
 
 class EditorSceneCommandController;
 
+enum class EditorDirtySceneResolution {
+    Save,
+    Discard,
+};
+
 class EditorSceneContext {
 public:
     EditorSceneContext();
@@ -71,12 +76,14 @@ public:
     void AcknowledgeSceneRenderSubmitted() noexcept;
     void MarkSceneDocumentDirty() noexcept;
     [[nodiscard]] bool SaveDirtySceneDocument(std::string_view reason);
+    void DiscardDirtySceneDocument(std::string_view reason);
+    [[nodiscard]] bool PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution);
     [[nodiscard]] bool BeginPlayModeSceneSession();
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
-    [[nodiscard]] bool NewScene();
+    [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool OpenDefaultScene();
-    [[nodiscard]] bool OpenScene(const std::filesystem::path& path);
+    [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool SaveCurrentScene();
     [[nodiscard]] bool SaveCurrentSceneAs(const std::filesystem::path& path);
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
