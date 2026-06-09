@@ -138,7 +138,7 @@ bool EditorAssetBrowserPointerHandler::HandleRightButtonDown(
     return EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(*content, x, y, sceneContext);
 }
 
-bool EditorAssetBrowserPointerHandler::HandleDoubleClick(
+EditorAssetBrowserDoubleClickResult EditorAssetBrowserPointerHandler::HandleDoubleClick(
     HWND sourceWindow,
     HWND mainWindow,
     int x,
@@ -149,7 +149,7 @@ bool EditorAssetBrowserPointerHandler::HandleDoubleClick(
     EditorSceneContext& sceneContext) {
     const std::optional<RECT> content = EditorAssetBrowserPointerPanelResolver::ResolveContent(sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
     if (!content.has_value()) {
-        return false;
+        return EditorAssetBrowserDoubleClickResult::None;
     }
 
     return EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(*content, x, y, sceneContext);
