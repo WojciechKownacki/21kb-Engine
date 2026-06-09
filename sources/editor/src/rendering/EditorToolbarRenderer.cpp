@@ -6,6 +6,7 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "scene/EditorSceneContext.hpp"
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -14,6 +15,8 @@
 #pragma warning(pop)
 
 #include <cmath>
+#include <filesystem>
+#include <string>
 #include <string_view>
 
 namespace kb::editor {
@@ -21,7 +24,9 @@ namespace {
 
 constexpr int kTransportIconInset = 7;
 constexpr int kToolbarButtonRadius = 8;
+constexpr int kSaveButtonRadius = 6;
 constexpr int kDropdownRadius = 7;
+constexpr int kToolbarStatusGap = 10;
 
 [[nodiscard]] COLORREF Blend(COLORREF a, COLORREF b, int numerator, int denominator) noexcept {
     const int inv = denominator - numerator;
@@ -58,6 +63,41 @@ void DrawMenuText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, text);
     DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX);
+}
+
+void DrawStatusText(HDC dc, RECT rect, std::string_view label, COLORREF text, UINT format) {
+    if (rect.right <= rect.left || rect.bottom <= rect.top || label.empty()) {
+        return;
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, text);
+    DrawTextA(dc, label.data(), static_cast<int>(label.size()), &rect, format | DT_NOPREFIX | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+}
+
+[[nodiscard]] std::string SceneDisplayName(const EditorSceneContext& sceneContext) {
+    const std::filesystem::path& path = sceneContext.CurrentScenePath();
+    const std::string filename = path.filename().string();
+    if (!filename.empty()) {
+        return filename;
+    }
+    return "Untitled.21kbscene";
+}
+
+[[nodiscard]] std::string ScenePersistenceStatus(const EditorSceneContext& sceneContext) {
+    return sceneContext.SceneDocumentDirty() ? "Unsaved" : "Saved";
+}
+
+[[nodiscard]] std::string PlayModeStatus(const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode) {
+    switch (playMode.Mode()) {
+    case EditorPlayMode::Playing:
+        return sceneContext.HasPlayModeSceneSession() ? "Playing - runtime snapshot active" : "Playing";
+    case EditorPlayMode::Paused:
+        return sceneContext.HasPlayModeSceneSession() ? "Paused - runtime snapshot active" : "Paused";
+    case EditorPlayMode::Stopped:
+        return sceneContext.HasPlayModeSceneSession() ? "Stopping - restoring scene" : "Editing";
+    }
+    return "Editing";
 }
 
 void FillRound(HDC dc, const RECT& rect, COLORREF fill, COLORREF border, int radius) {
@@ -133,6 +173,10 @@ EditorTransportCommand EditorToolbarRenderer::HitTestTransport(const EditorToolb
     return EditorToolbarLayout::HitTestTransport(rects, x, y);
 }
 
+bool EditorToolbarRenderer::HitTestSave(const EditorToolbarRects& rects, int x, int y) noexcept {
+    return EditorToolbarLayout::HitTestSave(rects, x, y);
+}
+
 void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorShellInteractionState& interaction) const {
     EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::HeaderStrip);
     const EditorMenuRects menu = ResolveMenu(rect, interaction.OpenMenu());
@@ -178,7 +222,7 @@ void EditorToolbarRenderer::PaintMenu(HDC dc, const RECT& rect, const EditorThem
     }
 }
 
-void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const {
+void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorTheme& theme, const EditorSceneContext& sceneContext, const EditorPlayModeState& playMode, const EditorShellInteractionState& interaction) const {
     EditorSurfacePainter::Fill(dc, rect, theme, EditorSurfaceKind::AppBackground);
     const EditorToolbarRects toolbar = ResolveToolbar(rect);
 
@@ -199,6 +243,7 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     const bool stopHovered = transportActive && hovered == EditorTransportCommand::Stop;
     const bool stopPressed = transportActive && pressed == EditorTransportCommand::Stop;
 
+    PaintTextButton(dc, toolbar.saveButton, theme, "Save", true, sceneContext.SceneDocumentDirty(), interaction.HoveredSave(), interaction.PressedSave(), warning);
     PaintButton(dc, toolbar.playButton, theme, isStopped, false, playHovered, playPressed, noGlow);
     PaintButton(dc, toolbar.pauseButton, theme, transportActive, isPaused, pauseHovered, pausePressed, isPaused ? success : noGlow);
     PaintButton(dc, toolbar.stopButton, theme, transportActive, false, stopHovered, stopPressed, noGlow);
@@ -223,6 +268,50 @@ void EditorToolbarRenderer::PaintToolbar(HDC dc, const RECT& rect, const EditorT
     HeroIconPainter::Draw(dc, iconRect(toolbar.playButton, playPressed), HeroIconKind::Play, isStopped ? (playHovered ? playHoverIcon : playIdleIcon) : disabledIcon, 1);
     HeroIconPainter::Draw(dc, iconRect(toolbar.pauseButton, pausePressed), isPaused ? HeroIconKind::Resume : HeroIconKind::Pause, transportActive ? (isPaused ? resumeIcon : (pauseHovered ? pauseHoverIcon : warningIcon)) : disabledIcon, 1);
     HeroIconPainter::Draw(dc, iconRect(toolbar.stopButton, stopPressed), HeroIconKind::TransportStop, transportActive ? (stopHovered ? stopHoverIcon : dangerIcon) : disabledIcon, 1);
+
+    const COLORREF textPrimary = ThemeColor(theme.textPrimary);
+    const COLORREF textSecondary = ThemeColor(theme.textSecondary);
+    const COLORREF dirtyText = sceneContext.SceneDocumentDirty() ? warningIcon : textSecondary;
+    const LONG centerLeft = toolbar.playButton.left;
+    const LONG centerRight = toolbar.stopButton.right;
+    const LONG statusGap = kToolbarStatusGap;
+    const RECT sceneRect{
+        std::max(rect.left, toolbar.saveButton.right + statusGap),
+        rect.top,
+        std::max(rect.left, centerLeft - statusGap),
+        rect.bottom,
+    };
+    const RECT modeRect{
+        std::min(rect.right, centerRight + statusGap),
+        rect.top,
+        rect.right - statusGap,
+        rect.bottom,
+    };
+    DrawStatusText(dc, sceneRect, SceneDisplayName(sceneContext) + " - " + ScenePersistenceStatus(sceneContext), dirtyText, DT_LEFT);
+    DrawStatusText(dc, modeRect, PlayModeStatus(sceneContext, playMode), playMode.IsPlaying() || playMode.IsPaused() ? textPrimary : textSecondary, DT_RIGHT);
+}
+
+void EditorToolbarRenderer::PaintTextButton(HDC dc, const RECT& rect, const EditorTheme& theme, std::string_view label, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const {
+    if (rect.right <= rect.left || rect.bottom <= rect.top) {
+        return;
+    }
+
+    static_cast<void>(theme);
+    const double pulse = ToolbarPulse();
+    const bool hasGlow = active && glow != RGB(0, 0, 0);
+    const COLORREF fill = enabled
+        ? (hovered ? RGB(38, 47, 60) : RGB(25, 30, 38))
+        : RGB(20, 23, 29);
+    const COLORREF activeFill = hasGlow ? BlendRatio(fill, glow, 0.12 + (0.08 * pulse)) : fill;
+    const COLORREF border = hasGlow ? BlendRatio(RGB(58, 70, 89), glow, 0.34 + (0.18 * pulse)) : (hovered ? RGB(66, 79, 101) : RGB(38, 45, 57));
+    const COLORREF text = enabled ? (active ? RGB(255, 229, 162) : RGB(204, 212, 222)) : RGB(110, 118, 130);
+    RECT button = rect;
+    if (pressed) {
+        OffsetRect(&button, 0, 1);
+    }
+    FillRound(dc, RECT{ button.left + 1, button.top + 2, button.right + 1, button.bottom + 2 }, RGB(8, 10, 14), RGB(8, 10, 14), kSaveButtonRadius);
+    FillRound(dc, button, activeFill, border, kSaveButtonRadius);
+    DrawStatusText(dc, RECT{ button.left + 8, button.top, button.right - 8, button.bottom }, label, text, DT_CENTER);
 }
 
 void EditorToolbarRenderer::PaintButton(HDC dc, const RECT& rect, const EditorTheme& theme, bool enabled, bool active, bool hovered, bool pressed, COLORREF glow) const {

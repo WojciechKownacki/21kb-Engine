@@ -76,7 +76,9 @@ public:
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
     [[nodiscard]] bool NewScene();
     [[nodiscard]] bool OpenDefaultScene();
+    [[nodiscard]] bool OpenScene(const std::filesystem::path& path);
     [[nodiscard]] bool SaveCurrentScene();
+    [[nodiscard]] bool SaveCurrentSceneAs(const std::filesystem::path& path);
     [[nodiscard]] bool CanUndoSceneCommand() const noexcept;
     [[nodiscard]] bool CanRedoSceneCommand() const noexcept;
     [[nodiscard]] bool UndoSceneCommand();
@@ -171,6 +173,7 @@ private:
     void RebuildHierarchyRowsIfNeeded() const;
     void ResetSceneEditState();
     void SelectFirstSceneEntityOrClear() noexcept;
+    [[nodiscard]] bool SaveSceneToPath(const std::filesystem::path& path);
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
     [[nodiscard]] std::filesystem::path ResolveDefaultScenePath() const;
 

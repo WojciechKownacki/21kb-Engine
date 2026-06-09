@@ -30,10 +30,14 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
         return true;
     }
 
-    if (!EditorAssetBrowserPointerHandler::HandleDoubleClick(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+    const EditorAssetBrowserDoubleClickResult assetResult =
+        EditorAssetBrowserPointerHandler::HandleDoubleClick(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_);
+    if (assetResult == EditorAssetBrowserDoubleClickResult::None) {
         return false;
     }
-    sceneContext_.ClearHierarchySelection();
+    if (assetResult == EditorAssetBrowserDoubleClickResult::BrowserNavigation) {
+        sceneContext_.ClearHierarchySelection();
+    }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;
 }

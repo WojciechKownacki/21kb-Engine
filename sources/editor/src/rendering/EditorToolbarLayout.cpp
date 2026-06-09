@@ -8,6 +8,10 @@ namespace {
 
 constexpr int kTransportButtonSize = 36;
 constexpr int kTransportButtonGap = 6;
+constexpr int kToolbarSideInset = 12;
+constexpr int kSaveButtonWidth = 68;
+constexpr int kSaveButtonMinWidth = 54;
+constexpr int kSaveButtonHeight = 28;
 constexpr int kMenuLeftInset = 10;
 constexpr int kMenuTopInset = 2;
 constexpr int kMenuItemHeightPad = 3;
@@ -23,7 +27,7 @@ constexpr std::array<EditorMenuDescriptor, 4> kMenus{{
 }};
 
 constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
-    { "New Scene", "Open...", "Save", "Exit" },
+    { "New Scene", "Open Scene...", "Save", "Save As..." },
     { "Undo", "Redo", "Duplicate", "Preferences" },
     { "Renderer", "Layout", "Project Settings", "Editor Settings" },
     { "Documentation", "Report Issue", "Release Notes", "About" },
@@ -41,6 +45,17 @@ constexpr std::array<std::array<std::string_view, 4>, 4> kDropdownRows{{
         .top = top,
         .right = toolbar.left + left + size,
         .bottom = top + size,
+    };
+}
+
+[[nodiscard]] RECT ToolbarRect(const RECT& toolbar, int left, int width, int height) noexcept {
+    const int toolbarHeight = static_cast<int>(toolbar.bottom - toolbar.top);
+    const int top = toolbar.top + std::max(0, (toolbarHeight - height) / 2);
+    return RECT{
+        .left = toolbar.left + left,
+        .top = top,
+        .right = toolbar.left + left + width,
+        .bottom = top + height,
     };
 }
 
@@ -107,6 +122,10 @@ EditorToolbarRects EditorToolbarLayout::ResolveToolbar(const RECT& rect) noexcep
     toolbar.playButton = ButtonRect(rect, left - rect.left, kTransportButtonSize);
     toolbar.pauseButton = ButtonRect(rect, left - rect.left + kTransportButtonSize + kTransportButtonGap, kTransportButtonSize);
     toolbar.stopButton = ButtonRect(rect, left - rect.left + (kTransportButtonSize + kTransportButtonGap) * 2, kTransportButtonSize);
+    const int saveAvailableWidth = toolbar.playButton.left - rect.left - kTransportButtonGap - kToolbarSideInset;
+    if (saveAvailableWidth >= kSaveButtonMinWidth) {
+        toolbar.saveButton = ToolbarRect(rect, kToolbarSideInset, std::min(kSaveButtonWidth, saveAvailableWidth), kSaveButtonHeight);
+    }
     return toolbar;
 }
 
@@ -146,6 +165,10 @@ EditorTransportCommand EditorToolbarLayout::HitTestTransport(const EditorToolbar
         return EditorTransportCommand::Stop;
     }
     return EditorTransportCommand::None;
+}
+
+bool EditorToolbarLayout::HitTestSave(const EditorToolbarRects& rects, int x, int y) noexcept {
+    return PointInRect(rects.saveButton, x, y);
 }
 
 int EditorToolbarLayout::MenuIndex(EditorMenuCommand menu) noexcept {

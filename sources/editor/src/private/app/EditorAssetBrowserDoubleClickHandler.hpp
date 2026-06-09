@@ -12,11 +12,17 @@ namespace kb::editor {
 
 class EditorSceneContext;
 
+enum class EditorAssetBrowserDoubleClickResult {
+    None,
+    BrowserNavigation,
+    SceneOpened,
+};
+
 class EditorAssetBrowserDoubleClickHandler {
 public:
     EditorAssetBrowserDoubleClickHandler() = delete;
 
-    [[nodiscard]] static bool HandleDoubleClick(const RECT& content, int x, int y, EditorSceneContext& sceneContext);
+    [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(const RECT& content, int x, int y, EditorSceneContext& sceneContext);
 };
 
 #endif
