@@ -16,6 +16,13 @@ namespace kb::editor {
 class ScenePanelContentRenderer {
 public:
 #if defined(_WIN32)
+    static void PresentViewport(
+        EditorSceneBgfxViewport& sceneViewport,
+        HWND sceneViewportHost,
+        const RECT& content,
+        const DockPanel& panel,
+        const EditorSceneContext& sceneContext);
+
     void Paint(
         HDC dc,
         const RECT& content,

@@ -30,6 +30,10 @@ void SceneRuntime::AddSceneSystem(std::unique_ptr<SceneSystem> system) {
     SceneRuntimeService::AddSceneSystem(scene_, std::move(system));
 }
 
+void SceneRuntime::SynchronizeTransforms() {
+    SceneRuntimeService::SynchronizeTransforms(scene_);
+}
+
 bool SceneRuntime::Update(float deltaSeconds) {
     return SceneRuntimeService::Update(scene_, deltaSeconds);
 }

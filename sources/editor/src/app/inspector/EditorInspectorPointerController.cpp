@@ -20,7 +20,7 @@ EditorInspectorPointerController::EditorInspectorPointerController(EditorSceneCo
 bool EditorInspectorPointerController::HandlePointerDown(const RECT& content, int x, int y) {
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
     static_cast<void>(InspectorPanelInteraction::HandlePointerDown(sceneContext_, hit, x, y));
-    shouldCaptureMouse_ = hit.kind == InspectorHitKind::FloatField;
+    shouldCaptureMouse_ = hit.kind == InspectorHitKind::FloatField || hit.kind == InspectorHitKind::MeshPreview;
     return true;
 }
 
@@ -35,6 +35,16 @@ bool EditorInspectorPointerController::HandlePointerUp() {
 bool EditorInspectorPointerController::UpdateHover(const RECT& content, int x, int y) {
     const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
     return InspectorPanelInteraction::UpdateHover(sceneContext_, hit);
+}
+
+bool EditorInspectorPointerController::HandleMouseWheel(const RECT& content, int x, int y, int wheelDelta) {
+    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
+    return InspectorPanelInteraction::HandleMouseWheel(sceneContext_, hit, wheelDelta);
+}
+
+bool EditorInspectorPointerController::HandleDoubleClick(const RECT& content, int x, int y) {
+    const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(content, sceneContext_, x, y);
+    return InspectorPanelInteraction::HandleDoubleClick(sceneContext_, hit);
 }
 
 bool EditorInspectorPointerController::UpdateHoverOrClear(const std::optional<RECT>& content, int x, int y) {

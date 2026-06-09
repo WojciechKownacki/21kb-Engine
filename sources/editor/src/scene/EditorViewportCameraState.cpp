@@ -124,15 +124,35 @@ void EditorViewportCameraState::BeginNavigation(EditorViewportCameraNavigationMo
     navigationMode_ = mode;
     lastX_ = x;
     lastY_ = y;
+    pendingX_ = x;
+    pendingY_ = y;
+    hasPendingPointer_ = false;
     if (mode == EditorViewportCameraNavigationMode::Orbit || mode == EditorViewportCameraNavigationMode::Dolly) {
         ResetOrbitPivot();
     }
+}
+
+void EditorViewportCameraState::QueuePointer(int x, int y) noexcept {
+    pendingX_ = x;
+    pendingY_ = y;
+    hasPendingPointer_ = true;
+}
+
+bool EditorViewportCameraState::ApplyQueuedPointer() noexcept {
+    if (!hasPendingPointer_) {
+        return false;
+    }
+    hasPendingPointer_ = false;
+    return UpdatePointer(pendingX_, pendingY_);
 }
 
 bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
     if (!IsNavigating()) {
         lastX_ = x;
         lastY_ = y;
+        pendingX_ = x;
+        pendingY_ = y;
+        hasPendingPointer_ = false;
         return false;
     }
 
@@ -176,6 +196,7 @@ bool EditorViewportCameraState::UpdatePointer(int x, int y) noexcept {
 
 void EditorViewportCameraState::EndNavigation() noexcept {
     navigationMode_ = EditorViewportCameraNavigationMode::None;
+    hasPendingPointer_ = false;
 }
 
 bool EditorViewportCameraState::ApplyKeyboardFlight(const EditorViewportCameraFlightInput& input, float deltaSeconds) noexcept {
