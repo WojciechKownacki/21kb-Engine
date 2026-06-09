@@ -46,7 +46,14 @@ public:
         bool editorSceneOverlaysEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
+        render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
+        bool shadowPassEnabled = true;
+        bool postProcessEnabled = true;
+        bool selectionMaskEnabled = true;
+        bool selectionOutlineEnabled = true;
+        bool gpuDrivenRuntimeDispatchEnabled = true;
         bool drawSafeArea = false;
+        std::uint64_t sceneRevision = 1U;
     };
 
     struct HostSurfaceLayout {
@@ -75,6 +82,7 @@ public:
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme);
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
+    void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
     void Hide() noexcept;
 
 private:
@@ -114,6 +122,7 @@ private:
         std::uint32_t viewportIndex = 0;
         bool presentedInCurrentPaint = false;
         std::array<std::uint64_t, 1U> selectedEntityIds{};
+        std::uint64_t submittedSceneRevision = 0U;
         render::SceneRenderTarget sceneTarget;
         render::ScenePostProcessTargets postProcessTargets;
     };
@@ -187,7 +196,11 @@ private:
             render::Renderer::SceneFrameSubmission& submission);
 
     private:
-        [[nodiscard]] static bool EnsureSessionTargets(ViewportSession& session, std::uint32_t renderWidth, std::uint32_t renderHeight);
+        [[nodiscard]] static bool EnsureSessionTargets(
+            ViewportSession& session,
+            std::uint32_t renderWidth,
+            std::uint32_t renderHeight,
+            bool postProcessEnabled);
         [[nodiscard]] static render::RenderSceneSubmitDesc BuildSubmitDesc(
             const PendingPresent& present,
             const HostSurface& surface,

@@ -82,6 +82,10 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
     desc.finalComposite.extent = RenderExtent{320U, 200U};
     Require(!desc.IsValid(), "RenderSceneSubmitDesc accepted enabled final composite without post-process target");
 
+    desc.postProcessEnabled = false;
+    Require(desc.IsValid(), "RenderSceneSubmitDesc rejected direct final composite when post-process is disabled");
+    desc.postProcessEnabled = true;
+
     desc.postProcess = RenderPostProcessTargetBinding{
         .selectionMaskFrameBuffer = bgfx::FrameBufferHandle{1U},
         .selectionMaskTexture = bgfx::TextureHandle{2U},

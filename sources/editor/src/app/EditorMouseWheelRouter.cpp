@@ -2,15 +2,33 @@
 
 #if defined(_WIN32)
 #include "app/console/EditorConsolePointerController.hpp"
+#include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "assets/EditorAssetBrowserGeometry.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/HierarchyToolbarLayout.hpp"
+#include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorSceneContext.hpp"
 
+#include <algorithm>
 #include <optional>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
+    const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
+    const int viewportHeight = std::max(0L, list.bottom - list.top);
+    const int contentHeight = static_cast<int>(sceneContext.HierarchyRows().size()) * kHierarchyRowHeight;
+    return std::max(0, contentHeight - viewportHeight);
+}
+
+} // namespace
 
 EditorMouseWheelRouter::EditorMouseWheelRouter(
     HWND messageWindow,
@@ -51,8 +69,27 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         return true;
     }
 
+    const std::optional<RECT> hierarchyContent = EditorPanelContentResolver::Resolve(DockPanelKind::Hierarchy, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (hierarchyContent.has_value() && Contains(*hierarchyContent, x, y)) {
+        const int direction = wheelDelta > 0 ? 1 : -1;
+        const int maxOffset = HierarchyMaxScroll(*hierarchyContent, sceneContext_);
+        return sceneContext_.SetHierarchyScrollOffset(
+            sceneContext_.HierarchyScrollOffset() - direction * kHierarchyRowHeight * 3,
+            maxOffset);
+    }
+
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleMouseWheel(messageWindow_, x, y, wheelDelta)) {
+        return true;
+    }
+
+    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    EditorInspectorPointerController inspectorPointer(sceneContext_);
+    if (inspectorContent.has_value() && inspectorPointer.HandleMouseWheel(*inspectorContent, x, y, wheelDelta)) {
+        InvalidateRect(messageWindow_, nullptr, FALSE);
+        if (messageWindow_ != mainWindow_) {
+            InvalidateRect(mainWindow_, nullptr, FALSE);
+        }
         return true;
     }
 

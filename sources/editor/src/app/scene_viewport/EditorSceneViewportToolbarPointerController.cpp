@@ -48,6 +48,12 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
         sceneViewport_.RequestPresent();
         return true;
     }
+    if (PointInRect(toolbar.renderProfileButton, x, y)) {
+        preview.CloseToolbarDropdown();
+        preview.CycleRenderProfile();
+        sceneViewport_.RequestPresent();
+        return true;
+    }
     if (PointInRect(toolbar.gridToggleButton, x, y)) {
         preview.CloseToolbarDropdown();
         preview.ToggleGridVisible();

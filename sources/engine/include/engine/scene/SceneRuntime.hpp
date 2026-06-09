@@ -31,6 +31,7 @@ public:
 
     void AddSystem(std::unique_ptr<kb::ecs::System> system);
     void AddSceneSystem(std::unique_ptr<SceneSystem> system);
+    void SynchronizeTransforms();
     [[nodiscard]] bool Update(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;

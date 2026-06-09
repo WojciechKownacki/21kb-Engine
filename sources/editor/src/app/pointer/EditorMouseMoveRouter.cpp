@@ -11,10 +11,27 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/HierarchyToolbarLayout.hpp"
+#include "scene/EditorHierarchyMetrics.hpp"
 
+#include <algorithm>
 #include <optional>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] int RectHeight(const RECT& rect) noexcept {
+    return std::max(0L, rect.bottom - rect.top);
+}
+
+[[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
+    const RECT list = HierarchyToolbarLayout::Resolve(hierarchyContent).listContent;
+    const int viewportHeight = RectHeight(list);
+    const int contentHeight = static_cast<int>(sceneContext.HierarchyRows().size()) * kHierarchyRowHeight;
+    return std::max(0, contentHeight - viewportHeight);
+}
+
+} // namespace
 
 EditorMouseMoveRouter::EditorMouseMoveRouter(
     HWND mainWindow,
@@ -53,16 +70,28 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
     EditorInspectorPointerController inspectorPointer(sceneContext_);
 
+    if (sceneContext_.IsHierarchyScrollbarDragging()) {
+        if (!leftButtonDown) {
+            sceneContext_.EndHierarchyScrollbarDrag();
+        } else if (const std::optional<RECT> hierarchyContent = EditorPanelContentResolver::Resolve(DockPanelKind::Hierarchy, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+                   hierarchyContent.has_value()) {
+            const RECT list = HierarchyToolbarLayout::Resolve(*hierarchyContent).listContent;
+            sceneContext_.DragHierarchyScrollbar(y, std::max(1, RectHeight(list) - 24), HierarchyMaxScroll(*hierarchyContent, sceneContext_));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    const bool draggingMeshPreview = sceneContext_.Inspector().IsDraggingMeshPreview();
     if (leftButtonDown && inspectorPointer.HandlePointerDrag(x, y)) {
-        sceneViewport_.RequestPresent();
+        if (!draggingMeshPreview) {
+            sceneViewport_.RequestPresent();
+        }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }
 
     if (leftButtonDown && pointerDrag_.Potential() && EditorPointerDragInteraction::Move(messageWindow, mainWindow_, x, y, pointerDrag_)) {
-        if (EditorSceneViewportObjectInteraction::UpdateMeshDragPreview(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_)) {
-            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-        }
         sceneViewport_.RequestPresent();
         return;
     }

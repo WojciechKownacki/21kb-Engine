@@ -1,8 +1,15 @@
 #include "inspection/InspectorPanelState.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::editor {
+namespace {
+
+constexpr float kMeshPreviewDefaultZoom = 1.0F;
+constexpr float kMeshPreviewFitZoom = 1.35F;
+
+} // namespace
 
 bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept {
     switch (section) {
@@ -179,6 +186,126 @@ void InspectorPanelState::EndFloatDrag() noexcept {
     dragStartX_ = 0;
     dragStartY_ = 0;
     floatDragMoved_ = false;
+}
+
+bool InspectorPanelState::IsDraggingMeshPreview() const noexcept {
+    return meshPreviewDragging_;
+}
+
+float InspectorPanelState::MeshPreviewYaw() const noexcept {
+    return meshPreviewYaw_;
+}
+
+float InspectorPanelState::MeshPreviewPitch() const noexcept {
+    return meshPreviewPitch_;
+}
+
+float InspectorPanelState::MeshPreviewZoom() const noexcept {
+    return meshPreviewZoom_;
+}
+
+EditorMeshPreviewRenderMode InspectorPanelState::MeshPreviewRenderMode() const noexcept {
+    return meshPreviewRenderMode_;
+}
+
+EditorMeshPreviewLightPreset InspectorPanelState::MeshPreviewLightPreset() const noexcept {
+    return meshPreviewLightPreset_;
+}
+
+int InspectorPanelState::MeshPreviewDragStartX() const noexcept {
+    return meshPreviewDragStartX_;
+}
+
+int InspectorPanelState::MeshPreviewDragStartY() const noexcept {
+    return meshPreviewDragStartY_;
+}
+
+float InspectorPanelState::MeshPreviewDragStartYaw() const noexcept {
+    return meshPreviewDragStartYaw_;
+}
+
+float InspectorPanelState::MeshPreviewDragStartPitch() const noexcept {
+    return meshPreviewDragStartPitch_;
+}
+
+void InspectorPanelState::BeginMeshPreviewDrag(int x, int y) noexcept {
+    EndTextEdit();
+    EndFloatDrag();
+    meshPreviewDragging_ = true;
+    meshPreviewDragStartX_ = x;
+    meshPreviewDragStartY_ = y;
+    meshPreviewDragStartYaw_ = meshPreviewYaw_;
+    meshPreviewDragStartPitch_ = meshPreviewPitch_;
+}
+
+void InspectorPanelState::DragMeshPreview(int x, int y) noexcept {
+    if (!meshPreviewDragging_) {
+        return;
+    }
+    meshPreviewYaw_ = meshPreviewDragStartYaw_ + static_cast<float>(x - meshPreviewDragStartX_) * 0.38F;
+    meshPreviewPitch_ = std::clamp(meshPreviewDragStartPitch_ + static_cast<float>(y - meshPreviewDragStartY_) * 0.28F, -80.0F, 80.0F);
+}
+
+void InspectorPanelState::EndMeshPreviewDrag() noexcept {
+    meshPreviewDragging_ = false;
+    meshPreviewDragStartX_ = 0;
+    meshPreviewDragStartY_ = 0;
+    meshPreviewDragStartYaw_ = meshPreviewYaw_;
+    meshPreviewDragStartPitch_ = meshPreviewPitch_;
+}
+
+bool InspectorPanelState::ZoomMeshPreview(float delta) noexcept {
+    const float previous = meshPreviewZoom_;
+    meshPreviewZoom_ = std::clamp(meshPreviewZoom_ * (1.0F + delta), 0.55F, 2.4F);
+    return previous != meshPreviewZoom_;
+}
+
+void InspectorPanelState::ResetMeshPreview() noexcept {
+    meshPreviewYaw_ = -35.0F;
+    meshPreviewPitch_ = 24.0F;
+    meshPreviewZoom_ = kMeshPreviewDefaultZoom;
+    meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::Solid;
+    meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Studio;
+    EndMeshPreviewDrag();
+}
+
+void InspectorPanelState::FitMeshPreview() noexcept {
+    meshPreviewZoom_ = kMeshPreviewFitZoom;
+    EndMeshPreviewDrag();
+}
+
+void InspectorPanelState::CycleMeshPreviewRenderMode() noexcept {
+    switch (meshPreviewRenderMode_) {
+    case EditorMeshPreviewRenderMode::Solid:
+        meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::WireframeOnly;
+        break;
+    case EditorMeshPreviewRenderMode::WireframeOnly:
+        meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::WireframeOverlay;
+        break;
+    case EditorMeshPreviewRenderMode::WireframeOverlay:
+        meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::Normals;
+        break;
+    case EditorMeshPreviewRenderMode::Normals:
+        meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::Bounds;
+        break;
+    case EditorMeshPreviewRenderMode::Bounds:
+        meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::Solid;
+        break;
+    }
+}
+
+void InspectorPanelState::CycleMeshPreviewLightPreset() noexcept {
+    switch (meshPreviewLightPreset_) {
+    case EditorMeshPreviewLightPreset::Studio:
+        meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Front;
+        break;
+    case EditorMeshPreviewLightPreset::Front:
+        meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Rim;
+        break;
+    case EditorMeshPreviewLightPreset::Rim:
+        meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Studio;
+        break;
+    }
 }
 
 } // namespace kb::editor

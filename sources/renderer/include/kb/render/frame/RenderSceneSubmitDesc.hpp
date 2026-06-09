@@ -148,12 +148,18 @@ struct RenderSceneSubmitDesc {
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
     bool editorSceneOverlaysEnabled = true;
+    bool shadowPassEnabled = true;
+    bool postProcessEnabled = true;
+    bool selectionMaskEnabled = true;
+    bool selectionOutlineEnabled = true;
+    bool gpuDrivenRuntimeDispatchEnabled = true;
+    bool synchronizeScene = true;
     EditorGridDesc editorGrid{};
     EditorGizmoDesc editorGizmo{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&
-               (!finalComposite.enabled || postProcess.enabled) &&
+               (!finalComposite.enabled || !postProcessEnabled || postProcess.enabled) &&
                (meshPassMode == SceneRenderMeshPassMode::OpaqueOnly ||
                 meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent);
     }

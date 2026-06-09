@@ -27,7 +27,8 @@ EditorSceneCommandController::EditorSceneCommandController(
     EditorAssetBrowserState& assetBrowser,
     EditorHierarchyExpansionState& hierarchyExpansion,
     EditorHierarchySearchState& hierarchySearch,
-    std::optional<std::string>& pendingTransactionLabel) noexcept
+    std::optional<std::string>& pendingTransactionLabel,
+    std::uint64_t& sceneRenderRevision) noexcept
     : scene_(scene)
     , commandStack_(commandStack)
     , console_(console)
@@ -36,7 +37,8 @@ EditorSceneCommandController::EditorSceneCommandController(
     , assetBrowser_(assetBrowser)
     , hierarchyExpansion_(hierarchyExpansion)
     , hierarchySearch_(hierarchySearch)
-    , pendingTransactionLabel_(pendingTransactionLabel) {}
+    , pendingTransactionLabel_(pendingTransactionLabel)
+    , sceneRenderRevision_(sceneRenderRevision) {}
 
 bool EditorSceneCommandController::Undo() {
     if (!commandStack_.Undo()) {
@@ -135,7 +137,11 @@ void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore(
 }
 
 void EditorSceneCommandController::NotifySceneChanged() {
-    static_cast<void>(scene_.Runtime().Update(0.0F));
+    ++sceneRenderRevision_;
+    if (sceneRenderRevision_ == 0U) {
+        sceneRenderRevision_ = 1U;
+    }
+    scene_.Runtime().SynchronizeTransforms();
     EditorSceneGizmoState& gizmo = viewportState_.Gizmo();
     gizmo.hoveredAxis = -1;
     gizmo.draggedAxis = -1;

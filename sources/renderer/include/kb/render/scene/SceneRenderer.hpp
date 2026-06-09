@@ -27,7 +27,18 @@ public:
     [[nodiscard]] bool Initialize();
     void Shutdown();
     void Submit(bgfx::ViewId viewId, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride = nullptr, SceneRenderDrawBudget drawBudget = {}, SceneRenderLightingConfig lightingConfig = {}) const;
-    void SubmitMeshPass(bgfx::ViewId viewId, MeshPassType pass, const RenderScene& renderScene, std::uint32_t viewportWidth, std::uint32_t viewportHeight, const SceneRenderCamera* cameraOverride = nullptr, SceneRenderDrawBudget drawBudget = {}, SceneRenderLightingConfig lightingConfig = {}, const SceneRenderShadowMapBinding* shadowMap = nullptr, std::span<const std::uint64_t> selectedEntityIds = {}) const;
+    void SubmitMeshPass(
+        bgfx::ViewId viewId,
+        MeshPassType pass,
+        const RenderScene& renderScene,
+        std::uint32_t viewportWidth,
+        std::uint32_t viewportHeight,
+        const SceneRenderCamera* cameraOverride = nullptr,
+        SceneRenderDrawBudget drawBudget = {},
+        SceneRenderLightingConfig lightingConfig = {},
+        const SceneRenderShadowMapBinding* shadowMap = nullptr,
+        std::span<const std::uint64_t> selectedEntityIds = {},
+        const SceneGpuDrivenFeatureSupport* gpuDrivenSupportOverride = nullptr) const;
     void SetDefaultDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultDrawBudget() const noexcept;
     void SetDefaultLightingConfig(SceneRenderLightingConfig lightingConfig) noexcept;

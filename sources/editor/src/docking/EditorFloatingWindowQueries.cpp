@@ -22,6 +22,10 @@ HWND EditorFloatingWindowQueries::WindowForPanel(std::uint32_t panelId) const no
     return registry_.WindowForPanel(panelId);
 }
 
+std::vector<HWND> EditorFloatingWindowQueries::Windows() const {
+    return registry_.Windows();
+}
+
 LRESULT EditorFloatingWindowQueries::HitTest(HWND window, LPARAM lparam) const {
     if (metrics_ == nullptr) {
         return HTCLIENT;

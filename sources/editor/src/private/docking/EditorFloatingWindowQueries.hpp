@@ -24,6 +24,7 @@ public:
     [[nodiscard]] bool IsFloatingWindow(HWND window) const noexcept;
     [[nodiscard]] std::uint32_t PanelId(HWND window) const noexcept;
     [[nodiscard]] HWND WindowForPanel(std::uint32_t panelId) const noexcept;
+    [[nodiscard]] std::vector<HWND> Windows() const;
     [[nodiscard]] LRESULT HitTest(HWND window, LPARAM lparam) const;
     [[nodiscard]] std::optional<FloatingWindowResizeEvent> ResizeEvent(HWND window, int width, int height) const noexcept;
     [[nodiscard]] std::optional<DockRect> RectForPanel(std::uint32_t panelId) const;

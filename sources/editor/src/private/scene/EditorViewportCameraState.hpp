@@ -47,6 +47,8 @@ public:
     [[nodiscard]] EditorViewportCameraAxes Axes() const noexcept;
 
     void BeginNavigation(EditorViewportCameraNavigationMode mode, int x, int y) noexcept;
+    void QueuePointer(int x, int y) noexcept;
+    [[nodiscard]] bool ApplyQueuedPointer() noexcept;
     [[nodiscard]] bool UpdatePointer(int x, int y) noexcept;
     void EndNavigation() noexcept;
     [[nodiscard]] bool ApplyKeyboardFlight(const EditorViewportCameraFlightInput& input, float deltaSeconds) noexcept;
@@ -70,6 +72,9 @@ private:
     EditorViewportCameraNavigationMode navigationMode_ = EditorViewportCameraNavigationMode::None;
     int lastX_ = 0;
     int lastY_ = 0;
+    int pendingX_ = 0;
+    int pendingY_ = 0;
+    bool hasPendingPointer_ = false;
 };
 
 } // namespace kb::editor

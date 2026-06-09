@@ -41,6 +41,7 @@ bool EditorSceneViewportMeshDragPreview::Update(
             sceneContext.CancelSceneEditTransaction();
             return false;
         }
+        sceneContext.MarkSceneRenderDirty();
     }
 
     EditorSceneViewportMath::MoveEntityTo(
@@ -48,6 +49,7 @@ bool EditorSceneViewportMeshDragPreview::Update(
         drag.meshScenePreview,
         sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
     sceneContext.SelectEntity(drag.meshScenePreview);
+    sceneContext.MarkSceneRenderDirty();
     return true;
 }
 
@@ -77,6 +79,7 @@ bool EditorSceneViewportMeshDragPreview::Commit(
             drag.meshScenePreview,
             sceneContext.ViewportPreview(hit->panelId).SnapGroundPosition(hit->groundPosition));
         sceneContext.SelectEntity(drag.meshScenePreview);
+        sceneContext.MarkSceneRenderDirty();
         drag.meshScenePreviewCommitted = true;
         if (sceneContext.HasPendingSceneEditTransaction()) {
             static_cast<void>(sceneContext.CommitSceneEditTransaction());
@@ -105,6 +108,7 @@ void EditorSceneViewportMeshDragPreview::Cancel(EditorSceneContext& sceneContext
     if (sceneContext.SelectedEntity() == drag.meshScenePreview) {
         sceneContext.ClearHierarchySelection();
     }
+    sceneContext.MarkSceneRenderDirty();
     drag.meshScenePreview = {};
 }
 

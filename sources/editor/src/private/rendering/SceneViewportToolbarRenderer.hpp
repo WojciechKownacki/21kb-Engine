@@ -4,6 +4,7 @@
 #include "scene/EditorViewportPreviewState.hpp"
 
 #include <array>
+#include <cstdint>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -18,6 +19,9 @@ namespace kb::editor {
 struct SceneViewportToolbarRects {
     RECT toolbar{};
     RECT row{};
+    RECT fpsCounter{};
+    RECT renderStats{};
+    RECT renderProfileButton{};
     RECT gridToggleButton{};
     RECT gridStepButton{};
     RECT snapToggleButton{};
@@ -25,6 +29,13 @@ struct SceneViewportToolbarRects {
     RECT dropdownPanel{};
     std::array<RECT, 6U> dropdownItems{};
     RECT renderArea{};
+};
+
+struct SceneViewportToolbarRenderStats {
+    std::uint32_t submittedDrawCalls = 0;
+    std::uint32_t submittedMeshes = 0;
+    std::uint32_t gpuDispatches = 0;
+    bool gpuDrivenActive = false;
 };
 
 class SceneViewportToolbarRenderer {
@@ -35,6 +46,8 @@ public:
 
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content) noexcept;
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept;
+    static void RecordPresentedFrame() noexcept;
+    static void RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
 };
 

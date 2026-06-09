@@ -19,6 +19,7 @@ struct RendererShadowSubmitDesc {
     const RenderSceneSubmitDesc& sceneDesc;
     const RenderViewportPlan& viewportPlan;
     const SceneRenderLightingConfig& lightingConfig;
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     SceneRenderSubmitStats& aggregateSubmitStats;
     SceneRenderDiagnostics& diagnostics;
     std::vector<SceneRenderPassSubmitStats>& passSubmitStats;

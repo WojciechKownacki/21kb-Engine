@@ -15,6 +15,7 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -57,6 +58,8 @@ public:
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
+    [[nodiscard]] std::uint64_t SceneRenderRevision() const noexcept;
+    void MarkSceneRenderDirty() noexcept;
     [[nodiscard]] bool NewScene();
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool SaveCurrentScene();
@@ -78,6 +81,12 @@ public:
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept;
 
     [[nodiscard]] std::vector<EditorHierarchyRow> HierarchyRows() const;
+    [[nodiscard]] int HierarchyScrollOffset() const noexcept;
+    [[nodiscard]] bool IsHierarchyScrollbarDragging() const noexcept;
+    [[nodiscard]] bool SetHierarchyScrollOffset(int offset, int maxOffset) noexcept;
+    void BeginHierarchyScrollbarDrag(int y) noexcept;
+    void DragHierarchyScrollbar(int y, int trackTravel, int maxOffset) noexcept;
+    void EndHierarchyScrollbarDrag() noexcept;
     [[nodiscard]] std::string_view HierarchySearchQuery() const noexcept;
     [[nodiscard]] bool IsHierarchySearchFocused() const noexcept;
     [[nodiscard]] bool IsHierarchyRenaming() const noexcept;
@@ -155,6 +164,11 @@ private:
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
     std::optional<std::string> pendingSceneTransactionLabel_;
+    std::uint64_t sceneRenderRevision_ = 1U;
+    int hierarchyScrollOffset_ = 0;
+    int hierarchyScrollbarDragY_ = 0;
+    int hierarchyScrollbarDragStartOffset_ = 0;
+    bool hierarchyScrollbarDragging_ = false;
 };
 
 } // namespace kb::editor

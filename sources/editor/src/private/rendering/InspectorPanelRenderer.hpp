@@ -22,7 +22,11 @@ public:
         RECT rect{};
     };
 
-    void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
+    void Paint(
+        HDC dc,
+        const RECT& content,
+        const EditorTheme& theme,
+        const EditorSceneContext& sceneContext) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
 #endif
 };

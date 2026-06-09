@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rendering/EditorMeshPreviewTypes.hpp"
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -24,6 +26,8 @@ enum class InspectorHitKind : std::uint8_t {
     TextField,
     BoolField,
     FloatField,
+    MeshPreview,
+    MeshPreviewToolbarButton,
 };
 
 enum class InspectorPropertyId : std::uint8_t {
@@ -39,6 +43,10 @@ enum class InspectorPropertyId : std::uint8_t {
     ScaleX,
     ScaleY,
     ScaleZ,
+    MeshPreviewReset,
+    MeshPreviewFit,
+    MeshPreviewRenderMode,
+    MeshPreviewLightPreset,
 };
 
 struct InspectorPanelState {
@@ -68,6 +76,24 @@ struct InspectorPanelState {
     void BeginFloatDrag(InspectorPropertyId property, float startValue, int x, int y) noexcept;
     void MarkFloatDragMoved() noexcept;
     void EndFloatDrag() noexcept;
+    [[nodiscard]] bool IsDraggingMeshPreview() const noexcept;
+    [[nodiscard]] float MeshPreviewYaw() const noexcept;
+    [[nodiscard]] float MeshPreviewPitch() const noexcept;
+    [[nodiscard]] float MeshPreviewZoom() const noexcept;
+    [[nodiscard]] EditorMeshPreviewRenderMode MeshPreviewRenderMode() const noexcept;
+    [[nodiscard]] EditorMeshPreviewLightPreset MeshPreviewLightPreset() const noexcept;
+    [[nodiscard]] int MeshPreviewDragStartX() const noexcept;
+    [[nodiscard]] int MeshPreviewDragStartY() const noexcept;
+    [[nodiscard]] float MeshPreviewDragStartYaw() const noexcept;
+    [[nodiscard]] float MeshPreviewDragStartPitch() const noexcept;
+    void BeginMeshPreviewDrag(int x, int y) noexcept;
+    void DragMeshPreview(int x, int y) noexcept;
+    void EndMeshPreviewDrag() noexcept;
+    [[nodiscard]] bool ZoomMeshPreview(float delta) noexcept;
+    void ResetMeshPreview() noexcept;
+    void FitMeshPreview() noexcept;
+    void CycleMeshPreviewRenderMode() noexcept;
+    void CycleMeshPreviewLightPreset() noexcept;
 
 private:
     bool generalCollapsed_ = false;
@@ -85,6 +111,16 @@ private:
     int dragStartX_ = 0;
     int dragStartY_ = 0;
     bool floatDragMoved_ = false;
+    bool meshPreviewDragging_ = false;
+    int meshPreviewDragStartX_ = 0;
+    int meshPreviewDragStartY_ = 0;
+    float meshPreviewYaw_ = -35.0F;
+    float meshPreviewPitch_ = 24.0F;
+    float meshPreviewZoom_ = 1.0F;
+    EditorMeshPreviewRenderMode meshPreviewRenderMode_ = EditorMeshPreviewRenderMode::Solid;
+    EditorMeshPreviewLightPreset meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Studio;
+    float meshPreviewDragStartYaw_ = -35.0F;
+    float meshPreviewDragStartPitch_ = 24.0F;
 };
 
 } // namespace kb::editor

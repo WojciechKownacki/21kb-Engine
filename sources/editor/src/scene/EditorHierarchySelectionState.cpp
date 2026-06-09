@@ -27,6 +27,25 @@ void EditorHierarchySelectionState::SelectEntity(kb::scene::SceneEntity entity) 
     }
 }
 
+void EditorHierarchySelectionState::SelectEntities(std::span<const kb::scene::SceneEntity> entities) {
+    selected_.clear();
+    selected_.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        if (entity.IsValid()) {
+            selected_.push_back(entity);
+        }
+    }
+
+    if (selected_.empty()) {
+        primary_ = {};
+        anchor_ = {};
+        return;
+    }
+
+    primary_ = selected_.back();
+    anchor_ = primary_;
+}
+
 void EditorHierarchySelectionState::Clear() noexcept {
     primary_ = {};
     selected_.clear();

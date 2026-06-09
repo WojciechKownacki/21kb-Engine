@@ -123,11 +123,6 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{viewportLayouts.data(), viewportLayouts.size()});
 
-    const bool presentSceneViewports = paintContext->sceneViewport->PresentRequested();
-    if (presentSceneViewports) {
-        paintContext->sceneViewport->BeginPaintLayout();
-    }
-
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
     DockWorkspaceRenderer{}.Paint(
@@ -143,13 +138,8 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->dockDrag,
         *paintContext->playMode,
         *paintContext->shellInteraction,
-        presentSceneViewports ? paintContext->sceneViewport : nullptr);
+        nullptr);
     EditorDragOverlayRenderer{}.Paint(paint.dc, *paintContext->drag, *paintContext->theme, *paintContext->sceneContext);
-
-    if (presentSceneViewports) {
-        paintContext->sceneViewport->EndPaintLayout();
-        paintContext->sceneViewport->ClearPresentRequest();
-    }
 }
 
 [[nodiscard]] DockDropPreviewOverlayWindow& MainDropPreviewOverlay() {

@@ -21,6 +21,7 @@ public:
 
     static void AddSystem(Scene& scene, std::unique_ptr<kb::ecs::System> system);
     static void AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
+    static void SynchronizeTransforms(Scene& scene);
     [[nodiscard]] static bool Update(Scene& scene, float deltaSeconds);
     static void RequestQuit(Scene& scene) noexcept;
     [[nodiscard]] static bool ShouldQuit(const Scene& scene) noexcept;

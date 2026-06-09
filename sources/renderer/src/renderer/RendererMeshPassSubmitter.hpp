@@ -24,6 +24,7 @@ struct RendererMeshPassSubmitDesc {
     const SceneRenderLightingConfig& lightingConfig;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport{};
     SceneRenderSubmitStats& aggregateSubmitStats;
     SceneRenderDiagnostics& diagnostics;
     std::vector<SceneRenderPassSubmitStats>& passSubmitStats;

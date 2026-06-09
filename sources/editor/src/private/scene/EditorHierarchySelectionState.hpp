@@ -4,6 +4,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 
 #include <cstddef>
+#include <span>
 #include <vector>
 
 namespace kb::editor {
@@ -15,6 +16,7 @@ public:
     [[nodiscard]] bool IsSelected(kb::scene::SceneEntity entity) const noexcept;
 
     void SelectEntity(kb::scene::SceneEntity entity);
+    void SelectEntities(std::span<const kb::scene::SceneEntity> entities);
     void Clear() noexcept;
     [[nodiscard]] bool SelectRow(const std::vector<EditorHierarchyRow>& rows, std::size_t rowIndex, bool additive, bool range);
 
