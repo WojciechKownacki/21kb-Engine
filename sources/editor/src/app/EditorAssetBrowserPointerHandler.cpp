@@ -152,7 +152,7 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserPointerHandler::HandleDoub
         return EditorAssetBrowserDoubleClickResult::None;
     }
 
-    return EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(*content, x, y, sceneContext);
+    return EditorAssetBrowserDoubleClickHandler::HandleDoubleClick(mainWindow, *content, x, y, sceneContext);
 }
 
 bool EditorAssetBrowserPointerHandler::HandlePointerMove(
