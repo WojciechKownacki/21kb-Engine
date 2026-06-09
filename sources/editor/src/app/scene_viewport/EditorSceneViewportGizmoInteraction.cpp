@@ -7,6 +7,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <cstdint>
 #include <optional>
 
 namespace kb::editor {
@@ -58,6 +59,20 @@ void StartAxisDrag(
     gizmo.axisDrag = drag;
 }
 
+[[nodiscard]] bool CommitGizmoDragState(EditorSceneContext& sceneContext) noexcept {
+    EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
+    if (!gizmo.IsDragging()) {
+        gizmo.ClearDragPointer();
+        return false;
+    }
+
+    gizmo.draggedAxis = -1;
+    gizmo.centerDrag = false;
+    gizmo.ClearDragPointer();
+    static_cast<void>(sceneContext.CommitActiveTransformEdit());
+    return true;
+}
+
 } // namespace
 
 bool EditorSceneViewportGizmoInteraction::BeginDrag(
@@ -82,9 +97,10 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         kb::scene::Vec3 centerStart{};
         const kb::scene::Vec3 planeNormal = camera.Axes().forward;
         if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, *targetPosition, planeNormal, centerStart)) {
-            if (!sceneContext.BeginSceneEditTransaction("Move Entity")) {
+            if (!sceneContext.BeginSelectedTransformEdit("Move Entity")) {
                 return false;
             }
+            gizmo.ClearDragPointer();
             StartCenterDrag(gizmo, *targetPosition, planeNormal, centerStart);
             return true;
         }
@@ -101,9 +117,10 @@ bool EditorSceneViewportGizmoInteraction::BeginDrag(
         return false;
     }
 
-    if (!sceneContext.BeginSceneEditTransaction("Move Entity")) {
+    if (!sceneContext.BeginSelectedTransformEdit("Move Entity")) {
         return false;
     }
+    gizmo.ClearDragPointer();
     StartAxisDrag(gizmo, *targetPosition, axis, drag);
     return true;
 }
@@ -120,21 +137,75 @@ bool EditorSceneViewportGizmoInteraction::UpdateDragOrHover(
     bool leftButtonDown) {
     EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
     if (gizmo.IsDragging()) {
-        return UpdateActiveDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
+        if (!leftButtonDown) {
+            return EndDrag(sceneContext);
+        }
+        gizmo.QueueDragPointer(reinterpret_cast<std::uintptr_t>(sourceWindow), x, y, true);
+        return true;
     }
 
     return UpdateHover(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
 }
 
-bool EditorSceneViewportGizmoInteraction::EndDrag(EditorSceneContext& sceneContext) noexcept {
+bool EditorSceneViewportGizmoInteraction::TickActiveDrag(
+    HWND mainWindow,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
     EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
     if (!gizmo.IsDragging()) {
+        gizmo.ClearDragPointer();
+        return false;
+    }
+
+    std::uintptr_t sourceWindowId = 0U;
+    int x = 0;
+    int y = 0;
+    bool leftButtonDown = false;
+    if (!gizmo.ConsumeDragPointer(sourceWindowId, x, y, leftButtonDown)) {
+        return false;
+    }
+
+    HWND sourceWindow = reinterpret_cast<HWND>(sourceWindowId);
+    if (sourceWindow == nullptr || IsWindow(sourceWindow) == 0) {
+        sourceWindow = mainWindow;
+    }
+    return UpdateActiveDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
+}
+
+bool EditorSceneViewportGizmoInteraction::EndDrag(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    if (!sceneContext.Gizmo().IsDragging()) {
+        return false;
+    }
+
+    static_cast<void>(UpdateActiveDrag(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, true));
+    return EndDrag(sceneContext);
+}
+
+bool EditorSceneViewportGizmoInteraction::EndDrag(EditorSceneContext& sceneContext) noexcept {
+    return CommitGizmoDragState(sceneContext);
+}
+
+bool EditorSceneViewportGizmoInteraction::CancelDrag(EditorSceneContext& sceneContext) noexcept {
+    EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
+    if (!gizmo.IsDragging()) {
+        gizmo.ClearDragPointer();
         return false;
     }
 
     gizmo.draggedAxis = -1;
     gizmo.centerDrag = false;
-    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    gizmo.ClearDragPointer();
+    sceneContext.CancelActiveTransformEdit();
     return true;
 }
 
@@ -160,8 +231,7 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
-        sceneContext.CancelSceneEditTransaction();
-        static_cast<void>(EndDrag(sceneContext));
+        static_cast<void>(CancelDrag(sceneContext));
         return true;
     }
 
@@ -174,10 +244,8 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
         if (EditorSceneViewportGizmoDragSolver::PlaneDragPosition(hit->ray, dragStartTarget, planeNormal, currentPoint)) {
             const kb::scene::Vec3 unsnappedPosition =
                 EditorSceneViewportMath::Add(dragStartTarget, EditorSceneViewportMath::Sub(currentPoint, startPoint));
-            EditorSceneViewportMath::MoveEntityTo(
-                sceneContext.Scene(),
-                selected,
-                sceneContext.ViewportPreview(hit->panelId).SnapPosition(unsnappedPosition));
+            static_cast<void>(sceneContext.ApplyActiveTransformEditPrimaryPosition(
+                sceneContext.ViewportPreview(hit->panelId).SnapPosition(unsnappedPosition)));
         }
         return true;
     }
@@ -186,10 +254,8 @@ bool EditorSceneViewportGizmoInteraction::UpdateActiveDrag(
         kb::scene::Vec3 delta{};
         if (EditorSceneViewportGizmoDragSolver::AxisDragDelta(*hit, dragStartTarget, gizmo.axisDrag, delta)) {
             const kb::scene::Vec3 unsnappedPosition = EditorSceneViewportMath::Add(dragStartTarget, delta);
-            EditorSceneViewportMath::MoveEntityTo(
-                sceneContext.Scene(),
-                selected,
-                sceneContext.ViewportPreview(hit->panelId).SnapPositionAxis(unsnappedPosition, gizmo.draggedAxis));
+            static_cast<void>(sceneContext.ApplyActiveTransformEditPrimaryPosition(
+                sceneContext.ViewportPreview(hit->panelId).SnapPositionAxis(unsnappedPosition, gizmo.draggedAxis)));
         }
         return true;
     }

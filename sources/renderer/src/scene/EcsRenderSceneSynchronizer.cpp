@@ -5,8 +5,10 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -151,6 +153,41 @@ void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponen
     static_cast<void>(transform);
 }
 
+void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
+    if (context.scene == nullptr || context.renderScene == nullptr || context.transforms == nullptr ||
+        context.meshes == nullptr || context.cameras == nullptr || context.lights == nullptr) {
+        return;
+    }
+
+    if (!entity.IsValid() || !context.scene->Entities().IsAlive(entity)) {
+        static_cast<void>(context.renderScene->RemoveMesh(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveCamera(entity.Id()));
+        static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
+        return;
+    }
+
+    const kb::scene::TransformComponent* transform = context.scene->Transforms().TryGet(entity);
+    const kb::scene::SceneComponentQueries components = context.scene->Components();
+
+    if (const kb::scene::CameraComponent* camera = components.Cameras().TryGet(entity); camera != nullptr && transform != nullptr) {
+        SyncCamera(entity, *transform, *camera, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveCamera(entity.Id()));
+    }
+
+    if (const kb::scene::MeshRendererComponent* mesh = components.MeshRenderers().TryGet(entity); mesh != nullptr && transform != nullptr) {
+        SyncMesh(entity, *transform, *mesh, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveMesh(entity.Id()));
+    }
+
+    if (const kb::scene::LightComponent* light = components.Lights().TryGet(entity); light != nullptr && transform != nullptr) {
+        SyncLight(entity, *transform, *light, &context);
+    } else {
+        static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
+    }
+}
+
 } // namespace
 
 void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserveDesc& desc) {
@@ -199,6 +236,31 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     static_cast<void>(renderScene.RemoveMeshesNotInSorted(std::span<const std::uint64_t>{ seenMeshes_ }));
     static_cast<void>(renderScene.RemoveCamerasNotInSorted(std::span<const std::uint64_t>{ seenCameras_ }));
     static_cast<void>(renderScene.RemoveLightsNotInSorted(std::span<const std::uint64_t>{ seenLights_ }));
+}
+
+void EcsRenderSceneSynchronizer::SyncEntities(
+    const kb::scene::Scene& scene,
+    RenderScene& renderScene,
+    std::span<const std::uint64_t> entityIds) const {
+    seenMeshes_.clear();
+    seenCameras_.clear();
+    seenLights_.clear();
+    transformCache_.clear();
+    transformResolving_.clear();
+
+    EcsRenderTransformResolver transforms{ scene, transformCache_, transformResolving_ };
+    SyncContext context{
+        .scene = &scene,
+        .renderScene = &renderScene,
+        .transforms = &transforms,
+        .meshes = &seenMeshes_,
+        .cameras = &seenCameras_,
+        .lights = &seenLights_,
+    };
+
+    for (const std::uint64_t entityId : entityIds) {
+        SyncEntity(kb::scene::SceneEntity{ entityId }, context);
+    }
 }
 
 EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexcept {

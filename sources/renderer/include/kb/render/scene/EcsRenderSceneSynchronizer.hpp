@@ -3,6 +3,7 @@
 #include "engine/scene/TransformComponent.hpp"
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -40,6 +41,7 @@ class EcsRenderSceneSynchronizer {
 public:
     void Reserve(const EcsRenderSceneSynchronizerReserveDesc& desc);
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     [[nodiscard]] EcsRenderSceneSynchronizerStats Stats() const noexcept;
 
 private:

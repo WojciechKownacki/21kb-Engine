@@ -59,9 +59,12 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    const bool wasGizmoDragging = sceneContext_.Gizmo().IsDragging();
     if (EditorSceneViewportObjectInteraction::UpdateGizmoDragOrHover(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, leftButtonDown)) {
         sceneViewport_.RequestPresent();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (!wasGizmoDragging) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
         return;
     }
 
