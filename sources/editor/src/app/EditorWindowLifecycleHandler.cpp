@@ -1,8 +1,11 @@
 #include "app/EditorWindowLifecycleHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorSceneLifecycleGuard.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
 #include "scene/EditorSceneContext.hpp"
+
+#include <optional>
 
 namespace kb::editor {
 
@@ -22,8 +25,17 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     }
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
-    if (!sceneContext_.SaveDirtySceneDocument("application close")) {
+    const std::optional<EditorDirtySceneResolution> resolution =
+        EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, L"closing the editor");
+    if (!resolution.has_value()) {
         return 0;
+    }
+    if (*resolution == EditorDirtySceneResolution::Save) {
+        if (!sceneContext_.PrepareDirtySceneTransition("application close", *resolution)) {
+            return 0;
+        }
+    } else {
+        sceneContext_.DiscardDirtySceneDocument("application close");
     }
 
     running_ = false;

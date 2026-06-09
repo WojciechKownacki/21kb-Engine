@@ -338,6 +338,27 @@ bool EditorSceneContext::SaveDirtySceneDocument(std::string_view reason) {
     return true;
 }
 
+void EditorSceneContext::DiscardDirtySceneDocument(std::string_view reason) {
+    if (!sceneDocumentDirty_) {
+        return;
+    }
+    sceneDocumentDirty_ = false;
+    console_.Warning("Project", "Unsaved scene changes discarded before " + std::string{ reason } + ".");
+}
+
+bool EditorSceneContext::PrepareDirtySceneTransition(std::string_view reason, EditorDirtySceneResolution resolution) {
+    if (!sceneDocumentDirty_) {
+        return true;
+    }
+
+    if (resolution == EditorDirtySceneResolution::Discard) {
+        console_.Warning("Project", "Unsaved scene changes discarded before " + std::string{ reason } + ".");
+        return true;
+    }
+
+    return SaveDirtySceneDocument(reason);
+}
+
 bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (playModeSceneSession_.Active()) {
         return true;
@@ -375,11 +396,11 @@ bool EditorSceneContext::HasPlayModeSceneSession() const noexcept {
     return playModeSceneSession_.Active();
 }
 
-bool EditorSceneContext::NewScene() {
+bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     if (!RestorePlayModeSceneSession()) {
         return false;
     }
-    if (!SaveDirtySceneDocument("creating a new scene")) {
+    if (!PrepareDirtySceneTransition("creating a new scene", dirtyResolution)) {
         return false;
     }
 
@@ -400,11 +421,11 @@ bool EditorSceneContext::OpenDefaultScene() {
     return OpenScene(ResolveDefaultScenePath());
 }
 
-bool EditorSceneContext::OpenScene(const std::filesystem::path& path) {
+bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution) {
     if (!RestorePlayModeSceneSession()) {
         return false;
     }
-    if (!SaveDirtySceneDocument("opening a scene")) {
+    if (!PrepareDirtySceneTransition("opening a scene", dirtyResolution)) {
         return false;
     }
 
