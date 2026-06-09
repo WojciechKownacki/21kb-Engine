@@ -1,8 +1,11 @@
 #include "app/EditorWindowToolbarPointerHandler.hpp"
 
 #if defined(_WIN32)
+#include "platform/win32/EditorSceneFileDialog.hpp"
+#include "project/EditorProjectPaths.hpp"
 #include "rendering/EditorToolbarRenderer.hpp"
 
+#include <filesystem>
 #include <optional>
 
 namespace kb::editor {
@@ -94,11 +97,17 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 1) {
-                if (sceneContext.OpenDefaultScene()) {
+                const std::optional<std::filesystem::path> path = EditorSceneFileDialog::Open(mainWindow, EditorProjectPaths::ScenesRoot());
+                if (path.has_value() && sceneContext.OpenScene(*path)) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 2) {
                 if (sceneContext.SaveCurrentScene()) {
+                    sceneViewport.RequestPresent();
+                }
+            } else if (*row == 3) {
+                const std::optional<std::filesystem::path> path = EditorSceneFileDialog::SaveAs(mainWindow, sceneContext.CurrentScenePath(), EditorProjectPaths::ScenesRoot());
+                if (path.has_value() && sceneContext.SaveCurrentSceneAs(*path)) {
                     sceneViewport.RequestPresent();
                 }
             }
@@ -200,6 +209,27 @@ struct TransportClickResult {
     return result.handled;
 }
 
+[[nodiscard]] bool HandleSaveLeftButtonDown(
+    HWND mainWindow,
+    int x,
+    int y,
+    const DockLayout& layout,
+    EditorSceneContext& sceneContext,
+    EditorSceneBgfxViewport& sceneViewport,
+    EditorShellInteractionState& shellInteraction) {
+    const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout.toolbar));
+    if (!EditorToolbarRenderer::HitTestSave(toolbar, x, y)) {
+        return false;
+    }
+
+    static_cast<void>(shellInteraction.SetPressedSave(true));
+    if (sceneContext.SaveCurrentScene()) {
+        sceneViewport.RequestPresent();
+    }
+    InvalidateToolbar(mainWindow, layout);
+    return true;
+}
+
 } // namespace
 
 bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
@@ -223,6 +253,10 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
     }
 
     if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
+        return true;
+    }
+
+    if (HandleSaveLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
         return true;
     }
 
@@ -251,7 +285,9 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
     bool changed = false;
     changed = shellInteraction.SetHoveredMenu(EditorToolbarRenderer::HitTestMenu(menu, x, y)) || changed;
     changed = shellInteraction.SetHoveredMenuRow(EditorToolbarRenderer::HitTestMenuRow(menu, x, y)) || changed;
-    changed = shellInteraction.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar)), x, y)) || changed;
+    const EditorToolbarRects toolbar = EditorToolbarRenderer::ResolveToolbar(ToRect(layout->toolbar));
+    changed = shellInteraction.SetHoveredSave(EditorToolbarRenderer::HitTestSave(toolbar, x, y)) || changed;
+    changed = shellInteraction.SetHoveredTransport(EditorToolbarRenderer::HitTestTransport(toolbar, x, y)) || changed;
     if (changed) {
         RECT rect = MenuInvalidationRect(*layout, shellInteraction.OpenMenu());
         IncludeRect(rect, ToRect(layout->toolbar));
@@ -262,6 +298,7 @@ bool EditorWindowToolbarPointerHandler::HandleMouseMove(
 
 void EditorWindowToolbarPointerHandler::ClearHover(EditorShellInteractionState& shellInteraction) noexcept {
     shellInteraction.ClearMenuHover();
+    shellInteraction.ClearSaveHover();
     shellInteraction.ClearTransportHover();
 }
 

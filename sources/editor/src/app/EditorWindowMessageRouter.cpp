@@ -66,6 +66,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         static_cast<void>(EditorSceneViewportObjectInteraction::CancelGizmoDrag(context_.sceneContext));
         context_.dockController.CancelDrag();
         context_.pointerDrag.Clear();
+        context_.shellInteraction.ClearPressedSave();
         context_.shellInteraction.ClearPressedTransport();
         context_.sceneViewport.RequestPresent();
         return 0;
@@ -87,6 +88,7 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         const bool captureStayedInEditor = newCapture == context_.mainWindow || context_.floatingWindows.Queries().IsFloatingWindow(newCapture);
         if (!captureStayedInEditor) {
             context_.pointerDrag.Clear();
+            context_.shellInteraction.ClearPressedSave();
             context_.shellInteraction.ClearPressedTransport();
             if (context_.mainWindow != nullptr) {
                 InvalidateRect(context_.mainWindow, nullptr, FALSE);

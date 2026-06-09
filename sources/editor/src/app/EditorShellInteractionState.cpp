@@ -28,6 +28,22 @@ bool EditorShellInteractionState::SetHoveredMenuRow(std::optional<int> row) noex
     return true;
 }
 
+bool EditorShellInteractionState::SetHoveredSave(bool hovered) noexcept {
+    if (hoveredSave_ == hovered) {
+        return false;
+    }
+    hoveredSave_ = hovered;
+    return true;
+}
+
+bool EditorShellInteractionState::SetPressedSave(bool pressed) noexcept {
+    if (pressedSave_ == pressed) {
+        return false;
+    }
+    pressedSave_ = pressed;
+    return true;
+}
+
 bool EditorShellInteractionState::SetHoveredTransport(EditorTransportCommand command) noexcept {
     if (hoveredTransport_ == command) {
         return false;
@@ -54,6 +70,14 @@ void EditorShellInteractionState::ClearMenuHover() noexcept {
     hoveredMenuRow_.reset();
 }
 
+void EditorShellInteractionState::ClearSaveHover() noexcept {
+    hoveredSave_ = false;
+}
+
+void EditorShellInteractionState::ClearPressedSave() noexcept {
+    pressedSave_ = false;
+}
+
 void EditorShellInteractionState::ClearTransportHover() noexcept {
     hoveredTransport_ = EditorTransportCommand::None;
 }
@@ -72,6 +96,14 @@ EditorMenuCommand EditorShellInteractionState::OpenMenu() const noexcept {
 
 std::optional<int> EditorShellInteractionState::HoveredMenuRow() const noexcept {
     return hoveredMenuRow_;
+}
+
+bool EditorShellInteractionState::HoveredSave() const noexcept {
+    return hoveredSave_;
+}
+
+bool EditorShellInteractionState::PressedSave() const noexcept {
+    return pressedSave_;
 }
 
 EditorTransportCommand EditorShellInteractionState::HoveredTransport() const noexcept {

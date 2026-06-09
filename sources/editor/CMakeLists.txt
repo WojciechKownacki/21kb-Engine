@@ -323,6 +323,7 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorPanelTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
+    src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
     src/private/project/EditorProjectAssetIndex.hpp
@@ -452,6 +453,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
     src/rendering/DockDropPreviewRenderer.cpp

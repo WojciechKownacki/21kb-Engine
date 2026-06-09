@@ -23,7 +23,7 @@ void DockWorkspaceRenderer::Paint(HWND parent, HDC dc, int width, int height, co
         metrics.panelPadding);
 
     EditorToolbarRenderer toolbarRenderer;
-    toolbarRenderer.PaintToolbar(dc, GdiDrawing::ToRect(layout.toolbar), theme, playMode, shellInteraction);
+    toolbarRenderer.PaintToolbar(dc, GdiDrawing::ToRect(layout.toolbar), theme, sceneContext, playMode, shellInteraction);
 
     DockWorkspaceChromeRenderer{}.Paint(dc, layout, dockModel, theme);
     DockWorkspaceTabStripRenderer{}.Paint(parent, dc, layout, dockModel, dockDrag, theme);

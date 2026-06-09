@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "docking/EditorDockModel.hpp"
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
@@ -27,7 +28,7 @@ public:
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext);
-    [[nodiscard]] static bool HandleDoubleClick(
+    [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(
         HWND sourceWindow,
         HWND mainWindow,
         int x,

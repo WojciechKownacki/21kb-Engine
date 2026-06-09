@@ -140,7 +140,7 @@ bool EditorAssetBrowserInputHandler::HandleKeyDown(HWND messageWindow, WPARAM wp
                 return true;
             }
         }
-        if (wparam == VK_F2 && sceneContext_.BeginAssetRename()) {
+        if (wparam == VK_F2 && sceneContext_.AssetBrowser().IsSelectionFocused() && sceneContext_.BeginAssetRename()) {
             Invalidate(messageWindow);
             return true;
         }
