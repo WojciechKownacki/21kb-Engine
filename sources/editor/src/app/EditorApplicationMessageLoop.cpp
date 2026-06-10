@@ -124,6 +124,15 @@ void CoalesceConsecutiveMouseMoveMessages(MSG& message) noexcept {
         }
         presented = PresentScenePanel(state, state.window, *panel, ToRect(panelLayout.content), refreshToolbar) || presented;
     }
+
+    if (!presented) {
+        // No Scene panel is the active tab in the main window (e.g. Inspector or
+        // Project Settings is shown in the leaf that hosts Scene View). Run an empty
+        // paint-layout cycle so the bgfx child surface is hidden instead of staying
+        // on top of the GDI-painted panel that is now active.
+        state.sceneViewport.BeginPaintLayout(state.window);
+        state.sceneViewport.EndPaintLayout();
+    }
     return presented;
 }
 
