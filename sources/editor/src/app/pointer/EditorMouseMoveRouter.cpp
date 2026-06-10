@@ -8,6 +8,7 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -123,6 +124,15 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
     if (inspectorPointer.Contains(inspectorContent, x, y)) {
+        return;
+    }
+
+    const std::optional<RECT> projectSettingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
+    if (projectSettingsPointer.UpdateHoverOrClear(projectSettingsContent, x, y)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+    if (projectSettingsPointer.Contains(projectSettingsContent, x, y)) {
         return;
     }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {

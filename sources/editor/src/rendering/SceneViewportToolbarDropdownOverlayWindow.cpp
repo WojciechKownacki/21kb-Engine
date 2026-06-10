@@ -109,6 +109,7 @@ void SceneViewportToolbarDropdownOverlayWindow::Hide() noexcept {
         ShowWindow(window_, SW_HIDE);
     }
     shown_ = false;
+    hoveredItem_ = -1;
 }
 
 bool SceneViewportToolbarDropdownOverlayWindow::EnsureWindow(HWND parent) {
@@ -211,18 +212,39 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
     for (std::size_t index = 0; index < count; ++index) {
         const float value = gridDropdown ? EditorViewportGridSpacingOption(index) : EditorViewportSnapStepOption(index);
         const bool selected = NearlyEqual(value, active);
+        const bool hovered = static_cast<int>(index) == hoveredItem_;
         RECT item = ItemRect(client, index, count);
         item.top += 1;
         item.bottom -= 1;
         if (selected) {
             FillRound(dc, item, RGB(39, 100, 124), RGB(87, 173, 207), kDropdownRadius);
+        } else if (hovered) {
+            FillRound(dc, item, RGB(46, 78, 104), RGB(96, 140, 178), kDropdownRadius);
         }
         GdiDrawing::DrawCenteredText(
             dc,
             item,
             gridDropdown ? EditorViewportGridSpacingLabel(value) : EditorViewportSnapStepLabel(value),
-            selected ? RGB(235, 250, 255) : GdiDrawing::ToColorRef(theme_.textPrimary));
+            selected ? RGB(235, 250, 255) : (hovered ? RGB(226, 236, 246) : GdiDrawing::ToColorRef(theme_.textPrimary)));
     }
+}
+
+int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clientY) const noexcept {
+    if (sceneContext_ == nullptr || window_ == nullptr || IsWindow(window_) == 0) {
+        return -1;
+    }
+    RECT client{};
+    GetClientRect(window_, &client);
+    const EditorViewportPreviewState& state = sceneContext_->ViewportPreview(panelId_);
+    const bool gridDropdown = state.ToolbarDropdown() == EditorViewportToolbarDropdown::GridSpacing;
+    const std::size_t count = gridDropdown ? EditorViewportGridSpacingOptionCount() : EditorViewportSnapStepOptionCount();
+    for (std::size_t index = 0; index < count; ++index) {
+        const RECT item = ItemRect(client, index, count);
+        if (clientX >= item.left && clientX < item.right && clientY >= item.top && clientY < item.bottom) {
+            return static_cast<int>(index);
+        }
+    }
+    return -1;
 }
 
 void SceneViewportToolbarDropdownOverlayWindow::ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const {
@@ -268,6 +290,24 @@ LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND wind
             return 0;
         }
         break;
+    case WM_MOUSEMOVE:
+        if (overlay != nullptr) {
+            const int index = overlay->ItemIndexAt(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
+            if (overlay->hoveredItem_ != index) {
+                overlay->hoveredItem_ = index;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            TRACKMOUSEEVENT track{ sizeof(TRACKMOUSEEVENT), TME_LEAVE, window, 0U };
+            static_cast<void>(TrackMouseEvent(&track));
+            return 0;
+        }
+        break;
+    case WM_MOUSELEAVE:
+        if (overlay != nullptr && overlay->hoveredItem_ != -1) {
+            overlay->hoveredItem_ = -1;
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        return 0;
     case WM_SETCURSOR:
         SetCursor(LoadCursorW(nullptr, MAKEINTRESOURCEW(32512)));
         return TRUE;
@@ -277,6 +317,7 @@ LRESULT CALLBACK SceneViewportToolbarDropdownOverlayWindow::WindowProc(HWND wind
             overlay->parent_ = nullptr;
             overlay->sceneContext_ = nullptr;
             overlay->shown_ = false;
+            overlay->hoveredItem_ = -1;
             overlay->screenBounds_ = RECT{};
             overlay->sceneContent_ = RECT{};
             overlay->panelId_ = 0U;
