@@ -25,6 +25,7 @@ struct ResolvedMapping {
     InputActionValueType valueType = InputActionValueType::Bool;
     bool consumeInput = true;
     InputKey key = InputKey::None;
+    float scale = 1.0F;
     std::vector<InputModifierDesc> modifiers;
     std::vector<InputTriggerDesc> triggers;
     std::vector<std::string> chordActionNames; // parallel to triggers; empty unless Chorded
