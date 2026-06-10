@@ -5,6 +5,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
+#include "scene/components/SceneInputComponentStore.hpp"
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
@@ -34,6 +35,8 @@ public:
     [[nodiscard]] SceneMeshRendererComponentStore& MeshRenderers() noexcept;
     [[nodiscard]] const SceneLightComponentStore& Lights() const noexcept;
     [[nodiscard]] SceneLightComponentStore& Lights() noexcept;
+    [[nodiscard]] const SceneInputComponentStore& Inputs() const noexcept;
+    [[nodiscard]] SceneInputComponentStore& Inputs() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -42,6 +45,7 @@ private:
     SceneCameraComponentStore cameras_;
     SceneMeshRendererComponentStore meshRenderers_;
     SceneLightComponentStore lights_;
+    SceneInputComponentStore inputs_;
 };
 
 } // namespace kb::scene

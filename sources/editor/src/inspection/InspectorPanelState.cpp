@@ -21,6 +21,12 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return assetCollapsed_;
     case InspectorSectionId::Folder:
         return folderCollapsed_;
+    case InspectorSectionId::InputAction:
+        return inputActionCollapsed_;
+    case InspectorSectionId::InputMappings:
+        return inputMappingsCollapsed_;
+    case InspectorSectionId::Input:
+        return inputCollapsed_;
     default:
         return false;
     }
@@ -40,6 +46,15 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::Folder:
         target = &folderCollapsed_;
+        break;
+    case InspectorSectionId::InputAction:
+        target = &inputActionCollapsed_;
+        break;
+    case InspectorSectionId::InputMappings:
+        target = &inputMappingsCollapsed_;
+        break;
+    case InspectorSectionId::Input:
+        target = &inputCollapsed_;
         break;
     default:
         break;
@@ -73,6 +88,25 @@ bool InspectorPanelState::IsAnyHovered() const noexcept {
 
 InspectorPropertyId InspectorPanelState::HoveredProperty() const noexcept {
     return hoveredProperty_;
+}
+
+bool InspectorPanelState::IsListeningForKey() const noexcept {
+    return listeningForKey_;
+}
+
+int InspectorPanelState::KeyCaptureMappingIndex() const noexcept {
+    return keyCaptureMappingIndex_;
+}
+
+void InspectorPanelState::BeginKeyCapture(int mappingIndex) noexcept {
+    listeningForKey_ = true;
+    keyCaptureMappingIndex_ = mappingIndex;
+    EndTextEdit();
+}
+
+void InspectorPanelState::EndKeyCapture() noexcept {
+    listeningForKey_ = false;
+    keyCaptureMappingIndex_ = -1;
 }
 
 bool InspectorPanelState::IsTextEditing() const noexcept {

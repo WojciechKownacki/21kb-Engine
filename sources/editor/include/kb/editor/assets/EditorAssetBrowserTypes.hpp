@@ -43,6 +43,8 @@ enum class EditorAssetContextCommand {
     None,
     Import,
     NewFolder,
+    NewInputAction,
+    NewInputMappingContext,
     Rename,
     Delete,
     Refresh,

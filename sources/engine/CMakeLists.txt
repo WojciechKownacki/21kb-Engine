@@ -83,6 +83,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneEntity.hpp
     include/engine/scene/SceneHierarchyAccess.hpp
     include/engine/scene/SceneHistory.hpp
+    include/engine/scene/InputComponent.hpp
+    include/engine/scene/SceneInputActivation.hpp
+    include/engine/scene/SceneInputComponents.hpp
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
@@ -130,6 +133,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptExecutionContext.hpp
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
+    include/engine/script/ScriptInputApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptRuntime.hpp
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
@@ -295,6 +299,8 @@ add_library(kb_engine STATIC
     src/scene/components/SceneBehaviourIteration.cpp
     src/scene/components/SceneBehaviourStorage.cpp
     src/scene/components/SceneCameraIteration.cpp
+    src/scene/components/SceneInputComponentApi.cpp
+    src/scene/components/SceneInputStorage.cpp
     src/scene/components/SceneLightApi.cpp
     src/scene/components/SceneLightStorage.cpp
     src/scene/components/SceneLightIteration.cpp
@@ -336,6 +342,7 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
     src/scene/modules/components/SceneComponentModule.cpp
+    src/scene/modules/components/SceneInputModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
@@ -360,6 +367,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneTransformQueries.cpp
     src/scene/SceneHistory.cpp
     src/scene/SceneHistoryService.cpp
+    src/scene/SceneInputActivation.cpp
     src/scene/systems/SceneSystem.cpp
     src/scene/systems/SceneSystemContext.cpp
     src/scene/systems/SceneSystemQueryAccess.cpp
@@ -398,6 +406,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/io/ScenePrefabAssetFieldParser.cpp
     src/scene/prefab/io/ScenePrefabAssetFieldWriter.cpp
     src/scene/prefab/io/ScenePrefabAssetKeyValueReader.cpp
+    src/scene/prefab/io/ScenePrefabAssetInputParser.cpp
     src/scene/prefab/io/ScenePrefabAssetLightParser.cpp
     src/scene/prefab/io/ScenePrefabAssetMeshRendererParser.cpp
     src/scene/prefab/io/ScenePrefabAssetNestedOverrideParser.cpp
@@ -485,6 +494,7 @@ add_library(kb_engine STATIC
     src/script/ScriptExecutionContext.cpp
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
+    src/script/ScriptInputApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptRuntime.cpp
     src/script/ScriptRuntimeAssetPreparer.cpp
@@ -527,6 +537,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneComponentStorageAccess.hpp
     src/private/scene/components/SceneBehaviourComponentStore.hpp
     src/private/scene/components/SceneMeshRendererIterationDispatcher.hpp
+    src/private/scene/components/SceneInputComponentStore.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
@@ -600,6 +611,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/io/ScenePrefabAssetFieldParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetFieldWriter.hpp
     src/private/scene/prefab/io/ScenePrefabAssetKeyValueReader.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetInputParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetLightParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetNestedOverrideParser.hpp
@@ -782,6 +794,29 @@ add_library(kb_engine STATIC
     src/private/ecs/world/WorldComponentMutator.hpp
     src/private/ecs/world/WorldComponentReader.hpp
     src/private/ecs/world/WorldComponentRegistrar.hpp
+    include/engine/input/InputActionValueType.hpp
+    include/engine/input/InputKey.hpp
+    include/engine/input/InputValue.hpp
+    include/engine/input/InputDeviceState.hpp
+    include/engine/input/InputModifierDesc.hpp
+    include/engine/input/InputTriggerDesc.hpp
+    include/engine/input/InputActionAsset.hpp
+    include/engine/input/InputMappingContextAsset.hpp
+    include/engine/input/InputAssetIO.hpp
+    include/engine/input/InputAssetLoaders.hpp
+    include/engine/input/InputModifiers.hpp
+    include/engine/input/InputTriggers.hpp
+    include/engine/input/InputSubsystem.hpp
+    include/engine/input/InputMappingEvaluator.hpp
+    include/engine/input/InputPollingSystem.hpp
+    src/input/InputKey.cpp
+    src/input/InputAssetIO.cpp
+    src/input/InputAssetLoaders.cpp
+    src/input/InputModifiers.cpp
+    src/input/InputTriggers.cpp
+    src/input/InputSubsystem.cpp
+    src/input/InputMappingEvaluator.cpp
+    src/input/InputPollingSystem.cpp
 )
 
 if(NOT WIN32)
@@ -844,6 +879,7 @@ if(BUILD_TESTING)
         tests/TestSuites.hpp
         tests/TestSupport.hpp
         tests/VisualGraphTests.cpp
+        tests/InputTests.cpp
     )
 
     target_link_libraries(kb_engine_tests
