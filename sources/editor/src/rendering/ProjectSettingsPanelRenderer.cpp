@@ -66,14 +66,17 @@ void DrawSelectorBox(HDC dc, const RECT& box, const std::string& display, bool i
     DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", RGB(150, 158, 168), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawDropdownList(HDC dc, const RECT& fieldBox, const std::vector<std::string>& options, const std::string& selected) {
+void DrawDropdownList(HDC dc, const RECT& fieldBox, const std::vector<std::string>& options, const std::string& selected, int hoveredOption) {
     if (options.empty()) {
         return;
     }
     GdiDrawing::DrawSharpFrame(dc, ProjectSettingsPanelLayout::OptionListBounds(fieldBox, static_cast<int>(options.size())), RGB(30, 32, 36), RGB(79, 129, 184));
     for (std::size_t index = 0; index < options.size(); ++index) {
         const RECT row = ProjectSettingsPanelLayout::OptionRow(fieldBox, static_cast<int>(index));
-        if (options[index] == selected) {
+        const bool hovered = static_cast<int>(index) == hoveredOption;
+        if (hovered) {
+            GdiDrawing::FillRectColor(dc, GdiDrawing::Inset(row, 1), RGB(51, 90, 130)); // Hover sits brighter than selection.
+        } else if (options[index] == selected) {
             GdiDrawing::FillRectColor(dc, GdiDrawing::Inset(row, 1), RGB(39, 70, 104));
         }
         const std::string label = MappingContextDisplayName(options[index]);
@@ -101,7 +104,7 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     DrawSelectorBox(dc, fieldBox, MappingContextDisplayName(project.inputMappingContext), project.inputMappingContext.empty(), dropdownOpen);
     if (dropdownOpen) {
-        DrawDropdownList(dc, fieldBox, sceneContext.ProjectInputMappingContextOptions(), project.inputMappingContext);
+        DrawDropdownList(dc, fieldBox, sceneContext.ProjectInputMappingContextOptions(), project.inputMappingContext, sceneContext.ProjectSettings().HoveredOption());
     }
 }
 

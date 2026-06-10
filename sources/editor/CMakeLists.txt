@@ -462,7 +462,6 @@ add_executable(kb_editor WIN32
     src/private/scene/input/EditorInputAssetCatalog.hpp
     src/private/scene/input/EditorInputActionAuthoring.hpp
     src/private/scene/input/EditorInputMappingContextAuthoring.hpp
-    src/private/scene/input/EditorInputComponentAuthoring.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -596,7 +595,6 @@ add_executable(kb_editor WIN32
     src/scene/input/EditorInputAssetCatalog.cpp
     src/scene/input/EditorInputActionAuthoring.cpp
     src/scene/input/EditorInputMappingContextAuthoring.cpp
-    src/scene/input/EditorInputComponentAuthoring.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp

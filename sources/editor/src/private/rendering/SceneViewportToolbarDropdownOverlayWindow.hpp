@@ -32,6 +32,7 @@ private:
     [[nodiscard]] RECT ResolveScreenBounds() const noexcept;
     [[nodiscard]] bool MoveToCurrentBounds(bool showWindow) noexcept;
     void Paint(HDC dc) const;
+    [[nodiscard]] int ItemIndexAt(int clientX, int clientY) const noexcept;
     void ForwardMouseMessage(UINT message, WPARAM wparam, LPARAM lparam) const;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
@@ -42,6 +43,7 @@ private:
     RECT screenBounds_{};
     std::uint64_t panelId_ = 0U;
     bool shown_ = false;
+    int hoveredItem_ = -1;
     EditorTheme theme_{};
     const EditorSceneContext* sceneContext_ = nullptr;
 #endif
