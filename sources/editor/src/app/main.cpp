@@ -1,7 +1,9 @@
 #include "kb/editor/EditorApplication.hpp"
 
+#include "app/EditorSelfTest.hpp"
 #include "project/EditorProjectPaths.hpp"
 
+#include <filesystem>
 #include <string_view>
 
 #if defined(_WIN32)
@@ -21,6 +23,15 @@ void ConfigureProjectFromArguments(int argc, wchar_t** argv) {
             return;
         }
     }
+}
+
+[[nodiscard]] bool HasSelfTestFlag(int argc, wchar_t** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (std::wstring_view{ argv[index] } == L"--selftest") {
+            return true;
+        }
+    }
+    return false;
 }
 #else
 void ConfigureProjectFromArguments(int argc, char** argv) {
@@ -49,9 +60,16 @@ int RunEditor() {
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool selfTest = false;
     if (argv != nullptr) {
         ConfigureProjectFromArguments(argc, argv);
+        selfTest = HasSelfTestFlag(argc, argv);
         LocalFree(argv);
+    }
+    if (selfTest) {
+        // Headless: run self-tests and exit before any window/graphics init.
+        const std::filesystem::path reportPath = std::filesystem::temp_directory_path() / "21kb_selftest" / "report.txt";
+        return kb::editor::EditorSelfTest::Run(reportPath);
     }
     return RunEditor();
 }
