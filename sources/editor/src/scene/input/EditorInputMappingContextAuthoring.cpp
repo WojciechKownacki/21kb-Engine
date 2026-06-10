@@ -51,6 +51,14 @@ bool EditorInputMappingContextAuthoring::SetMappingKey(kb::assets::AssetId id, s
     });
 }
 
+bool EditorInputMappingContextAuthoring::SetMappingScale(kb::assets::AssetId id, std::size_t index, float scale) {
+    return gateway_.MutateContext(id, [index, scale](kb::input::InputMappingContextAsset& asset) {
+        if (index < asset.mappings.size()) {
+            asset.mappings[index].scale = scale;
+        }
+    });
+}
+
 bool EditorInputMappingContextAuthoring::CycleMappingAction(kb::assets::AssetId id, std::size_t index) {
     const std::vector<std::uint64_t> actions = catalog_.SortedIdsOfType("InputAction");
     if (actions.empty()) {

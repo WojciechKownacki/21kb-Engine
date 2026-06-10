@@ -8,6 +8,9 @@
 
 #include <Xinput.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace kb::editor {
 namespace {
 
@@ -28,12 +31,32 @@ using kb::input::InputKey;
     return foregroundProcess == GetCurrentProcessId();
 }
 
-[[nodiscard]] float NormalizeStick(SHORT value) noexcept {
-    return static_cast<float>(value) / 32767.0F;
+struct StickAxes {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+// Radial dead zone (XInput recommendation): ignore small magnitudes so a resting
+// stick reads exactly zero, then rescale the remainder to a clean 0..1 range so
+// there is no value jump at the dead-zone edge.
+[[nodiscard]] StickAxes NormalizeStick(SHORT rawX, SHORT rawY, SHORT deadZone) noexcept {
+    const float x = static_cast<float>(rawX);
+    const float y = static_cast<float>(rawY);
+    const float magnitude = std::sqrt((x * x) + (y * y));
+    if (magnitude <= static_cast<float>(deadZone)) {
+        return StickAxes{};
+    }
+    constexpr float kMaxMagnitude = 32767.0F;
+    const float clamped = std::min(magnitude, kMaxMagnitude);
+    const float scaled = (clamped - static_cast<float>(deadZone)) / (kMaxMagnitude - static_cast<float>(deadZone));
+    return StickAxes{.x = (x / magnitude) * scaled, .y = (y / magnitude) * scaled};
 }
 
 [[nodiscard]] float NormalizeTrigger(BYTE value) noexcept {
-    return static_cast<float>(value) / 255.0F;
+    if (value <= XINPUT_GAMEPAD_TRIGGER_THRESHOLD) {
+        return 0.0F;
+    }
+    return static_cast<float>(value - XINPUT_GAMEPAD_TRIGGER_THRESHOLD) / (255.0F - static_cast<float>(XINPUT_GAMEPAD_TRIGGER_THRESHOLD));
 }
 
 void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
@@ -45,10 +68,12 @@ void CollectGamepad(kb::input::InputDeviceState& state) noexcept {
     for (const Win32GamepadButtonBinding& binding : Win32InputKeyMap::GamepadButtons()) {
         state.SetKeyDown(binding.key, (pad.wButtons & binding.mask) != 0);
     }
-    state.SetAnalog(InputKey::GamepadLeftStickX, NormalizeStick(pad.sThumbLX));
-    state.SetAnalog(InputKey::GamepadLeftStickY, NormalizeStick(pad.sThumbLY));
-    state.SetAnalog(InputKey::GamepadRightStickX, NormalizeStick(pad.sThumbRX));
-    state.SetAnalog(InputKey::GamepadRightStickY, NormalizeStick(pad.sThumbRY));
+    const StickAxes left = NormalizeStick(pad.sThumbLX, pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+    const StickAxes right = NormalizeStick(pad.sThumbRX, pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+    state.SetAnalog(InputKey::GamepadLeftStickX, left.x);
+    state.SetAnalog(InputKey::GamepadLeftStickY, left.y);
+    state.SetAnalog(InputKey::GamepadRightStickX, right.x);
+    state.SetAnalog(InputKey::GamepadRightStickY, right.y);
     state.SetAnalog(InputKey::GamepadLeftTrigger, NormalizeTrigger(pad.bLeftTrigger));
     state.SetAnalog(InputKey::GamepadRightTrigger, NormalizeTrigger(pad.bRightTrigger));
 }

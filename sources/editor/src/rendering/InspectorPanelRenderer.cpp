@@ -707,6 +707,7 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
             : std::string{ kb::input::ToString(mapping.triggers.front().type) };
         section.Field("Key" + suffix, keyText, InspectorPropertyId::InputMappingKey);
         section.Field("Action" + suffix, AssetDisplayName(sceneContext, mapping.actionId), InspectorPropertyId::InputMappingAction);
+        section.Field("Scale" + suffix, FormatFloat(mapping.scale), InspectorPropertyId::InputMappingScale);
         section.Field("Trigger" + suffix, triggerText, InspectorPropertyId::InputMappingTrigger);
         section.Field("", "Remove", InspectorPropertyId::InputMappingRemove);
     }
@@ -958,9 +959,10 @@ void AdvanceRow(int& y) noexcept {
     }
     const std::optional<kb::input::InputMappingContextAsset> context = sceneContext.ReadInputMappingContextAsset(imcId);
     const std::size_t mappingCount = context.has_value() ? context->mappings.size() : 0U;
-    const std::array<InspectorPropertyId, 4> rowProperties{
+    const std::array<InspectorPropertyId, 5> rowProperties{
         InspectorPropertyId::InputMappingKey,
         InspectorPropertyId::InputMappingAction,
+        InspectorPropertyId::InputMappingScale,
         InspectorPropertyId::InputMappingTrigger,
         InspectorPropertyId::InputMappingRemove,
     };

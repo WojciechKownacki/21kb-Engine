@@ -27,6 +27,7 @@ bool InputMappingContextStack::Add(std::uint64_t contextId, std::int32_t priorit
     for (const InputKeyMapping& mapping : context->mappings) {
         ResolvedMapping resolved;
         resolved.key = mapping.key;
+        resolved.scale = mapping.scale;
         resolved.modifiers = mapping.modifiers;
         resolved.triggers = mapping.triggers;
         resolved.triggerStates.resize(mapping.triggers.size());

@@ -5,15 +5,36 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputKey.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "platform/win32/Win32InputKeyMap.hpp"
 
+#include <array>
 #include <cstddef>
+#include <cstdio>
 #include <optional>
 #include <string>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] std::string FormatScale(float value) {
+    std::array<char, 32> buffer{};
+    std::snprintf(buffer.data(), buffer.size(), "%.3f", static_cast<double>(value));
+    std::string text = buffer.data();
+    if (text.find('.') != std::string::npos) {
+        while (!text.empty() && text.back() == '0') {
+            text.pop_back();
+        }
+        if (!text.empty() && text.back() == '.') {
+            text.pop_back();
+        }
+    }
+    return text;
+}
+
+} // namespace
 
 bool InspectorInputInteraction::HandleActionAssetClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
     const kb::assets::AssetId asset = sceneContext.AssetBrowser().SelectedAsset();
@@ -36,6 +57,13 @@ bool InspectorInputInteraction::HandleMappingClick(EditorSceneContext& sceneCont
     const auto index = static_cast<std::size_t>(hit.index < 0 ? 0 : hit.index);
     if (hit.property == InspectorPropertyId::InputMappingKey) {
         sceneContext.Inspector().BeginKeyCapture(hit.index);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::InputMappingScale) {
+        const std::optional<kb::input::InputMappingContextAsset> context = sceneContext.ReadInputMappingContextAsset(imc);
+        const float scale = (context.has_value() && index < context->mappings.size()) ? context->mappings[index].scale : 1.0F;
+        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::InputMappingScale, FormatScale(scale));
+        sceneContext.Inspector().SetEditIndex(static_cast<int>(index));
         return true;
     }
     sceneContext.Inspector().EndTextEdit();

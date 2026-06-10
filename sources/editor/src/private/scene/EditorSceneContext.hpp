@@ -189,6 +189,7 @@ public:
     [[nodiscard]] bool AddInputMapping(kb::assets::AssetId id);
     [[nodiscard]] bool RemoveInputMapping(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool SetInputMappingKey(kb::assets::AssetId id, std::size_t index, kb::input::InputKey key);
+    [[nodiscard]] bool SetInputMappingScale(kb::assets::AssetId id, std::size_t index, float scale);
     [[nodiscard]] bool CycleInputMappingAction(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool CycleInputMappingTrigger(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);

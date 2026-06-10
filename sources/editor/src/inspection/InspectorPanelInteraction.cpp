@@ -371,6 +371,15 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             inspector.EndTextEdit();
             return true;
         }
+        if (inspector.EditedProperty() == InspectorPropertyId::InputMappingScale) {
+            float scale = 0.0F;
+            const int index = inspector.EditIndex();
+            if (index >= 0 && ParseFloat(inspector.EditBuffer(), scale)) {
+                static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().SelectedAsset(), static_cast<std::size_t>(index), scale));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
         if (sceneContext.Scene().Entities().IsAlive(entity)) {
             const InspectorPropertyId property = inspector.EditedProperty();
