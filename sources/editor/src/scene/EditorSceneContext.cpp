@@ -2,6 +2,9 @@
 
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
@@ -13,8 +16,10 @@
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
+#include "engine/script/ScriptFunctionRegistry.hpp"
 #include "engine/script/ScriptRuntimeHost.hpp"
 
+#include "scene/EditorScriptAssetGateway.hpp"
 #include "scene/input/EditorInputActionAuthoring.hpp"
 #include "scene/input/EditorInputAssetGateway.hpp"
 #include "scene/input/EditorInputMappingContextAuthoring.hpp"
@@ -34,6 +39,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 
 namespace kb::editor {
@@ -177,6 +183,27 @@ void EditorSceneContext::EnsureScriptRuntime() {
     // Runtime().Update, so it is inert in edit mode.
     scriptHost_ = std::make_unique<kb::script::ScriptRuntimeHost>(
         scene_, kb::script::ScriptRuntimeHostOptions{ .installSceneSystem = true });
+
+    // Log("...") in any script prints to the editor Console. console_ outlives
+    // scriptHost_ (declared last, destroyed first), so capturing it is safe.
+    kb::script::ScriptFunctionDesc logDesc;
+    logDesc.signature.name = "Log";
+    logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+    logDesc.signature.outputs = {};
+    EditorConsoleState* console = &console_;
+    logDesc.callback = [console](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
+        std::string message;
+        for (const kb::script::ScriptFunctionArgument& argument : arguments) {
+            if (argument.name == "message") {
+                message = argument.value.AsString();
+                break;
+            }
+        }
+        console->Info("Script", message);
+        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+    };
+    static_cast<void>(scriptHost_->RegisterFunction(std::move(logDesc)));
+
     if (!scriptHost_->Succeeded()) {
         for (const std::string& diagnostic : scriptHost_->Diagnostics()) {
             console_.Error("Scripts", diagnostic);
@@ -277,6 +304,14 @@ EditorProjectSettingsState& EditorSceneContext::ProjectSettings() noexcept {
 
 const EditorProjectSettingsState& EditorSceneContext::ProjectSettings() const noexcept {
     return projectSettings_;
+}
+
+EditorScriptEditorState& EditorSceneContext::ScriptEditor() noexcept {
+    return scriptEditor_;
+}
+
+const EditorScriptEditorState& EditorSceneContext::ScriptEditor() const noexcept {
+    return scriptEditor_;
 }
 
 EditorConsoleState& EditorSceneContext::Console() noexcept {
@@ -1211,6 +1246,32 @@ bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::p
     return InputMappingContextAuthoring().Create(virtualFolder);
 }
 
+bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtualFolder) {
+    EditorScriptAssetGateway gateway{ scene_, assetBrowser_ };
+    const std::optional<std::filesystem::path> path = gateway.CreateLuaScript(virtualFolder);
+    if (!path.has_value()) {
+        console_.Error("Scripts", "Lua script could not be created in folder: " + virtualFolder.generic_string());
+        return false;
+    }
+    console_.Info("Scripts", "Lua script created: " + path->generic_string());
+    return true;
+}
+
+bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr) {
+        console_.Error("Scripts", "Lua script metadata was not found.");
+        return false;
+    }
+    std::filesystem::path path = metadata->physicalPath;
+    if (const std::optional<std::filesystem::path> mounted = scene_.Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
+        path = *mounted;
+    }
+    scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
+    console_.Info("Scripts", "Opened script: " + metadata->virtualPath.generic_string());
+    return true;
+}
+
 std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {
     return EditorInputAssetGateway::ReadAction(scene_, id);
 }
@@ -1410,6 +1471,70 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     }
     console_.Info("Scripts", "Behaviour asset assigned: " + metadata->name);
     return true;
+}
+
+bool EditorSceneContext::HasEntityScript(kb::scene::SceneEntity entity) const {
+    return entity.IsValid() && scene_.Components().Behaviours().Has(entity);
+}
+
+std::string EditorSceneContext::EntityScriptName(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+    if (behaviour == nullptr) {
+        return {};
+    }
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    if (metadata == nullptr) {
+        return "(missing script)";
+    }
+    return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
+}
+
+bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) const {
+    const kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+    return behaviour != nullptr && behaviour->enabled;
+}
+
+std::vector<std::pair<kb::assets::AssetId, std::string>> EditorSceneContext::AvailableScriptAssets() const {
+    std::vector<std::pair<kb::assets::AssetId, std::string>> scripts;
+    for (const kb::assets::AssetMetadata& metadata : scene_.Assets().Manager().Registry().All()) {
+        if (kb::script::ScriptBehaviourAsset::IsBehaviourAsset(metadata)) {
+            scripts.emplace_back(metadata.id, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name);
+        }
+    }
+    std::sort(scripts.begin(), scripts.end(), [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+    return scripts;
+}
+
+bool EditorSceneContext::AttachScriptToEntity(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    return AddBehaviourAssetToEntity(assetId, entity);
+}
+
+bool EditorSceneContext::RemoveScriptFromEntity(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_.Components().Behaviours().Has(entity)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Remove Script", [this, entity]() {
+        if (!scene_.Entities().IsAlive(entity)) {
+            return false;
+        }
+        scene_.Components().Behaviours().Remove(entity);
+        return true;
+    });
+}
+
+bool EditorSceneContext::ToggleEntityScriptEnabled(kb::scene::SceneEntity entity) {
+    if (!entity.IsValid() || !scene_.Components().Behaviours().Has(entity)) {
+        return false;
+    }
+    return ExecuteSceneCommand("Toggle Script Enabled", [this, entity]() {
+        kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+        if (behaviour == nullptr) {
+            return false;
+        }
+        behaviour->enabled = !behaviour->enabled;
+        scene_.Components().Behaviours().MarkModified(entity);
+        return true;
+    });
 }
 
 bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {

@@ -17,7 +17,7 @@ class EditorLeftButtonDoubleClickRouter {
 public:
     EditorLeftButtonDoubleClickRouter(
         HWND mainWindow,
-        const EditorDockModel& dockModel,
+        EditorDockModel& dockModel,
         const EditorFloatingWindowManager& floatingWindows,
         EditorSceneContext& sceneContext,
         const EditorMetrics& metrics) noexcept;
@@ -26,7 +26,7 @@ public:
 
 private:
     HWND mainWindow_ = nullptr;
-    const EditorDockModel& dockModel_;
+    EditorDockModel& dockModel_;
     const EditorFloatingWindowManager& floatingWindows_;
     EditorSceneContext& sceneContext_;
     const EditorMetrics& metrics_;

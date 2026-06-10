@@ -196,7 +196,9 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
         model.Queries().ResolveDropPreview(tabbedLayout, inspectorLayout->tab.x + 1, inspectorLayout->tab.y + 1);
     kb::editor::tests::Require(preview.has_value(), "Tab strip did not resolve a drop marker");
     kb::editor::tests::Require(preview->kind == kb::editor::DockDropPreviewKind::StripMarker, "Tab strip drop should use a strip marker preview");
-    kb::editor::tests::Require(preview->tabInsertionIndex == 1U, "Tab strip insertion index did not match the cursor position");
+    // The default center leaf carries Scene (2) + Script Editor (8), so the
+    // docked Inspector (4) lands at tab index 2.
+    kb::editor::tests::Require(preview->tabInsertionIndex == 2U, "Tab strip insertion index did not match the cursor position");
     kb::editor::tests::Require(
         preview->rect.width == 3 && preview->rect.height == inspectorLayout->tab.height,
         "Tab strip marker geometry should be a thin vertical marker");
@@ -205,8 +207,8 @@ void RunTabStripDropInsertsAtResolvedIndexTest() {
     model.Commands().DockPanelTo(5U, *preview);
     const kb::editor::DockLayout dockedLayout = BuildDefaultLayout(model);
     const std::vector<std::uint32_t> order = PanelOrderInLeaf(dockedLayout, sceneLayout->leafId);
-    kb::editor::tests::Require(order.size() >= 3U, "Docked tab was not inserted into the target leaf");
-    kb::editor::tests::Require(order[0] == 2U && order[1] == 5U && order[2] == 4U, "Docked tab was not inserted at the resolved tab strip index");
+    kb::editor::tests::Require(order.size() >= 4U, "Docked tab was not inserted into the target leaf");
+    kb::editor::tests::Require(order[0] == 2U && order[1] == 8U && order[2] == 5U && order[3] == 4U, "Docked tab was not inserted at the resolved tab strip index");
 }
 
 void RunSplitterAndFloatingResizeTest() {

@@ -12,7 +12,7 @@ namespace kb::editor {
 
 EditorLeftButtonDoubleClickRouter::EditorLeftButtonDoubleClickRouter(
     HWND mainWindow,
-    const EditorDockModel& dockModel,
+    EditorDockModel& dockModel,
     const EditorFloatingWindowManager& floatingWindows,
     EditorSceneContext& sceneContext,
     const EditorMetrics& metrics) noexcept
@@ -37,6 +37,14 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::BrowserNavigation) {
         sceneContext_.ClearHierarchySelection();
+    }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::ScriptEditorOpened) {
+        for (const DockPanel& panel : dockModel_.Queries().Panels()) {
+            if (panel.kind == DockPanelKind::ScriptEditor) {
+                dockModel_.Commands().ActivatePanel(panel.id);
+                break;
+            }
+        }
     }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;

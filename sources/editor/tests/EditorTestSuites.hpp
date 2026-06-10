@@ -9,6 +9,7 @@ void RunEditorPlayModeSceneSessionTests();
 void RunEditorViewportPreviewTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
+void RunScriptEditorTests();
 void RunSvgPathTests();
 
 } // namespace kb::editor::tests

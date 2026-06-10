@@ -11,6 +11,7 @@
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
+#include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -25,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace kb::input {
@@ -87,6 +89,8 @@ public:
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
     [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
     [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
+    [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
+    [[nodiscard]] const EditorScriptEditorState& ScriptEditor() const noexcept;
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
@@ -187,6 +191,8 @@ public:
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetInputActionName(kb::assets::AssetId id, std::string name);
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
@@ -209,6 +215,15 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
+
+    // Unity-style script (behaviour) authoring from the Inspector.
+    [[nodiscard]] bool HasEntityScript(kb::scene::SceneEntity entity) const;
+    [[nodiscard]] std::string EntityScriptName(kb::scene::SceneEntity entity) const;
+    [[nodiscard]] bool EntityScriptEnabled(kb::scene::SceneEntity entity) const;
+    [[nodiscard]] std::vector<std::pair<kb::assets::AssetId, std::string>> AvailableScriptAssets() const;
+    [[nodiscard]] bool AttachScriptToEntity(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool RemoveScriptFromEntity(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleEntityScriptEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool CommitActiveTransformEdit();
@@ -241,6 +256,7 @@ private:
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
     EditorProjectSettingsState projectSettings_;
+    EditorScriptEditorState scriptEditor_;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;

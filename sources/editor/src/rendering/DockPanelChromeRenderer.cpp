@@ -61,6 +61,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::ProjectSettings:
         icon = HeroIconKind::Gamepad2;
         return true;
+    case DockPanelKind::ScriptEditor:
+        icon = HeroIconKind::CommandLine;
+        return true;
     default:
         return false;
     }
