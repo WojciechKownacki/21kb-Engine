@@ -317,6 +317,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowToolbarPointerHandler.hpp
     src/private/app/EditorWindowInvalidator.hpp
     src/private/app/EditorWindowResizeHandler.hpp
+    src/private/inspection/InspectorInputInteraction.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
     src/private/inspection/InspectorComponentLabelFormatter.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
@@ -521,6 +522,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
     src/rendering/MainWindowBackBufferPainter.cpp
