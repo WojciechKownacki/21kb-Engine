@@ -254,9 +254,6 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().BeginFloatDrag(hit.property, ReadTransformValue(transform, hit.property), x, y);
         return true;
     }
-    if (hit.section == InspectorSectionId::Input) {
-        return InspectorInputInteraction::HandleComponentClick(sceneContext, entity, hit);
-    }
     return true;
 }
 
@@ -359,15 +356,6 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
     case VK_RETURN: {
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
             static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().SelectedAsset(), inspector.EditBuffer()));
-            inspector.EndTextEdit();
-            return true;
-        }
-        if (inspector.EditedProperty() == InspectorPropertyId::InputComponentPriority) {
-            const std::string_view text = Trim(inspector.EditBuffer());
-            int priority = 0;
-            if (std::from_chars(text.data(), text.data() + text.size(), priority).ec == std::errc{}) {
-                static_cast<void>(sceneContext.SetInputComponentPriority(sceneContext.SelectedEntity(), priority));
-            }
             inspector.EndTextEdit();
             return true;
         }
