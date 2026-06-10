@@ -21,6 +21,7 @@ enum class DockPanelKind : std::uint8_t {
     Inspector,
     Assets,
     Console,
+    ProjectSettings,
 };
 
 enum class DockSplitAxis : std::uint8_t {

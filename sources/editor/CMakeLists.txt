@@ -55,6 +55,7 @@ add_executable(kb_editor WIN32
     src/app/project_files/EditorProjectFilesDeleteConfirmOverlayController.cpp
     src/app/project_files/EditorProjectFilesMouseWheelController.cpp
     src/app/project_files/EditorProjectFilesTransientUiController.cpp
+    src/app/project_settings/EditorProjectSettingsPointerController.cpp
     src/app/scene_viewport/EditorSceneViewportCameraController.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoHitTester.cpp
@@ -289,6 +290,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPrefabAssetHierarchyDropHandler.hpp
     src/private/app/EditorPrefabAssetProjectFilesDropHandler.hpp
     src/private/app/panels/EditorPanelPointerHitContext.hpp
+    src/private/app/project_settings/EditorProjectSettingsPointerController.hpp
     src/private/app/pointer/EditorLeftButtonDoubleClickRouter.hpp
     src/private/app/pointer/EditorLeftButtonDownRouter.hpp
     src/private/app/pointer/EditorLeftButtonUpRouter.hpp
@@ -410,6 +412,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/ProjectFilesTileTextRenderer.hpp
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
+    src/private/rendering/ProjectSettingsPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
@@ -545,6 +548,7 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
+    src/rendering/ProjectSettingsPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
     src/rendering/ScenePanelContentRenderer.cpp
