@@ -19,6 +19,7 @@ enum class InspectorSectionId : std::uint8_t {
     Folder,
     InputAction,
     InputMappings,
+    Script,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -58,11 +59,21 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    ScriptName,
+    ScriptEnabled,
+    ScriptRemove,
+    ScriptAdd,
+    ScriptOption,
 };
 
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
+
+    // "Add Script" picker (Unity-style) in the entity Script section.
+    [[nodiscard]] bool IsScriptPickerOpen() const noexcept { return scriptPickerOpen_; }
+    void ToggleScriptPicker() noexcept { scriptPickerOpen_ = !scriptPickerOpen_; }
+    void CloseScriptPicker() noexcept { scriptPickerOpen_ = false; }
     [[nodiscard]] bool SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) noexcept;
     void ClearHover() noexcept;
     [[nodiscard]] bool IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept;
@@ -121,6 +132,8 @@ private:
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
+    bool scriptCollapsed_ = false;
+    bool scriptPickerOpen_ = false;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;

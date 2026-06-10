@@ -144,6 +144,18 @@ public:
     [[nodiscard]] bool SelectContentFolderAt(std::size_t index, const kb::assets::AssetManager& manager, bool additive, bool range);
     [[nodiscard]] bool SelectAsset(kb::assets::AssetId id, const kb::assets::AssetManager& manager);
     [[nodiscard]] bool SelectAssetAt(std::size_t index, const kb::assets::AssetManager& manager, bool additive, bool range);
+
+    // Plain asset clicks defer selection to pointer-up so a press-and-drag does
+    // not change the Inspector. The id is parked here on press and consumed on
+    // release (a quick click) to perform the actual selection / preview.
+    void SetPendingPreviewAsset(kb::assets::AssetId id) noexcept { pendingPreviewAsset_ = id; }
+    void ClearPendingPreviewAsset() noexcept { pendingPreviewAsset_ = {}; }
+    [[nodiscard]] bool HasPendingPreviewAsset() const noexcept { return pendingPreviewAsset_.IsValid(); }
+    [[nodiscard]] kb::assets::AssetId TakePendingPreviewAsset() noexcept {
+        const kb::assets::AssetId id = pendingPreviewAsset_;
+        pendingPreviewAsset_ = {};
+        return id;
+    }
     [[nodiscard]] bool SelectAllContent(const kb::assets::AssetManager& manager);
     [[nodiscard]] bool ToggleFolderExpanded(const std::filesystem::path& virtualPath, const kb::assets::AssetManager& manager);
     void ClearSelection() noexcept;
@@ -177,6 +189,7 @@ private:
     int dropActionMenuX_ = 0;
     int dropActionMenuY_ = 0;
     kb::assets::AssetId dropActionAsset_{};
+    kb::assets::AssetId pendingPreviewAsset_{};
     std::filesystem::path dropActionSourceFolder_{};
     std::filesystem::path dropActionTargetFolder_{};
     EditorAssetDropAction dropActionHovered_ = EditorAssetDropAction::None;

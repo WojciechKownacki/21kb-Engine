@@ -7,6 +7,9 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
+#include "assets/EditorAssetBrowserState.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/scene/SceneAssets.hpp"
 
 namespace kb::editor {
 
@@ -61,7 +64,19 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (pointerDrag_.Potential()) {
+        const bool wasDragging = pointerDrag_.Active();
         const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
+        // A press without a drag is a plain click: commit the deferred asset
+        // selection now (preview in the Inspector). A real drag changes nothing.
+        if (!wasDragging) {
+            const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
+            if (pending.IsValid() && sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
+                sceneContext_.ClearHierarchySelection(); // Selecting an asset deselects the entity.
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            }
+        } else {
+            sceneContext_.AssetBrowser().ClearPendingPreviewAsset();
+        }
         if (handledDrop) {
             sceneViewport_.RequestPresent();
         }

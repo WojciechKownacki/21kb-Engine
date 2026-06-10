@@ -16,6 +16,7 @@ enum class EditorAssetBrowserDoubleClickResult {
     None,
     BrowserNavigation,
     SceneOpened,
+    ScriptEditorOpened,
 };
 
 class EditorAssetBrowserDoubleClickHandler {

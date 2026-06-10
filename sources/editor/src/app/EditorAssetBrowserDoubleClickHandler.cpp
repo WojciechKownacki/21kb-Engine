@@ -60,7 +60,15 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
     }
     case EditorAssetBrowserHitKind::Asset: {
         const std::optional<kb::assets::AssetMetadata> metadata = EditorAssetBrowserHitPayloadResolver::AssetMetadataAt(hit, state, manager);
-        if (!metadata.has_value() || !IsSceneDocumentAsset(*metadata)) {
+        if (!metadata.has_value()) {
+            return EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (metadata->type == "LuaScript") {
+            return sceneContext.OpenLuaScript(metadata->id)
+                ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
+        if (!IsSceneDocumentAsset(*metadata)) {
             return EditorAssetBrowserDoubleClickResult::None;
         }
         const std::optional<EditorDirtySceneResolution> resolution =
