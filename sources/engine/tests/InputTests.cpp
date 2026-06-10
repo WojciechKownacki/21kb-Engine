@@ -122,6 +122,45 @@ void TestSubsystemAndConsume() {
     Require(subsystem.WasActionStarted("Move"), "Move should report Started on its first triggered frame");
 }
 
+void TestAxisScaleAndContinuous() {
+    auto move = MakeAction("Move", InputActionValueType::Axis1D, true);
+
+    // W (+1) and S (-1) build a keyboard axis; the left stick X feeds it analog.
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::W, .scale = 1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::S, .scale = -1.0F});
+    context->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::GamepadLeftStickX, .scale = 1.0F});
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{{1U, move}};
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{{10U, context}};
+
+    InputSubsystem subsystem;
+    subsystem.SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+    Require(subsystem.AddMappingContext(10U, 0), "Axis context should resolve");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::W, true);
+    subsystem.Evaluate(0.016F);
+    Require(NearlyEqual(subsystem.GetActionValue("Move").AsAxis1D(), 1.0F), "W with scale +1 should give axis +1");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::S, true);
+    subsystem.Evaluate(0.016F);
+    Require(NearlyEqual(subsystem.GetActionValue("Move").AsAxis1D(), 0.0F), "Opposing W/S should cancel to 0");
+
+    // Sub-threshold analog must still flow (axes are not trigger-gated).
+    subsystem.MutableDeviceState().Reset();
+    subsystem.MutableDeviceState().SetAnalog(InputKey::GamepadLeftStickX, 0.3F);
+    subsystem.Evaluate(0.016F);
+    Require(NearlyEqual(subsystem.GetActionValue("Move").AsAxis1D(), 0.3F), "Analog axis below 0.5 must still register its value");
+}
+
 void TestAssetRoundTrip() {
     InputActionAsset action;
     action.name = "Fire";
@@ -205,6 +244,7 @@ void RunInputTests() {
     TestModifiers();
     TestTriggers();
     TestSubsystemAndConsume();
+    TestAxisScaleAndContinuous();
     TestAssetRoundTrip();
     TestAssetDiscoveryAndResolve();
 }

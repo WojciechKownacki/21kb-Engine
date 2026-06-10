@@ -60,6 +60,7 @@ enum class InspectorPropertyId : std::uint8_t {
     InputComponentRemove,
     InputMappingKey,
     InputMappingAction,
+    InputMappingScale,
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
@@ -80,6 +81,10 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsTextEditing() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
+    // Row index the current text edit targets in a dynamic list (e.g. which
+    // mapping's scale is being edited). -1 when not applicable.
+    [[nodiscard]] int EditIndex() const noexcept;
+    void SetEditIndex(int index) noexcept;
     void BeginTextEdit(InspectorPropertyId property, std::string value);
     void AppendText(wchar_t character);
     void InsertText(std::string_view text);
@@ -128,6 +133,7 @@ private:
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
     std::string editBuffer_;
+    int editIndex_ = -1;
     bool editSelectingAll_ = false;
     bool listeningForKey_ = false;
     int keyCaptureMappingIndex_ = -1;
