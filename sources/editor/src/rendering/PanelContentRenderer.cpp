@@ -6,9 +6,11 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HierarchyPanelRenderer.hpp"
 #include "rendering/HeroIconPainter.hpp"
+#include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/ScriptEditorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -317,6 +319,10 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::ScriptEditor:
+        ScriptEditorPanelRenderer{}.Paint(dc, content, theme, sceneContext, EditorScriptEditorOverlay::IsDirty(sceneViewportHost));
+        EditorScriptEditorOverlay::Sync(sceneViewportHost, content, sceneContext);
         break;
     case DockPanelKind::Generic:
     default:

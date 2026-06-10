@@ -1,6 +1,7 @@
 #include "script/lua/api/PucLuaFunctionApi.hpp"
 
 #include "engine/script/ScriptExecutionContext.hpp"
+#include "engine/script/ScriptValue.hpp"
 #include "script/lua/PucLuaValueBridge.hpp"
 
 extern "C" {
@@ -8,6 +9,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -73,12 +75,38 @@ int LuaCallFunction(lua_State* state) {
     return 1;
 }
 
+// Log(value): print-style helper. Coerces any value to a string and forwards it
+// to the registered "Log" function (the editor routes that to its Console). A
+// no-op when no "Log" function is registered (e.g. headless engine hosts).
+int LuaLog(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        return 0;
+    }
+    std::size_t length = 0;
+    const char* text = luaL_tolstring(state, 1, &length);
+    std::vector<ScriptFunctionArgument> arguments;
+    arguments.push_back(ScriptFunctionArgument{
+        .name = "message",
+        .value = ScriptValue{ std::string{ text != nullptr ? text : "", text != nullptr ? length : std::size_t{ 0 } } },
+    });
+    if (text != nullptr) {
+        lua_pop(state, 1);
+    }
+    static_cast<void>(context->CallFunction("Log", arguments));
+    return 0;
+}
+
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaCallFunction, 1);
     lua_setfield(state, environmentIndex, "CallFunction");
+
+    lua_pushlightuserdata(state, &context);
+    lua_pushcclosure(state, &LuaLog, 1);
+    lua_setfield(state, environmentIndex, "Log");
 }
 
 } // namespace kb::script

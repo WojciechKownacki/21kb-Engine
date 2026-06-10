@@ -3,6 +3,8 @@
 #if defined(_WIN32)
 #include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
 #include "app/EditorBehaviourAssetHierarchyDropHandler.hpp"
+#include "app/EditorBehaviourAssetInspectorDropHandler.hpp"
+#include "app/EditorBehaviourAssetSceneDropHandler.hpp"
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
 #include "app/EditorMeshAssetSceneDropHandler.hpp"
@@ -29,6 +31,8 @@ bool EditorPointerDropHandler::Drop(
         return (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
             || (drag.assetCreatesMeshEntity && EditorMeshAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);

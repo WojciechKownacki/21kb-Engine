@@ -26,6 +26,8 @@ add_executable(kb_editor WIN32
     src/app/docking/EditorMainDockSplitterPointerController.cpp
     src/app/EditorAssetFolderProjectFilesDropHandler.cpp
     src/app/EditorBehaviourAssetHierarchyDropHandler.cpp
+    src/app/EditorBehaviourAssetInspectorDropHandler.cpp
+    src/app/EditorBehaviourAssetSceneDropHandler.cpp
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
@@ -271,6 +273,8 @@ add_executable(kb_editor WIN32
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
+    src/private/app/EditorBehaviourAssetInspectorDropHandler.hpp
+    src/private/app/EditorBehaviourAssetSceneDropHandler.hpp
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
@@ -416,6 +420,18 @@ add_executable(kb_editor WIN32
     src/private/rendering/ProjectFilesTreeRenderer.hpp
     src/private/rendering/ProjectSettingsPanelLayout.hpp
     src/private/rendering/ProjectSettingsPanelRenderer.hpp
+    src/private/rendering/EditorScriptEditorOverlay.hpp
+    src/private/rendering/script_editor/LuaSyntaxHighlighter.hpp
+    src/private/rendering/script_editor/ScriptEditorClipboard.hpp
+    src/private/rendering/script_editor/ScriptEditorDocument.hpp
+    src/private/rendering/script_editor/ScriptEditorInput.hpp
+    src/private/rendering/script_editor/ScriptEditorLayout.hpp
+    src/private/rendering/script_editor/ScriptEditorRenderer.hpp
+    src/private/rendering/script_editor/ScriptEditorTextEncoding.hpp
+    src/private/rendering/script_editor/ScriptEditorTheme.hpp
+    src/private/rendering/script_editor/ScriptEditorWindow.hpp
+    src/private/rendering/script_editor/ScriptSourceFile.hpp
+    src/private/rendering/ScriptEditorPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
@@ -447,6 +463,8 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
     src/private/scene/EditorProjectSettingsState.hpp
+    src/private/scene/EditorScriptAssetGateway.hpp
+    src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
@@ -553,6 +571,17 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTreeRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
+    src/rendering/EditorScriptEditorOverlay.cpp
+    src/rendering/script_editor/LuaSyntaxHighlighter.cpp
+    src/rendering/script_editor/ScriptEditorClipboard.cpp
+    src/rendering/script_editor/ScriptEditorDocument.cpp
+    src/rendering/script_editor/ScriptEditorInput.cpp
+    src/rendering/script_editor/ScriptEditorLayout.cpp
+    src/rendering/script_editor/ScriptEditorRenderer.cpp
+    src/rendering/script_editor/ScriptEditorTextEncoding.cpp
+    src/rendering/script_editor/ScriptEditorWindow.cpp
+    src/rendering/script_editor/ScriptSourceFile.cpp
+    src/rendering/ScriptEditorPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
     src/rendering/ScenePanelContentRenderer.cpp
@@ -581,6 +610,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorHierarchySelectionState.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
+    src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
@@ -679,7 +709,10 @@ if(BUILD_TESTING)
         tests/EditorCommandStackTests.cpp
         tests/EditorTestSuites.hpp
         tests/EditorTestSupport.hpp
+        tests/ScriptEditorTests.cpp
         tests/SvgPathTests.cpp
+        src/rendering/script_editor/LuaSyntaxHighlighter.cpp
+        src/rendering/script_editor/ScriptEditorDocument.cpp
         src/docking/DefaultDockWorkspace.cpp
         src/docking/DockCenterPanelInserter.cpp
         src/docking/DockDropEdgeBandClassifier.cpp

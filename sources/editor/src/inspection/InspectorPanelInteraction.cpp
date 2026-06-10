@@ -18,9 +18,38 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::editor {
 namespace {
+
+// Unity-style "Add Script" section interaction for the selected entity.
+[[nodiscard]] bool HandleScriptClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    switch (hit.property) {
+    case InspectorPropertyId::ScriptEnabled:
+        static_cast<void>(sceneContext.ToggleEntityScriptEnabled(entity));
+        return true;
+    case InspectorPropertyId::ScriptRemove:
+        static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+        sceneContext.Inspector().CloseScriptPicker();
+        return true;
+    case InspectorPropertyId::ScriptAdd:
+        sceneContext.Inspector().ToggleScriptPicker();
+        return true;
+    case InspectorPropertyId::ScriptOption: {
+        const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < scripts.size()) {
+            static_cast<void>(sceneContext.AttachScriptToEntity(entity, scripts[static_cast<std::size_t>(hit.index)].first));
+        }
+        sceneContext.Inspector().CloseScriptPicker();
+        return true;
+    }
+    default:
+        return true;
+    }
+}
 
 [[nodiscard]] float StepFor(InspectorPropertyId property) noexcept {
     switch (property) {
@@ -233,6 +262,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
+    }
+
+    if (hit.section == InspectorSectionId::Script) {
+        return HandleScriptClick(sceneContext, entity, hit);
     }
 
     if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityName) {
