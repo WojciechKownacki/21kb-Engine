@@ -121,9 +121,18 @@ const std::string& InspectorPanelState::EditBuffer() const noexcept {
     return editBuffer_;
 }
 
+int InspectorPanelState::EditIndex() const noexcept {
+    return editIndex_;
+}
+
+void InspectorPanelState::SetEditIndex(int index) noexcept {
+    editIndex_ = index;
+}
+
 void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::string value) {
     editedProperty_ = property;
     editBuffer_ = std::move(value);
+    editIndex_ = -1;
     editSelectingAll_ = false;
     EndFloatDrag();
 }
@@ -174,6 +183,7 @@ void InspectorPanelState::SelectAllText() noexcept {
 void InspectorPanelState::EndTextEdit() noexcept {
     editedProperty_ = InspectorPropertyId::None;
     editBuffer_.clear();
+    editIndex_ = -1;
     editSelectingAll_ = false;
 }
 

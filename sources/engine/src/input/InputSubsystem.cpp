@@ -53,7 +53,7 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
 
             const MappingEvaluationInput evalInput{
                 .valueType = mapping.valueType,
-                .rawValue = deviceState_.GetValue(mapping.key),
+                .rawValue = deviceState_.GetValue(mapping.key) * mapping.scale,
                 .modifiers = mapping.modifiers,
                 .triggers = mapping.triggers,
                 .chordActionNames = mapping.chordActionNames,
@@ -61,9 +61,13 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
             const MappingEvaluationResult result = evaluator.Evaluate(
                 evalInput, deltaSeconds, mapping.modifierState, mapping.triggerStates, chordSatisfied);
 
+            // Axes (Axis1D/2D/3D) contribute their continuous value every frame so
+            // analog sticks and sub-threshold movement register; buttons (Bool)
+            // only contribute while a trigger is firing.
+            const bool isAxis = mapping.valueType != InputActionValueType::Bool;
             InputActionState& actionState = actionStates_[mapping.actionName];
             actionState.value.type = mapping.valueType;
-            if (result.state != TriggerState::None) {
+            if (isAxis || result.state != TriggerState::None) {
                 actionState.value.x += result.value.x;
                 actionState.value.y += result.value.y;
                 actionState.value.z += result.value.z;
