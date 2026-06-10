@@ -807,6 +807,7 @@ add_library(kb_engine STATIC
     include/engine/input/InputModifiers.hpp
     include/engine/input/InputTriggers.hpp
     include/engine/input/InputSubsystem.hpp
+    include/engine/input/InputMappingContextStack.hpp
     include/engine/input/InputMappingEvaluator.hpp
     include/engine/input/InputPollingSystem.hpp
     src/input/InputKey.cpp
@@ -815,6 +816,7 @@ add_library(kb_engine STATIC
     src/input/InputModifiers.cpp
     src/input/InputTriggers.cpp
     src/input/InputSubsystem.cpp
+    src/input/InputMappingContextStack.cpp
     src/input/InputMappingEvaluator.cpp
     src/input/InputPollingSystem.cpp
 )
