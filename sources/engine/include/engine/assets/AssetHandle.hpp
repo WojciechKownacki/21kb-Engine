@@ -27,6 +27,10 @@ public:
         return asset_.get();
     }
 
+    [[nodiscard]] std::shared_ptr<const T> Shared() const noexcept {
+        return asset_;
+    }
+
     [[nodiscard]] const T& operator*() const noexcept {
         return *asset_;
     }

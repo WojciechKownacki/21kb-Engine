@@ -22,6 +22,8 @@ enum class AssetImportCategory : std::uint16_t {
     Script,
     Scene,
     Data,
+    InputAction,
+    InputMappingContext,
 };
 
 struct AssetImportItemResult {

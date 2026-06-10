@@ -15,6 +15,12 @@
 #include <string_view>
 #include <vector>
 
+namespace kb::input {
+
+class InputSubsystem;
+
+} // namespace kb::input
+
 namespace kb::script {
 
 class ScriptExecutionContext final {
@@ -33,6 +39,9 @@ public:
 
     [[nodiscard]] kb::scene::Scene& GetScene() noexcept;
     [[nodiscard]] const kb::scene::Scene& GetScene() const noexcept;
+    // Convenience access to the scene's runtime input subsystem for native scripts.
+    [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
+    [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     [[nodiscard]] kb::scene::SceneEntity Self() const noexcept;
     [[nodiscard]] kb::assets::AssetId Asset() const noexcept;
     [[nodiscard]] kb::scene::BehaviourBackend Backend() const noexcept;

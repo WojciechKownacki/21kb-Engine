@@ -3,6 +3,12 @@
 #include <cstdint>
 #include <memory>
 
+namespace kb::input {
+
+class InputSubsystem;
+
+} // namespace kb::input
+
 namespace kb::scene {
 
 class SceneAssets;
@@ -46,6 +52,8 @@ public:
     [[nodiscard]] ScenePrefabs Prefabs() const noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
+    [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
+    [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     [[nodiscard]] std::uint64_t Id() const noexcept;
 
 private:

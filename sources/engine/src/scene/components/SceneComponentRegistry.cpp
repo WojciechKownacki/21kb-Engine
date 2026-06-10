@@ -2,6 +2,7 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -19,7 +20,8 @@ SceneComponentRegistry::SceneComponentRegistry(ecs_world_t& world)
     , behaviourComponentId_(RegisterComponent(world, "kb.scene.BehaviourComponent", sizeof(BehaviourComponent), alignof(BehaviourComponent)))
     , cameraComponentId_(RegisterComponent(world, "kb.scene.CameraComponent", sizeof(CameraComponent), alignof(CameraComponent)))
     , meshRendererComponentId_(RegisterComponent(world, "kb.scene.MeshRendererComponent", sizeof(MeshRendererComponent), alignof(MeshRendererComponent)))
-    , lightComponentId_(RegisterComponent(world, "kb.scene.LightComponent", sizeof(LightComponent), alignof(LightComponent))) {}
+    , lightComponentId_(RegisterComponent(world, "kb.scene.LightComponent", sizeof(LightComponent), alignof(LightComponent)))
+    , inputComponentId_(RegisterComponent(world, "kb.scene.InputComponent", sizeof(InputComponent), alignof(InputComponent))) {}
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
     return transformComponentId_;
@@ -43,6 +45,10 @@ std::uint64_t SceneComponentRegistry::MeshRendererComponentId() const noexcept {
 
 std::uint64_t SceneComponentRegistry::LightComponentId() const noexcept {
     return lightComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::InputComponentId() const noexcept {
+    return inputComponentId_;
 }
 
 std::uint64_t SceneComponentRegistry::RegisterComponent(ecs_world_t& world, const char* name, std::size_t size, std::size_t alignment) {
