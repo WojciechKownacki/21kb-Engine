@@ -142,6 +142,13 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor fields are invalid." };
     }
 
+    // File version 2+: project-wide input settings (older files leave defaults).
+    if (fileVersion >= 2U) {
+        if (!input.ReadString(descriptor.inputMappingContext) || !input.ReadBool(descriptor.inputEnabled)) {
+            return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor input settings are invalid." };
+        }
+    }
+
     if (!input.Exhausted()) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor contains trailing data." };
     }

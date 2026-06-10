@@ -8,6 +8,7 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
+#include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
@@ -313,6 +314,9 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::Scene:
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, sceneViewport, sceneViewportHost);
+        break;
+    case DockPanelKind::ProjectSettings:
+        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::Generic:
     default:

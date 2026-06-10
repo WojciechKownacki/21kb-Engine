@@ -179,6 +179,9 @@ public:
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
 
+    [[nodiscard]] bool CycleProjectInputMappingContext();
+    [[nodiscard]] bool ToggleProjectInputEnabled();
+
     [[nodiscard]] bool AddInputComponent(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RemoveInputComponent(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleInputComponentEnabled(kb::scene::SceneEntity entity);
@@ -209,6 +212,8 @@ private:
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
     [[nodiscard]] EditorInputComponentAuthoring InputComponentAuthoring() noexcept;
+    void ActivateProjectInput();
+    [[nodiscard]] bool SaveProjectDescriptor();
     void ClearSceneDocumentDirty() noexcept;
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;

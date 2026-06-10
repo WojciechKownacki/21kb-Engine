@@ -70,11 +70,22 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
         metrics.panelPadding);
 }
 
+void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
+    for (const DockPanel& panel : dockModel.Queries().Panels()) {
+        if (panel.kind == DockPanelKind::ProjectSettings) {
+            dockModel.Commands().ActivatePanel(panel.id);
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return;
+        }
+    }
+}
+
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
     int x,
     int y,
     const DockLayout& layout,
+    EditorDockModel& dockModel,
     EditorSceneContext& sceneContext,
     EditorSceneBgfxViewport& sceneViewport,
     EditorShellInteractionState& shellInteraction) {
@@ -131,6 +142,12 @@ void InvalidateToolbar(HWND mainWindow, const DockLayout& layout) noexcept {
                 if (sceneContext.DuplicateSelectedHierarchyEntities()) {
                     sceneViewport.RequestPresent();
                 }
+            } else if (*row == 3) {
+                ActivateProjectSettingsPanel(mainWindow, dockModel);
+            }
+        } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
+            if (*row == 2) {
+                ActivateProjectSettingsPanel(mainWindow, dockModel);
             }
         }
         const EditorMenuCommand oldMenu = shellInteraction.OpenMenu();
@@ -259,7 +276,7 @@ bool EditorWindowToolbarPointerHandler::HandleLeftButtonDown(
         return false;
     }
 
-    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, sceneContext, sceneViewport, shellInteraction)) {
+    if (HandleMenuLeftButtonDown(mainWindow, x, y, *layout, dockModel, sceneContext, sceneViewport, shellInteraction)) {
         return true;
     }
 
