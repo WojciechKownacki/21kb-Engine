@@ -249,6 +249,14 @@ const InspectorPanelState& EditorSceneContext::Inspector() const noexcept {
     return inspector_;
 }
 
+EditorProjectSettingsState& EditorSceneContext::ProjectSettings() noexcept {
+    return projectSettings_;
+}
+
+const EditorProjectSettingsState& EditorSceneContext::ProjectSettings() const noexcept {
+    return projectSettings_;
+}
+
 EditorConsoleState& EditorSceneContext::Console() noexcept {
     return console_;
 }
@@ -1212,8 +1220,8 @@ bool EditorSceneContext::ToggleProjectInputEnabled() {
     return SaveProjectDescriptor();
 }
 
-bool EditorSceneContext::CycleProjectInputMappingContext() {
-    // "(none)" is the first option so the project input can also be cleared.
+std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions() const {
+    // Empty first entry is the "(None)" choice so the project input can be cleared.
     std::vector<std::string> options{ std::string{} };
     for (const kb::assets::AssetMetadata& metadata : scene_.Assets().Manager().Registry().All()) {
         if (metadata.type == "InputMappingContext") {
@@ -1221,12 +1229,19 @@ bool EditorSceneContext::CycleProjectInputMappingContext() {
         }
     }
     std::sort(options.begin() + 1, options.end());
+    return options;
+}
 
-    const auto found = std::ranges::find(options, project_.inputMappingContext);
-    std::size_t index = found != options.end() ? static_cast<std::size_t>(std::distance(options.begin(), found)) : 0U;
-    index = (index + 1U) % options.size();
-    project_.inputMappingContext = options[index];
+bool EditorSceneContext::SetProjectInputMappingContext(std::string virtualPath) {
+    if (project_.inputMappingContext == virtualPath) {
+        return false;
+    }
+    project_.inputMappingContext = std::move(virtualPath);
     return SaveProjectDescriptor();
+}
+
+bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
+    return projectSettings_.CloseDropdowns();
 }
 
 void EditorSceneContext::ActivateProjectInput() {

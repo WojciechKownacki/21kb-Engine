@@ -8,6 +8,7 @@ add_executable(kb_editor WIN32
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
+    src/app/EditorSelfTest.cpp
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
@@ -282,6 +283,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorPlayModeState.hpp
     src/private/app/EditorPlayModeSceneSession.hpp
     src/private/app/EditorSceneLifecycleGuard.hpp
+    src/private/app/EditorSelfTest.hpp
     src/private/app/EditorShellInteractionState.hpp
     src/private/app/EditorPointerDragInteraction.hpp
     src/private/app/EditorPointerDragState.hpp
@@ -412,6 +414,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/ProjectFilesTileTextRenderer.hpp
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
+    src/private/rendering/ProjectSettingsPanelLayout.hpp
     src/private/rendering/ProjectSettingsPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
@@ -443,6 +446,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchySelectionState.hpp
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
+    src/private/scene/EditorProjectSettingsState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
@@ -548,6 +552,7 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
+    src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
     src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
