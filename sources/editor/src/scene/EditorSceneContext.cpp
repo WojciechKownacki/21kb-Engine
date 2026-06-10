@@ -1239,6 +1239,10 @@ bool EditorSceneContext::SetInputMappingKey(kb::assets::AssetId id, std::size_t 
     return InputMappingContextAuthoring().SetMappingKey(id, index, key);
 }
 
+bool EditorSceneContext::SetInputMappingScale(kb::assets::AssetId id, std::size_t index, float scale) {
+    return InputMappingContextAuthoring().SetMappingScale(id, index, scale);
+}
+
 bool EditorSceneContext::CycleInputMappingAction(kb::assets::AssetId id, std::size_t index) {
     return InputMappingContextAuthoring().CycleMappingAction(id, index);
 }

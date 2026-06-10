@@ -35,6 +35,7 @@ public:
     [[nodiscard]] bool AddMapping(kb::assets::AssetId id);
     [[nodiscard]] bool RemoveMapping(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool SetMappingKey(kb::assets::AssetId id, std::size_t index, kb::input::InputKey key);
+    [[nodiscard]] bool SetMappingScale(kb::assets::AssetId id, std::size_t index, float scale);
     [[nodiscard]] bool CycleMappingAction(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool CycleMappingTrigger(kb::assets::AssetId id, std::size_t index);
 
