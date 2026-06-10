@@ -116,6 +116,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_KEYDOWN:
+        if (InspectorPanelInteraction::HandleKeyCapture(context_.sceneContext, wparam)) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (InspectorPanelInteraction::HandleKeyDown(messageWindow, context_.sceneContext, wparam)) {
             context_.sceneViewport.RequestPresent();
             InvalidateRect(messageWindow, nullptr, FALSE);
@@ -165,6 +173,16 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
     case WM_SETCURSOR:
         if (message == WM_NCHITTEST) {
             return EditorWindowHitTestHandler::Handle(messageWindow, lparam, context_.floatingWindows);
+        }
+        if (context_.sceneContext.Inspector().IsListeningForKey() &&
+            (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN)) {
+            const int captureButton = message == WM_LBUTTONDOWN ? VK_LBUTTON : (message == WM_RBUTTONDOWN ? VK_RBUTTON : VK_MBUTTON);
+            static_cast<void>(InspectorPanelInteraction::HandleKeyCapture(context_.sceneContext, static_cast<WPARAM>(captureButton)));
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
+            return 0;
         }
         return EditorWindowPointerMessageDispatcher{ context_ }.Dispatch(messageWindow, message, wparam, lparam);
     case WM_CONTEXTMENU:

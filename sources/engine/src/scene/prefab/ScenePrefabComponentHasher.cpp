@@ -43,6 +43,13 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.light->volumetricScattering);
         ScenePrefabHashBuilder::Mix(hash, components.light->castsShadow ? 1U : 0U);
     }
+
+    ScenePrefabHashBuilder::Mix(hash, components.input.has_value() ? 1U : 0U);
+    if (components.input.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.input->mappingContextAssetId);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.input->priority)));
+        ScenePrefabHashBuilder::Mix(hash, components.input->enabled ? 1U : 0U);
+    }
 }
 
 } // namespace kb::scene

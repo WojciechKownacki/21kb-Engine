@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
@@ -159,6 +160,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (!state.playMode.IsPlaying()) {
         return;
     }
+    // Feed real device input to the runtime before systems tick (Input phase).
+    state.inputCollector.Collect(state.sceneContext.Scene().Input().MutableDeviceState(), state.window);
     static_cast<void>(state.sceneContext.Scene().Runtime().Update(deltaSeconds));
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {

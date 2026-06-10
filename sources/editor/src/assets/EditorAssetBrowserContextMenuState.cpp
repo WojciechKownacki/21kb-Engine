@@ -53,11 +53,15 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
             items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
         }
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
     case EditorAssetContextTargetKind::Background:
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Import, .label = "Import..." });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
     case EditorAssetContextTargetKind::None:

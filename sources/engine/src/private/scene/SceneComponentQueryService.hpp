@@ -2,6 +2,7 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -29,6 +30,9 @@ public:
 
     [[nodiscard]] static bool HasLight(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const LightComponent* TryGetLight(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasInput(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const InputComponent* TryGetInput(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

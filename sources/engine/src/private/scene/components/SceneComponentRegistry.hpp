@@ -17,6 +17,7 @@ public:
     [[nodiscard]] std::uint64_t CameraComponentId() const noexcept;
     [[nodiscard]] std::uint64_t MeshRendererComponentId() const noexcept;
     [[nodiscard]] std::uint64_t LightComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t InputComponentId() const noexcept;
 
 private:
     [[nodiscard]] static std::uint64_t RegisterComponent(ecs_world_t& world, const char* name, std::size_t size, std::size_t alignment);
@@ -27,6 +28,7 @@ private:
     std::uint64_t cameraComponentId_ = 0;
     std::uint64_t meshRendererComponentId_ = 0;
     std::uint64_t lightComponentId_ = 0;
+    std::uint64_t inputComponentId_ = 0;
 };
 
 } // namespace kb::scene

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
@@ -18,6 +19,7 @@ struct ScenePrefabNodeComponents {
     std::optional<CameraComponent> camera;
     std::optional<MeshRendererComponent> meshRenderer;
     std::optional<LightComponent> light;
+    std::optional<InputComponent> input;
 };
 
 struct ScenePrefabNodeDesc {

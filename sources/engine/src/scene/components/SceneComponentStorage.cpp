@@ -10,7 +10,8 @@ SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComp
     , behaviours_(world, components.BehaviourComponentId())
     , cameras_(world, components.CameraComponentId())
     , meshRenderers_(world, components.MeshRendererComponentId())
-    , lights_(world, components.LightComponentId()) {}
+    , lights_(world, components.LightComponentId())
+    , inputs_(world, components.InputComponentId()) {}
 
 void SceneComponentStorage::SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility) {
     transforms_.Set(entity, transform);
@@ -63,6 +64,14 @@ const SceneLightComponentStore& SceneComponentStorage::Lights() const noexcept {
 
 SceneLightComponentStore& SceneComponentStorage::Lights() noexcept {
     return lights_;
+}
+
+const SceneInputComponentStore& SceneComponentStorage::Inputs() const noexcept {
+    return inputs_;
+}
+
+SceneInputComponentStore& SceneComponentStorage::Inputs() noexcept {
+    return inputs_;
 }
 
 } // namespace kb::scene

@@ -27,6 +27,14 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
             static_cast<void>(state.SelectFolder(targetFolder, manager));
         }
         return sceneContext.BeginAssetFolderCreation();
+    case EditorAssetContextCommand::NewInputAction: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateInputActionAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewInputMappingContext: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateInputMappingContextAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::Rename:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.BeginAssetRename(targetAsset);

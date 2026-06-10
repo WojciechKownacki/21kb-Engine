@@ -17,6 +17,9 @@ enum class InspectorSectionId : std::uint8_t {
     Light,
     Asset,
     Folder,
+    InputAction,
+    InputMappings,
+    Input,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -47,6 +50,19 @@ enum class InspectorPropertyId : std::uint8_t {
     MeshPreviewFit,
     MeshPreviewRenderMode,
     MeshPreviewLightPreset,
+    InputActionName,
+    InputActionValueType,
+    InputActionConsume,
+    InputComponentEnabled,
+    InputComponentPriority,
+    InputComponentMappingContext,
+    InputComponentAdd,
+    InputComponentRemove,
+    InputMappingKey,
+    InputMappingAction,
+    InputMappingTrigger,
+    InputMappingRemove,
+    InputMappingAdd,
 };
 
 struct InspectorPanelState {
@@ -57,6 +73,10 @@ struct InspectorPanelState {
     [[nodiscard]] bool IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept;
     [[nodiscard]] bool IsAnyHovered() const noexcept;
     [[nodiscard]] InspectorPropertyId HoveredProperty() const noexcept;
+    [[nodiscard]] bool IsListeningForKey() const noexcept;
+    [[nodiscard]] int KeyCaptureMappingIndex() const noexcept;
+    void BeginKeyCapture(int mappingIndex) noexcept;
+    void EndKeyCapture() noexcept;
     [[nodiscard]] bool IsTextEditing() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
@@ -100,12 +120,17 @@ private:
     bool transformCollapsed_ = false;
     bool assetCollapsed_ = false;
     bool folderCollapsed_ = false;
+    bool inputActionCollapsed_ = false;
+    bool inputMappingsCollapsed_ = false;
+    bool inputCollapsed_ = false;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
     std::string editBuffer_;
     bool editSelectingAll_ = false;
+    bool listeningForKey_ = false;
+    int keyCaptureMappingIndex_ = -1;
     InspectorPropertyId draggedProperty_ = InspectorPropertyId::None;
     float dragStartValue_ = 0.0F;
     int dragStartX_ = 0;

@@ -2,6 +2,7 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -38,6 +39,11 @@ public:
     static void SetLight(Scene& scene, SceneEntity entity, const LightComponent& light);
     static void RemoveLight(Scene& scene, SceneEntity entity) noexcept;
     static void MarkLightModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static InputComponent* TryGetInput(Scene& scene, SceneEntity entity) noexcept;
+    static void SetInput(Scene& scene, SceneEntity entity, const InputComponent& input);
+    static void RemoveInput(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkInputModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

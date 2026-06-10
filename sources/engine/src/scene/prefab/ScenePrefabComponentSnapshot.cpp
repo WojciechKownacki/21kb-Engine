@@ -23,6 +23,10 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.light = *light;
     }
 
+    if (const InputComponent* input = sceneComponents.Inputs().TryGet(entity)) {
+        components.input = *input;
+    }
+
     return components;
 }
 

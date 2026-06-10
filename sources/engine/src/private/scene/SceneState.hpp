@@ -3,6 +3,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
@@ -32,6 +33,7 @@ public:
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
     kb::assets::AssetManager assets;
+    kb::input::InputSubsystem inputSubsystem;
     SceneHistoryStack undoHistory;
     SceneHistoryStack redoHistory;
     kb::ecs::SystemScheduler systemScheduler;

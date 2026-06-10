@@ -1,5 +1,8 @@
 #include "engine/script/ScriptExecutionContext.hpp"
 
+#include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/Scene.hpp"
+
 #include <utility>
 
 namespace kb::script {
@@ -32,6 +35,14 @@ kb::scene::Scene& ScriptExecutionContext::GetScene() noexcept {
 
 const kb::scene::Scene& ScriptExecutionContext::GetScene() const noexcept {
     return scene_;
+}
+
+kb::input::InputSubsystem& ScriptExecutionContext::Input() noexcept {
+    return scene_.Input();
+}
+
+const kb::input::InputSubsystem& ScriptExecutionContext::Input() const noexcept {
+    return scene_.Input();
 }
 
 kb::scene::SceneEntity ScriptExecutionContext::Self() const noexcept {
