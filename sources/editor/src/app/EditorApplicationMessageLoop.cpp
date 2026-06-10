@@ -169,6 +169,10 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneContext.Console().Info("Input", "Pressed: " + std::string{ button });
     });
     static_cast<void>(state.sceneContext.Scene().Runtime().Update(deltaSeconds));
+    // Diagnostic: echo configured action events (Started/Triggered/Completed) too.
+    state.inputDebugLogger.LogActionEvents(input.FrameEvents(), [&state](std::string_view action) {
+        state.sceneContext.Console().Info("Input", "Action " + std::string{ action });
+    });
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();
