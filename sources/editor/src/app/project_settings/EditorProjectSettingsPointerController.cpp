@@ -43,6 +43,26 @@ bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& conte
     }
 }
 
+bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, int x, int y) {
+    if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen()) {
+        return sceneContext_.ProjectSettings().SetHoveredOption(-1);
+    }
+    const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext_, x, y);
+    const int hovered = hit.kind == ProjectSettingsHitKind::MappingContextOption ? hit.index : -1;
+    return sceneContext_.ProjectSettings().SetHoveredOption(hovered);
+}
+
+bool EditorProjectSettingsPointerController::UpdateHoverOrClear(const std::optional<RECT>& content, int x, int y) {
+    if (content.has_value() && x >= content->left && x < content->right && y >= content->top && y < content->bottom) {
+        return UpdateHover(*content, x, y);
+    }
+    return sceneContext_.ProjectSettings().SetHoveredOption(-1);
+}
+
+bool EditorProjectSettingsPointerController::Contains(const std::optional<RECT>& content, int x, int y) const noexcept {
+    return content.has_value() && x >= content->left && x < content->right && y >= content->top && y < content->bottom;
+}
+
 } // namespace kb::editor
 
 #endif

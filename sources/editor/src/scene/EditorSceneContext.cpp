@@ -13,10 +13,10 @@
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
+#include "engine/script/ScriptRuntimeHost.hpp"
 
 #include "scene/input/EditorInputActionAuthoring.hpp"
 #include "scene/input/EditorInputAssetGateway.hpp"
-#include "scene/input/EditorInputComponentAuthoring.hpp"
 #include "scene/input/EditorInputMappingContextAuthoring.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
@@ -163,6 +163,28 @@ EditorSceneContext::EditorSceneContext() {
         }
     }
     console_.Info("Editor", "Editor scene initialized.");
+}
+
+EditorSceneContext::~EditorSceneContext() = default;
+
+void EditorSceneContext::EnsureScriptRuntime() {
+    if (scriptHost_ != nullptr) {
+        return;
+    }
+    // Behaviour scripts (Lua / Visual Graph / native) only tick once a script
+    // host is installed into the scene runtime. Created lazily on first play and
+    // reused; the installed scene system only runs while play mode ticks
+    // Runtime().Update, so it is inert in edit mode.
+    scriptHost_ = std::make_unique<kb::script::ScriptRuntimeHost>(
+        scene_, kb::script::ScriptRuntimeHostOptions{ .installSceneSystem = true });
+    if (!scriptHost_->Succeeded()) {
+        for (const std::string& diagnostic : scriptHost_->Diagnostics()) {
+            console_.Error("Scripts", diagnostic);
+        }
+        console_.Error("Scripts", "Script runtime could not be fully initialized; behaviours may not run.");
+    } else {
+        console_.Info("Scripts", "Script runtime ready for play mode.");
+    }
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
@@ -392,6 +414,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
+    EnsureScriptRuntime();
     kb::scene::SceneInputActivation::Apply(scene_);
     ActivateProjectInput();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
@@ -1180,17 +1203,6 @@ EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthor
     return EditorInputMappingContextAuthoring{ scene_, assetBrowser_, console_ };
 }
 
-EditorInputComponentAuthoring EditorSceneContext::InputComponentAuthoring() noexcept {
-    return EditorInputComponentAuthoring{
-        scene_,
-        console_,
-        [this](std::string label, std::function<bool()> mutation) {
-            return ExecuteSceneCommand(std::move(label), std::move(mutation));
-        },
-        [this](kb::scene::SceneEntity entity) { SelectEntity(entity); },
-    };
-}
-
 bool EditorSceneContext::CreateInputActionAsset(const std::filesystem::path& virtualFolder) {
     return InputActionAuthoring().Create(virtualFolder);
 }
@@ -1265,26 +1277,6 @@ bool EditorSceneContext::SaveProjectDescriptor() {
         console_.Error("Project", "Project settings could not be saved.");
     }
     return saved;
-}
-
-bool EditorSceneContext::AddInputComponent(kb::scene::SceneEntity entity) {
-    return InputComponentAuthoring().Add(entity);
-}
-
-bool EditorSceneContext::RemoveInputComponent(kb::scene::SceneEntity entity) {
-    return InputComponentAuthoring().Remove(entity);
-}
-
-bool EditorSceneContext::ToggleInputComponentEnabled(kb::scene::SceneEntity entity) {
-    return InputComponentAuthoring().ToggleEnabled(entity);
-}
-
-bool EditorSceneContext::SetInputComponentPriority(kb::scene::SceneEntity entity, std::int32_t priority) {
-    return InputComponentAuthoring().SetPriority(entity, priority);
-}
-
-bool EditorSceneContext::CycleInputComponentMappingContext(kb::scene::SceneEntity entity) {
-    return InputComponentAuthoring().CycleMappingContext(entity);
 }
 
 std::optional<kb::input::InputMappingContextAsset> EditorSceneContext::ReadInputMappingContextAsset(kb::assets::AssetId id) const {
