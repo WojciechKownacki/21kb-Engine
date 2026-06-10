@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 
 #include "docking/EditorFloatingWindowManager.hpp"
+#include "console/EditorConsoleState.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
@@ -161,7 +162,12 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         return;
     }
     // Feed real device input to the runtime before systems tick (Input phase).
-    state.inputCollector.Collect(state.sceneContext.Scene().Input().MutableDeviceState(), state.window);
+    kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
+    state.inputCollector.Collect(input.MutableDeviceState(), state.window);
+    // Diagnostic: echo every pressed button to the console so input is observable.
+    state.inputDebugLogger.LogPresses(input.DeviceState(), [&state](std::string_view button) {
+        state.sceneContext.Console().Info("Input", "Pressed: " + std::string{ button });
+    });
     static_cast<void>(state.sceneContext.Scene().Runtime().Update(deltaSeconds));
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
