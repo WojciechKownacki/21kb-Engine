@@ -27,6 +27,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
             static_cast<void>(state.SelectFolder(targetFolder, manager));
         }
         return sceneContext.BeginAssetFolderCreation();
+    case EditorAssetContextCommand::NewLuaScript: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateLuaScriptAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewInputAction: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputActionAsset(destinationFolder);

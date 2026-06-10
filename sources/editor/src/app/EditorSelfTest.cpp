@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "scene/EditorScriptAssetGateway.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -253,6 +254,95 @@ void RunGameplayLoopSuite(Report& report) {
     report.Check(std::abs(settledX - movedX) < 0.01F, "Releasing W stops the actor (no drift)");
 }
 
+// Proves the Lua script editor model + file gateway: create a .lua asset, open
+// it, and round-trip an edit on disk (what the editable control persists).
+void RunScriptEditorSuite(Report& report) {
+    EditorSceneContext context;
+
+    report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset");
+    const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });
+    report.Check(script.IsValid(), "New asset registered with type LuaScript");
+
+    report.Check(context.OpenLuaScript(script), "Open the script in the editor");
+    report.Check(context.ScriptEditor().IsOpen(), "Script editor reports an open file");
+    const std::filesystem::path path = context.ScriptEditor().FilePath();
+    report.Check(std::filesystem::exists(path), "Open script file exists on disk");
+    report.Check(context.ScriptEditor().Title().ends_with(".lua"), "Editor title is the .lua file name");
+    report.Check(EditorScriptAssetGateway::ReadSource(path).find("function Tick") != std::string::npos, "New script ships a Tick template");
+
+    const std::uint64_t generationBefore = context.ScriptEditor().Generation();
+    report.Check(context.OpenLuaScript(script), "Re-open the script");
+    report.Check(context.ScriptEditor().Generation() != generationBefore, "Re-opening bumps the reload generation");
+
+    const std::string edited = "function Tick(self, dt) end\n";
+    report.Check(EditorScriptAssetGateway::WriteSource(path, edited), "Save edited source to disk");
+    report.Check(EditorScriptAssetGateway::ReadSource(path) == edited, "Edited source round-trips on disk");
+}
+
+// Proves the Unity-style Inspector script attach flow at the model level:
+// the script appears in the Add Script list, attaches, toggles, and removes.
+void RunScriptAttachSuite(Report& report) {
+    EditorSceneContext context;
+
+    report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset");
+    const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });
+    report.Check(script.IsValid(), "Lua script registered");
+    report.Check(!context.AvailableScriptAssets().empty(), "Script appears in the Add Script list");
+
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(actor.IsValid(), "Create actor entity");
+    report.Check(!context.HasEntityScript(actor), "Actor has no script initially");
+
+    report.Check(context.AttachScriptToEntity(actor, script), "Attach script via the inspector path");
+    report.Check(context.HasEntityScript(actor), "Actor now has a script");
+    report.Check(!context.EntityScriptName(actor).empty(), "Attached script name resolves");
+    report.Check(context.EntityScriptEnabled(actor), "Script is enabled by default");
+
+    report.Check(context.ToggleEntityScriptEnabled(actor), "Toggle script enabled");
+    report.Check(!context.EntityScriptEnabled(actor), "Script is now disabled");
+
+    report.Check(context.RemoveScriptFromEntity(actor), "Remove script");
+    report.Check(!context.HasEntityScript(actor), "Actor has no script after removal");
+}
+
+// Proves Log("...") from a Lua script reaches the editor Console during play.
+void RunScriptLogSuite(Report& report) {
+    EditorSceneContext context;
+
+    const std::filesystem::path luaPath = EditorProjectPaths::AssetsRoot() / "LogBehaviour.lua";
+    {
+        std::error_code error;
+        std::filesystem::create_directories(luaPath.parent_path(), error);
+        std::ofstream lua(luaPath, std::ios::binary | std::ios::trunc);
+        lua << "local logged = false\n"
+               "function Tick(self, dt)\n"
+               "    if not logged then\n"
+               "        logged = true\n"
+               "        Log(\"PING_FROM_LUA\")\n"
+               "    end\n"
+               "end\n";
+    }
+    static_cast<void>(context.Scene().Assets().Discover());
+    const kb::assets::AssetId behaviour = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.virtualPath.filename() == "LogBehaviour.lua"; });
+    report.Check(behaviour.IsValid(), "Log behaviour script discovered");
+
+    const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
+    report.Check(context.AttachScriptToEntity(actor, behaviour), "Attach logging script to actor");
+    report.Check(context.BeginPlayModeSceneSession(), "Begin play mode session");
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(context.Scene().Runtime().Update(0.016F));
+    }
+
+    bool logged = false;
+    for (const EditorConsoleEntry& entry : context.Console().Entries()) {
+        if (entry.message.find("PING_FROM_LUA") != std::string::npos) {
+            logged = true;
+            break;
+        }
+    }
+    report.Check(logged, "Log() from a Lua script reached the editor Console");
+}
+
 // Runs one suite in its own freshly-created scratch project (cwd-based bootstrap),
 // then restores the previous working directory.
 void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Report&)) {
@@ -291,6 +381,9 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     Report report;
     RunSuiteInScratch(report, "project_settings", &RunProjectSettingsSuite);
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
+    RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
+    RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
+    RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     WriteReport(reportPath, report);
     return report.Ok() ? 0 : 1;
 }

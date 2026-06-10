@@ -799,6 +799,27 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         y = section.Bottom() + kSectionGap;
     }
 
+    {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script");
+        if (sceneContext.HasEntityScript(selected)) {
+            section.Field("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName);
+            section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
+            section.Field("", "Remove Script", InspectorPropertyId::ScriptRemove);
+        } else {
+            section.Field("", inspector.IsScriptPickerOpen() ? "Add Script  (pick one)" : "Add Script", InspectorPropertyId::ScriptAdd);
+            if (inspector.IsScriptPickerOpen()) {
+                const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
+                if (scripts.empty()) {
+                    section.Field("", "(no scripts - create a .lua first)", InspectorPropertyId::None);
+                } else {
+                    for (const std::pair<kb::assets::AssetId, std::string>& script : scripts) {
+                        section.Field("", script.second, InspectorPropertyId::ScriptOption);
+                    }
+                }
+            }
+        }
+        y = section.Bottom() + kSectionGap;
+    }
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit MakeHit(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, RECT rect) noexcept {
@@ -1073,6 +1094,42 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return hit;
         }
         AdvanceRow(y);
+    }
+    y += kSectionGap;
+
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Script, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::Script)) {
+        if (sceneContext.HasEntityScript(selected)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptEnabled, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptRemove, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        } else {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptAdd, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (state.IsScriptPickerOpen()) {
+                const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
+                for (std::size_t index = 0; index < scripts.size(); ++index) {
+                    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptOption, x, yPoint); hit.kind != InspectorHitKind::None) {
+                        hit.index = static_cast<int>(index);
+                        return hit;
+                    }
+                    AdvanceRow(y);
+                }
+            }
+        }
     }
     return {};
 }
