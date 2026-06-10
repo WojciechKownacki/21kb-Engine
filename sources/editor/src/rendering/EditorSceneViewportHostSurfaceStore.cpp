@@ -83,10 +83,14 @@ bool EditorSceneBgfxViewport::HostSurfaceStore::HasVisibleUnpresentedForHost(HWN
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexcept {
+    // Only repaint the uncovered host area on the visible -> hidden transition.
+    // Invalidating every call would busy-loop the editor frame while a non-Scene
+    // tab is active (each hide would post a fresh WM_PAINT).
+    const bool wasVisible = surface.window != nullptr && IsWindow(surface.window) != 0 && IsWindowVisible(surface.window) != 0;
     if (surface.window != nullptr && IsWindow(surface.window) != 0) {
         ShowWindow(surface.window, SW_HIDE);
     }
-    if (surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
+    if (wasVisible && surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }
     surface.presentedInCurrentPaint = false;
