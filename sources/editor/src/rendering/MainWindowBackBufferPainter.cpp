@@ -4,6 +4,7 @@
 #include "rendering/DockDropPreviewOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/EditorDragOverlayRenderer.hpp"
+#include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -12,6 +13,7 @@
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -122,6 +124,19 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     paintContext->sceneViewport->SyncHostSurfaceLayouts(
         paintContext->window,
         std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{viewportLayouts.data(), viewportLayouts.size()});
+
+    // Hide the script editor's child text control unless its panel is the active
+    // tab, so it does not linger over whatever shares its dock leaf.
+    const bool scriptEditorActive = std::ranges::any_of(layout.panels, [&](const DockPanelLayout& panelLayout) {
+        if (!panelLayout.active) {
+            return false;
+        }
+        const DockPanel* panel = paintContext->dockModel->Queries().FindPanel(panelLayout.panelId);
+        return panel != nullptr && panel->kind == DockPanelKind::ScriptEditor;
+    });
+    if (!scriptEditorActive) {
+        EditorScriptEditorOverlay::Hide(paintContext->window);
+    }
 
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);

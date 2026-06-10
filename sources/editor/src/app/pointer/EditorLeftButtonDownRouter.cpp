@@ -192,7 +192,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (EditorAssetBrowserPointerHandler::HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        sceneContext_.ClearHierarchySelection();
+        // A deferred plain asset click must not change anything on press (so a
+        // press-and-drag keeps the current Inspector / entity context). Selection
+        // and the hierarchy deselect happen on release. Other browser actions
+        // (folder select, toolbar) still clear the hierarchy selection here.
+        if (!sceneContext_.AssetBrowser().HasPendingPreviewAsset()) {
+            sceneContext_.ClearHierarchySelection();
+        }
         if (EditorAssetBrowserPointerHandler::RequiresMouseCapture(sceneContext_)) {
             SetCapture(messageWindow);
         }
