@@ -2,84 +2,29 @@
 
 #include "engine/input/InputMappingEvaluator.hpp"
 
-#include <algorithm>
-#include <span>
+#include <string>
 #include <utility>
 
 namespace kb::input {
 
 void InputSubsystem::SetResolvers(ActionResolver actionResolver, ContextResolver contextResolver) {
-    actionResolver_ = std::move(actionResolver);
-    contextResolver_ = std::move(contextResolver);
+    stack_.SetResolvers(std::move(actionResolver), std::move(contextResolver));
 }
 
 bool InputSubsystem::AddMappingContext(std::uint64_t contextId, std::int32_t priority) {
-    if (!actionResolver_ || !contextResolver_) {
-        return false;
-    }
-    const std::shared_ptr<const InputMappingContextAsset> context = contextResolver_(contextId);
-    if (context == nullptr) {
-        return false;
-    }
-
-    ActiveMappingContext active;
-    active.contextId = contextId;
-    active.priority = priority;
-    active.mappings.reserve(context->mappings.size());
-    for (const InputKeyMapping& mapping : context->mappings) {
-        ResolvedMapping resolved;
-        resolved.key = mapping.key;
-        resolved.modifiers = mapping.modifiers;
-        resolved.triggers = mapping.triggers;
-        resolved.triggerStates.resize(mapping.triggers.size());
-        resolved.chordActionNames.resize(mapping.triggers.size());
-
-        if (const std::shared_ptr<const InputActionAsset> action = actionResolver_(mapping.actionId)) {
-            resolved.actionName = action->name;
-            resolved.valueType = action->valueType;
-            resolved.consumeInput = action->consumeInput;
-        }
-
-        for (std::size_t index = 0U; index < mapping.triggers.size(); ++index) {
-            const InputTriggerDesc& trigger = mapping.triggers[index];
-            if (trigger.type == InputTriggerType::Chorded && trigger.chordActionId != 0U) {
-                if (const std::shared_ptr<const InputActionAsset> chord = actionResolver_(trigger.chordActionId)) {
-                    resolved.chordActionNames[index] = chord->name;
-                }
-            }
-        }
-
-        if (!resolved.actionName.empty()) {
-            active.mappings.push_back(std::move(resolved));
-        }
-    }
-
-    RemoveMappingContext(contextId);
-    contexts_.push_back(std::move(active));
-    SortByPriority();
-    return true;
+    return stack_.Add(contextId, priority);
 }
 
 void InputSubsystem::RemoveMappingContext(std::uint64_t contextId) {
-    std::erase_if(contexts_, [contextId](const ActiveMappingContext& context) {
-        return context.contextId == contextId;
-    });
+    stack_.Remove(contextId);
 }
 
 void InputSubsystem::ClearMappingContexts() noexcept {
-    contexts_.clear();
+    stack_.Clear();
 }
 
 bool InputSubsystem::HasMappingContext(std::uint64_t contextId) const noexcept {
-    return std::ranges::any_of(contexts_, [contextId](const ActiveMappingContext& context) {
-        return context.contextId == contextId;
-    });
-}
-
-void InputSubsystem::SortByPriority() {
-    std::ranges::stable_sort(contexts_, [](const ActiveMappingContext& lhs, const ActiveMappingContext& rhs) {
-        return lhs.priority > rhs.priority;
-    });
+    return stack_.Has(contextId);
 }
 
 void InputSubsystem::Evaluate(float deltaSeconds) {
@@ -99,7 +44,7 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
         return found != previousCombined_.end() && found->second == TriggerState::Triggered;
     };
 
-    for (ActiveMappingContext& context : contexts_) {
+    for (ActiveMappingContext& context : stack_.Active()) {
         for (ResolvedMapping& mapping : context.mappings) {
             const auto keyIndex = static_cast<std::uint16_t>(mapping.key);
             if (consumedKeys[keyIndex]) {
