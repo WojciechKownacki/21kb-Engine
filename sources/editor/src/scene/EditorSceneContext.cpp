@@ -6,7 +6,15 @@
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
+
+#include "scene/input/EditorInputActionAuthoring.hpp"
+#include "scene/input/EditorInputAssetGateway.hpp"
+#include "scene/input/EditorInputComponentAuthoring.hpp"
+#include "scene/input/EditorInputMappingContextAuthoring.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include "scene/EditorDefaultSceneFactory.hpp"
@@ -29,6 +37,7 @@ namespace kb::editor {
 namespace {
 
 constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
+
 
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
     return std::ranges::find(entities, entity) != entities.end();
@@ -372,6 +381,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
+    kb::scene::SceneInputActivation::Apply(scene_);
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
@@ -380,6 +390,7 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     if (!playModeSceneSession_.Active()) {
         return true;
     }
+    kb::scene::SceneInputActivation::Clear(scene_);
     if (!playModeSceneSession_.Restore(scene_)) {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
@@ -1147,6 +1158,93 @@ bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const 
         console_.Error("Prefabs", AssetErrorOr(scene_.Assets().Manager(), "Prefab asset creation failed."));
     }
     return created;
+}
+
+EditorInputActionAuthoring EditorSceneContext::InputActionAuthoring() noexcept {
+    return EditorInputActionAuthoring{ scene_, assetBrowser_, console_ };
+}
+
+EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthoring() noexcept {
+    return EditorInputMappingContextAuthoring{ scene_, assetBrowser_, console_ };
+}
+
+EditorInputComponentAuthoring EditorSceneContext::InputComponentAuthoring() noexcept {
+    return EditorInputComponentAuthoring{
+        scene_,
+        console_,
+        [this](std::string label, std::function<bool()> mutation) {
+            return ExecuteSceneCommand(std::move(label), std::move(mutation));
+        },
+        [this](kb::scene::SceneEntity entity) { SelectEntity(entity); },
+    };
+}
+
+bool EditorSceneContext::CreateInputActionAsset(const std::filesystem::path& virtualFolder) {
+    return InputActionAuthoring().Create(virtualFolder);
+}
+
+bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
+    return InputMappingContextAuthoring().Create(virtualFolder);
+}
+
+std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {
+    return EditorInputAssetGateway::ReadAction(scene_, id);
+}
+
+bool EditorSceneContext::SetInputActionName(kb::assets::AssetId id, std::string name) {
+    return InputActionAuthoring().SetName(id, std::move(name));
+}
+
+bool EditorSceneContext::CycleInputActionValueType(kb::assets::AssetId id) {
+    return InputActionAuthoring().CycleValueType(id);
+}
+
+bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {
+    return InputActionAuthoring().ToggleConsume(id);
+}
+
+bool EditorSceneContext::AddInputComponent(kb::scene::SceneEntity entity) {
+    return InputComponentAuthoring().Add(entity);
+}
+
+bool EditorSceneContext::RemoveInputComponent(kb::scene::SceneEntity entity) {
+    return InputComponentAuthoring().Remove(entity);
+}
+
+bool EditorSceneContext::ToggleInputComponentEnabled(kb::scene::SceneEntity entity) {
+    return InputComponentAuthoring().ToggleEnabled(entity);
+}
+
+bool EditorSceneContext::SetInputComponentPriority(kb::scene::SceneEntity entity, std::int32_t priority) {
+    return InputComponentAuthoring().SetPriority(entity, priority);
+}
+
+bool EditorSceneContext::CycleInputComponentMappingContext(kb::scene::SceneEntity entity) {
+    return InputComponentAuthoring().CycleMappingContext(entity);
+}
+
+std::optional<kb::input::InputMappingContextAsset> EditorSceneContext::ReadInputMappingContextAsset(kb::assets::AssetId id) const {
+    return EditorInputAssetGateway::ReadContext(scene_, id);
+}
+
+bool EditorSceneContext::AddInputMapping(kb::assets::AssetId id) {
+    return InputMappingContextAuthoring().AddMapping(id);
+}
+
+bool EditorSceneContext::RemoveInputMapping(kb::assets::AssetId id, std::size_t index) {
+    return InputMappingContextAuthoring().RemoveMapping(id, index);
+}
+
+bool EditorSceneContext::SetInputMappingKey(kb::assets::AssetId id, std::size_t index, kb::input::InputKey key) {
+    return InputMappingContextAuthoring().SetMappingKey(id, index, key);
+}
+
+bool EditorSceneContext::CycleInputMappingAction(kb::assets::AssetId id, std::size_t index) {
+    return InputMappingContextAuthoring().CycleMappingAction(id, index);
+}
+
+bool EditorSceneContext::CycleInputMappingTrigger(kb::assets::AssetId id, std::size_t index) {
+    return InputMappingContextAuthoring().CycleMappingTrigger(id, index);
 }
 
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent) {

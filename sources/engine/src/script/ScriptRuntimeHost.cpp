@@ -4,6 +4,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
@@ -301,6 +302,13 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     state_->visualGraphBackend = visualGraphBackend.get();
     if (!state_->runtime.RegisterBackend(std::move(visualGraphBackend))) {
         AddDiagnostic("VisualGraph script backend could not be registered");
+    }
+
+    // Expose the runtime input API. RegisterFunction mirrors each function into
+    // the Lua function table and a Visual Graph CallNative node, so this single
+    // call covers all three scripting backends.
+    if (!ScriptInputApi::Register(*this)) {
+        AddDiagnostic("input script API could not be fully registered");
     }
 }
 

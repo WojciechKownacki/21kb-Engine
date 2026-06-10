@@ -51,6 +51,13 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "light.volumetricScattering=" << components.light->volumetricScattering << '\n';
         output << "light.castsShadow=" << (components.light->castsShadow ? 1 : 0) << '\n';
     }
+
+    output << "input=" << (components.input.has_value() ? 1 : 0) << '\n';
+    if (components.input.has_value()) {
+        output << "input.mappingContextAssetId=" << components.input->mappingContextAssetId << '\n';
+        output << "input.priority=" << components.input->priority << '\n';
+        output << "input.enabled=" << (components.input->enabled ? 1 : 0) << '\n';
+    }
 }
 
 } // namespace kb::scene

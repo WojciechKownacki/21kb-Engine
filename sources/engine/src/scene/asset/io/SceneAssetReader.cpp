@@ -19,6 +19,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     CameraBit = 1U << 0U,
     MeshRendererBit = 1U << 1U,
     LightBit = 1U << 2U,
+    InputBit = 1U << 3U,
 };
 
 using SceneAssetBinaryIO::ByteReader;
@@ -102,6 +103,17 @@ using SceneAssetBinaryIO::ReadAllBytes;
     return true;
 }
 
+[[nodiscard]] bool ReadInput(ByteReader& input, InputComponent& output) {
+    std::uint32_t priority = 0;
+    if (!input.ReadUInt64(output.mappingContextAssetId) ||
+        !input.ReadUInt32(priority) ||
+        !input.ReadBool(output.enabled)) {
+        return false;
+    }
+    output.priority = static_cast<std::int32_t>(priority);
+    return true;
+}
+
 [[nodiscard]] bool ReadNestedOverride(ByteReader& input, ScenePrefabPropertyOverride& output) {
     std::uint32_t flag = 0;
     if (!input.ReadUInt32(output.nodeIndex) ||
@@ -139,7 +151,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
         !ReadVec3(input, output.transform.localScale) ||
         !input.ReadBool(output.visibility.visible) ||
         !input.ReadUInt32(componentBits) ||
-        (componentBits & ~(CameraBit | MeshRendererBit | LightBit)) != 0U) {
+        (componentBits & ~(CameraBit | MeshRendererBit | LightBit | InputBit)) != 0U) {
         return false;
     }
 
@@ -163,6 +175,13 @@ using SceneAssetBinaryIO::ReadAllBytes;
             return false;
         }
         output.components.light = light;
+    }
+    if ((componentBits & InputBit) != 0U) {
+        InputComponent inputComponent;
+        if (!ReadInput(input, inputComponent)) {
+            return false;
+        }
+        output.components.input = inputComponent;
     }
     return true;
 }

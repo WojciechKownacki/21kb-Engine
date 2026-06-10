@@ -25,9 +25,20 @@
 #include <span>
 #include <vector>
 
+namespace kb::input {
+
+struct InputActionAsset;
+struct InputMappingContextAsset;
+enum class InputKey : std::uint16_t;
+
+} // namespace kb::input
+
 namespace kb::editor {
 
 class EditorSceneCommandController;
+class EditorInputActionAuthoring;
+class EditorInputMappingContextAuthoring;
+class EditorInputComponentAuthoring;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -161,6 +172,25 @@ public:
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
+    [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetInputActionName(kb::assets::AssetId id, std::string name);
+    [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
+    [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
+
+    [[nodiscard]] bool AddInputComponent(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool RemoveInputComponent(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool ToggleInputComponentEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool SetInputComponentPriority(kb::scene::SceneEntity entity, std::int32_t priority);
+    [[nodiscard]] bool CycleInputComponentMappingContext(kb::scene::SceneEntity entity);
+
+    [[nodiscard]] std::optional<kb::input::InputMappingContextAsset> ReadInputMappingContextAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] bool AddInputMapping(kb::assets::AssetId id);
+    [[nodiscard]] bool RemoveInputMapping(kb::assets::AssetId id, std::size_t index);
+    [[nodiscard]] bool SetInputMappingKey(kb::assets::AssetId id, std::size_t index, kb::input::InputKey key);
+    [[nodiscard]] bool CycleInputMappingAction(kb::assets::AssetId id, std::size_t index);
+    [[nodiscard]] bool CycleInputMappingTrigger(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
@@ -175,6 +205,9 @@ public:
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
+    [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
+    [[nodiscard]] EditorInputComponentAuthoring InputComponentAuthoring() noexcept;
     void ClearSceneDocumentDirty() noexcept;
     void InvalidateHierarchyRows() noexcept;
     void RebuildHierarchyRowsIfNeeded() const;

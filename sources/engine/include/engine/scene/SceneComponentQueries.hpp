@@ -3,6 +3,7 @@
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
+#include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
@@ -20,6 +21,7 @@ public:
     [[nodiscard]] SceneCameraComponentQueries Cameras() const noexcept;
     [[nodiscard]] SceneMeshRendererComponentQueries MeshRenderers() const noexcept;
     [[nodiscard]] SceneLightComponentQueries Lights() const noexcept;
+    [[nodiscard]] SceneInputComponentQueries Inputs() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

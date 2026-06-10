@@ -10,5 +10,6 @@ void RunScenePrefabTests();
 void RunProjectSceneTests();
 void RunScriptRuntimeTests();
 void RunVisualGraphTests();
+void RunInputTests();
 
 } // namespace kb::tests

@@ -42,6 +42,10 @@ std::string_view ToString(AssetImportCategory category) noexcept {
         return "Scene";
     case AssetImportCategory::Data:
         return "Data";
+    case AssetImportCategory::InputAction:
+        return "InputAction";
+    case AssetImportCategory::InputMappingContext:
+        return "InputMappingContext";
     case AssetImportCategory::Unknown:
     default:
         return "Unknown";
@@ -52,6 +56,10 @@ std::string_view RuntimeAssetType(AssetImportCategory category) noexcept {
     switch (category) {
     case AssetImportCategory::Model:
         return "RenderMesh";
+    case AssetImportCategory::InputAction:
+        return "InputAction";
+    case AssetImportCategory::InputMappingContext:
+        return "InputMappingContext";
     case AssetImportCategory::Unknown:
     case AssetImportCategory::Texture:
     case AssetImportCategory::Audio:

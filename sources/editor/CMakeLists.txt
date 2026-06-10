@@ -329,6 +329,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
     src/private/platform/win32/Win32ErrorReporter.hpp
+    src/private/platform/win32/Win32InputCollector.hpp
     src/private/project/EditorProjectAssetIndex.hpp
     src/private/project/EditorProjectBootstrap.hpp
     src/private/project/EditorProjectPanelHitTester.hpp
@@ -447,6 +448,11 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
+    src/private/scene/input/EditorInputAssetGateway.hpp
+    src/private/scene/input/EditorInputAssetCatalog.hpp
+    src/private/scene/input/EditorInputActionAuthoring.hpp
+    src/private/scene/input/EditorInputMappingContextAuthoring.hpp
+    src/private/scene/input/EditorInputComponentAuthoring.hpp
     src/private/windowing/FloatingWindowControlActions.hpp
     src/private/windowing/FloatingWindowControlHitTester.hpp
     src/private/windowing/FloatingWindowControlInteractor.hpp
@@ -460,6 +466,7 @@ add_executable(kb_editor WIN32
     src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
     src/platform/win32/Win32ErrorReporter.cpp
+    src/platform/win32/Win32InputCollector.cpp
     src/rendering/DockDropPreviewRenderer.cpp
     src/rendering/DockDropPreviewOverlayWindow.cpp
     src/rendering/DockPanelChromeRenderer.cpp
@@ -570,6 +577,11 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
+    src/scene/input/EditorInputAssetGateway.cpp
+    src/scene/input/EditorInputAssetCatalog.cpp
+    src/scene/input/EditorInputActionAuthoring.cpp
+    src/scene/input/EditorInputMappingContextAuthoring.cpp
+    src/scene/input/EditorInputComponentAuthoring.cpp
     src/windowing/FloatingWindowControlActions.cpp
     src/windowing/FloatingWindowFactory.cpp
     src/windowing/FloatingWindowHitTestResolver.cpp
@@ -637,7 +649,7 @@ target_link_libraries(kb_editor
         kb_renderer
 )
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32 xinput)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)

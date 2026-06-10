@@ -29,6 +29,10 @@ SceneLightComponentQueries SceneComponentQueries::Lights() const noexcept {
     return SceneLightComponentQueries{ scene_ };
 }
 
+SceneInputComponentQueries SceneComponentQueries::Inputs() const noexcept {
+    return SceneInputComponentQueries{ scene_ };
+}
+
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
 }
@@ -51,6 +55,10 @@ SceneMeshRendererComponents SceneComponents::MeshRenderers() const noexcept {
 
 SceneLightComponents SceneComponents::Lights() const noexcept {
     return SceneLightComponents{ scene_ };
+}
+
+SceneInputComponents SceneComponents::Inputs() const noexcept {
+    return SceneInputComponents{ scene_ };
 }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {

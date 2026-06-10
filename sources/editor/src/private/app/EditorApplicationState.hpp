@@ -7,6 +7,7 @@
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
+#include "platform/win32/Win32InputCollector.hpp"
 #include "rendering/EditorGdiRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
@@ -41,6 +42,7 @@ struct EditorApplicationState {
     EditorPlayModeState playMode;
     EditorShellInteractionState shellInteraction;
     EditorPointerDragState pointerDrag;
+    Win32InputCollector inputCollector;
     bool running = false;
 #endif
 };
