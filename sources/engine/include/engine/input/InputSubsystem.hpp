@@ -3,13 +3,11 @@
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputDeviceState.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
-#include "engine/input/InputModifiers.hpp"
+#include "engine/input/InputMappingContextStack.hpp"
 #include "engine/input/InputTriggers.hpp"
 #include "engine/input/InputValue.hpp"
 
 #include <cstdint>
-#include <functional>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -41,26 +39,6 @@ struct InputActionEvent {
     InputValue value{};
 };
 
-// Runtime mapping/runtime entry: a mapping with its resolved action metadata and
-// per-frame state machine storage.
-struct ResolvedMapping {
-    std::string actionName;
-    InputActionValueType valueType = InputActionValueType::Bool;
-    bool consumeInput = true;
-    InputKey key = InputKey::None;
-    std::vector<InputModifierDesc> modifiers;
-    std::vector<InputTriggerDesc> triggers;
-    std::vector<std::string> chordActionNames; // parallel to triggers; empty unless Chorded
-    ModifierRuntimeState modifierState{};
-    std::vector<TriggerRuntimeState> triggerStates;
-};
-
-struct ActiveMappingContext {
-    std::uint64_t contextId = 0U;
-    std::int32_t priority = 0;
-    std::vector<ResolvedMapping> mappings;
-};
-
 // The runtime input subsystem. Platform code fills MutableDeviceState() each frame;
 // the polling system calls Evaluate(dt); scripts query action states by name.
 //
@@ -69,8 +47,8 @@ struct ActiveMappingContext {
 // into per-action values + trigger events every frame.
 class InputSubsystem {
 public:
-    using ActionResolver = std::function<std::shared_ptr<const InputActionAsset>(std::uint64_t)>;
-    using ContextResolver = std::function<std::shared_ptr<const InputMappingContextAsset>(std::uint64_t)>;
+    using ActionResolver = InputMappingContextStack::ActionResolver;
+    using ContextResolver = InputMappingContextStack::ContextResolver;
 
     // Resolvers translate asset ids into asset data (typically backed by the
     // scene's AssetManager). Required before AddMappingContext can resolve names.
@@ -106,13 +84,10 @@ public:
     }
 
 private:
-    void SortByPriority();
     [[nodiscard]] const InputActionState* FindState(std::string_view action) const;
 
-    ActionResolver actionResolver_;
-    ContextResolver contextResolver_;
     InputDeviceState deviceState_;
-    std::vector<ActiveMappingContext> contexts_; // sorted by priority, descending
+    InputMappingContextStack stack_;
     std::unordered_map<std::string, InputActionState> actionStates_;
     std::unordered_map<std::string, TriggerState> previousCombined_;
     std::vector<InputActionEvent> frameEvents_;
