@@ -1,0 +1,26 @@
+#pragma once
+
+namespace kb::script {
+
+class ScriptRuntimeHost;
+
+// Registers the runtime input API as script functions on the host. Because the
+// host mirrors every registered function into both the Lua function table
+// (CallFunction) and a Visual Graph CallNative node, a single registration here
+// exposes input to all three scripting backends from one source of truth.
+//
+// Registered functions (all take/return well-typed pins):
+//   IsActionPressed(action:String)        -> pressed:Bool
+//   GetActionValue(action:String)         -> value:Float        (axis1D / bool as 0/1)
+//   GetActionValueXY(action:String)       -> x:Float, y:Float   (axis2D)
+//   WasActionStarted(action:String)       -> started:Bool
+//   WasActionTriggered(action:String)     -> triggered:Bool
+//   WasActionCompleted(action:String)     -> completed:Bool
+//   AddMappingContext(context:String, priority:Int)  -> added:Bool
+//   RemoveMappingContext(context:String)             -> removed:Bool
+// (context is the decimal string form of the mapping-context asset id.)
+struct ScriptInputApi {
+    [[nodiscard]] static bool Register(ScriptRuntimeHost& host);
+};
+
+} // namespace kb::script

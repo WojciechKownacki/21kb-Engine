@@ -18,6 +18,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.light.has_value()) {
         sceneComponents.Lights().Set(entity, *components.light);
     }
+    if (components.input.has_value()) {
+        sceneComponents.Inputs().Set(entity, *components.input);
+    }
 }
 
 } // namespace kb::scene

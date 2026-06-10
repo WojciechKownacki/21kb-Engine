@@ -5,6 +5,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -38,6 +39,7 @@ void ScenePrefabNodeStateWriter::Write(Scene& scene, SceneObject object, SceneOb
     WriteOptionalComponent(components.Cameras(), entity, node.components.camera);
     WriteOptionalComponent(components.MeshRenderers(), entity, node.components.meshRenderer);
     WriteOptionalComponent(components.Lights(), entity, node.components.light);
+    WriteOptionalComponent(components.Inputs(), entity, node.components.input);
 }
 
 } // namespace kb::scene

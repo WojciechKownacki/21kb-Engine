@@ -2,9 +2,12 @@
 
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
+#include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -24,6 +27,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -652,6 +656,63 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     Text(dc, content, "Select an object or asset to inspect it", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+// Resolves an asset id to a display label for inspector fields that reference
+// another asset (mapping-context on a component, action on a mapping).
+[[nodiscard]] std::string AssetDisplayName(const EditorSceneContext& sceneContext, std::uint64_t id) {
+    if (id == 0U) {
+        return "(none)";
+    }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id }); metadata != nullptr) {
+        return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
+    }
+    return "(missing)";
+}
+
+void PaintInputActionAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const kb::input::InputActionAsset action = sceneContext.ReadInputActionAsset(metadata.id).value_or(kb::input::InputActionAsset{});
+
+    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, action.name.empty() ? metadata.name : action.name, "Input Action");
+    int y = content.top + kHeaderHeight + kPanelPadTop;
+    {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputAction, HeroIconKind::Gamepad2, "Input Action");
+        section.Field("Name", action.name, InspectorPropertyId::InputActionName);
+        section.Field("Value Type", kb::input::ToString(action.valueType), InspectorPropertyId::InputActionValueType);
+        section.Bool("Consume Input", action.consumeInput, InspectorPropertyId::InputActionConsume);
+        y = section.Bottom() + kSectionGap;
+    }
+    {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        section.Field("Id", FormatUInt64(metadata.id.value));
+        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
+    }
+}
+
+void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const kb::input::InputMappingContextAsset context = sceneContext.ReadInputMappingContextAsset(metadata.id).value_or(kb::input::InputMappingContextAsset{});
+
+    DrawHeader(dc, content, theme, HeroIconKind::Gamepad2, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "Input Mapping Context");
+    int y = content.top + kHeaderHeight + kPanelPadTop;
+
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::InputMappings, HeroIconKind::Gamepad2, "Mappings");
+    for (std::size_t index = 0; index < context.mappings.size(); ++index) {
+        const kb::input::InputKeyMapping& mapping = context.mappings[index];
+        const std::string suffix = " " + std::to_string(index);
+        const bool capturing = inspector.IsListeningForKey() && inspector.KeyCaptureMappingIndex() == static_cast<int>(index);
+        const std::string keyText = capturing ? std::string{ "Press a key..." } : std::string{ kb::input::ToString(mapping.key) };
+        const std::string triggerText = mapping.triggers.empty()
+            ? std::string{ "Down (implicit)" }
+            : std::string{ kb::input::ToString(mapping.triggers.front().type) };
+        section.Field("Key" + suffix, keyText, InspectorPropertyId::InputMappingKey);
+        section.Field("Action" + suffix, AssetDisplayName(sceneContext, mapping.actionId), InspectorPropertyId::InputMappingAction);
+        section.Field("Trigger" + suffix, triggerText, InspectorPropertyId::InputMappingTrigger);
+        section.Field("", "Remove", InspectorPropertyId::InputMappingRemove);
+    }
+    section.Field("", "Add Mapping", InspectorPropertyId::InputMappingAdd);
+}
+
 void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
@@ -663,6 +724,15 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(state.SelectedAsset());
         if (metadata == nullptr) {
             DrawEmpty(dc, content, theme);
+            return;
+        }
+
+        if (metadata->type == "InputAction") {
+            PaintInputActionAsset(dc, content, theme, sceneContext, *metadata);
+            return;
+        }
+        if (metadata->type == "InputMappingContext") {
+            PaintInputMappingContextAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
 
@@ -727,6 +797,20 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         section.Vec3("Position", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
         section.Rotation("Rotation", transform.localRotation);
         section.Vec3("Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+        y = section.Bottom() + kSectionGap;
+    }
+
+    {
+        const kb::scene::InputComponent* input = scene.Components().Inputs().TryGet(selected);
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Input, HeroIconKind::Gamepad2, "Input");
+        if (input != nullptr) {
+            section.Bool("Enabled", input->enabled, InspectorPropertyId::InputComponentEnabled);
+            section.Field("Priority", std::to_string(input->priority), InspectorPropertyId::InputComponentPriority);
+            section.Field("Mapping Context", AssetDisplayName(sceneContext, input->mappingContextAssetId), InspectorPropertyId::InputComponentMappingContext);
+            section.Field("", "Remove Component", InspectorPropertyId::InputComponentRemove);
+        } else {
+            section.Field("", "Add Input Component", InspectorPropertyId::InputComponentAdd);
+        }
         y = section.Bottom() + kSectionGap;
     }
 }
@@ -840,6 +924,62 @@ void AdvanceRow(int& y) noexcept {
     y += kFieldRowHeight + kDividerHeight;
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestInputActionSection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::InputAction, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::InputAction)) {
+        return {};
+    }
+    const std::array<std::pair<InspectorPropertyId, bool>, 3> rows{ {
+        { InspectorPropertyId::InputActionName, false },
+        { InspectorPropertyId::InputActionValueType, false },
+        { InspectorPropertyId::InputActionConsume, true },
+    } };
+    for (const auto& [property, isBool] : rows) {
+        const RECT row = RowRect(content, y);
+        InspectorPanelRenderer::Hit hit = isBool
+            ? HitBool(row, InspectorSectionId::InputAction, property, x, yPoint)
+            : HitTextRow(row, InspectorSectionId::InputAction, property, x, yPoint);
+        if (hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestInputMappingSection(const RECT& content, const InspectorPanelState& state, const EditorSceneContext& sceneContext, kb::assets::AssetId imcId, int x, int yPoint, int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::InputMappings, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::InputMappings)) {
+        return {};
+    }
+    const std::optional<kb::input::InputMappingContextAsset> context = sceneContext.ReadInputMappingContextAsset(imcId);
+    const std::size_t mappingCount = context.has_value() ? context->mappings.size() : 0U;
+    const std::array<InspectorPropertyId, 4> rowProperties{
+        InspectorPropertyId::InputMappingKey,
+        InspectorPropertyId::InputMappingAction,
+        InspectorPropertyId::InputMappingTrigger,
+        InspectorPropertyId::InputMappingRemove,
+    };
+    for (std::size_t mapping = 0; mapping < mappingCount; ++mapping) {
+        for (const InspectorPropertyId property : rowProperties) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::InputMappings, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+                hit.index = static_cast<int>(mapping);
+                return hit;
+            }
+            AdvanceRow(y);
+        }
+    }
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::InputMappings, InspectorPropertyId::InputMappingAdd, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    return {};
+}
+
 } // namespace
 
 void InspectorPanelRenderer::Paint(
@@ -880,7 +1020,14 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
 
     if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-        if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sceneContext.AssetBrowser().SelectedAsset())) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sceneContext.AssetBrowser().SelectedAsset());
+        if (metadata != nullptr && metadata->type == "InputAction") {
+            return HitTestInputActionSection(content, state, x, yPoint, y);
+        }
+        if (metadata != nullptr && metadata->type == "InputMappingContext") {
+            return HitTestInputMappingSection(content, state, sceneContext, metadata->id, x, yPoint, y);
+        }
+        if (metadata != nullptr) {
             if (EditorMeshPreviewCache().StatsFor(*metadata) != nullptr) {
                 const RECT preview = MeshPreviewPanelRect(content, y);
                 const RECT toolbar = MeshPreviewToolbarRect(preview);
@@ -939,6 +1086,36 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return hit;
         }
         AdvanceRow(y);
+    }
+    y += kSectionGap;
+
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Input, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::Input)) {
+        if (sceneContext.Scene().Components().Inputs().Has(selected)) {
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentEnabled, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentPriority, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentMappingContext, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentRemove, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        } else {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentAdd, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        }
     }
     y += kSectionGap;
 

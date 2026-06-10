@@ -19,6 +19,7 @@ public:
         InspectorHitKind kind = InspectorHitKind::None;
         InspectorSectionId section = InspectorSectionId::None;
         InspectorPropertyId property = InspectorPropertyId::None;
+        int index = -1; // Row index for dynamic lists (e.g. mapping context entries).
         RECT rect{};
     };
 
