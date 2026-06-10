@@ -13,6 +13,7 @@
 #include "app/panels/EditorPanelPointerHitContext.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
+#include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
@@ -211,6 +212,13 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (inspectorPointer.ShouldCaptureMouse()) {
             SetCapture(messageWindow);
         }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (panelHit.inProjectSettingsPanel) {
+        EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
+        static_cast<void>(projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y));
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

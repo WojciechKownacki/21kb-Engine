@@ -8,8 +8,11 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputSubsystem.hpp"
+#include "engine/project/ProjectDescriptorWriter.hpp"
 
 #include "scene/input/EditorInputActionAuthoring.hpp"
 #include "scene/input/EditorInputAssetGateway.hpp"
@@ -382,6 +385,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     kb::scene::SceneInputActivation::Apply(scene_);
+    ActivateProjectInput();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
 }
@@ -1201,6 +1205,51 @@ bool EditorSceneContext::CycleInputActionValueType(kb::assets::AssetId id) {
 
 bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {
     return InputActionAuthoring().ToggleConsume(id);
+}
+
+bool EditorSceneContext::ToggleProjectInputEnabled() {
+    project_.inputEnabled = !project_.inputEnabled;
+    return SaveProjectDescriptor();
+}
+
+bool EditorSceneContext::CycleProjectInputMappingContext() {
+    // "(none)" is the first option so the project input can also be cleared.
+    std::vector<std::string> options{ std::string{} };
+    for (const kb::assets::AssetMetadata& metadata : scene_.Assets().Manager().Registry().All()) {
+        if (metadata.type == "InputMappingContext") {
+            options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
+        }
+    }
+    std::sort(options.begin() + 1, options.end());
+
+    const auto found = std::ranges::find(options, project_.inputMappingContext);
+    std::size_t index = found != options.end() ? static_cast<std::size_t>(std::distance(options.begin(), found)) : 0U;
+    index = (index + 1U) % options.size();
+    project_.inputMappingContext = options[index];
+    return SaveProjectDescriptor();
+}
+
+void EditorSceneContext::ActivateProjectInput() {
+    if (!project_.inputEnabled || project_.inputMappingContext.empty()) {
+        return;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().FindByPath(project_.inputMappingContext);
+    if (metadata != nullptr && metadata->type == "InputMappingContext") {
+        static_cast<void>(scene_.Input().AddMappingContext(metadata->id.value, 0));
+    }
+}
+
+bool EditorSceneContext::SaveProjectDescriptor() {
+    if (projectFile_.empty()) {
+        return false;
+    }
+    const bool saved = kb::project::ProjectDescriptorWriter::Write(projectFile_, project_);
+    if (saved) {
+        console_.Info("Project", "Project settings saved.");
+    } else {
+        console_.Error("Project", "Project settings could not be saved.");
+    }
+    return saved;
 }
 
 bool EditorSceneContext::AddInputComponent(kb::scene::SceneEntity entity) {

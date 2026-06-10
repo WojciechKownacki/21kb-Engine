@@ -45,7 +45,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         !StringFits(descriptor.category) ||
         !StringFits(descriptor.description) ||
         !StringFits(descriptor.contentRoot) ||
-        !StringFits(descriptor.defaultScene)) {
+        !StringFits(descriptor.defaultScene) ||
+        !StringFits(descriptor.inputMappingContext)) {
         return false;
     }
 
@@ -98,6 +99,10 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         WriteString(output, plugin.name);
         WriteBool(output, plugin.enabled);
     }
+
+    // File version 2+: project-wide input settings.
+    WriteString(output, descriptor.inputMappingContext);
+    WriteBool(output, descriptor.inputEnabled);
     return output;
 }
 
