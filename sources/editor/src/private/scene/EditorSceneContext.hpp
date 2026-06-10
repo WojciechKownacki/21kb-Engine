@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -34,12 +35,17 @@ enum class InputKey : std::uint16_t;
 
 } // namespace kb::input
 
+namespace kb::script {
+
+class ScriptRuntimeHost;
+
+} // namespace kb::script
+
 namespace kb::editor {
 
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
-class EditorInputComponentAuthoring;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -49,6 +55,10 @@ enum class EditorDirtySceneResolution {
 class EditorSceneContext {
 public:
     EditorSceneContext();
+    ~EditorSceneContext();
+
+    EditorSceneContext(const EditorSceneContext&) = delete;
+    EditorSceneContext& operator=(const EditorSceneContext&) = delete;
 
     [[nodiscard]] kb::scene::Scene& Scene() noexcept;
     [[nodiscard]] const kb::scene::Scene& Scene() const noexcept;
@@ -187,12 +197,6 @@ public:
     [[nodiscard]] bool ToggleProjectInputEnabled();
     bool CloseProjectSettingsDropdowns() noexcept;
 
-    [[nodiscard]] bool AddInputComponent(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool RemoveInputComponent(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool ToggleInputComponentEnabled(kb::scene::SceneEntity entity);
-    [[nodiscard]] bool SetInputComponentPriority(kb::scene::SceneEntity entity, std::int32_t priority);
-    [[nodiscard]] bool CycleInputComponentMappingContext(kb::scene::SceneEntity entity);
-
     [[nodiscard]] std::optional<kb::input::InputMappingContextAsset> ReadInputMappingContextAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool AddInputMapping(kb::assets::AssetId id);
     [[nodiscard]] bool RemoveInputMapping(kb::assets::AssetId id, std::size_t index);
@@ -216,8 +220,8 @@ private:
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
-    [[nodiscard]] EditorInputComponentAuthoring InputComponentAuthoring() noexcept;
     void ActivateProjectInput();
+    void EnsureScriptRuntime();
     [[nodiscard]] bool SaveProjectDescriptor();
     void ClearSceneDocumentDirty() noexcept;
     void InvalidateHierarchyRows() noexcept;
@@ -258,6 +262,9 @@ private:
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;
+    // Declared last so it is destroyed before scene_: the script host installs a
+    // scene system that references the scene.
+    std::unique_ptr<kb::script::ScriptRuntimeHost> scriptHost_;
 };
 
 } // namespace kb::editor

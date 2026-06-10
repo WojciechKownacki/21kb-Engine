@@ -6,8 +6,6 @@
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
-#include "engine/scene/InputComponent.hpp"
-#include "engine/scene/SceneComponents.hpp"
 #include "platform/win32/Win32InputKeyMap.hpp"
 
 #include <array>
@@ -79,32 +77,6 @@ bool InspectorInputInteraction::HandleMappingClick(EditorSceneContext& sceneCont
         break;
     case InspectorPropertyId::InputMappingAdd:
         static_cast<void>(sceneContext.AddInputMapping(imc));
-        break;
-    default:
-        break;
-    }
-    return true;
-}
-
-bool InspectorInputInteraction::HandleComponentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputComponentPriority) {
-        const kb::scene::InputComponent* component = sceneContext.Scene().Components().Inputs().TryGet(entity);
-        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::InputComponentPriority, std::to_string(component != nullptr ? component->priority : 0));
-        return true;
-    }
-    sceneContext.Inspector().EndTextEdit();
-    switch (hit.property) {
-    case InspectorPropertyId::InputComponentEnabled:
-        static_cast<void>(sceneContext.ToggleInputComponentEnabled(entity));
-        break;
-    case InspectorPropertyId::InputComponentMappingContext:
-        static_cast<void>(sceneContext.CycleInputComponentMappingContext(entity));
-        break;
-    case InspectorPropertyId::InputComponentRemove:
-        static_cast<void>(sceneContext.RemoveInputComponent(entity));
-        break;
-    case InspectorPropertyId::InputComponentAdd:
-        static_cast<void>(sceneContext.AddInputComponent(entity));
         break;
     default:
         break;

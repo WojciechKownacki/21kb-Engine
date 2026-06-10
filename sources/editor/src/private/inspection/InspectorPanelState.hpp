@@ -19,7 +19,6 @@ enum class InspectorSectionId : std::uint8_t {
     Folder,
     InputAction,
     InputMappings,
-    Input,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -53,11 +52,6 @@ enum class InspectorPropertyId : std::uint8_t {
     InputActionName,
     InputActionValueType,
     InputActionConsume,
-    InputComponentEnabled,
-    InputComponentPriority,
-    InputComponentMappingContext,
-    InputComponentAdd,
-    InputComponentRemove,
     InputMappingKey,
     InputMappingAction,
     InputMappingScale,
@@ -127,7 +121,6 @@ private:
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
-    bool inputCollapsed_ = false;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;

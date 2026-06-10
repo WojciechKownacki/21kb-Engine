@@ -3,11 +3,9 @@
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputAssetIO.hpp"
-#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -801,19 +799,6 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         y = section.Bottom() + kSectionGap;
     }
 
-    {
-        const kb::scene::InputComponent* input = scene.Components().Inputs().TryGet(selected);
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Input, HeroIconKind::Gamepad2, "Input");
-        if (input != nullptr) {
-            section.Bool("Enabled", input->enabled, InspectorPropertyId::InputComponentEnabled);
-            section.Field("Priority", std::to_string(input->priority), InspectorPropertyId::InputComponentPriority);
-            section.Field("Mapping Context", AssetDisplayName(sceneContext, input->mappingContextAssetId), InspectorPropertyId::InputComponentMappingContext);
-            section.Field("", "Remove Component", InspectorPropertyId::InputComponentRemove);
-        } else {
-            section.Field("", "Add Input Component", InspectorPropertyId::InputComponentAdd);
-        }
-        y = section.Bottom() + kSectionGap;
-    }
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit MakeHit(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, RECT rect) noexcept {
@@ -1089,38 +1074,6 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         }
         AdvanceRow(y);
     }
-    y += kSectionGap;
-
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Input, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    if (!state.IsCollapsed(InspectorSectionId::Input)) {
-        if (sceneContext.Scene().Components().Inputs().Has(selected)) {
-            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentEnabled, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentPriority, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentMappingContext, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentRemove, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-        } else {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Input, InspectorPropertyId::InputComponentAdd, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-        }
-    }
-    y += kSectionGap;
-
     return {};
 }
 
