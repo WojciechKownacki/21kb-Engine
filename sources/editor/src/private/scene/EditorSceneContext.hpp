@@ -10,6 +10,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
+#include "scene/EditorProjectSettingsState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -74,6 +75,8 @@ public:
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
+    [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
+    [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
     [[nodiscard]] const std::filesystem::path& ProjectFile() const noexcept;
     [[nodiscard]] const std::filesystem::path& CurrentScenePath() const noexcept;
@@ -179,8 +182,10 @@ public:
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
 
-    [[nodiscard]] bool CycleProjectInputMappingContext();
+    [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
+    [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
+    bool CloseProjectSettingsDropdowns() noexcept;
 
     [[nodiscard]] bool AddInputComponent(kb::scene::SceneEntity entity);
     [[nodiscard]] bool RemoveInputComponent(kb::scene::SceneEntity entity);
@@ -231,6 +236,7 @@ private:
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
+    EditorProjectSettingsState projectSettings_;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorHierarchyExpansionState hierarchyExpansion_;
