@@ -4,14 +4,10 @@
 #include "app/EditorTextInputShortcuts.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetId.hpp"
-#include "engine/input/InputActionAsset.hpp"
-#include "engine/input/InputKey.hpp"
-#include "engine/scene/InputComponent.hpp"
-#include "engine/scene/SceneComponents.hpp"
-#include "platform/win32/Win32InputCollector.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "inspection/InspectorInputInteraction.hpp"
 
 #include <algorithm>
 #include <array>
@@ -197,75 +193,6 @@ void SetTransformValue(kb::scene::Scene& scene, kb::scene::SceneEntity entity, I
         property == InspectorPropertyId::ScaleX || property == InspectorPropertyId::ScaleY || property == InspectorPropertyId::ScaleZ;
 }
 
-bool HandleInputActionAssetClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
-    const kb::assets::AssetId asset = sceneContext.AssetBrowser().SelectedAsset();
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputActionName) {
-        const std::optional<kb::input::InputActionAsset> current = sceneContext.ReadInputActionAsset(asset);
-        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::InputActionName, current.has_value() ? current->name : std::string{});
-        return true;
-    }
-    sceneContext.Inspector().EndTextEdit();
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputActionValueType) {
-        static_cast<void>(sceneContext.CycleInputActionValueType(asset));
-    } else if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::InputActionConsume) {
-        static_cast<void>(sceneContext.ToggleInputActionConsume(asset));
-    }
-    return true;
-}
-
-bool HandleInputMappingClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
-    const kb::assets::AssetId imc = sceneContext.AssetBrowser().SelectedAsset();
-    const auto index = static_cast<std::size_t>(hit.index < 0 ? 0 : hit.index);
-    if (hit.property == InspectorPropertyId::InputMappingKey) {
-        sceneContext.Inspector().BeginKeyCapture(hit.index);
-        return true;
-    }
-    sceneContext.Inspector().EndTextEdit();
-    switch (hit.property) {
-    case InspectorPropertyId::InputMappingAction:
-        static_cast<void>(sceneContext.CycleInputMappingAction(imc, index));
-        break;
-    case InspectorPropertyId::InputMappingTrigger:
-        static_cast<void>(sceneContext.CycleInputMappingTrigger(imc, index));
-        break;
-    case InspectorPropertyId::InputMappingRemove:
-        static_cast<void>(sceneContext.RemoveInputMapping(imc, index));
-        break;
-    case InspectorPropertyId::InputMappingAdd:
-        static_cast<void>(sceneContext.AddInputMapping(imc));
-        break;
-    default:
-        break;
-    }
-    return true;
-}
-
-bool HandleInputComponentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputComponentPriority) {
-        const kb::scene::InputComponent* component = sceneContext.Scene().Components().Inputs().TryGet(entity);
-        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::InputComponentPriority, std::to_string(component != nullptr ? component->priority : 0));
-        return true;
-    }
-    sceneContext.Inspector().EndTextEdit();
-    switch (hit.property) {
-    case InspectorPropertyId::InputComponentEnabled:
-        static_cast<void>(sceneContext.ToggleInputComponentEnabled(entity));
-        break;
-    case InspectorPropertyId::InputComponentMappingContext:
-        static_cast<void>(sceneContext.CycleInputComponentMappingContext(entity));
-        break;
-    case InspectorPropertyId::InputComponentRemove:
-        static_cast<void>(sceneContext.RemoveInputComponent(entity));
-        break;
-    case InspectorPropertyId::InputComponentAdd:
-        static_cast<void>(sceneContext.AddInputComponent(entity));
-        break;
-    default:
-        break;
-    }
-    return true;
-}
-
 } // namespace
 
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
@@ -299,10 +226,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     const bool assetSelected = sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset;
     if (assetSelected && hit.section == InspectorSectionId::InputAction) {
-        return HandleInputActionAssetClick(sceneContext, hit);
+        return InspectorInputInteraction::HandleActionAssetClick(sceneContext, hit);
     }
     if (assetSelected && hit.section == InspectorSectionId::InputMappings) {
-        return HandleInputMappingClick(sceneContext, hit);
+        return InspectorInputInteraction::HandleMappingClick(sceneContext, hit);
     }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
@@ -328,7 +255,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     if (hit.section == InspectorSectionId::Input) {
-        return HandleInputComponentClick(sceneContext, entity, hit);
+        return InspectorInputInteraction::HandleComponentClick(sceneContext, entity, hit);
     }
     return true;
 }
@@ -474,22 +401,7 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
 }
 
 bool InspectorPanelInteraction::HandleKeyCapture(EditorSceneContext& sceneContext, WPARAM virtualKey) {
-    InspectorPanelState& inspector = sceneContext.Inspector();
-    if (!inspector.IsListeningForKey()) {
-        return false;
-    }
-    if (virtualKey == VK_ESCAPE) {
-        inspector.EndKeyCapture();
-        return true;
-    }
-    const kb::input::InputKey key = Win32InputKeyFromVirtualKey(static_cast<int>(virtualKey));
-    const int index = inspector.KeyCaptureMappingIndex();
-    if (key != kb::input::InputKey::None && index >= 0 &&
-        sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
-        static_cast<void>(sceneContext.SetInputMappingKey(sceneContext.AssetBrowser().SelectedAsset(), static_cast<std::size_t>(index), key));
-    }
-    inspector.EndKeyCapture();
-    return true;
+    return InspectorInputInteraction::HandleKeyCapture(sceneContext, virtualKey);
 }
 
 bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept {
