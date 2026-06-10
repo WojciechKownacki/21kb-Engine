@@ -19,8 +19,17 @@ namespace kb::editor {
 // context is a project-wide setting, not a per-entity component.
 enum class ProjectSettingsHitKind : std::uint8_t {
     None,
-    MappingContextField,
+    CategoryItem,         // A row in the left category sidebar (see Hit::index).
+    MappingContextField,  // The closed selector box (click toggles the dropdown).
+    MappingContextOption, // A row inside the open dropdown list (see Hit::index).
     EnabledCheckbox,
+};
+
+// Categories shown in the left sidebar. Add entries here as the panel grows;
+// each maps to a content page rendered in the right pane.
+enum class ProjectSettingsCategory : int {
+    Inputs = 0,
+    Count,
 };
 #endif
 
@@ -29,6 +38,7 @@ public:
 #if defined(_WIN32)
     struct Hit {
         ProjectSettingsHitKind kind = ProjectSettingsHitKind::None;
+        int index = -1; // Option index when kind == MappingContextOption.
         RECT rect{};
     };
 
@@ -37,7 +47,7 @@ public:
         const RECT& content,
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext) const;
-    [[nodiscard]] static Hit HitTest(const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
 #endif
 };
 

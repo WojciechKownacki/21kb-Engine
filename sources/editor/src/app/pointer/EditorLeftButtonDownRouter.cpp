@@ -116,6 +116,12 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
 
+    // A click outside the Project Settings panel dismisses its open dropdown,
+    // then proceeds with normal handling of wherever the click landed.
+    if (!panelHit.inProjectSettingsPanel && sceneContext_.CloseProjectSettingsDropdowns()) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+
     if (!panelHit.sceneContent.has_value() && sceneContext_.CloseViewportToolbarDropdowns()) {
         sceneViewport_.RequestPresent();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
