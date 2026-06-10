@@ -6,21 +6,13 @@
 #define NOMINMAX
 #include <Windows.h>
 
-#include <cstdint>
-
 namespace kb::input {
 
 class InputDeviceState;
-enum class InputKey : std::uint16_t;
 
 } // namespace kb::input
 
 namespace kb::editor {
-
-// Maps a Win32 virtual-key (or mouse-button VK_*BUTTON) to an engine InputKey,
-// used by the inspector's "press a key to bind" capture. Returns InputKey::None
-// for keys that have no engine mapping.
-[[nodiscard]] kb::input::InputKey Win32InputKeyFromVirtualKey(int virtualKey) noexcept;
 
 // Fills an engine InputDeviceState each frame from Win32 keyboard/mouse and
 // XInput gamepad state. Lives in the editor (Win32-specific); the engine stays
