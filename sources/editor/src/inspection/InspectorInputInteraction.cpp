@@ -7,7 +7,7 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
-#include "platform/win32/Win32InputCollector.hpp"
+#include "platform/win32/Win32InputKeyMap.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -93,7 +93,7 @@ bool InspectorInputInteraction::HandleKeyCapture(EditorSceneContext& sceneContex
         inspector.EndKeyCapture();
         return true;
     }
-    const kb::input::InputKey key = Win32InputKeyFromVirtualKey(static_cast<int>(virtualKey));
+    const kb::input::InputKey key = Win32InputKeyMap::InputKeyForVirtualKey(static_cast<int>(virtualKey));
     const int index = inspector.KeyCaptureMappingIndex();
     if (key != kb::input::InputKey::None && index >= 0 &&
         sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
