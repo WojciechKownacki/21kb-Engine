@@ -9,6 +9,18 @@ class InputSubsystem;
 
 } // namespace kb::input
 
+namespace kb::modules {
+
+class EngineModuleHost;
+
+} // namespace kb::modules
+
+namespace kb::project {
+
+struct ProjectDescriptor;
+
+} // namespace kb::project
+
 namespace kb::scene {
 
 class SceneAssets;
@@ -30,6 +42,10 @@ class SceneTransforms;
 class Scene {
 public:
     Scene();
+    // Construct with an explicit project descriptor so the engine module host can
+    // honour its enabled/disabled module set. The default constructor delegates here
+    // with a default descriptor (every built-in engine module enabled).
+    explicit Scene(kb::project::ProjectDescriptor descriptor);
     ~Scene();
 
     Scene(const Scene&) = delete;
@@ -60,6 +76,7 @@ private:
     friend class SceneAccess;
 
     std::unique_ptr<SceneState> state_;
+    std::unique_ptr<kb::modules::EngineModuleHost> moduleHost_;
     std::uint64_t id_ = 0;
 };
 

@@ -11,6 +11,7 @@
 #include "app/docking/EditorMainDockSplitterPointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
 #include "app/panels/EditorPanelPointerHitContext.hpp"
+#include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
 #include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
@@ -231,6 +232,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (panelHit.inProjectSettingsPanel) {
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
         static_cast<void>(projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y));
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (panelHit.inPluginsPanel) {
+        EditorPluginsPointerController pluginsPointer(sceneContext_);
+        static_cast<void>(pluginsPointer.HandlePointerDown(*panelHit.pluginsContent, x, y));
+        if (sceneContext_.Plugins().IsScrollbarDragging()) {
+            SetCapture(messageWindow);
+        }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

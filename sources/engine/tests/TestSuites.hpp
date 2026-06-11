@@ -11,5 +11,6 @@ void RunProjectSceneTests();
 void RunScriptRuntimeTests();
 void RunVisualGraphTests();
 void RunInputTests();
+void RunEngineModuleTests();
 
 } // namespace kb::tests
