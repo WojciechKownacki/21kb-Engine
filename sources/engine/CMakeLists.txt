@@ -1,4 +1,7 @@
 add_library(kb_engine STATIC
+    include/engine/audio/AudioClipAsset.hpp
+    include/engine/audio/AudioClipAssetLoader.hpp
+    include/engine/audio/AudioPlayback.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetImportCatalog.hpp
@@ -68,12 +71,16 @@ add_library(kb_engine STATIC
     include/engine/ecs/world/WorldRelationApi.inl
     include/engine/ecs/world/WorldRuntimeApi.inl
     include/engine/ecs/world/WorldSerializationApi.inl
+    include/engine/scene/AudioListenerComponent.hpp
+    include/engine/scene/AudioSourceComponent.hpp
     include/engine/scene/CameraComponent.hpp
     include/engine/scene/ColliderComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
     include/engine/scene/RigidbodyComponent.hpp
     include/engine/scene/Scene.hpp
+    include/engine/scene/SceneAudioListenerComponents.hpp
+    include/engine/scene/SceneAudioSourceComponents.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetMeta.hpp
     include/engine/scene/SceneBehaviourComponents.hpp
@@ -128,6 +135,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptApiNameCollector.hpp
     include/engine/script/ScriptApiNameRegistry.hpp
     include/engine/script/ScriptApiDeclarationParser.hpp
+    include/engine/script/ScriptAudioApi.hpp
     include/engine/script/ScriptAsset.hpp
     include/engine/script/ScriptAssetLoader.hpp
     include/engine/script/ScriptBackend.hpp
@@ -181,6 +189,8 @@ add_library(kb_engine STATIC
     include/engine/modules/IEngineModule.hpp
     include/engine/modules/EngineModuleHost.hpp
     src/modules/EngineModuleHost.cpp
+    src/audio/AudioClipAssetLoader.cpp
+    src/audio/AudioPlayback.cpp
     src/assets/AssetId.cpp
     src/assets/AssetDiscoveryService.cpp
     src/assets/AssetFileOperations.cpp
@@ -295,6 +305,13 @@ add_library(kb_engine STATIC
     src/scene/SceneState.cpp
     src/scene/SceneTransformIterationService.cpp
     src/scene/asset/io/SceneAssetBinaryIO.cpp
+    src/scene/asset/io/SceneAssetComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetAudioComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetBehaviourComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetCameraComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetInputComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetPhysicsComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetRenderComponentCodec.cpp
     src/scene/asset/io/SceneAssetIntegrity.cpp
     src/scene/asset/io/SceneAssetMetaReader.cpp
     src/scene/asset/io/SceneAssetMetaWriter.cpp
@@ -306,6 +323,10 @@ add_library(kb_engine STATIC
     src/scene/components/SceneComponentAccess.cpp
     src/scene/components/SceneComponentRegistry.cpp
     src/scene/components/SceneComponentStorage.cpp
+    src/scene/components/SceneAudioListenerApi.cpp
+    src/scene/components/SceneAudioListenerStorage.cpp
+    src/scene/components/SceneAudioSourceApi.cpp
+    src/scene/components/SceneAudioSourceStorage.cpp
     src/scene/components/SceneBehaviourApi.cpp
     src/scene/components/SceneBehaviourIteration.cpp
     src/scene/components/SceneBehaviourStorage.cpp
@@ -353,6 +374,8 @@ add_library(kb_engine STATIC
     src/scene/history/SceneHistoryStack.cpp
     src/scene/document/SceneDocumentCaptureService.cpp
     src/scene/document/SceneDocumentService.cpp
+    src/scene/modules/components/SceneAudioListenerModule.cpp
+    src/scene/modules/components/SceneAudioSourceModule.cpp
     src/scene/modules/components/SceneCameraModule.cpp
     src/scene/modules/components/SceneBehaviourModule.cpp
     src/scene/modules/components/SceneComponentIterationModule.cpp
@@ -505,6 +528,7 @@ add_library(kb_engine STATIC
     src/script/ScriptApiNameCollector.cpp
     src/script/ScriptApiNameRegistry.cpp
     src/script/ScriptApiDeclarationParser.cpp
+    src/script/ScriptAudioApi.cpp
     src/script/ScriptAssetLoader.cpp
     src/script/ScriptBehaviourAsset.cpp
     src/script/ScriptBehaviourBindingService.cpp
@@ -547,6 +571,8 @@ add_library(kb_engine STATIC
     src/private/project/ProjectDescriptorIntegrity.hpp
     src/private/project/ProjectDescriptorMetaReader.hpp
     src/private/project/ProjectDescriptorMetaWriter.hpp
+    src/private/scene/components/SceneAudioListenerComponentStore.hpp
+    src/private/scene/components/SceneAudioSourceComponentStore.hpp
     src/private/scene/components/SceneCameraComponentStore.hpp
     src/private/scene/components/SceneComponentIteration.hpp
     src/private/scene/components/SceneComponentIterationAccess.hpp
@@ -592,9 +618,17 @@ add_library(kb_engine STATIC
     src/private/scene/assets/SceneAssetLoader.hpp
     src/private/scene/asset/io/SceneAssetFormat.hpp
     src/private/scene/asset/io/SceneAssetBinaryIO.hpp
+    src/private/scene/asset/io/SceneAssetComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetAudioComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetBehaviourComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetCameraComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetInputComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetRenderComponentCodec.hpp
     src/private/scene/asset/io/SceneAssetIntegrity.hpp
     src/private/scene/asset/io/SceneAssetMetaReader.hpp
     src/private/scene/asset/io/SceneAssetMetaWriter.hpp
+    src/private/scene/asset/io/SceneAssetPrimitiveCodec.hpp
     src/private/scene/asset/io/SceneAssetReader.hpp
     src/private/scene/asset/io/SceneAssetWriter.hpp
     src/private/scene/assets/ScenePrefabAssetLoader.hpp
@@ -890,6 +924,7 @@ if(BUILD_TESTING)
         tests/EcsTestTypes.hpp
         tests/ProjectSceneTests.cpp
         tests/PhysicsSceneSystemTests.cpp
+        tests/AudioSceneSystemTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp

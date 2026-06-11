@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/audio/AudioClipAsset.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAsset.hpp"
@@ -261,6 +262,26 @@ void RunScenePrefabRuntimeAssetTest() {
     kb::tests::Require(copyInstance.ObjectCount() == 1, "Runtime-loaded duplicate GUID prefab did not instantiate");
 }
 
+void RunSceneAudioClipAssetDiscoveryTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path projectRoot = TestRoot() / "AudioProject";
+    const std::filesystem::path clipPath = projectRoot / "Assets" / "Audio" / "Ping.wav";
+    WriteTextFile(clipPath, "audio bytes");
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Scene audio asset project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Scene audio asset discovery did not find the wav file");
+
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Audio/Ping.wav");
+    kb::tests::Require(metadata != nullptr, "Discovered audio asset could not be resolved by virtual path");
+    kb::tests::Require(metadata->type == "AudioClip", "Discovered audio asset was not classified as AudioClip");
+
+    const kb::assets::AssetHandle<kb::audio::AudioClipAsset> loaded = scene.Assets().Manager().Load<kb::audio::AudioClipAsset>(metadata->id);
+    kb::tests::Require(loaded.IsLoaded(), "Audio clip asset did not load through the runtime asset manager");
+    kb::tests::Require(loaded->path == clipPath, "Audio clip asset did not preserve the resolved physical path");
+}
+
 void RunScriptAssetPipelineTest() {
     ResetTestRoot();
 
@@ -352,6 +373,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
     RunScenePrefabRuntimeAssetTest();
+    RunSceneAudioClipAssetDiscoveryTest();
     RunScriptAssetPipelineTest();
 }
 

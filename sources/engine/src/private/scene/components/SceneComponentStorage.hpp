@@ -3,6 +3,8 @@
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "scene/components/SceneAudioListenerComponentStore.hpp"
+#include "scene/components/SceneAudioSourceComponentStore.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
 #include "scene/components/SceneColliderComponentStore.hpp"
@@ -43,6 +45,10 @@ public:
     [[nodiscard]] SceneRigidbodyComponentStore& Rigidbodies() noexcept;
     [[nodiscard]] const SceneColliderComponentStore& Colliders() const noexcept;
     [[nodiscard]] SceneColliderComponentStore& Colliders() noexcept;
+    [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
+    [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
+    [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
+    [[nodiscard]] SceneAudioListenerComponentStore& AudioListeners() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -54,6 +60,8 @@ private:
     SceneInputComponentStore inputs_;
     SceneRigidbodyComponentStore rigidbodies_;
     SceneColliderComponentStore colliders_;
+    SceneAudioSourceComponentStore audioSources_;
+    SceneAudioListenerComponentStore audioListeners_;
 };
 
 } // namespace kb::scene

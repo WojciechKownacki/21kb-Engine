@@ -1,5 +1,8 @@
 #pragma once
 
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
@@ -24,6 +27,9 @@ struct ScenePrefabNodeComponents {
     std::optional<InputComponent> input;
     std::optional<RigidbodyComponent> rigidbody;
     std::optional<ColliderComponent> collider;
+    std::optional<BehaviourComponent> behaviour;
+    std::optional<AudioSourceComponent> audioSource;
+    std::optional<AudioListenerComponent> audioListener;
 };
 
 struct ScenePrefabNodeDesc {

@@ -1,5 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
 
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -209,6 +210,7 @@ void EditorSceneContext::EnsureScriptRuntime() {
 
     auto scriptModule = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
     kb::script::ScriptModule* scriptModuleView = scriptModule.get();
+    scriptModule_ = scriptModuleView;
     scriptModuleHost_ = std::make_unique<kb::modules::EngineModuleHost>(project_);
     scriptModuleHost_->Add(std::move(scriptModule));
     scriptModuleHost_->Load(scene_->Runtime().EcsWorld());
@@ -227,6 +229,16 @@ void EditorSceneContext::EnsureScriptRuntime() {
     } else {
         console_.Info("Scripts", "Script runtime ready for play mode.");
     }
+}
+
+void EditorSceneContext::ResetScriptRuntimeStateForPlayMode() {
+    if (scriptModule_ == nullptr || scriptModule_->Host() == nullptr) {
+        return;
+    }
+    kb::script::ScriptRuntimeHost& host = *scriptModule_->Host();
+    host.LuaRuntime().Clear();
+    host.VisualGraphInstances().Clear();
+    host.SharedState().Clear();
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
@@ -469,6 +481,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (!SaveDirtySceneDocument("entering play mode")) {
         return false;
     }
+    kb::audio::AudioPlayback::StopAll(*scene_);
 
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
     if (!playModeSceneSession_.Begin(*scene_, name)) {
@@ -476,6 +489,7 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
         return false;
     }
     EnsureScriptRuntime();
+    ResetScriptRuntimeStateForPlayMode();
     kb::scene::SceneInputActivation::Apply(*scene_);
     ActivateProjectInput();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
@@ -486,6 +500,7 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     if (!playModeSceneSession_.Active()) {
         return true;
     }
+    kb::audio::AudioPlayback::StopAll(*scene_);
     kb::scene::SceneInputActivation::Clear(*scene_);
     if (!playModeSceneSession_.Restore(*scene_)) {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
@@ -519,6 +534,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         scriptModuleHost_->DetachScene(*scene_);
         scriptModuleHost_->Unload();
         scriptModuleHost_.reset();
+        scriptModule_ = nullptr;
     }
 
     auto nextScene = std::make_unique<kb::scene::Scene>(project_);
@@ -594,6 +610,10 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
 }
 
 bool EditorSceneContext::SaveCurrentScene() {
+    if (playModeSceneSession_.Active()) {
+        console_.Warning("Project", "Scene save ignored while play mode is active. Stop play mode before saving.");
+        return false;
+    }
     if (currentScenePath_.empty()) {
         currentScenePath_ = EditorProjectPaths::DefaultScenePath();
     }
@@ -602,7 +622,8 @@ bool EditorSceneContext::SaveCurrentScene() {
 }
 
 bool EditorSceneContext::SaveCurrentSceneAs(const std::filesystem::path& path) {
-    if (!RestorePlayModeSceneSession()) {
+    if (playModeSceneSession_.Active()) {
+        console_.Warning("Project", "Save As ignored while play mode is active. Stop play mode before saving.");
         return false;
     }
     return SaveSceneToPath(path);

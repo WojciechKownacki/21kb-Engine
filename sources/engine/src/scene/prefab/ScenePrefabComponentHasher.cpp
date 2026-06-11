@@ -71,6 +71,31 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::MixFloat(hash, components.collider->height);
         ScenePrefabHashBuilder::Mix(hash, components.collider->trigger ? 1U : 0U);
     }
+
+    ScenePrefabHashBuilder::Mix(hash, components.behaviour.has_value() ? 1U : 0U);
+    if (components.behaviour.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.behaviour->behaviourAssetId);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.behaviour->backend));
+        ScenePrefabHashBuilder::Mix(hash, components.behaviour->enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.behaviour->tickGroup));
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.behaviour->executionOrder)));
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.audioSource.has_value() ? 1U : 0U);
+    if (components.audioSource.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->clipAssetId);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->volume);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->pitch);
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->loop ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->spatial ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->autoplay ? 1U : 0U);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.audioListener.has_value() ? 1U : 0U);
+    if (components.audioListener.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, components.audioListener->primary ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.audioListener->enabled ? 1U : 0U);
+    }
 }
 
 } // namespace kb::scene

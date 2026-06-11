@@ -17,6 +17,12 @@
 #include <optional>
 #include <unordered_map>
 
+namespace kb::audio {
+
+class IAudioPlaybackBackend;
+
+} // namespace kb::audio
+
 namespace kb::scene {
 
 class SceneState {
@@ -52,6 +58,7 @@ public:
     std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::uint64_t nextHierarchyOrder = 1;
+    kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
 };
 
 } // namespace kb::scene

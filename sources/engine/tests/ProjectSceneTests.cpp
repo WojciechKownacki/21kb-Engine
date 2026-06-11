@@ -5,6 +5,9 @@
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -13,6 +16,7 @@
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/ecs/ComponentSerialization.hpp"
 #include "engine/ecs/World.hpp"
@@ -131,6 +135,25 @@ void RunSceneDocumentRoundTripTest() {
         .height = 2.5F,
         .trigger = true,
     });
+    source.Components().AudioSources().Set(child, kb::scene::AudioSourceComponent{
+        .clipAssetId = 90,
+        .volume = 0.25F,
+        .pitch = 1.5F,
+        .loop = true,
+        .spatial = false,
+        .autoplay = true,
+    });
+    source.Components().AudioListeners().Set(secondRoot, kb::scene::AudioListenerComponent{
+        .primary = true,
+        .enabled = false,
+    });
+    source.Components().Behaviours().Set(child, kb::scene::BehaviourComponent{
+        .behaviourAssetId = 91,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
+        .executionOrder = -3,
+    });
 
     Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "RoundTrip"), "Scene document was not saved");
 
@@ -149,11 +172,107 @@ void RunSceneDocumentRoundTripTest() {
     const kb::scene::CameraComponent* camera = target.Components().Cameras().TryGet(roots[1]);
     const kb::scene::RigidbodyComponent* rigidbody = target.Components().Rigidbodies().TryGet(roots[0]);
     const kb::scene::ColliderComponent* collider = target.Components().Colliders().TryGet(roots[0]);
+    const kb::scene::AudioSourceComponent* audioSource = target.Components().AudioSources().TryGet(restoredChildren[0]);
+    const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(roots[1]);
+    const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(restoredChildren[0]);
     Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 41 && !meshRenderer->castsShadow, "Scene document mesh renderer did not roundtrip");
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
     Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F), "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
     Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
+    Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay, "Scene document audio source did not roundtrip");
+    Require(audioListener != nullptr && audioListener->primary && !audioListener->enabled, "Scene document audio listener did not roundtrip");
+    Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
+}
+
+void RunSceneAudioListenerComponentReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioListener" });
+    source.Components().AudioListeners().Set(sourceEntity, kb::scene::AudioListenerComponent{
+        .primary = false,
+        .enabled = true,
+    });
+
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.AudioListenerComponent");
+    Require(reflection != nullptr, "AudioListenerComponent reflection was not registered");
+    Require(reflection->FindField("primary") != nullptr, "AudioListenerComponent reflection is missing primary");
+
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AudioListenerComponent>(), serialized), "AudioListenerComponent reflection serialization failed");
+
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioListenerTarget" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "AudioListenerComponent reflection apply failed");
+
+    const kb::scene::AudioListenerComponent* restored = target.Components().AudioListeners().TryGet(targetEntity);
+    Require(restored != nullptr && !restored->primary && restored->enabled, "AudioListenerComponent reflection did not roundtrip");
+}
+
+void RunSceneAudioSourceComponentReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioSource" });
+    source.Components().AudioSources().Set(sourceEntity, kb::scene::AudioSourceComponent{
+        .clipAssetId = 777,
+        .volume = 0.6F,
+        .pitch = 0.8F,
+        .loop = true,
+        .spatial = false,
+        .autoplay = true,
+    });
+
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.AudioSourceComponent");
+    Require(reflection != nullptr, "AudioSourceComponent reflection was not registered");
+    Require(reflection->FindField("clipAssetId") != nullptr, "AudioSourceComponent reflection is missing clipAssetId");
+
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AudioSourceComponent>(), serialized), "AudioSourceComponent reflection serialization failed");
+
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AudioTarget" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "AudioSourceComponent reflection apply failed");
+
+    const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(targetEntity);
+    Require(restored != nullptr && restored->clipAssetId == 777 && NearlyEqual(restored->volume, 0.6F) && NearlyEqual(restored->pitch, 0.8F) && restored->loop && !restored->spatial && restored->autoplay, "AudioSourceComponent reflection did not roundtrip");
+}
+
+void RunSceneAudioSourcePrefabRoundTripTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AudioPrefab" });
+    source.Components().AudioSources().Set(root.Entity(), kb::scene::AudioSourceComponent{
+        .clipAssetId = 1234,
+        .volume = 0.7F,
+        .pitch = 1.2F,
+        .loop = true,
+        .spatial = true,
+        .autoplay = false,
+    });
+
+    kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(prefab);
+    Require(!instance.Empty(), "Audio source prefab did not instantiate");
+
+    const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(instance.ObjectAt(0).Entity());
+    Require(restored != nullptr && restored->clipAssetId == 1234 && NearlyEqual(restored->volume, 0.7F) && NearlyEqual(restored->pitch, 1.2F) && restored->loop && restored->spatial && !restored->autoplay, "Audio source prefab component did not roundtrip");
+}
+
+void RunSceneAudioListenerPrefabRoundTripTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneObject root = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "AudioListenerPrefab" });
+    source.Components().AudioListeners().Set(root.Entity(), kb::scene::AudioListenerComponent{
+        .primary = false,
+        .enabled = false,
+    });
+
+    kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
+    kb::scene::Scene target;
+    const kb::scene::ScenePrefabInstance instance = target.Prefabs().Instantiate(prefab);
+    Require(!instance.Empty(), "Audio listener prefab did not instantiate");
+
+    const kb::scene::AudioListenerComponent* restored = target.Components().AudioListeners().TryGet(instance.ObjectAt(0).Entity());
+    Require(restored != nullptr && !restored->primary && !restored->enabled, "Audio listener prefab component did not roundtrip");
 }
 
 void RunScenePhysicsComponentReflectionSerializationTest() {
@@ -279,6 +398,10 @@ void RunProjectSceneTests() {
     RunProjectDescriptorRoundTripTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
+    RunSceneAudioListenerComponentReflectionSerializationTest();
+    RunSceneAudioSourceComponentReflectionSerializationTest();
+    RunSceneAudioListenerPrefabRoundTripTest();
+    RunSceneAudioSourcePrefabRoundTripTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneDocumentAssetDiscoveryTest();
