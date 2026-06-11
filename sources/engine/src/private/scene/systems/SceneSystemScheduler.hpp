@@ -21,6 +21,7 @@ public:
 
     void Add(std::unique_ptr<SceneSystem> system, Scene& scene);
     void Update(Scene& scene, float deltaSeconds);
+    void FixedUpdate(Scene& scene, float fixedDeltaSeconds);
     void Shutdown(Scene& scene) noexcept;
 
 private:

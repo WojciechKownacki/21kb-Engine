@@ -26,6 +26,13 @@ void SceneSystemScheduler::Update(Scene& scene, float deltaSeconds) {
     }
 }
 
+void SceneSystemScheduler::FixedUpdate(Scene& scene, float fixedDeltaSeconds) {
+    SceneSystemContext context{ scene, fixedDeltaSeconds };
+    for (const auto& system : systems_) {
+        system->OnFixedUpdate(context);
+    }
+}
+
 void SceneSystemScheduler::Shutdown(Scene& scene) noexcept {
     SceneSystemContext context{ scene, 0.0F };
     for (auto it = systems_.rbegin(); it != systems_.rend(); ++it) {
