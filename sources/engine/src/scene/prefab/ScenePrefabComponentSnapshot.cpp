@@ -35,6 +35,18 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.collider = *collider;
     }
 
+    if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
+        components.behaviour = *behaviour;
+    }
+
+    if (const AudioSourceComponent* audioSource = sceneComponents.AudioSources().TryGet(entity)) {
+        components.audioSource = *audioSource;
+    }
+
+    if (const AudioListenerComponent* audioListener = sceneComponents.AudioListeners().TryGet(entity)) {
+        components.audioListener = *audioListener;
+    }
+
     return components;
 }
 

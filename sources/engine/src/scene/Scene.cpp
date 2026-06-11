@@ -1,5 +1,6 @@
 #include "engine/scene/Scene.hpp"
 
+#include "engine/audio/AudioClipAssetLoader.hpp"
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
@@ -37,6 +38,7 @@ Scene::Scene(kb::project::ProjectDescriptor descriptor)
     const bool registeredVisualGraphLoader = state_->assets.RegisterLoader(std::make_unique<kb::visual::VisualGraphAssetLoader>());
     const bool registeredInputActionLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputActionAssetLoader>());
     const bool registeredInputContextLoader = state_->assets.RegisterLoader(std::make_unique<kb::input::InputMappingContextAssetLoader>());
+    const bool registeredAudioClipLoader = state_->assets.RegisterLoader(std::make_unique<kb::audio::AudioClipAssetLoader>());
     const bool registeredImportedAssetLoader = state_->assets.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>());
     static_cast<void>(registeredPrefabLoader);
     static_cast<void>(registeredSceneLoader);
@@ -45,6 +47,7 @@ Scene::Scene(kb::project::ProjectDescriptor descriptor)
     static_cast<void>(registeredVisualGraphLoader);
     static_cast<void>(registeredInputActionLoader);
     static_cast<void>(registeredInputContextLoader);
+    static_cast<void>(registeredAudioClipLoader);
     static_cast<void>(registeredImportedAssetLoader);
 
     // Subsystems are driven through the engine module host instead of being wired
@@ -62,10 +65,12 @@ Scene::Scene(kb::project::ProjectDescriptor descriptor)
 Scene::~Scene() {
     if (moduleHost_ != nullptr) {
         moduleHost_->DetachScene(*this);
-        moduleHost_->Unload();
     }
     state_->sceneSystemScheduler.Shutdown(*this);
     state_->systemScheduler.Shutdown(state_->world);
+    if (moduleHost_ != nullptr) {
+        moduleHost_->Unload();
+    }
 }
 
 kb::input::InputSubsystem& Scene::Input() noexcept {

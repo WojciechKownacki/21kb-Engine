@@ -3,9 +3,11 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/SceneAssetMeta.hpp"
 #include "scene/asset/io/SceneAssetBinaryIO.hpp"
+#include "scene/asset/io/SceneAssetComponentCodec.hpp"
 #include "scene/asset/io/SceneAssetFormat.hpp"
 #include "scene/asset/io/SceneAssetIntegrity.hpp"
 #include "scene/asset/io/SceneAssetMetaWriter.hpp"
+#include "scene/asset/io/SceneAssetPrimitiveCodec.hpp"
 
 #include <algorithm>
 #include <set>
@@ -15,21 +17,10 @@ namespace kb::scene {
 namespace {
 
 using SceneAssetBinaryIO::WriteBytesAtomically;
-using SceneAssetBinaryIO::WriteFloat;
 using SceneAssetBinaryIO::WriteRaw;
 using SceneAssetBinaryIO::WriteString;
 using SceneAssetBinaryIO::WriteUInt8;
 using SceneAssetBinaryIO::WriteUInt32;
-using SceneAssetBinaryIO::WriteUInt64;
-
-enum SceneNodeComponentBits : std::uint32_t {
-    CameraBit = 1U << 0U,
-    MeshRendererBit = 1U << 1U,
-    LightBit = 1U << 2U,
-    InputBit = 1U << 3U,
-    RigidbodyBit = 1U << 4U,
-    ColliderBit = 1U << 5U,
-};
 
 [[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& scenePath) {
     std::filesystem::path metaPath = scenePath;
@@ -47,78 +38,6 @@ enum SceneNodeComponentBits : std::uint32_t {
     return count;
 }
 
-void WriteVec3(std::vector<std::uint8_t>& output, Vec3 value) {
-    WriteFloat(output, value.x);
-    WriteFloat(output, value.y);
-    WriteFloat(output, value.z);
-}
-
-void WriteQuat(std::vector<std::uint8_t>& output, Quat value) {
-    WriteFloat(output, value.x);
-    WriteFloat(output, value.y);
-    WriteFloat(output, value.z);
-    WriteFloat(output, value.w);
-}
-
-void WriteCamera(std::vector<std::uint8_t>& output, const CameraComponent& camera) {
-    WriteUInt32(output, static_cast<std::uint32_t>(camera.projection));
-    WriteFloat(output, camera.verticalFovDegrees);
-    WriteFloat(output, camera.orthographicHeight);
-    WriteFloat(output, camera.nearClip);
-    WriteFloat(output, camera.farClip);
-    WriteUInt8(output, camera.primary ? 1U : 0U);
-}
-
-void WriteMeshRenderer(std::vector<std::uint8_t>& output, const MeshRendererComponent& meshRenderer) {
-    WriteUInt64(output, meshRenderer.meshAssetId);
-    WriteUInt64(output, meshRenderer.materialAssetId);
-    WriteUInt32(output, meshRenderer.materialSlotOverrideCount);
-    for (const std::uint64_t materialSlotAssetId : meshRenderer.materialSlotAssetIds) {
-        WriteUInt64(output, materialSlotAssetId);
-    }
-    WriteUInt8(output, meshRenderer.castsShadow ? 1U : 0U);
-    WriteUInt8(output, meshRenderer.receivesShadow ? 1U : 0U);
-}
-
-void WriteLight(std::vector<std::uint8_t>& output, const LightComponent& light) {
-    WriteUInt32(output, static_cast<std::uint32_t>(light.kind));
-    WriteVec3(output, light.color);
-    WriteFloat(output, light.intensity);
-    WriteFloat(output, light.range);
-    WriteFloat(output, light.innerConeDegrees);
-    WriteFloat(output, light.outerConeDegrees);
-    WriteFloat(output, light.areaWidth);
-    WriteFloat(output, light.areaHeight);
-    WriteFloat(output, light.contactShadowLength);
-    WriteFloat(output, light.volumetricScattering);
-    WriteUInt8(output, light.castsShadow ? 1U : 0U);
-}
-
-void WriteInput(std::vector<std::uint8_t>& output, const InputComponent& input) {
-    WriteUInt64(output, input.mappingContextAssetId);
-    WriteUInt32(output, static_cast<std::uint32_t>(input.priority));
-    WriteUInt8(output, input.enabled ? 1U : 0U);
-}
-
-void WriteRigidbody(std::vector<std::uint8_t>& output, const RigidbodyComponent& rigidbody) {
-    WriteUInt32(output, static_cast<std::uint32_t>(rigidbody.bodyType));
-    WriteFloat(output, rigidbody.mass);
-    WriteVec3(output, rigidbody.linearVelocity);
-    WriteVec3(output, rigidbody.angularVelocity);
-    WriteFloat(output, rigidbody.gravityScale);
-    WriteUInt8(output, rigidbody.useGravity ? 1U : 0U);
-    WriteUInt8(output, rigidbody.lockRotation ? 1U : 0U);
-}
-
-void WriteCollider(std::vector<std::uint8_t>& output, const ColliderComponent& collider) {
-    WriteUInt32(output, static_cast<std::uint32_t>(collider.shape));
-    WriteVec3(output, collider.center);
-    WriteVec3(output, collider.boxSize);
-    WriteFloat(output, collider.radius);
-    WriteFloat(output, collider.height);
-    WriteUInt8(output, collider.trigger ? 1U : 0U);
-}
-
 void WriteNestedOverride(std::vector<std::uint8_t>& output, const ScenePrefabPropertyOverride& property) {
     WriteUInt32(output, property.nodeIndex);
     WriteUInt32(output, static_cast<std::uint32_t>(property.flag));
@@ -134,37 +53,11 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
         WriteNestedOverride(output, property);
     }
     WriteUInt32(output, node.parentNode);
-    WriteVec3(output, node.transform.localPosition);
-    WriteQuat(output, node.transform.localRotation);
-    WriteVec3(output, node.transform.localScale);
+    SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localPosition);
+    SceneAssetPrimitiveCodec::WriteQuat(output, node.transform.localRotation);
+    SceneAssetPrimitiveCodec::WriteVec3(output, node.transform.localScale);
     WriteUInt8(output, node.visibility.visible ? 1U : 0U);
-
-    std::uint32_t componentBits = 0;
-    componentBits |= node.components.camera.has_value() ? CameraBit : 0U;
-    componentBits |= node.components.meshRenderer.has_value() ? MeshRendererBit : 0U;
-    componentBits |= node.components.light.has_value() ? LightBit : 0U;
-    componentBits |= node.components.input.has_value() ? InputBit : 0U;
-    componentBits |= node.components.rigidbody.has_value() ? RigidbodyBit : 0U;
-    componentBits |= node.components.collider.has_value() ? ColliderBit : 0U;
-    WriteUInt32(output, componentBits);
-    if (node.components.camera.has_value()) {
-        WriteCamera(output, *node.components.camera);
-    }
-    if (node.components.meshRenderer.has_value()) {
-        WriteMeshRenderer(output, *node.components.meshRenderer);
-    }
-    if (node.components.light.has_value()) {
-        WriteLight(output, *node.components.light);
-    }
-    if (node.components.input.has_value()) {
-        WriteInput(output, *node.components.input);
-    }
-    if (node.components.rigidbody.has_value()) {
-        WriteRigidbody(output, *node.components.rigidbody);
-    }
-    if (node.components.collider.has_value()) {
-        WriteCollider(output, *node.components.collider);
-    }
+    SceneAssetComponentCodec::Write(output, node.components);
 }
 
 void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std::uint64_t>& seen, std::uint64_t rawId, std::string role) {
@@ -192,6 +85,12 @@ void AddDependency(std::vector<SceneAssetDependency>& dependencies, std::set<std
         if (!node.nestedPrefabGuid.empty()) {
             const kb::assets::AssetId nestedId = kb::assets::MakeAssetId(node.nestedPrefabGuid);
             AddDependency(dependencies, seen, nestedId.value, "nestedPrefab");
+        }
+        if (node.components.audioSource.has_value()) {
+            AddDependency(dependencies, seen, node.components.audioSource->clipAssetId, "audioClip");
+        }
+        if (node.components.behaviour.has_value()) {
+            AddDependency(dependencies, seen, node.components.behaviour->behaviourAssetId, "behaviour");
         }
     }
     std::ranges::sort(dependencies, [](const SceneAssetDependency& left, const SceneAssetDependency& right) {

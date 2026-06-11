@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -56,6 +58,16 @@ public:
     static void SetCollider(Scene& scene, SceneEntity entity, const ColliderComponent& collider);
     static void RemoveCollider(Scene& scene, SceneEntity entity) noexcept;
     static void MarkColliderModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static AudioSourceComponent* TryGetAudioSource(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource);
+    static void RemoveAudioSource(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAudioSourceModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static AudioListenerComponent* TryGetAudioListener(Scene& scene, SceneEntity entity) noexcept;
+    static void SetAudioListener(Scene& scene, SceneEntity entity, const AudioListenerComponent& audioListener);
+    static void RemoveAudioListener(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkAudioListenerModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

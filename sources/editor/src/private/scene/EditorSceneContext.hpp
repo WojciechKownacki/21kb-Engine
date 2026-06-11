@@ -45,6 +45,12 @@ class EngineModuleHost;
 
 } // namespace kb::modules
 
+namespace kb::script {
+
+class ScriptModule;
+
+} // namespace kb::script
+
 namespace kb::editor {
 
 class EditorSceneCommandController;
@@ -246,6 +252,7 @@ private:
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
     void ActivateProjectInput();
     void EnsureScriptRuntime();
+    void ResetScriptRuntimeStateForPlayMode();
     [[nodiscard]] bool SaveProjectDescriptor();
     void ClearSceneDocumentDirty() noexcept;
     void InvalidateHierarchyRows() noexcept;
@@ -294,6 +301,7 @@ private:
     bool hierarchyScrollbarDragging_ = false;
     // Declared last so it is destroyed before scene_: the script module installs
     // a scene system that references the scene.
+    kb::script::ScriptModule* scriptModule_ = nullptr;
     std::unique_ptr<kb::modules::EngineModuleHost> scriptModuleHost_;
 };
 

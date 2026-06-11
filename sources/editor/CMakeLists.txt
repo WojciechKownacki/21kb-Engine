@@ -713,6 +713,14 @@ if(TARGET kb_physics_jolt_plugin)
     )
 endif()
 
+if(TARGET kb_audio_miniaudio_plugin)
+    add_dependencies(kb_editor kb_audio_miniaudio_plugin)
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"$<TARGET_FILE:kb_audio_miniaudio_plugin>\""
+    )
+endif()
+
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32 xinput)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
@@ -801,6 +809,7 @@ if(BUILD_TESTING)
         src/assets/EditorAssetBrowserTreeHitTester.cpp
         src/assets/EditorAssetBrowserViewState.cpp
         src/commands/EditorCommandStack.cpp
+        src/scene/EditorDefaultSceneFactory.cpp
         src/scene/EditorHierarchyExpansionState.cpp
         src/scene/EditorHierarchyRowBuilder.cpp
         src/scene/EditorHierarchyRowFactory.cpp
