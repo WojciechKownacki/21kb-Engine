@@ -19,6 +19,10 @@ constexpr int kPadding = 14;
 constexpr int kScrollbarWidth = 12;
 constexpr int kScrollbarInset = 3;
 constexpr int kScrollbarMinThumb = 24;
+constexpr int kPluginColumnLeft = 30;
+constexpr int kPluginColumnRight = 230;
+constexpr int kStatusColumnRight = 330;
+constexpr int kCategoryColumnRight = 430;
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -105,9 +109,10 @@ void DrawHeader(HDC dc, const RECT& content) {
 void DrawColumnHeader(HDC dc, const RECT& content) {
     const RECT header = ColumnHeaderRect(content);
     GdiDrawing::FillRectColor(dc, header, RGB(24, 27, 31));
-    DrawText(dc, RECT{ header.left + kPadding + 30, header.top, header.left + 230, header.bottom }, "PLUGIN", RGB(150, 158, 168), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.left + 230, header.top, header.left + 330, header.bottom }, "CATEGORY", RGB(150, 158, 168), 11, FW_SEMIBOLD);
-    DrawText(dc, RECT{ header.left + 330, header.top, header.right - kPadding, header.bottom }, "BINARY", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPadding + kPluginColumnLeft, header.top, header.left + kPluginColumnRight, header.bottom }, "PLUGIN", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPluginColumnRight, header.top, header.left + kStatusColumnRight, header.bottom }, "STATUS", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kStatusColumnRight, header.top, header.left + kCategoryColumnRight, header.bottom }, "CATEGORY", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kCategoryColumnRight, header.top, header.right - kPadding, header.bottom }, "BINARY", RGB(150, 158, 168), 11, FW_SEMIBOLD);
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
 }
 
@@ -126,14 +131,15 @@ void DrawRow(HDC dc, const RECT& row, std::size_t index, const EditorSceneContex
 
     const RECT checkbox{ row.left + 8, row.top + 8, row.left + 24, row.top + 24 };
     DrawCheckbox(dc, checkbox, enabled);
-    DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + 220, row.top + 18 }, plugin->displayName.data(), RGB(222, 228, 234), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + 220, row.bottom }, plugin->id.data(), RGB(122, 130, 144), 11);
-    DrawText(dc, RECT{ row.left + 220, row.top, row.left + 320, row.bottom }, plugin->category.data(), RGB(196, 205, 214), 12);
+    DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, plugin->displayName.data(), RGB(222, 228, 234), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id.data(), RGB(122, 130, 144), 11);
+    DrawText(dc, RECT{ row.left + kPluginColumnRight, row.top, row.left + kStatusColumnRight, row.bottom }, enabled ? "Enabled" : "Disabled", enabled ? RGB(126, 201, 143) : RGB(136, 145, 156), 12);
+    DrawText(dc, RECT{ row.left + kStatusColumnRight, row.top, row.left + kCategoryColumnRight, row.bottom }, plugin->category.data(), RGB(196, 205, 214), 12);
 
     const std::string binary = sceneContext.ProjectPluginBinaryPath(plugin->id).empty()
         ? std::string{ plugin->binaryPath }
         : sceneContext.ProjectPluginBinaryPath(plugin->id);
-    DrawText(dc, RECT{ row.left + 320, row.top, row.right - 10, row.bottom }, binary.c_str(), RGB(150, 158, 168), 11);
+    DrawText(dc, RECT{ row.left + kCategoryColumnRight, row.top, row.right - 10, row.bottom }, binary.c_str(), RGB(150, 158, 168), 11);
     GdiDrawing::FillRectColor(dc, RECT{ row.left, row.bottom - 1, row.right, row.bottom }, RGB(18, 20, 23));
 }
 
