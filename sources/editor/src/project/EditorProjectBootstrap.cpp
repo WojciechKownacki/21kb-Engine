@@ -8,6 +8,22 @@
 namespace kb::editor {
 namespace {
 
+#if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_PHYSICS_JOLT_PLUGIN_PATH "kb_physics_jolt_plugin.dll"
+#else
+#define KB_PHYSICS_JOLT_PLUGIN_PATH "libkb_physics_jolt_plugin.so"
+#endif
+#endif
+
+#if !defined(KB_AUDIO_MINIAUDIO_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_AUDIO_MINIAUDIO_PLUGIN_PATH "kb_audio_miniaudio_plugin.dll"
+#else
+#define KB_AUDIO_MINIAUDIO_PLUGIN_PATH "libkb_audio_miniaudio_plugin.so"
+#endif
+#endif
+
 [[nodiscard]] kb::project::ProjectDescriptor DefaultDescriptor() {
     kb::project::ProjectDescriptor descriptor;
     const std::string projectName = EditorProjectPaths::ProjectFile().stem().string();
@@ -17,6 +33,16 @@ namespace {
     descriptor.contentRoot = "Assets";
     descriptor.defaultScene = "/Game/Scenes/Main.21kbscene";
     descriptor.targetPlatforms = { "Windows" };
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Physics.Jolt",
+        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .enabled = true,
+    });
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Audio.Miniaudio",
+        .binaryPath = KB_AUDIO_MINIAUDIO_PLUGIN_PATH,
+        .enabled = true,
+    });
     return descriptor;
 }
 

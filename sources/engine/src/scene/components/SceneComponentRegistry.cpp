@@ -2,6 +2,8 @@
 
 #include "engine/ecs/ComponentReflectionMacros.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/ColliderComponent.hpp"
@@ -46,6 +48,25 @@ void RegisterPhysicsReflection(kb::ecs::World& world) {
         }));
 }
 
+void RegisterAudioReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<AudioListenerComponent>(
+        "kb.scene.AudioListenerComponent",
+        {
+            KB_ECS_FIELD(AudioListenerComponent, primary, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioListenerComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+        }));
+    static_cast<void>(world.RegisterComponentReflection<AudioSourceComponent>(
+        "kb.scene.AudioSourceComponent",
+        {
+            KB_ECS_FIELD(AudioSourceComponent, clipAssetId, kb::ecs::ComponentFieldType::Bytes),
+            KB_ECS_FIELD(AudioSourceComponent, volume, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, pitch, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, loop, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioSourceComponent, spatial, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioSourceComponent, autoplay, kb::ecs::ComponentFieldType::Bool),
+        }));
+}
+
 } // namespace
 
 SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
@@ -57,8 +78,11 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , lightComponentId_(RegisterSceneComponent<LightComponent>(world, "kb.scene.LightComponent"))
     , inputComponentId_(RegisterSceneComponent<InputComponent>(world, "kb.scene.InputComponent"))
     , rigidbodyComponentId_(RegisterSceneComponent<RigidbodyComponent>(world, "kb.scene.RigidbodyComponent"))
-    , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent")) {
+    , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent"))
+    , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
+    , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent")) {
     RegisterPhysicsReflection(world);
+    RegisterAudioReflection(world);
 }
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
@@ -95,6 +119,14 @@ std::uint64_t SceneComponentRegistry::RigidbodyComponentId() const noexcept {
 
 std::uint64_t SceneComponentRegistry::ColliderComponentId() const noexcept {
     return colliderComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
+    return audioSourceComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::AudioListenerComponentId() const noexcept {
+    return audioListenerComponentId_;
 }
 
 } // namespace kb::scene

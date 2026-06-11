@@ -61,6 +61,15 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool ReadInt32(std::int32_t& output) {
+        std::uint32_t bits = 0U;
+        if (!ReadUInt32(bits)) {
+            return false;
+        }
+        output = std::bit_cast<std::int32_t>(bits);
+        return true;
+    }
+
     [[nodiscard]] bool ReadUInt64(std::uint64_t& output) {
         if (Remaining() < sizeof(std::uint64_t)) {
             return false;
@@ -123,6 +132,10 @@ inline void WriteUInt32(std::vector<std::uint8_t>& output, std::uint32_t value) 
     output.push_back(static_cast<std::uint8_t>((value >> 8U) & 0xFFU));
     output.push_back(static_cast<std::uint8_t>((value >> 16U) & 0xFFU));
     output.push_back(static_cast<std::uint8_t>((value >> 24U) & 0xFFU));
+}
+
+inline void WriteInt32(std::vector<std::uint8_t>& output, std::int32_t value) {
+    WriteUInt32(output, std::bit_cast<std::uint32_t>(value));
 }
 
 inline void WriteUInt64(std::vector<std::uint8_t>& output, std::uint64_t value) {
