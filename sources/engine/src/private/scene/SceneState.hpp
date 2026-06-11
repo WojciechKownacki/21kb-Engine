@@ -14,6 +14,7 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 namespace kb::scene {
@@ -43,6 +44,12 @@ public:
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;
+    struct FixedTransformSample {
+        TransformComponent previous;
+        TransformComponent current;
+    };
+    std::unordered_map<SceneEntity::IdType, FixedTransformSample> fixedTransformSamples;
+    std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::uint64_t nextHierarchyOrder = 1;
 };

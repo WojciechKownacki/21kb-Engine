@@ -27,6 +27,7 @@ public:
     [[nodiscard]] static SceneRuntimeFixedStepSettings FixedStepSettings(const Scene& scene) noexcept;
     [[nodiscard]] static float FixedInterpolationAlpha(const Scene& scene) noexcept;
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;
+    [[nodiscard]] static std::optional<TransformComponent> InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static bool Update(Scene& scene, float deltaSeconds);
     static void RequestQuit(Scene& scene) noexcept;
     [[nodiscard]] static bool ShouldQuit(const Scene& scene) noexcept;

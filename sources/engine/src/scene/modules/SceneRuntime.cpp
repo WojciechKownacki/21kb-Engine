@@ -31,6 +31,10 @@ std::size_t SceneRuntimeQueries::LastFixedStepCount() const noexcept {
     return SceneRuntimeService::LastFixedStepCount(scene_);
 }
 
+std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedTransform(scene_, entity);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -60,6 +64,10 @@ float SceneRuntime::FixedInterpolationAlpha() const noexcept {
 
 std::size_t SceneRuntime::LastFixedStepCount() const noexcept {
     return SceneRuntimeService::LastFixedStepCount(scene_);
+}
+
+std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {
+    return SceneRuntimeService::InterpolatedTransform(scene_, entity);
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {
