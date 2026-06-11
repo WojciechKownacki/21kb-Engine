@@ -1,7 +1,11 @@
 #pragma once
 
+#include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/TransformComponent.hpp"
+
 #include <cstddef>
 #include <memory>
+#include <optional>
 
 namespace kb::ecs {
 
@@ -30,6 +34,7 @@ public:
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
+    [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
 
 private:
     const Scene& scene_;
@@ -46,6 +51,7 @@ public:
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
+    [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] bool Update(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;

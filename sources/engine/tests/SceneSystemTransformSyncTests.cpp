@@ -9,6 +9,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <memory>
+#include <optional>
 
 namespace {
 
@@ -71,6 +72,23 @@ private:
     SceneSystemCounters& counters_;
     float lastVariableDeltaSeconds_ = 0.0F;
     float lastFixedDeltaSeconds_ = 0.0F;
+};
+
+class FixedMoveSceneSystem final : public kb::scene::SceneSystem {
+public:
+    FixedMoveSceneSystem(kb::scene::SceneEntity entity, kb::scene::Vec3 targetPosition) noexcept
+        : entity_(entity)
+        , targetPosition_(targetPosition) {}
+
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override {
+        kb::scene::TransformComponent transform = context.Transforms().Get(entity_);
+        transform.localPosition = targetPosition_;
+        context.Transforms().Set(entity_, transform);
+    }
+
+private:
+    kb::scene::SceneEntity entity_{};
+    kb::scene::Vec3 targetPosition_{};
 };
 
 void RunSceneSystemTransformSyncTest() {
@@ -138,6 +156,35 @@ void RunSceneRuntimeFixedStepTest() {
     kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().FixedInterpolationAlpha(), 0.0F), "Runtime should drop excess fixed time after max-step safety triggers");
 }
 
+void RunSceneRuntimeFixedInterpolationTest() {
+    kb::scene::Scene scene;
+    scene.Runtime().SetFixedStepSettings(kb::scene::SceneRuntimeFixedStepSettings{
+        .fixedDeltaSeconds = 0.02F,
+        .maxFrameDeltaSeconds = 0.25F,
+        .maxFixedStepsPerFrame = 4U,
+    });
+
+    kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Interpolated",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F },
+        },
+    });
+    scene.Runtime().AddSceneSystem(std::make_unique<FixedMoveSceneSystem>(object.Entity(), kb::scene::Vec3{ 10.0F, 0.0F, 0.0F }));
+
+    static_cast<void>(scene.Runtime().Update(0.02F));
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(object).localPosition.x, 10.0F), "Fixed system should write the current transform");
+    std::optional<kb::scene::TransformComponent> interpolated = scene.Runtime().InterpolatedTransform(object.Entity());
+    kb::tests::Require(interpolated.has_value(), "Runtime should expose an interpolated transform sample");
+    kb::tests::Require(kb::tests::NearlyEqual(interpolated->localPosition.x, 0.0F), "Alpha 0 should expose the previous fixed transform sample");
+
+    static_cast<void>(scene.Runtime().Update(0.01F));
+    interpolated = scene.Runtime().InterpolatedTransform(object.Entity());
+    kb::tests::Require(interpolated.has_value(), "Runtime should keep interpolation samples across frames without a fixed step");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Runtime().FixedInterpolationAlpha(), 0.5F), "Runtime should expose half-step interpolation alpha");
+    kb::tests::Require(kb::tests::NearlyEqual(interpolated->localPosition.x, 5.0F), "Interpolated transform should blend previous and current fixed samples");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -145,6 +192,7 @@ namespace kb::tests {
 void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
     RunSceneRuntimeFixedStepTest();
+    RunSceneRuntimeFixedInterpolationTest();
 }
 
 } // namespace kb::tests
