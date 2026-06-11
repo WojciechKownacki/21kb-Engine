@@ -149,27 +149,27 @@ EditorSceneContext::EditorSceneContext()
     : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
-    , scene_(project_) {
+    , scene_(std::make_unique<kb::scene::Scene>(project_)) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
     } else {
         console_.Error("Project", projectBootstrap_.error.empty() ? "Project descriptor bootstrap failed." : projectBootstrap_.error);
     }
 
-    if (scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
+    if (scene_->Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
         console_.Info("Project", "Mounted project assets.");
     } else {
-        console_.Error("Project", AssetErrorOr(scene_.Assets().Manager(), "Project assets could not be mounted."));
+        console_.Error("Project", AssetErrorOr(scene_->Assets().Manager(), "Project assets could not be mounted."));
     }
-    const std::size_t discovered = scene_.Assets().Discover();
+    const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     currentScenePath_ = ResolveDefaultScenePath();
     std::error_code error;
-    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, currentScenePath_)) {
+    if (!currentScenePath_.empty() && std::filesystem::is_regular_file(currentScenePath_, error) && !error && kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, currentScenePath_)) {
         SelectFirstSceneEntityOrClear();
         console_.Info("Project", "Opened default scene: " + currentScenePath_.generic_string());
     } else {
-        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+        hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
         if (SaveCurrentScene()) {
             console_.Info("Project", "Created default scene: " + currentScenePath_.generic_string());
         }
@@ -211,8 +211,8 @@ void EditorSceneContext::EnsureScriptRuntime() {
     kb::script::ScriptModule* scriptModuleView = scriptModule.get();
     scriptModuleHost_ = std::make_unique<kb::modules::EngineModuleHost>(project_);
     scriptModuleHost_->Add(std::move(scriptModule));
-    scriptModuleHost_->Load(scene_.Runtime().EcsWorld());
-    scriptModuleHost_->AttachScene(scene_);
+    scriptModuleHost_->Load(scene_->Runtime().EcsWorld());
+    scriptModuleHost_->AttachScene(*scene_);
 
     if (!scriptModuleHost_->IsActive("Script")) {
         console_.Warning("Scripts", "Script module is disabled for this project; behaviours will not run.");
@@ -230,11 +230,11 @@ void EditorSceneContext::EnsureScriptRuntime() {
 }
 
 kb::scene::Scene& EditorSceneContext::Scene() noexcept {
-    return scene_;
+    return *scene_;
 }
 
 const kb::scene::Scene& EditorSceneContext::Scene() const noexcept {
-    return scene_;
+    return *scene_;
 }
 
 EditorAssetBrowserState& EditorSceneContext::AssetBrowser() noexcept {
@@ -413,7 +413,7 @@ void EditorSceneContext::MarkSceneEntitiesRenderDirty(std::span<const kb::scene:
         return;
     }
     for (const kb::scene::SceneEntity entity : entities) {
-        AppendEntityBranchRenderDirty(scene_, entity, sceneRenderDirtyEntityIds_);
+        AppendEntityBranchRenderDirty(*scene_, entity, sceneRenderDirtyEntityIds_);
     }
 }
 
@@ -463,17 +463,20 @@ bool EditorSceneContext::BeginPlayModeSceneSession() {
     if (playModeSceneSession_.Active()) {
         return true;
     }
+    if (plugins_.HasPendingReload() && !ReloadSceneFromProject()) {
+        return false;
+    }
     if (!SaveDirtySceneDocument("entering play mode")) {
         return false;
     }
 
     const std::string name = currentScenePath_.stem().string().empty() ? std::string{ "Main" } : currentScenePath_.stem().string();
-    if (!playModeSceneSession_.Begin(scene_, name)) {
+    if (!playModeSceneSession_.Begin(*scene_, name)) {
         console_.Error("Play Mode", "Scene snapshot could not be captured.");
         return false;
     }
     EnsureScriptRuntime();
-    kb::scene::SceneInputActivation::Apply(scene_);
+    kb::scene::SceneInputActivation::Apply(*scene_);
     ActivateProjectInput();
     console_.Info("Play Mode", "Captured editor scene snapshot.");
     return true;
@@ -483,8 +486,8 @@ bool EditorSceneContext::RestorePlayModeSceneSession() {
     if (!playModeSceneSession_.Active()) {
         return true;
     }
-    kb::scene::SceneInputActivation::Clear(scene_);
-    if (!playModeSceneSession_.Restore(scene_)) {
+    kb::scene::SceneInputActivation::Clear(*scene_);
+    if (!playModeSceneSession_.Restore(*scene_)) {
         console_.Error("Play Mode", "Editor scene snapshot could not be restored.");
         return false;
     }
@@ -500,6 +503,48 @@ bool EditorSceneContext::HasPlayModeSceneSession() const noexcept {
     return playModeSceneSession_.Active();
 }
 
+bool EditorSceneContext::ReloadSceneFromProject() {
+    if (!RestorePlayModeSceneSession()) {
+        return false;
+    }
+    if (!SaveDirtySceneDocument("reloading project plugins")) {
+        return false;
+    }
+    if (currentScenePath_.empty() && !SaveCurrentScene()) {
+        console_.Error("Project", "Scene could not be saved before reloading project plugins.");
+        return false;
+    }
+
+    if (scriptModuleHost_ != nullptr) {
+        scriptModuleHost_->DetachScene(*scene_);
+        scriptModuleHost_->Unload();
+        scriptModuleHost_.reset();
+    }
+
+    auto nextScene = std::make_unique<kb::scene::Scene>(project_);
+    if (nextScene->Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
+        console_.Info("Project", "Mounted project assets.");
+    } else {
+        console_.Error("Project", AssetErrorOr(nextScene->Assets().Manager(), "Project assets could not be mounted."));
+        return false;
+    }
+    const std::size_t discovered = nextScene->Assets().Discover();
+    console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
+
+    if (!currentScenePath_.empty() && !kb::scene::SceneDocumentService::LoadFileIntoScene(*nextScene, currentScenePath_)) {
+        console_.Error("Project", "Scene could not be reloaded: " + currentScenePath_.generic_string());
+        return false;
+    }
+
+    scene_ = std::move(nextScene);
+    plugins_.ClearPendingReload();
+    SelectFirstSceneEntityOrClear();
+    ResetSceneEditState();
+    ClearSceneDocumentDirty();
+    console_.Info("Project", "Reloaded scene with current project plugin settings.");
+    return true;
+}
+
 bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
     if (!RestorePlayModeSceneSession()) {
         return false;
@@ -508,12 +553,12 @@ bool EditorSceneContext::NewScene(EditorDirtySceneResolution dirtyResolution) {
         return false;
     }
 
-    const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
+    const std::vector<kb::scene::SceneEntity> roots = scene_->Hierarchy().RootEntities();
     for (const kb::scene::SceneEntity root : roots) {
-        scene_.Entities().Destroy(root);
+        scene_->Entities().Destroy(root);
     }
 
-    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(scene_));
+    hierarchySelection_.SelectEntity(EditorDefaultSceneFactory::Seed(*scene_));
     currentScenePath_ = EditorProjectPaths::UniqueScenePath("Untitled");
     ResetSceneEditState();
     MarkSceneDocumentDirty();
@@ -535,7 +580,7 @@ bool EditorSceneContext::OpenScene(const std::filesystem::path& path, EditorDirt
 
     const std::filesystem::path scenePath = EnsureSceneDocumentExtension(path);
 
-    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(scene_, scenePath)) {
+    if (!kb::scene::SceneDocumentService::LoadFileIntoScene(*scene_, scenePath)) {
         console_.Error("Project", "Scene could not be opened: " + scenePath.generic_string());
         return false;
     }
@@ -575,13 +620,13 @@ bool EditorSceneContext::SaveSceneToPath(const std::filesystem::path& path) {
     }
 
     const std::string name = scenePath.stem().string().empty() ? std::string{ "Main" } : scenePath.stem().string();
-    if (!kb::scene::SceneDocumentService::Save(scene_, scenePath, name)) {
+    if (!kb::scene::SceneDocumentService::Save(*scene_, scenePath, name)) {
         console_.Error("Project", "Scene could not be saved: " + scenePath.generic_string());
         return false;
     }
 
     currentScenePath_ = scenePath;
-    static_cast<void>(scene_.Assets().Discover());
+    static_cast<void>(scene_->Assets().Discover());
     ClearSceneDocumentDirty();
     console_.Info("Project", "Saved scene: " + currentScenePath_.generic_string());
     return true;
@@ -636,7 +681,7 @@ bool EditorSceneContext::IsHierarchyEntitySelected(kb::scene::SceneEntity entity
 }
 
 void EditorSceneContext::SelectEntity(kb::scene::SceneEntity entity) noexcept {
-    const kb::scene::SceneEntity selected = scene_.Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
+    const kb::scene::SceneEntity selected = scene_->Entities().IsAlive(entity) ? entity : kb::scene::SceneEntity{};
     if (hierarchyRenameEntity_.IsValid() && hierarchyRenameEntity_ != selected) {
         static_cast<void>(CommitHierarchyRename());
     }
@@ -648,7 +693,7 @@ void EditorSceneContext::SelectHierarchyEntities(std::span<const kb::scene::Scen
     std::vector<kb::scene::SceneEntity> alive;
     alive.reserve(entities.size());
     for (const kb::scene::SceneEntity entity : entities) {
-        if (scene_.Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
+        if (scene_->Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
             alive.push_back(entity);
         }
     }
@@ -746,7 +791,7 @@ bool EditorSceneContext::IsHierarchySearchFocused() const noexcept {
 }
 
 bool EditorSceneContext::IsHierarchyRenaming() const noexcept {
-    return hierarchyRenameEntity_.IsValid() && scene_.Entities().IsAlive(hierarchyRenameEntity_);
+    return hierarchyRenameEntity_.IsValid() && scene_->Entities().IsAlive(hierarchyRenameEntity_);
 }
 
 bool EditorSceneContext::IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept {
@@ -799,7 +844,7 @@ void EditorSceneContext::ClearHierarchySearch() {
 
 bool EditorSceneContext::BeginHierarchyRename() {
     const kb::scene::SceneEntity entity = SelectedEntity();
-    if (!scene_.Entities().IsAlive(entity)) {
+    if (!scene_->Entities().IsAlive(entity)) {
         CancelHierarchyRename();
         return false;
     }
@@ -808,7 +853,7 @@ bool EditorSceneContext::BeginHierarchyRename() {
     assetBrowser_.CancelTextEdit();
     inspector_.EndTextEdit();
     hierarchyRenameEntity_ = entity;
-    hierarchyRenameBuffer_ = scene_.Entities().Name(entity);
+    hierarchyRenameBuffer_ = scene_->Entities().Name(entity);
     hierarchyRenameSelectingAll_ = true;
     InvalidateHierarchyRows();
     return true;
@@ -893,16 +938,16 @@ bool EditorSceneContext::CommitHierarchyRename() {
 
     const kb::scene::SceneEntity entity = hierarchyRenameEntity_;
     const std::string name = hierarchyRenameBuffer_.empty() ? "Entity" : hierarchyRenameBuffer_;
-    if (scene_.Entities().Name(entity) == name) {
+    if (scene_->Entities().Name(entity) == name) {
         CancelHierarchyRename();
         return false;
     }
 
     const bool renamed = ExecuteSceneCommand("Rename Entity", [this, entity, name]() {
-        if (!scene_.Entities().IsAlive(entity)) {
+        if (!scene_->Entities().IsAlive(entity)) {
             return false;
         }
-        scene_.Entities().SetName(entity, name);
+        scene_->Entities().SetName(entity, name);
         return true;
     });
     if (renamed) {
@@ -930,25 +975,25 @@ bool EditorSceneContext::BeginAssetFolderCreation() {
 
 bool EditorSceneContext::BeginAssetRename() {
     static_cast<void>(CommitHierarchyRename());
-    return assetBrowser_.BeginRenameSelection(scene_.Assets().Manager());
+    return assetBrowser_.BeginRenameSelection(scene_->Assets().Manager());
 }
 
 bool EditorSceneContext::BeginAssetRename(kb::assets::AssetId id) {
     static_cast<void>(CommitHierarchyRename());
-    return assetBrowser_.BeginRenameAsset(id, scene_.Assets().Manager());
+    return assetBrowser_.BeginRenameAsset(id, scene_->Assets().Manager());
 }
 
 bool EditorSceneContext::BeginAssetFolderRename(const std::filesystem::path& virtualFolder) {
     static_cast<void>(CommitHierarchyRename());
-    return assetBrowser_.BeginRenameFolder(virtualFolder, scene_.Assets().Manager());
+    return assetBrowser_.BeginRenameFolder(virtualFolder, scene_->Assets().Manager());
 }
 
 bool EditorSceneContext::CommitAssetTextEdit() {
-    const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(scene_, assetBrowser_);
+    const bool committed = EditorSceneAssetBrowserCommands::CommitTextEdit(*scene_, assetBrowser_);
     if (committed) {
         console_.Info("Assets", "Asset browser text edit committed.");
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset browser text edit failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset browser text edit failed."));
     }
     return committed;
 }
@@ -958,7 +1003,7 @@ void EditorSceneContext::CancelAssetTextEdit() noexcept {
 }
 
 bool EditorSceneContext::DeleteSelectedAssetBrowserItem() {
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(scene_, assetBrowser_);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteSelected(*scene_, assetBrowser_);
     if (deleted) {
         console_.Info("Assets", "Selected asset browser item deleted.");
     } else {
@@ -973,8 +1018,8 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
         return false;
     }
 
-    const std::vector<kb::scene::SceneEntity> deleting = TopLevelSelectedEntities(scene_, hierarchySelection_.SelectedEntities());
-    if (!AnyAlive(scene_, deleting)) {
+    const std::vector<kb::scene::SceneEntity> deleting = TopLevelSelectedEntities(*scene_, hierarchySelection_.SelectedEntities());
+    if (!AnyAlive(*scene_, deleting)) {
         ClearHierarchySelection();
         console_.Warning("Hierarchy", "No hierarchy entity was deleted.");
         return false;
@@ -1001,8 +1046,8 @@ bool EditorSceneContext::DeleteSelectedHierarchyEntity() noexcept {
 
 bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
     const std::vector<kb::scene::SceneEntity> selected = hierarchySelection_.SelectedEntities();
-    const std::vector<kb::scene::SceneEntity> duplicating = TopLevelSelectedEntities(scene_, selected);
-    if (duplicating.empty() || !AnyAlive(scene_, duplicating)) {
+    const std::vector<kb::scene::SceneEntity> duplicating = TopLevelSelectedEntities(*scene_, selected);
+    if (duplicating.empty() || !AnyAlive(*scene_, duplicating)) {
         console_.Warning("Hierarchy", "No hierarchy entity was duplicated.");
         return false;
     }
@@ -1033,14 +1078,14 @@ bool EditorSceneContext::DuplicateSelectedHierarchyEntities() {
 
 bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::span<const kb::scene::SceneEntity> entities) {
     const std::vector<EditorSceneObjectPrefabPayload> payloads = EditorSceneObjectPayloadBuilder::Capture(*this, entities);
-    if (payloads.empty() || !AnyAlive(scene_, entities)) {
+    if (payloads.empty() || !AnyAlive(*scene_, entities)) {
         return false;
     }
 
     std::vector<kb::scene::SceneEntity> alive;
     alive.reserve(entities.size());
     for (const kb::scene::SceneEntity entity : entities) {
-        if (scene_.Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
+        if (scene_->Entities().IsAlive(entity) && !ContainsEntity(alive, entity)) {
             alive.push_back(entity);
         }
     }
@@ -1053,66 +1098,66 @@ bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::s
     SelectHierarchyEntities(alive);
     MarkSceneRenderDirty();
     MarkSceneDocumentDirty();
-    scene_.Runtime().SynchronizeTransforms();
+    scene_->Runtime().SynchronizeTransforms();
     return true;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(scene_, assetBrowser_, id);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id);
     if (deleted) {
         console_.Info("Assets", "Asset deleted.");
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset delete failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset delete failed."));
     }
     return deleted;
 }
 
 bool EditorSceneContext::DeleteAssetBrowserFolder(const std::filesystem::path& virtualFolder) {
-    const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(scene_, assetBrowser_, virtualFolder);
+    const bool deleted = EditorSceneAssetBrowserCommands::DeleteFolder(*scene_, assetBrowser_, virtualFolder);
     if (deleted) {
         console_.Info("Assets", "Folder deleted: " + virtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder delete failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder delete failed."));
     }
     return deleted;
 }
 
 bool EditorSceneContext::MoveAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
     if (moved) {
         console_.Info("Assets", "Asset moved to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset move failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset move failed."));
     }
     return moved;
 }
 
 bool EditorSceneContext::MoveAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    const bool moved = EditorSceneAssetBrowserCommands::MoveFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
     if (moved) {
         console_.Info("Assets", "Folder moved to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder move failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder move failed."));
     }
     return moved;
 }
 
 bool EditorSceneContext::CopyAssetToFolder(kb::assets::AssetId id, const std::filesystem::path& destinationVirtualFolder) {
-    const bool copied = EditorSceneAssetBrowserCommands::CopyAssetToFolder(scene_, assetBrowser_, id, destinationVirtualFolder);
+    const bool copied = EditorSceneAssetBrowserCommands::CopyAssetToFolder(*scene_, assetBrowser_, id, destinationVirtualFolder);
     if (copied) {
         console_.Info("Assets", "Asset copied to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset copy failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset copy failed."));
     }
     return copied;
 }
 
 bool EditorSceneContext::CopyAssetFolderToFolder(const std::filesystem::path& sourceVirtualFolder, const std::filesystem::path& destinationVirtualFolder) {
-    const bool copied = EditorSceneAssetBrowserCommands::CopyFolderToFolder(scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
+    const bool copied = EditorSceneAssetBrowserCommands::CopyFolderToFolder(*scene_, assetBrowser_, sourceVirtualFolder, destinationVirtualFolder);
     if (copied) {
         console_.Info("Assets", "Folder copied to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Folder copy failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Folder copy failed."));
     }
     return copied;
 }
@@ -1122,11 +1167,11 @@ bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path>
 }
 
 bool EditorSceneContext::ImportAssetFiles(std::span<const std::filesystem::path> sourceFiles, const std::filesystem::path& destinationVirtualFolder) {
-    const bool imported = EditorSceneAssetBrowserCommands::ImportFiles(scene_, assetBrowser_, sourceFiles, destinationVirtualFolder);
+    const bool imported = EditorSceneAssetBrowserCommands::ImportFiles(*scene_, assetBrowser_, sourceFiles, destinationVirtualFolder);
     if (imported) {
         console_.Info("Assets", "Imported " + std::to_string(sourceFiles.size()) + " file(s) to " + destinationVirtualFolder.generic_string());
     } else {
-        console_.Error("Assets", AssetErrorOr(scene_.Assets().Manager(), "Asset import failed."));
+        console_.Error("Assets", AssetErrorOr(scene_->Assets().Manager(), "Asset import failed."));
     }
     return imported;
 }
@@ -1144,7 +1189,7 @@ bool EditorSceneContext::ToggleHierarchyRowExpanded(std::size_t rowIndex) {
 
 bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
     if (!ExecuteSceneCommand("Toggle Visibility", [this, entity]() {
-            return EditorSceneHierarchyActions::ToggleVisibility(scene_, entity);
+            return EditorSceneHierarchyActions::ToggleVisibility(*scene_, entity);
         })) {
         console_.Warning("Hierarchy", "Visibility toggle ignored for invalid entity.");
         return false;
@@ -1156,7 +1201,7 @@ bool EditorSceneContext::ToggleEntityVisibility(kb::scene::SceneEntity entity) {
 kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
     kb::scene::SceneEntity created{};
     if (ExecuteSceneCommand("Create Entity", [this, &created]() {
-            created = EditorSceneHierarchyActions::CreateObject(scene_);
+            created = EditorSceneHierarchyActions::CreateObject(*scene_);
             if (!created.IsValid()) {
                 return false;
             }
@@ -1169,13 +1214,13 @@ kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
 }
 
 bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent) {
-    if (!child.IsValid() || !scene_.Entities().IsAlive(child)) {
+    if (!child.IsValid() || !scene_->Entities().IsAlive(child)) {
         console_.Warning("Hierarchy", "Entity reparent ignored.");
         return false;
     }
 
     const bool moved = ExecuteSceneCommand("Reparent Entity", [this, child, parent]() {
-        return EditorSceneHierarchyActions::Reparent(scene_, child, parent);
+        return EditorSceneHierarchyActions::Reparent(*scene_, child, parent);
     });
     if (moved) {
         SelectEntity(child);
@@ -1187,14 +1232,14 @@ bool EditorSceneContext::ReparentEntity(kb::scene::SceneEntity child, kb::scene:
 }
 
 bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent) {
-    const std::vector<kb::scene::SceneEntity> moving = TopLevelSelectedEntities(scene_, children);
+    const std::vector<kb::scene::SceneEntity> moving = TopLevelSelectedEntities(*scene_, children);
     if (moving.empty()) {
         console_.Warning("Hierarchy", "Hierarchy reparent did not move any entity.");
         return false;
     }
 
     const std::span<const kb::scene::SceneEntity> movingSpan{ moving.data(), moving.size() };
-    if (parent.IsValid() && (ContainsEntity(movingSpan, parent) || HasSelectedAncestor(scene_, parent, movingSpan))) {
+    if (parent.IsValid() && (ContainsEntity(movingSpan, parent) || HasSelectedAncestor(*scene_, parent, movingSpan))) {
         console_.Warning("Hierarchy", "Cannot reparent an entity below itself or a selected descendant.");
         return false;
     }
@@ -1205,7 +1250,7 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
             if (child == parent) {
                 continue;
             }
-            anyMoved = EditorSceneHierarchyActions::Reparent(scene_, child, parent) || anyMoved;
+            anyMoved = EditorSceneHierarchyActions::Reparent(*scene_, child, parent) || anyMoved;
         }
         return anyMoved;
     });
@@ -1214,7 +1259,7 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
         hierarchySelection_.Clear();
         bool first = true;
         for (const kb::scene::SceneEntity entity : children) {
-            if (!scene_.Entities().IsAlive(entity)) {
+            if (!scene_->Entities().IsAlive(entity)) {
                 continue;
             }
             for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
@@ -1238,27 +1283,27 @@ bool EditorSceneContext::ReparentEntities(std::span<const kb::scene::SceneEntity
 }
 
 bool EditorSceneContext::CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path) {
-    const bool created = EditorScenePrefabActions::CreateAsset(scene_, entity, path);
+    const bool created = EditorScenePrefabActions::CreateAsset(*scene_, entity, path);
     if (created) {
-        static_cast<void>(scene_.Assets().Discover());
-        if (const std::optional<std::filesystem::path> virtualPath = scene_.Assets().Manager().Mounts().ToVirtual(path)) {
-            if (const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().FindByPath(*virtualPath); metadata != nullptr) {
-                static_cast<void>(assetBrowser_.SelectAsset(metadata->id, scene_.Assets().Manager()));
+        static_cast<void>(scene_->Assets().Discover());
+        if (const std::optional<std::filesystem::path> virtualPath = scene_->Assets().Manager().Mounts().ToVirtual(path)) {
+            if (const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(*virtualPath); metadata != nullptr) {
+                static_cast<void>(assetBrowser_.SelectAsset(metadata->id, scene_->Assets().Manager()));
             }
         }
         console_.Info("Prefabs", "Prefab asset created: " + path.generic_string());
     } else {
-        console_.Error("Prefabs", AssetErrorOr(scene_.Assets().Manager(), "Prefab asset creation failed."));
+        console_.Error("Prefabs", AssetErrorOr(scene_->Assets().Manager(), "Prefab asset creation failed."));
     }
     return created;
 }
 
 EditorInputActionAuthoring EditorSceneContext::InputActionAuthoring() noexcept {
-    return EditorInputActionAuthoring{ scene_, assetBrowser_, console_ };
+    return EditorInputActionAuthoring{ *scene_, assetBrowser_, console_ };
 }
 
 EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthoring() noexcept {
-    return EditorInputMappingContextAuthoring{ scene_, assetBrowser_, console_ };
+    return EditorInputMappingContextAuthoring{ *scene_, assetBrowser_, console_ };
 }
 
 bool EditorSceneContext::CreateInputActionAsset(const std::filesystem::path& virtualFolder) {
@@ -1270,7 +1315,7 @@ bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::p
 }
 
 bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtualFolder) {
-    EditorScriptAssetGateway gateway{ scene_, assetBrowser_ };
+    EditorScriptAssetGateway gateway{ *scene_, assetBrowser_ };
     const std::optional<std::filesystem::path> path = gateway.CreateLuaScript(virtualFolder);
     if (!path.has_value()) {
         console_.Error("Scripts", "Lua script could not be created in folder: " + virtualFolder.generic_string());
@@ -1281,13 +1326,13 @@ bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtu
 }
 
 bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
-    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(id);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr) {
         console_.Error("Scripts", "Lua script metadata was not found.");
         return false;
     }
     std::filesystem::path path = metadata->physicalPath;
-    if (const std::optional<std::filesystem::path> mounted = scene_.Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
+    if (const std::optional<std::filesystem::path> mounted = scene_->Assets().Manager().Mounts().Resolve(metadata->virtualPath)) {
         path = *mounted;
     }
     scriptEditor_.Open(path, id, metadata->virtualPath.filename().string());
@@ -1296,7 +1341,7 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
 }
 
 std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {
-    return EditorInputAssetGateway::ReadAction(scene_, id);
+    return EditorInputAssetGateway::ReadAction(*scene_, id);
 }
 
 bool EditorSceneContext::SetInputActionName(kb::assets::AssetId id, std::string name) {
@@ -1319,7 +1364,7 @@ bool EditorSceneContext::ToggleProjectInputEnabled() {
 std::vector<std::string> EditorSceneContext::ProjectInputMappingContextOptions() const {
     // Empty first entry is the "(None)" choice so the project input can be cleared.
     std::vector<std::string> options{ std::string{} };
-    for (const kb::assets::AssetMetadata& metadata : scene_.Assets().Manager().Registry().All()) {
+    for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
         if (metadata.type == "InputMappingContext") {
             options.push_back(kb::assets::NormalizeAssetPath(metadata.virtualPath));
         }
@@ -1393,9 +1438,9 @@ void EditorSceneContext::ActivateProjectInput() {
     if (!project_.inputEnabled || project_.inputMappingContext.empty()) {
         return;
     }
-    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().FindByPath(project_.inputMappingContext);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().FindByPath(project_.inputMappingContext);
     if (metadata != nullptr && metadata->type == "InputMappingContext") {
-        static_cast<void>(scene_.Input().AddMappingContext(metadata->id.value, 0));
+        static_cast<void>(scene_->Input().AddMappingContext(metadata->id.value, 0));
     }
 }
 
@@ -1413,7 +1458,7 @@ bool EditorSceneContext::SaveProjectDescriptor() {
 }
 
 std::optional<kb::input::InputMappingContextAsset> EditorSceneContext::ReadInputMappingContextAsset(kb::assets::AssetId id) const {
-    return EditorInputAssetGateway::ReadContext(scene_, id);
+    return EditorInputAssetGateway::ReadContext(*scene_, id);
 }
 
 bool EditorSceneContext::AddInputMapping(kb::assets::AssetId id) {
@@ -1447,7 +1492,7 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
     std::optional<kb::scene::SceneEntity> root;
     if (!ExecuteSceneCommand("Instantiate Prefab", [this, &root, path, virtualPath, parent]() {
-            root = EditorScenePrefabActions::InstantiateAsset(scene_, path, virtualPath, parent);
+            root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, parent);
             if (!root.has_value()) {
                 return false;
             }
@@ -1471,7 +1516,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
         return {};
     }
 
-    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(assetId);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
     if (metadata == nullptr) {
         console_.Error("Assets", "Mesh asset metadata was not found.");
         return {};
@@ -1483,7 +1528,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
 
     kb::scene::SceneEntity entity{};
     if (!logCreation) {
-        entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+        entity = EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, position);
         if (!entity.IsValid()) {
             console_.Error("Assets", "Mesh entity could not be created: " + metadata->name);
             return {};
@@ -1494,7 +1539,7 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
     }
 
     const bool created = ExecuteSceneCommand("Create Mesh Entity", [this, assetId, position, metadata, &entity]() {
-        entity = EditorSceneMeshAssetActions::CreateMeshEntity(scene_, assetId, metadata->name, position);
+        entity = EditorSceneMeshAssetActions::CreateMeshEntity(*scene_, assetId, metadata->name, position);
         if (!entity.IsValid()) {
             return false;
         }
@@ -1513,12 +1558,12 @@ kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::Ass
 }
 
 bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity) {
-    if (!assetId.IsValid() || !entity.IsValid() || !scene_.Entities().IsAlive(entity)) {
+    if (!assetId.IsValid() || !entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Scripts", "Behaviour asset assignment ignored for invalid target.");
         return false;
     }
 
-    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(assetId);
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
     if (metadata == nullptr) {
         console_.Error("Scripts", "Behaviour asset metadata was not found.");
         return false;
@@ -1531,10 +1576,10 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     }
 
     if (!ExecuteSceneCommand("Assign Behaviour", [this, entity, behaviour]() {
-            if (!scene_.Entities().IsAlive(entity)) {
+            if (!scene_->Entities().IsAlive(entity)) {
                 return false;
             }
-            scene_.Components().Behaviours().Set(entity, *behaviour);
+            scene_->Components().Behaviours().Set(entity, *behaviour);
             SelectEntity(entity);
             return true;
         })) {
@@ -1546,15 +1591,15 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
 }
 
 bool EditorSceneContext::HasEntityScript(kb::scene::SceneEntity entity) const {
-    return entity.IsValid() && scene_.Components().Behaviours().Has(entity);
+    return entity.IsValid() && scene_->Components().Behaviours().Has(entity);
 }
 
 std::string EditorSceneContext::EntityScriptName(kb::scene::SceneEntity entity) const {
-    const kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
     if (behaviour == nullptr) {
         return {};
     }
-    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ behaviour->behaviourAssetId });
     if (metadata == nullptr) {
         return "(missing script)";
     }
@@ -1562,13 +1607,13 @@ std::string EditorSceneContext::EntityScriptName(kb::scene::SceneEntity entity) 
 }
 
 bool EditorSceneContext::EntityScriptEnabled(kb::scene::SceneEntity entity) const {
-    const kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+    const kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
     return behaviour != nullptr && behaviour->enabled;
 }
 
 std::vector<std::pair<kb::assets::AssetId, std::string>> EditorSceneContext::AvailableScriptAssets() const {
     std::vector<std::pair<kb::assets::AssetId, std::string>> scripts;
-    for (const kb::assets::AssetMetadata& metadata : scene_.Assets().Manager().Registry().All()) {
+    for (const kb::assets::AssetMetadata& metadata : scene_->Assets().Manager().Registry().All()) {
         if (kb::script::ScriptBehaviourAsset::IsBehaviourAsset(metadata)) {
             scripts.emplace_back(metadata.id, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name);
         }
@@ -1582,51 +1627,51 @@ bool EditorSceneContext::AttachScriptToEntity(kb::scene::SceneEntity entity, kb:
 }
 
 bool EditorSceneContext::RemoveScriptFromEntity(kb::scene::SceneEntity entity) {
-    if (!entity.IsValid() || !scene_.Components().Behaviours().Has(entity)) {
+    if (!entity.IsValid() || !scene_->Components().Behaviours().Has(entity)) {
         return false;
     }
     return ExecuteSceneCommand("Remove Component", [this, entity]() {
-        if (!scene_.Entities().IsAlive(entity)) {
+        if (!scene_->Entities().IsAlive(entity)) {
             return false;
         }
-        scene_.Components().Behaviours().Remove(entity);
+        scene_->Components().Behaviours().Remove(entity);
         return true;
     });
 }
 
 bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
-    if (!entity.IsValid() || !scene_.Entities().IsAlive(entity)) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Inspector", "Component add ignored for invalid entity.");
         return false;
     }
 
     if (componentId == "Camera") {
-        if (scene_.Components().Cameras().Has(entity)) {
+        if (scene_->Components().Cameras().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Camera component.");
             return false;
         }
         return ExecuteSceneCommand("Add Camera Component", [this, entity]() {
-            scene_.Components().Cameras().Set(entity, kb::scene::CameraComponent{});
+            scene_->Components().Cameras().Set(entity, kb::scene::CameraComponent{});
             return true;
         });
     }
     if (componentId == "Light") {
-        if (scene_.Components().Lights().Has(entity)) {
+        if (scene_->Components().Lights().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Light component.");
             return false;
         }
         return ExecuteSceneCommand("Add Light Component", [this, entity]() {
-            scene_.Components().Lights().Set(entity, kb::scene::LightComponent{});
+            scene_->Components().Lights().Set(entity, kb::scene::LightComponent{});
             return true;
         });
     }
     if (componentId == "MeshRenderer") {
-        if (scene_.Components().MeshRenderers().Has(entity)) {
+        if (scene_->Components().MeshRenderers().Has(entity)) {
             console_.Warning("Inspector", "Entity already has a Mesh Renderer component.");
             return false;
         }
         return ExecuteSceneCommand("Add Mesh Renderer Component", [this, entity]() {
-            scene_.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
+            scene_->Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
             return true;
         });
     }
@@ -1636,16 +1681,16 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
 }
 
 bool EditorSceneContext::ToggleEntityScriptEnabled(kb::scene::SceneEntity entity) {
-    if (!entity.IsValid() || !scene_.Components().Behaviours().Has(entity)) {
+    if (!entity.IsValid() || !scene_->Components().Behaviours().Has(entity)) {
         return false;
     }
     return ExecuteSceneCommand("Toggle Script Enabled", [this, entity]() {
-        kb::scene::BehaviourComponent* behaviour = scene_.Components().Behaviours().TryGet(entity);
+        kb::scene::BehaviourComponent* behaviour = scene_->Components().Behaviours().TryGet(entity);
         if (behaviour == nullptr) {
             return false;
         }
         behaviour->enabled = !behaviour->enabled;
-        scene_.Components().Behaviours().MarkModified(entity);
+        scene_->Components().Behaviours().MarkModified(entity);
         return true;
     });
 }
@@ -1656,11 +1701,11 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
     }
 
     const kb::scene::SceneEntity primary = SelectedEntity();
-    if (!scene_.Entities().IsAlive(primary)) {
+    if (!scene_->Entities().IsAlive(primary)) {
         return false;
     }
 
-    std::vector<kb::scene::SceneEntity> editing = TopLevelSelectedEntities(scene_, hierarchySelection_.SelectedEntities());
+    std::vector<kb::scene::SceneEntity> editing = TopLevelSelectedEntities(*scene_, hierarchySelection_.SelectedEntities());
     if (editing.empty()) {
         editing.push_back(primary);
     } else if (!ContainsEntity(editing, primary)) {
@@ -1673,10 +1718,10 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
     activeTransformEdit_.changes.clear();
     activeTransformEdit_.changes.reserve(editing.size());
     for (const kb::scene::SceneEntity entity : editing) {
-        if (!scene_.Entities().IsAlive(entity) || FindTransformChange(activeTransformEdit_.changes, entity) != nullptr) {
+        if (!scene_->Entities().IsAlive(entity) || FindTransformChange(activeTransformEdit_.changes, entity) != nullptr) {
             continue;
         }
-        const kb::scene::TransformComponent* transform = scene_.Transforms().TryGet(entity);
+        const kb::scene::TransformComponent* transform = scene_->Transforms().TryGet(entity);
         if (transform == nullptr) {
             continue;
         }
@@ -1714,7 +1759,7 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
     std::vector<kb::scene::SceneEntity> touched;
     touched.reserve(activeTransformEdit_.changes.size());
     for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_.Entities().IsAlive(change.entity)) {
+        if (!scene_->Entities().IsAlive(change.entity)) {
             continue;
         }
         kb::scene::TransformComponent next = change.before;
@@ -1725,11 +1770,11 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
         };
         change.after = next;
 
-        const kb::scene::TransformComponent current = scene_.Transforms().Get(change.entity);
+        const kb::scene::TransformComponent current = scene_->Transforms().Get(change.entity);
         if (SameTransform(current, next)) {
             continue;
         }
-        scene_.Transforms().Set(change.entity, next);
+        scene_->Transforms().Set(change.entity, next);
         touched.push_back(change.entity);
         changed = true;
     }
@@ -1749,10 +1794,10 @@ bool EditorSceneContext::CommitActiveTransformEdit() {
     std::vector<EditorSceneObjectTransformChange> committed;
     committed.reserve(activeTransformEdit_.changes.size());
     for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_.Entities().IsAlive(change.entity)) {
+        if (!scene_->Entities().IsAlive(change.entity)) {
             continue;
         }
-        if (const kb::scene::TransformComponent* current = scene_.Transforms().TryGet(change.entity); current != nullptr) {
+        if (const kb::scene::TransformComponent* current = scene_->Transforms().TryGet(change.entity); current != nullptr) {
             change.after = *current;
         }
         if (!SameTransform(change.before, change.after)) {
@@ -1774,7 +1819,7 @@ bool EditorSceneContext::CommitActiveTransformEdit() {
     commandStack_.PushExecuted(std::make_unique<EditorSceneTransformDeltaCommand>(*this, label, std::move(committed)));
     MarkSceneEntitiesRenderDirty(touched);
     MarkSceneDocumentDirty();
-    scene_.Runtime().SynchronizeTransforms();
+    scene_->Runtime().SynchronizeTransforms();
     return true;
 }
 
@@ -1788,17 +1833,17 @@ void EditorSceneContext::CancelActiveTransformEdit() noexcept {
     std::vector<kb::scene::SceneEntity> touched;
     touched.reserve(activeTransformEdit_.changes.size());
     for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_.Entities().IsAlive(change.entity)) {
+        if (!scene_->Entities().IsAlive(change.entity)) {
             continue;
         }
-        scene_.Transforms().Set(change.entity, change.before);
+        scene_->Transforms().Set(change.entity, change.before);
         touched.push_back(change.entity);
         changed = true;
     }
     activeTransformEdit_.Clear();
     if (changed) {
         MarkSceneEntitiesRenderDirty(touched);
-        scene_.Runtime().SynchronizeTransforms();
+        scene_->Runtime().SynchronizeTransforms();
     }
 }
 
@@ -1808,7 +1853,7 @@ bool EditorSceneContext::HasActiveTransformEdit() const noexcept {
 
 EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
     return EditorSceneCommandController{
-        scene_,
+        *scene_,
         commandStack_,
         console_,
         viewportState_,
@@ -1840,7 +1885,7 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
         return;
     }
 
-    hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
+    hierarchyRowsCache_ = EditorHierarchyRowBuilder::Build(*scene_, hierarchyExpansion_.CollapsedEntities(), hierarchySearch_.Query());
     hierarchyRowsDirty_ = false;
 }
 
@@ -1851,11 +1896,11 @@ void EditorSceneContext::ResetSceneEditState() {
     CancelHierarchyRename();
     inspector_.EndTextEdit();
     MarkSceneRenderDirty();
-    scene_.Runtime().SynchronizeTransforms();
+    scene_->Runtime().SynchronizeTransforms();
 }
 
 void EditorSceneContext::SelectFirstSceneEntityOrClear() noexcept {
-    const std::vector<kb::scene::SceneEntity> roots = scene_.Hierarchy().RootEntities();
+    const std::vector<kb::scene::SceneEntity> roots = scene_->Hierarchy().RootEntities();
     if (roots.empty()) {
         hierarchySelection_.Clear();
         return;
@@ -1865,7 +1910,7 @@ void EditorSceneContext::SelectFirstSceneEntityOrClear() noexcept {
 }
 
 std::filesystem::path EditorSceneContext::ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const {
-    if (const std::optional<std::filesystem::path> physical = scene_.Assets().Manager().Mounts().Resolve(virtualPath)) {
+    if (const std::optional<std::filesystem::path> physical = scene_->Assets().Manager().Mounts().Resolve(virtualPath)) {
         return *physical;
     }
     return EditorProjectPaths::DefaultScenePath();
