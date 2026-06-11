@@ -2,10 +2,12 @@
 
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 
 namespace kb::scene {
@@ -22,6 +24,8 @@ public:
     [[nodiscard]] SceneMeshRendererComponents MeshRenderers() const noexcept;
     [[nodiscard]] SceneLightComponents Lights() const noexcept;
     [[nodiscard]] SceneInputComponents Inputs() const noexcept;
+    [[nodiscard]] SceneRigidbodyComponents Rigidbodies() const noexcept;
+    [[nodiscard]] SceneColliderComponents Colliders() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

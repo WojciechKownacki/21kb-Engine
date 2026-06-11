@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
@@ -10,6 +11,7 @@
 #include "scene/EditorHierarchyRow.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
+#include "scene/EditorPluginsState.hpp"
 #include "scene/EditorProjectSettingsState.hpp"
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
@@ -37,11 +39,11 @@ enum class InputKey : std::uint16_t;
 
 } // namespace kb::input
 
-namespace kb::script {
+namespace kb::modules {
 
-class ScriptRuntimeHost;
+class EngineModuleHost;
 
-} // namespace kb::script
+} // namespace kb::modules
 
 namespace kb::editor {
 
@@ -89,6 +91,8 @@ public:
     [[nodiscard]] const EditorSceneGizmoState& Gizmo() const noexcept;
     [[nodiscard]] EditorProjectSettingsState& ProjectSettings() noexcept;
     [[nodiscard]] const EditorProjectSettingsState& ProjectSettings() const noexcept;
+    [[nodiscard]] EditorPluginsState& Plugins() noexcept;
+    [[nodiscard]] const EditorPluginsState& Plugins() const noexcept;
     [[nodiscard]] EditorScriptEditorState& ScriptEditor() noexcept;
     [[nodiscard]] const EditorScriptEditorState& ScriptEditor() const noexcept;
     [[nodiscard]] const kb::project::ProjectDescriptor& Project() const noexcept;
@@ -202,6 +206,9 @@ public:
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
     [[nodiscard]] bool ToggleProjectInputEnabled();
     bool CloseProjectSettingsDropdowns() noexcept;
+    [[nodiscard]] bool IsProjectPluginEnabled(std::string_view pluginId) const noexcept;
+    [[nodiscard]] std::string ProjectPluginBinaryPath(std::string_view pluginId) const;
+    [[nodiscard]] bool ToggleProjectPlugin(std::size_t catalogIndex);
 
     [[nodiscard]] std::optional<kb::input::InputMappingContextAsset> ReadInputMappingContextAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool AddInputMapping(kb::assets::AssetId id);
@@ -224,6 +231,7 @@ public:
     [[nodiscard]] bool AttachScriptToEntity(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool RemoveScriptFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleEntityScriptEnabled(kb::scene::SceneEntity entity);
+    [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool CommitActiveTransformEdit();
@@ -247,15 +255,20 @@ private:
     [[nodiscard]] std::filesystem::path ResolveProjectVirtualPath(const std::filesystem::path& virtualPath) const;
     [[nodiscard]] std::filesystem::path ResolveDefaultScenePath() const;
 
-    kb::scene::Scene scene_;
+    // Declared before scene_ so the scene can be constructed from the loaded project
+    // descriptor: the project's enabled/disabled module set must be known before the
+    // scene wires its subsystems through the engine module host.
+    EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
     std::filesystem::path projectFile_;
+    kb::scene::Scene scene_;
     std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
     EditorProjectSettingsState projectSettings_;
+    EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
@@ -278,9 +291,9 @@ private:
     int hierarchyScrollbarDragY_ = 0;
     int hierarchyScrollbarDragStartOffset_ = 0;
     bool hierarchyScrollbarDragging_ = false;
-    // Declared last so it is destroyed before scene_: the script host installs a
-    // scene system that references the scene.
-    std::unique_ptr<kb::script::ScriptRuntimeHost> scriptHost_;
+    // Declared last so it is destroyed before scene_: the script module installs
+    // a scene system that references the scene.
+    std::unique_ptr<kb::modules::EngineModuleHost> scriptModuleHost_;
 };
 
 } // namespace kb::editor

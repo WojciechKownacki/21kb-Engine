@@ -64,6 +64,23 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
     }
 }
 
+void InspectorPanelState::ToggleAddComponentBrowser() {
+    scriptComponentMenuOpen_ = false;
+    addComponentBrowserOpen_ = !addComponentBrowserOpen_;
+    if (addComponentBrowserOpen_) {
+        BeginTextEdit(InspectorPropertyId::AddComponentSearch, {});
+    } else if (editedProperty_ == InspectorPropertyId::AddComponentSearch) {
+        EndTextEdit();
+    }
+}
+
+void InspectorPanelState::CloseAddComponentBrowser() noexcept {
+    addComponentBrowserOpen_ = false;
+    if (editedProperty_ == InspectorPropertyId::AddComponentSearch) {
+        EndTextEdit();
+    }
+}
+
 bool InspectorPanelState::SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) noexcept {
     if (hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property) {
         return false;
@@ -72,6 +89,21 @@ bool InspectorPanelState::SetHover(InspectorHitKind kind, InspectorSectionId sec
     hoveredSection_ = section;
     hoveredProperty_ = property;
     return true;
+}
+
+bool InspectorPanelState::IsComponentMenuOpen(InspectorSectionId section) const noexcept {
+    return section == InspectorSectionId::Script && scriptComponentMenuOpen_;
+}
+
+void InspectorPanelState::ToggleComponentMenu(InspectorSectionId section) noexcept {
+    CloseAddComponentBrowser();
+    if (section == InspectorSectionId::Script) {
+        scriptComponentMenuOpen_ = !scriptComponentMenuOpen_;
+    }
+}
+
+void InspectorPanelState::CloseComponentMenus() noexcept {
+    scriptComponentMenuOpen_ = false;
 }
 
 void InspectorPanelState::ClearHover() noexcept {

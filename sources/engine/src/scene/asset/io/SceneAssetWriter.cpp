@@ -27,6 +27,8 @@ enum SceneNodeComponentBits : std::uint32_t {
     MeshRendererBit = 1U << 1U,
     LightBit = 1U << 2U,
     InputBit = 1U << 3U,
+    RigidbodyBit = 1U << 4U,
+    ColliderBit = 1U << 5U,
 };
 
 [[nodiscard]] std::filesystem::path MetaPathFor(const std::filesystem::path& scenePath) {
@@ -98,6 +100,25 @@ void WriteInput(std::vector<std::uint8_t>& output, const InputComponent& input) 
     WriteUInt8(output, input.enabled ? 1U : 0U);
 }
 
+void WriteRigidbody(std::vector<std::uint8_t>& output, const RigidbodyComponent& rigidbody) {
+    WriteUInt32(output, static_cast<std::uint32_t>(rigidbody.bodyType));
+    WriteFloat(output, rigidbody.mass);
+    WriteVec3(output, rigidbody.linearVelocity);
+    WriteVec3(output, rigidbody.angularVelocity);
+    WriteFloat(output, rigidbody.gravityScale);
+    WriteUInt8(output, rigidbody.useGravity ? 1U : 0U);
+    WriteUInt8(output, rigidbody.lockRotation ? 1U : 0U);
+}
+
+void WriteCollider(std::vector<std::uint8_t>& output, const ColliderComponent& collider) {
+    WriteUInt32(output, static_cast<std::uint32_t>(collider.shape));
+    WriteVec3(output, collider.center);
+    WriteVec3(output, collider.boxSize);
+    WriteFloat(output, collider.radius);
+    WriteFloat(output, collider.height);
+    WriteUInt8(output, collider.trigger ? 1U : 0U);
+}
+
 void WriteNestedOverride(std::vector<std::uint8_t>& output, const ScenePrefabPropertyOverride& property) {
     WriteUInt32(output, property.nodeIndex);
     WriteUInt32(output, static_cast<std::uint32_t>(property.flag));
@@ -123,6 +144,8 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     componentBits |= node.components.meshRenderer.has_value() ? MeshRendererBit : 0U;
     componentBits |= node.components.light.has_value() ? LightBit : 0U;
     componentBits |= node.components.input.has_value() ? InputBit : 0U;
+    componentBits |= node.components.rigidbody.has_value() ? RigidbodyBit : 0U;
+    componentBits |= node.components.collider.has_value() ? ColliderBit : 0U;
     WriteUInt32(output, componentBits);
     if (node.components.camera.has_value()) {
         WriteCamera(output, *node.components.camera);
@@ -135,6 +158,12 @@ void WriteNode(std::vector<std::uint8_t>& output, const ScenePrefabNodeDesc& nod
     }
     if (node.components.input.has_value()) {
         WriteInput(output, *node.components.input);
+    }
+    if (node.components.rigidbody.has_value()) {
+        WriteRigidbody(output, *node.components.rigidbody);
+    }
+    if (node.components.collider.has_value()) {
+        WriteCollider(output, *node.components.collider);
     }
 }
 

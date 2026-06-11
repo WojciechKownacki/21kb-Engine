@@ -23,6 +23,7 @@ enum class DockPanelKind : std::uint8_t {
     Console,
     ProjectSettings,
     ScriptEditor,
+    Plugins,
 };
 
 enum class DockSplitAxis : std::uint8_t {
