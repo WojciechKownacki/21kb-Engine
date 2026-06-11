@@ -57,12 +57,25 @@ public:
         scrollbarDragging_ = false;
     }
 
+    [[nodiscard]] bool HasPendingReload() const noexcept {
+        return pendingReload_;
+    }
+
+    void MarkPendingReload() noexcept {
+        pendingReload_ = true;
+    }
+
+    void ClearPendingReload() noexcept {
+        pendingReload_ = false;
+    }
+
 private:
     std::int64_t scrollOffset_ = 0;
     std::size_t hoveredPluginIndex_ = std::numeric_limits<std::size_t>::max();
     int scrollbarDragY_ = 0;
     std::int64_t scrollbarDragStartOffset_ = 0;
     bool scrollbarDragging_ = false;
+    bool pendingReload_ = false;
 };
 
 } // namespace kb::editor

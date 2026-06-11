@@ -364,9 +364,11 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Plugin starts disabled in a fresh scratch project");
     report.Check(controller.UpdateHoverOrClear(std::optional<RECT>{ kContent }, togglePoint.x, togglePoint.y), "Hovering first plugin updates hover state");
     report.Check(context.Plugins().HoveredPluginIndex() == 0U, "Hovered plugin index tracked");
+    report.Check(!context.Plugins().HasPendingReload(), "Plugin panel starts without pending reload");
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox is handled");
     report.Check(context.IsProjectPluginEnabled(descriptor->id), "Clicking checkbox enables the plugin");
     report.Check(context.ProjectPluginBinaryPath(descriptor->id) == descriptor->binaryPath, "Enabled plugin stores the catalog binary path");
+    report.Check(context.Plugins().HasPendingReload(), "Enabling plugin marks pending reload");
 
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
@@ -381,6 +383,7 @@ void RunPluginsPanelSuite(Report& report) {
 
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox again is handled");
     report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Second click disables the plugin");
+    report.Check(context.Plugins().HasPendingReload(), "Disabling plugin keeps pending reload marked");
     {
         const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
         const auto iter = std::find_if(reloaded.descriptor.plugins.begin(), reloaded.descriptor.plugins.end(), [descriptor](const kb::project::ProjectPluginReference& plugin) {

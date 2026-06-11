@@ -106,6 +106,14 @@ void DrawHeader(HDC dc, const RECT& content) {
     DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, "Plugins", RGB(226, 230, 235), 14, FW_SEMIBOLD);
 }
 
+void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneContext) {
+    DrawHeader(dc, content);
+    if (sceneContext.Plugins().HasPendingReload()) {
+        const RECT header = HeaderRect(content);
+        DrawText(dc, RECT{ header.left + 110, header.top, header.right - kPadding, header.bottom }, "Pending scene reload", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void DrawColumnHeader(HDC dc, const RECT& content) {
     const RECT header = ColumnHeaderRect(content);
     GdiDrawing::FillRectColor(dc, header, RGB(24, 27, 31));
@@ -124,6 +132,7 @@ void DrawRow(HDC dc, const RECT& row, std::size_t index, const EditorSceneContex
 
     const bool hovered = sceneContext.Plugins().HoveredPluginIndex() == index;
     const bool enabled = sceneContext.IsProjectPluginEnabled(plugin->id);
+    const bool pendingReload = sceneContext.Plugins().HasPendingReload();
     GdiDrawing::FillRectColor(dc, row, hovered ? RGB(35, 43, 52) : ((index & 1U) != 0U ? RGB(28, 31, 35) : RGB(26, 28, 31)));
     if (enabled) {
         GdiDrawing::FillRectColor(dc, RECT{ row.left, row.top, row.left + 2, row.bottom }, RGB(79, 129, 184));
@@ -133,7 +142,8 @@ void DrawRow(HDC dc, const RECT& row, std::size_t index, const EditorSceneContex
     DrawCheckbox(dc, checkbox, enabled);
     DrawText(dc, RECT{ row.left + 34, row.top + 1, row.left + kPluginColumnRight - 10, row.top + 18 }, plugin->displayName.data(), RGB(222, 228, 234), 12, FW_SEMIBOLD);
     DrawText(dc, RECT{ row.left + 34, row.top + 17, row.left + kPluginColumnRight - 10, row.bottom }, plugin->id.data(), RGB(122, 130, 144), 11);
-    DrawText(dc, RECT{ row.left + kPluginColumnRight, row.top, row.left + kStatusColumnRight, row.bottom }, enabled ? "Enabled" : "Disabled", enabled ? RGB(126, 201, 143) : RGB(136, 145, 156), 12);
+    const char* status = enabled ? (pendingReload ? "Enabled*" : "Enabled") : (pendingReload ? "Disabled*" : "Disabled");
+    DrawText(dc, RECT{ row.left + kPluginColumnRight, row.top, row.left + kStatusColumnRight, row.bottom }, status, pendingReload ? RGB(223, 178, 91) : (enabled ? RGB(126, 201, 143) : RGB(136, 145, 156)), 12);
     DrawText(dc, RECT{ row.left + kStatusColumnRight, row.top, row.left + kCategoryColumnRight, row.bottom }, plugin->category.data(), RGB(196, 205, 214), 12);
 
     const std::string binary = sceneContext.ProjectPluginBinaryPath(plugin->id).empty()
@@ -159,7 +169,7 @@ void DrawScrollbar(HDC dc, const RECT& content, const EditorSceneContext& sceneC
 void PluginsPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
-    DrawHeader(dc, content);
+    DrawHeader(dc, content, sceneContext);
     DrawColumnHeader(dc, content);
 
     const RECT rows = ListRowsRect(content);

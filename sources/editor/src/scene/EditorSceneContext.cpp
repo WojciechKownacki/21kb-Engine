@@ -1370,7 +1370,11 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
             .enabled = true,
         });
         console_.Info("Plugins", std::string{ descriptor->displayName } + " enabled. Reopen the scene or enter play mode after reload to apply.");
-        return SaveProjectDescriptor();
+        const bool saved = SaveProjectDescriptor();
+        if (saved) {
+            plugins_.MarkPendingReload();
+        }
+        return saved;
     }
 
     iter->enabled = !iter->enabled;
@@ -1378,7 +1382,11 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
         iter->binaryPath = std::string{ descriptor->binaryPath };
     }
     console_.Info("Plugins", std::string{ descriptor->displayName } + (iter->enabled ? " enabled." : " disabled.") + " Project plugin changes apply when the scene/module host is rebuilt.");
-    return SaveProjectDescriptor();
+    const bool saved = SaveProjectDescriptor();
+    if (saved) {
+        plugins_.MarkPendingReload();
+    }
+    return saved;
 }
 
 void EditorSceneContext::ActivateProjectInput() {
