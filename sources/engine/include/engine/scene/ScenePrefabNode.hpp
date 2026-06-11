@@ -1,9 +1,11 @@
 #pragma once
 
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -20,6 +22,8 @@ struct ScenePrefabNodeComponents {
     std::optional<MeshRendererComponent> meshRenderer;
     std::optional<LightComponent> light;
     std::optional<InputComponent> input;
+    std::optional<RigidbodyComponent> rigidbody;
+    std::optional<ColliderComponent> collider;
 };
 
 struct ScenePrefabNodeDesc {

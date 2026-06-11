@@ -62,7 +62,7 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
     return true;
 }
 
-[[nodiscard]] bool ReadPlugins(ByteReader& input, ProjectDescriptor& descriptor) {
+[[nodiscard]] bool ReadPlugins(ByteReader& input, ProjectDescriptor& descriptor, std::uint32_t fileVersion) {
     std::uint32_t count = 0U;
     if (!input.ReadUInt32(count) || count > ProjectDescriptorFormat::MaxPluginCount) {
         return false;
@@ -72,8 +72,13 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
     for (std::uint32_t index = 0U; index < count; ++index) {
         ProjectPluginReference plugin;
         if (!input.ReadString(plugin.name) ||
-            !input.ReadBool(plugin.enabled) ||
             plugin.name.empty()) {
+            return false;
+        }
+        if (fileVersion >= 3U && !input.ReadString(plugin.binaryPath)) {
+            return false;
+        }
+        if (!input.ReadBool(plugin.enabled)) {
             return false;
         }
         descriptor.plugins.push_back(std::move(plugin));
@@ -138,7 +143,7 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
         !input.ReadBool(descriptor.disableEnginePluginsByDefault) ||
         !ReadStringList(input, ProjectDescriptorFormat::MaxTargetPlatformCount, descriptor.targetPlatforms) ||
         !ReadModules(input, descriptor) ||
-        !ReadPlugins(input, descriptor)) {
+        !ReadPlugins(input, descriptor, fileVersion)) {
         return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor fields are invalid." };
     }
 

@@ -20,6 +20,7 @@ enum class InspectorSectionId : std::uint8_t {
     InputAction,
     InputMappings,
     Script,
+    AddComponent,
 };
 
 enum class InspectorHitKind : std::uint8_t {
@@ -31,6 +32,7 @@ enum class InspectorHitKind : std::uint8_t {
     FloatField,
     MeshPreview,
     MeshPreviewToolbarButton,
+    ComponentMenuButton,
 };
 
 enum class InspectorPropertyId : std::uint8_t {
@@ -61,19 +63,22 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingAdd,
     ScriptName,
     ScriptEnabled,
-    ScriptRemove,
-    ScriptAdd,
-    ScriptOption,
+    ComponentRemove,
+    AddComponentButton,
+    AddComponentSearch,
+    AddComponentOption,
 };
 
 struct InspectorPanelState {
     [[nodiscard]] bool IsCollapsed(InspectorSectionId section) const noexcept;
     void ToggleCollapsed(InspectorSectionId section) noexcept;
 
-    // "Add Script" picker (Unity-style) in the entity Script section.
-    [[nodiscard]] bool IsScriptPickerOpen() const noexcept { return scriptPickerOpen_; }
-    void ToggleScriptPicker() noexcept { scriptPickerOpen_ = !scriptPickerOpen_; }
-    void CloseScriptPicker() noexcept { scriptPickerOpen_ = false; }
+    [[nodiscard]] bool IsAddComponentBrowserOpen() const noexcept { return addComponentBrowserOpen_; }
+    void ToggleAddComponentBrowser();
+    void CloseAddComponentBrowser() noexcept;
+    [[nodiscard]] bool IsComponentMenuOpen(InspectorSectionId section) const noexcept;
+    void ToggleComponentMenu(InspectorSectionId section) noexcept;
+    void CloseComponentMenus() noexcept;
     [[nodiscard]] bool SetHover(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) noexcept;
     void ClearHover() noexcept;
     [[nodiscard]] bool IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept;
@@ -133,7 +138,8 @@ private:
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
     bool scriptCollapsed_ = false;
-    bool scriptPickerOpen_ = false;
+    bool addComponentBrowserOpen_ = false;
+    bool scriptComponentMenuOpen_ = false;
     InspectorHitKind hoveredKind_ = InspectorHitKind::None;
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;

@@ -7,6 +7,7 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -23,6 +24,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -52,6 +54,12 @@ constexpr int kAssetPreviewMinHeight = 142;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
+constexpr int kComponentMenuButtonSize = 18;
+constexpr int kAddComponentButtonHeight = 24;
+constexpr int kAddComponentBrowserMaxHeight = 280;
+constexpr int kAddComponentSearchHeight = 24;
+constexpr int kAddComponentResultRowHeight = 26;
+constexpr int kAddComponentCategoryHeaderHeight = 22;
 constexpr float kMeshPreviewFitZoom = 1.35F;
 
 [[nodiscard]] COLORREF Color(EditorColor color) {
@@ -184,7 +192,12 @@ void DrawTriangle(HDC dc, RECT rect, bool expanded, COLORREF color) {
     ProjectFilesPanelDrawing::DrawDisclosureTriangle(dc, rect, color, expanded);
 }
 
-void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title) {
+[[nodiscard]] RECT ComponentRemoveButtonRect(RECT header) noexcept {
+    const int top = CenteredY(header, kComponentMenuButtonSize);
+    return Rect(header.right - kRowPadX - kComponentMenuButtonSize, top, header.right - kRowPadX, top + kComponentMenuButtonSize);
+}
+
+void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool removeButton = false) {
     const bool hovered = state.IsHovered(InspectorHitKind::SectionHeader, section, InspectorPropertyId::None);
     GdiDrawing::FillRectColor(dc, rect, hovered ? HoverFill(theme) : Color(theme.strip));
 
@@ -194,10 +207,22 @@ void DrawSectionHeader(HDC dc, RECT rect, const EditorTheme& theme, const Inspec
     RECT iconRect = Rect(rect.left + 35, rect.top + 3, rect.left + 53, rect.top + 21);
     HeroIconPainter::Draw(dc, iconRect, icon, Color(theme.textSecondary), 2);
 
-    RECT titleRect = Rect(rect.left + 59, rect.top, rect.right - 8, rect.bottom);
+    RECT titleRect = Rect(rect.left + 59, rect.top, removeButton ? rect.right - 44 : rect.right - 8, rect.bottom);
     ScopedFont font(13, FW_SEMIBOLD);
     const ScopedGdiObject selectedFont(dc, font.handle);
     Text(dc, titleRect, title, Color(theme.textPrimary));
+
+    if (removeButton) {
+        const RECT button = ComponentRemoveButtonRect(rect);
+        const bool buttonHovered = state.IsHovered(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove);
+        DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.strip), Color(theme.borderPanel));
+        ScopedFont xFont(11, FW_SEMIBOLD);
+        const ScopedGdiObject selectedXFont(dc, xFont.handle);
+        RECT glyph = button;
+        glyph.top -= 1;
+        glyph.bottom -= 1;
+        Text(dc, glyph, "x", Color(theme.textSecondary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 void DrawValueBox(HDC dc, RECT rect, const EditorTheme& theme, std::string_view value, bool hovered = false) {
@@ -343,9 +368,9 @@ void DrawBoolRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPane
 
 class SectionWriter {
 public:
-    SectionWriter(HDC dc, RECT bounds, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title)
+    SectionWriter(HDC dc, RECT bounds, const EditorTheme& theme, const InspectorPanelState& state, InspectorSectionId section, HeroIconKind icon, std::string_view title, bool menuButton = false)
         : dc_(dc), bounds_(bounds), theme_(theme), state_(state), section_(section), collapsed_(state.IsCollapsed(section)) {
-        DrawSectionHeader(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kSectionHeaderHeight), theme_, state_, section_, icon, title);
+        DrawSectionHeader(dc_, Rect(bounds_.left, y_, bounds_.right, y_ + kSectionHeaderHeight), theme_, state_, section_, icon, title, menuButton);
         y_ += kSectionHeaderHeight;
         if (collapsed_) {
             return;
@@ -409,6 +434,95 @@ private:
     bool collapsed_ = false;
     int y_ = bounds_.top;
 };
+
+[[nodiscard]] RECT AddComponentButtonRect(RECT content, int y) noexcept {
+    const int width = std::min<int>(240, std::max<int>(120, static_cast<int>(content.right - content.left) - 32));
+    const int left = content.left + std::max(16, (static_cast<int>(content.right - content.left) - width) / 2);
+    return Rect(left, y, left + width, y + kAddComponentButtonHeight);
+}
+
+[[nodiscard]] RECT AddComponentBrowserRect(RECT content, int y) noexcept {
+    const RECT button = AddComponentButtonRect(content, y);
+    const int top = button.bottom + 8;
+    const int left = content.left + 12;
+    const int right = content.right - 12;
+    const int bottom = std::min(static_cast<int>(content.bottom), top + kAddComponentBrowserMaxHeight);
+    return Rect(left, top, right, bottom);
+}
+
+[[nodiscard]] RECT AddComponentSearchRect(RECT browser) noexcept {
+    return Rect(browser.left + 10, browser.top + 34, browser.right - 10, browser.top + 34 + kAddComponentSearchHeight);
+}
+
+[[nodiscard]] RECT AddComponentResultsRect(RECT browser) noexcept {
+    return Rect(browser.left + 1, browser.top + 68, browser.right - 1, browser.bottom - 1);
+}
+
+[[nodiscard]] std::string_view AddComponentQuery(const InspectorPanelState& inspector) noexcept {
+    return inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch ? std::string_view{ inspector.EditBuffer() } : std::string_view{};
+}
+
+void DrawAddComponentBrowser(HDC dc, RECT content, const EditorTheme& theme, const InspectorPanelState& inspector, int y) {
+    const RECT browser = AddComponentBrowserRect(content, y);
+    DrawFrame(dc, browser, Rgb(30, 33, 38), Rgb(70, 78, 88));
+
+    ScopedFont titleFont(12, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedTitleFont(dc, titleFont.handle);
+        Text(dc, Rect(browser.left + 10, browser.top + 4, browser.right - 10, browser.top + 28), "Add Component", Color(theme.textPrimary));
+    }
+
+    const RECT search = AddComponentSearchRect(browser);
+    const bool searchFocused = inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch;
+    DrawFrame(dc, search, Rgb(20, 22, 25), searchFocused ? Color(theme.accent) : Rgb(54, 60, 68));
+    const std::string_view query = AddComponentQuery(inspector);
+    if (!query.empty()) {
+        Text(dc, Shrink(search, 8, 0, 8, 0), query, Color(theme.textPrimary));
+    }
+
+    const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(query);
+    const RECT results = AddComponentResultsRect(browser);
+    int rowTop = results.top;
+    std::string category;
+    for (const InspectorComponentTile* tile : tiles) {
+        if (tile == nullptr) {
+            continue;
+        }
+        if (tile->category != category) {
+            category = tile->category;
+            const RECT categoryRow = Rect(results.left, rowTop, results.right, rowTop + kAddComponentCategoryHeaderHeight);
+            if (categoryRow.bottom > results.bottom) {
+                break;
+            }
+            GdiDrawing::FillRectColor(dc, categoryRow, Rgb(25, 28, 33));
+            ScopedFont categoryFont(11, FW_SEMIBOLD);
+            const ScopedGdiObject selectedCategoryFont(dc, categoryFont.handle);
+            Text(dc, Rect(categoryRow.left + 10, categoryRow.top, categoryRow.right - 10, categoryRow.bottom), category, Color(theme.textSecondary));
+            rowTop += kAddComponentCategoryHeaderHeight;
+        }
+        const RECT row = Rect(results.left, rowTop, results.right, rowTop + kAddComponentResultRowHeight);
+        if (row.bottom > results.bottom) {
+            break;
+        }
+        Text(dc, Rect(row.left + 22, row.top, row.right - 10, row.bottom), tile->label, Color(theme.textPrimary));
+        rowTop += kAddComponentResultRowHeight;
+    }
+
+    if (tiles.empty()) {
+        Text(dc, results, "No components found", Rgb(122, 130, 144), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const InspectorPanelState& inspector, int y) {
+    const RECT button = AddComponentButtonRect(content, y);
+    DrawFrame(dc, button, inspector.IsAddComponentBrowserOpen() ? HoverFill(theme) : Color(theme.chrome), Color(theme.borderPanel));
+    ScopedFont font(12, FW_NORMAL);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    Text(dc, button, "Add Component", Color(theme.textPrimary), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (inspector.IsAddComponentBrowserOpen()) {
+        DrawAddComponentBrowser(dc, content, theme, inspector, y);
+    }
+}
 
 [[nodiscard]] std::optional<std::filesystem::path> ResolveAssetPhysicalPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
     if (!metadata.physicalPath.empty()) {
@@ -799,27 +913,13 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         y = section.Bottom() + kSectionGap;
     }
 
-    {
-        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script");
-        if (sceneContext.HasEntityScript(selected)) {
-            section.Field("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName);
-            section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
-            section.Field("", "Remove Script", InspectorPropertyId::ScriptRemove);
-        } else {
-            section.Field("", inspector.IsScriptPickerOpen() ? "Add Script  (pick one)" : "Add Script", InspectorPropertyId::ScriptAdd);
-            if (inspector.IsScriptPickerOpen()) {
-                const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
-                if (scripts.empty()) {
-                    section.Field("", "(no scripts - create a .lua first)", InspectorPropertyId::None);
-                } else {
-                    for (const std::pair<kb::assets::AssetId, std::string>& script : scripts) {
-                        section.Field("", script.second, InspectorPropertyId::ScriptOption);
-                    }
-                }
-            }
-        }
+    if (sceneContext.HasEntityScript(selected)) {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Script, HeroIconKind::CommandLine, "Script", true);
+        section.Field("Script", sceneContext.EntityScriptName(selected), InspectorPropertyId::ScriptName);
+        section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
         y = section.Bottom() + kSectionGap;
     }
+    DrawAddComponent(dc, content, theme, inspector, y);
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit MakeHit(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, RECT rect) noexcept {
@@ -915,9 +1015,15 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     return {};
 }
 
-[[nodiscard]] InspectorPanelRenderer::Hit HitSectionHeader(RECT bounds, int& y, const InspectorPanelState& state, InspectorSectionId section, int x, int yPoint) noexcept {
+[[nodiscard]] InspectorPanelRenderer::Hit HitSectionHeader(RECT bounds, int& y, const InspectorPanelState& state, InspectorSectionId section, int x, int yPoint, bool removeButton = false) noexcept {
     RECT header = Rect(bounds.left, y, bounds.right, y + kSectionHeaderHeight);
     y += kSectionHeaderHeight;
+    if (removeButton) {
+        const RECT remove = ComponentRemoveButtonRect(header);
+        if (Contains(remove, x, yPoint)) {
+            return MakeHit(InspectorHitKind::ComponentMenuButton, section, InspectorPropertyId::ComponentRemove, remove);
+        }
+    }
     if (Contains(header, x, yPoint)) {
         return MakeHit(InspectorHitKind::SectionHeader, section, InspectorPropertyId::None, header);
     }
@@ -1097,11 +1203,11 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
     y += kSectionGap;
 
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Script, x, yPoint); hit.kind != InspectorHitKind::None) {
-        return hit;
-    }
-    if (!state.IsCollapsed(InspectorSectionId::Script)) {
-        if (sceneContext.HasEntityScript(selected)) {
+    if (sceneContext.HasEntityScript(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Script, x, yPoint, true); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::Script)) {
             if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, x, yPoint); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
@@ -1110,25 +1216,40 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptRemove, x, yPoint); hit.kind != InspectorHitKind::None) {
+        }
+        y += kSectionGap;
+    }
+
+    const RECT addButton = AddComponentButtonRect(content, y);
+    if (Contains(addButton, x, yPoint)) {
+        return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton, addButton);
+    }
+    if (state.IsAddComponentBrowserOpen()) {
+        const RECT browser = AddComponentBrowserRect(content, y);
+        const RECT search = AddComponentSearchRect(browser);
+        if (Contains(search, x, yPoint)) {
+            return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentSearch, search);
+        }
+        const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(AddComponentQuery(state));
+        const RECT results = AddComponentResultsRect(browser);
+        int rowTop = results.top;
+        std::string category;
+        for (std::size_t index = 0; index < tiles.size(); ++index) {
+            const InspectorComponentTile* tile = tiles[index];
+            if (tile == nullptr) {
+                continue;
+            }
+            if (tile->category != category) {
+                category = tile->category;
+                rowTop += kAddComponentCategoryHeaderHeight;
+            }
+            RECT row = Rect(results.left, rowTop, results.right, rowTop + kAddComponentResultRowHeight);
+            if (Contains(row, x, yPoint)) {
+                InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, row);
+                hit.index = static_cast<int>(index);
                 return hit;
             }
-            AdvanceRow(y);
-        } else {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptAdd, x, yPoint); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            if (state.IsScriptPickerOpen()) {
-                const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
-                for (std::size_t index = 0; index < scripts.size(); ++index) {
-                    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptOption, x, yPoint); hit.kind != InspectorHitKind::None) {
-                        hit.index = static_cast<int>(index);
-                        return hit;
-                    }
-                    AdvanceRow(y);
-                }
-            }
+            rowTop += kAddComponentResultRowHeight;
         }
     }
     return {};

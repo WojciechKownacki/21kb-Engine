@@ -80,6 +80,16 @@ void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
     }
 }
 
+void ActivatePluginsPanel(HWND mainWindow, EditorDockModel& dockModel) {
+    for (const DockPanel& panel : dockModel.Queries().Panels()) {
+        if (panel.kind == DockPanelKind::Plugins) {
+            dockModel.Commands().ActivatePanel(panel.id);
+            InvalidateRect(mainWindow, nullptr, FALSE);
+            return;
+        }
+    }
+}
+
 [[nodiscard]] bool HandleMenuLeftButtonDown(
     HWND mainWindow,
     int x,
@@ -143,7 +153,7 @@ void ActivateProjectSettingsPanel(HWND mainWindow, EditorDockModel& dockModel) {
                     sceneViewport.RequestPresent();
                 }
             } else if (*row == 3) {
-                ActivateProjectSettingsPanel(mainWindow, dockModel);
+                ActivatePluginsPanel(mainWindow, dockModel);
             }
         } else if (shellInteraction.OpenMenu() == EditorMenuCommand::Options) {
             if (*row == 2) {

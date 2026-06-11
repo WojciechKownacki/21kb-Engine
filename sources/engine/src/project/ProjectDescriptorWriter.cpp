@@ -62,7 +62,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
         }
     }
     for (const ProjectPluginReference& plugin : descriptor.plugins) {
-        if (plugin.name.empty() || !StringFits(plugin.name)) {
+        if (plugin.name.empty() || !StringFits(plugin.name) || !StringFits(plugin.binaryPath)) {
             return false;
         }
     }
@@ -97,6 +97,7 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     WriteUInt32(output, static_cast<std::uint32_t>(descriptor.plugins.size()));
     for (const ProjectPluginReference& plugin : descriptor.plugins) {
         WriteString(output, plugin.name);
+        WriteString(output, plugin.binaryPath);
         WriteBool(output, plugin.enabled);
     }
 

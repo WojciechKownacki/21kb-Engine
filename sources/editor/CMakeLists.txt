@@ -35,6 +35,7 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
+    src/app/plugins/EditorPluginsPointerController.cpp
     src/app/EditorWindowLifecycleHandler.cpp
     src/app/EditorWindowHitTestHandler.cpp
     src/app/EditorPaintDispatcher.cpp
@@ -282,6 +283,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorMouseWheelRouter.hpp
     src/private/app/inspector/EditorInspectorPointerController.hpp
+    src/private/app/plugins/EditorPluginsPointerController.hpp
     src/private/app/EditorPaintDispatcher.hpp
     src/private/app/EditorPendingTextEditCommitter.hpp
     src/private/app/EditorPlayModeState.hpp
@@ -327,11 +329,14 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
+    src/private/inspection/InspectorColliderTextBuilder.hpp
+    src/private/inspection/InspectorComponentCatalog.hpp
     src/private/inspection/InspectorComponentLabelFormatter.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
     src/private/inspection/InspectorMeshRendererTextBuilder.hpp
     src/private/inspection/InspectorPanelTextBuilder.hpp
+    src/private/inspection/InspectorRigidbodyTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
@@ -418,6 +423,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/ProjectFilesTileTextRenderer.hpp
     src/private/rendering/ProjectFilesToolbarRenderer.hpp
     src/private/rendering/ProjectFilesTreeRenderer.hpp
+    src/private/rendering/PluginsPanelRenderer.hpp
     src/private/rendering/ProjectSettingsPanelLayout.hpp
     src/private/rendering/ProjectSettingsPanelRenderer.hpp
     src/private/rendering/EditorScriptEditorOverlay.hpp
@@ -462,6 +468,8 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchySelectionState.hpp
     src/private/scene/EditorHierarchyRowPicker.hpp
     src/private/scene/EditorHierarchySelectionController.hpp
+    src/private/scene/EditorPluginCatalog.hpp
+    src/private/scene/EditorPluginsState.hpp
     src/private/scene/EditorProjectSettingsState.hpp
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
@@ -569,6 +577,7 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesTileTextRenderer.cpp
     src/rendering/ProjectFilesToolbarRenderer.cpp
     src/rendering/ProjectFilesTreeRenderer.cpp
+    src/rendering/PluginsPanelRenderer.cpp
     src/rendering/ProjectSettingsPanelLayout.cpp
     src/rendering/ProjectSettingsPanelRenderer.cpp
     src/rendering/EditorScriptEditorOverlay.cpp
@@ -592,11 +601,14 @@ add_executable(kb_editor WIN32
     src/rendering/SvgPathCursor.cpp
     src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
+    src/inspection/InspectorColliderTextBuilder.cpp
+    src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMeshRendererTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
+    src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorDefaultSceneFactory.cpp
     src/scene/EditorHierarchyContentResolver.cpp
     src/scene/EditorHierarchyFloatingContentResolver.cpp
@@ -610,6 +622,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorHierarchySelectionState.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
+    src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
     src/scene/EditorSceneCommandController.cpp
@@ -691,6 +704,14 @@ target_link_libraries(kb_editor
         kb_engine
         kb_renderer
 )
+
+if(TARGET kb_physics_jolt_plugin)
+    add_dependencies(kb_editor kb_physics_jolt_plugin)
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
+    )
+endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32 xinput)
 

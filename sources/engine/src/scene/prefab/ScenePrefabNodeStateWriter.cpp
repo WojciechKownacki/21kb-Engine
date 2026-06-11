@@ -2,12 +2,14 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
+#include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneInputComponents.hpp"
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
+#include "engine/scene/SceneRigidbodyComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 namespace kb::scene {
@@ -40,6 +42,8 @@ void ScenePrefabNodeStateWriter::Write(Scene& scene, SceneObject object, SceneOb
     WriteOptionalComponent(components.MeshRenderers(), entity, node.components.meshRenderer);
     WriteOptionalComponent(components.Lights(), entity, node.components.light);
     WriteOptionalComponent(components.Inputs(), entity, node.components.input);
+    WriteOptionalComponent(components.Rigidbodies(), entity, node.components.rigidbody);
+    WriteOptionalComponent(components.Colliders(), entity, node.components.collider);
 }
 
 } // namespace kb::scene

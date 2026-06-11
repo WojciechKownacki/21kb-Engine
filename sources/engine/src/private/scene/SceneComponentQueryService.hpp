@@ -2,9 +2,11 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
@@ -33,6 +35,12 @@ public:
 
     [[nodiscard]] static bool HasInput(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const InputComponent* TryGetInput(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasRigidbody(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const RigidbodyComponent* TryGetRigidbody(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasCollider(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const ColliderComponent* TryGetCollider(const Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

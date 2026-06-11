@@ -25,6 +25,7 @@ EditorPanelPointerHitContext EditorPanelPointerHitContextResolver::Resolve(
     context.inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
     context.consoleContent = EditorPanelContentResolver::Resolve(DockPanelKind::Console, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
     context.projectSettingsContent = EditorPanelContentResolver::Resolve(DockPanelKind::ProjectSettings, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
+    context.pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow, mainWindow, dockModel, floatingWindows, metrics);
     context.hierarchyContent = EditorHierarchyContentResolver::Resolve(messageWindow, mainWindow, dockModel, floatingWindows, metrics);
 
     const std::optional<EditorResolvedPanelContent> scenePanelContent =
@@ -37,6 +38,7 @@ EditorPanelPointerHitContext EditorPanelPointerHitContextResolver::Resolve(
     context.inInspectorPanel = context.inspectorContent.has_value() && PointInRect(*context.inspectorContent, x, y);
     context.inConsolePanel = context.consoleContent.has_value() && PointInRect(*context.consoleContent, x, y);
     context.inProjectSettingsPanel = context.projectSettingsContent.has_value() && PointInRect(*context.projectSettingsContent, x, y);
+    context.inPluginsPanel = context.pluginsContent.has_value() && PointInRect(*context.pluginsContent, x, y);
     context.inHierarchyPanel = context.hierarchyContent.has_value() && PointInRect(*context.hierarchyContent, x, y);
     return context;
 }

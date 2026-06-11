@@ -12,5 +12,6 @@ int main() {
     kb::tests::RunScriptRuntimeTests();
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();
+    kb::tests::RunEngineModuleTests();
     return EXIT_SUCCESS;
 }

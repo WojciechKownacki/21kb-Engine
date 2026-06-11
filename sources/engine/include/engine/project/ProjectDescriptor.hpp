@@ -14,11 +14,12 @@ struct ProjectModuleDescriptor {
 
 struct ProjectPluginReference {
     std::string name;
+    std::string binaryPath;
     bool enabled = true;
 };
 
 struct ProjectDescriptor {
-    static constexpr std::uint32_t CurrentFileVersion = 2U;
+    static constexpr std::uint32_t CurrentFileVersion = 3U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string engineAssociation = "21kb";

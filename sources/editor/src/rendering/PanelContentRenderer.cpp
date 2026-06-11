@@ -8,6 +8,7 @@
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectFilesPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/ScriptEditorPanelRenderer.hpp"
@@ -319,6 +320,9 @@ void PanelContentRenderer::Paint(
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        break;
+    case DockPanelKind::Plugins:
+        PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
         break;
     case DockPanelKind::ScriptEditor:
         ScriptEditorPanelRenderer{}.Paint(dc, content, theme, sceneContext, EditorScriptEditorOverlay::IsDirty(sceneViewportHost));

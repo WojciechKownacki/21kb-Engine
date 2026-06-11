@@ -13,6 +13,9 @@
 #include "engine/scene/SceneDocument.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRuntime.hpp"
+#include "engine/ecs/ComponentSerialization.hpp"
+#include "engine/ecs/World.hpp"
 
 #include <array>
 #include <filesystem>
@@ -47,7 +50,7 @@ void RunProjectDescriptorRoundTripTest() {
     descriptor.defaultScene = "/Game/Scenes/Test.21kbscene";
     descriptor.targetPlatforms = { "Windows", "Linux" };
     descriptor.modules.push_back(kb::project::ProjectModuleDescriptor{ .name = "SampleRuntime", .type = "Runtime", .loadingPhase = "Default" });
-    descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "GameplayTools", .enabled = true });
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{ .name = "GameplayTools", .binaryPath = "Plugins/GameplayTools.dll", .enabled = true });
 
     Require(kb::project::ProjectManager::CreateProject(projectFile, descriptor), "Project descriptor was not created");
     Require(std::filesystem::is_regular_file(projectFile), "Project descriptor file was not written");
@@ -71,6 +74,7 @@ void RunProjectDescriptorRoundTripTest() {
     Require(loaded.descriptor.targetPlatforms.size() == 2, "Project descriptor target platforms did not roundtrip");
     Require(!loaded.descriptor.modules.empty() && loaded.descriptor.modules.front().name == "SampleRuntime", "Project descriptor modules did not roundtrip");
     Require(!loaded.descriptor.plugins.empty() && loaded.descriptor.plugins.front().name == "GameplayTools", "Project descriptor plugins did not roundtrip");
+    Require(loaded.descriptor.plugins.front().binaryPath == "Plugins/GameplayTools.dll", "Project descriptor plugin binary path did not roundtrip");
 }
 
 void RunProjectDescriptorRejectsChecksumMismatchTest() {
@@ -113,6 +117,20 @@ void RunSceneDocumentRoundTripTest() {
         .orthographicHeight = 16.0F,
         .primary = true,
     });
+    source.Components().Rigidbodies().Set(root, kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+        .mass = 8.0F,
+        .linearVelocity = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F },
+        .angularVelocity = kb::scene::Vec3{ 0.0F, 4.0F, 0.0F },
+        .gravityScale = 0.5F,
+    });
+    source.Components().Colliders().Set(root, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Capsule,
+        .center = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+        .radius = 0.75F,
+        .height = 2.5F,
+        .trigger = true,
+    });
 
     Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "RoundTrip"), "Scene document was not saved");
 
@@ -129,9 +147,41 @@ void RunSceneDocumentRoundTripTest() {
     const kb::scene::MeshRendererComponent* meshRenderer = target.Components().MeshRenderers().TryGet(roots[0]);
     const kb::scene::LightComponent* light = target.Components().Lights().TryGet(restoredChildren[0]);
     const kb::scene::CameraComponent* camera = target.Components().Cameras().TryGet(roots[1]);
+    const kb::scene::RigidbodyComponent* rigidbody = target.Components().Rigidbodies().TryGet(roots[0]);
+    const kb::scene::ColliderComponent* collider = target.Components().Colliders().TryGet(roots[0]);
     Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 41 && !meshRenderer->castsShadow, "Scene document mesh renderer did not roundtrip");
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
     Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F), "Scene document camera did not roundtrip");
+    Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
+    Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
+}
+
+void RunScenePhysicsComponentReflectionSerializationTest() {
+    kb::scene::Scene source;
+    const kb::scene::SceneEntity sourceEntity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "PhysicsSource" });
+    source.Components().Rigidbodies().Set(sourceEntity, kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Kinematic,
+        .mass = 5.0F,
+        .linearVelocity = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F },
+        .gravityScale = 0.0F,
+        .useGravity = false,
+        .lockRotation = true,
+    });
+
+    kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
+    const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.RigidbodyComponent");
+    Require(reflection != nullptr, "RigidbodyComponent reflection was not registered");
+    Require(reflection->FindField("linearVelocity") != nullptr, "RigidbodyComponent reflection is missing velocity");
+
+    kb::ecs::SerializedComponent serialized;
+    Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::RigidbodyComponent>(), serialized), "RigidbodyComponent reflection serialization failed");
+
+    kb::scene::Scene target;
+    const kb::scene::SceneEntity targetEntity = target.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "PhysicsTarget" });
+    Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "RigidbodyComponent reflection apply failed");
+
+    const kb::scene::RigidbodyComponent* restored = target.Components().Rigidbodies().TryGet(targetEntity);
+    Require(restored != nullptr && restored->bodyType == kb::scene::RigidbodyBodyType::Kinematic && NearlyEqual(restored->mass, 5.0F) && NearlyEqual(restored->linearVelocity.x, 2.0F) && !restored->useGravity && restored->lockRotation, "RigidbodyComponent reflection did not roundtrip");
 }
 
 void RunEmptySceneDocumentClearsRuntimeSceneTest() {
@@ -229,6 +279,7 @@ void RunProjectSceneTests() {
     RunProjectDescriptorRoundTripTest();
     RunProjectDescriptorRejectsChecksumMismatchTest();
     RunSceneDocumentRoundTripTest();
+    RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
     RunSceneDocumentAssetDiscoveryTest();
     RunSceneAssetWritesMetaAndLoadsThroughSceneSystemTest();

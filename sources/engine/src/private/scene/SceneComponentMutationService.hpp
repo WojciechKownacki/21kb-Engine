@@ -2,9 +2,11 @@
 
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
@@ -44,6 +46,16 @@ public:
     static void SetInput(Scene& scene, SceneEntity entity, const InputComponent& input);
     static void RemoveInput(Scene& scene, SceneEntity entity) noexcept;
     static void MarkInputModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static RigidbodyComponent* TryGetRigidbody(Scene& scene, SceneEntity entity) noexcept;
+    static void SetRigidbody(Scene& scene, SceneEntity entity, const RigidbodyComponent& rigidbody);
+    static void RemoveRigidbody(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkRigidbodyModified(Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static ColliderComponent* TryGetCollider(Scene& scene, SceneEntity entity) noexcept;
+    static void SetCollider(Scene& scene, SceneEntity entity, const ColliderComponent& collider);
+    static void RemoveCollider(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkColliderModified(Scene& scene, SceneEntity entity) noexcept;
 };
 
 } // namespace kb::scene

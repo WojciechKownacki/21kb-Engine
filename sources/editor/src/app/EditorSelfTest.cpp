@@ -280,20 +280,19 @@ void RunScriptEditorSuite(Report& report) {
 }
 
 // Proves the Unity-style Inspector script attach flow at the model level:
-// the script appears in the Add Script list, attaches, toggles, and removes.
+// scripts attach as components, toggle, and remove through the component path.
 void RunScriptAttachSuite(Report& report) {
     EditorSceneContext context;
 
     report.Check(context.CreateLuaScriptAsset("/Game"), "Create Lua script asset");
     const kb::assets::AssetId script = FindAssetId(context, [](const kb::assets::AssetMetadata& m) { return m.type == "LuaScript"; });
     report.Check(script.IsValid(), "Lua script registered");
-    report.Check(!context.AvailableScriptAssets().empty(), "Script appears in the Add Script list");
 
     const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
     report.Check(actor.IsValid(), "Create actor entity");
     report.Check(!context.HasEntityScript(actor), "Actor has no script initially");
 
-    report.Check(context.AttachScriptToEntity(actor, script), "Attach script via the inspector path");
+    report.Check(context.AttachScriptToEntity(actor, script), "Attach script as component");
     report.Check(context.HasEntityScript(actor), "Actor now has a script");
     report.Check(!context.EntityScriptName(actor).empty(), "Attached script name resolves");
     report.Check(context.EntityScriptEnabled(actor), "Script is enabled by default");
@@ -301,7 +300,7 @@ void RunScriptAttachSuite(Report& report) {
     report.Check(context.ToggleEntityScriptEnabled(actor), "Toggle script enabled");
     report.Check(!context.EntityScriptEnabled(actor), "Script is now disabled");
 
-    report.Check(context.RemoveScriptFromEntity(actor), "Remove script");
+    report.Check(context.RemoveScriptFromEntity(actor), "Remove script component");
     report.Check(!context.HasEntityScript(actor), "Actor has no script after removal");
 }
 

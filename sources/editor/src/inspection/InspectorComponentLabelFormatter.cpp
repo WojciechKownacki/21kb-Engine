@@ -24,4 +24,28 @@ const char* InspectorComponentLabelFormatter::ProjectionName(kb::scene::CameraPr
     return "Unknown";
 }
 
+const char* InspectorComponentLabelFormatter::RigidbodyBodyTypeName(kb::scene::RigidbodyBodyType bodyType) noexcept {
+    switch (bodyType) {
+    case kb::scene::RigidbodyBodyType::Static:
+        return "Static";
+    case kb::scene::RigidbodyBodyType::Dynamic:
+        return "Dynamic";
+    case kb::scene::RigidbodyBodyType::Kinematic:
+        return "Kinematic";
+    }
+    return "Unknown";
+}
+
+const char* InspectorComponentLabelFormatter::ColliderShapeName(kb::scene::ColliderShape shape) noexcept {
+    switch (shape) {
+    case kb::scene::ColliderShape::Box:
+        return "Box";
+    case kb::scene::ColliderShape::Sphere:
+        return "Sphere";
+    case kb::scene::ColliderShape::Capsule:
+        return "Capsule";
+    }
+    return "Unknown";
+}
+
 } // namespace kb::editor

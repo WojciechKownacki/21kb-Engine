@@ -11,7 +11,9 @@ SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComp
     , cameras_(world, components.CameraComponentId())
     , meshRenderers_(world, components.MeshRendererComponentId())
     , lights_(world, components.LightComponentId())
-    , inputs_(world, components.InputComponentId()) {}
+    , inputs_(world, components.InputComponentId())
+    , rigidbodies_(world, components.RigidbodyComponentId())
+    , colliders_(world, components.ColliderComponentId()) {}
 
 void SceneComponentStorage::SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility) {
     transforms_.Set(entity, transform);
@@ -72,6 +74,22 @@ const SceneInputComponentStore& SceneComponentStorage::Inputs() const noexcept {
 
 SceneInputComponentStore& SceneComponentStorage::Inputs() noexcept {
     return inputs_;
+}
+
+const SceneRigidbodyComponentStore& SceneComponentStorage::Rigidbodies() const noexcept {
+    return rigidbodies_;
+}
+
+SceneRigidbodyComponentStore& SceneComponentStorage::Rigidbodies() noexcept {
+    return rigidbodies_;
+}
+
+const SceneColliderComponentStore& SceneComponentStorage::Colliders() const noexcept {
+    return colliders_;
+}
+
+SceneColliderComponentStore& SceneComponentStorage::Colliders() noexcept {
+    return colliders_;
 }
 
 } // namespace kb::scene

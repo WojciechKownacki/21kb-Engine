@@ -27,6 +27,14 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.input = *input;
     }
 
+    if (const RigidbodyComponent* rigidbody = sceneComponents.Rigidbodies().TryGet(entity)) {
+        components.rigidbody = *rigidbody;
+    }
+
+    if (const ColliderComponent* collider = sceneComponents.Colliders().TryGet(entity)) {
+        components.collider = *collider;
+    }
+
     return components;
 }
 

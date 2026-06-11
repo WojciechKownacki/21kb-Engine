@@ -6,9 +6,11 @@
 #include "engine/scene/SceneAssets.hpp"
 
 #include "inspection/InspectorCameraTextBuilder.hpp"
+#include "inspection/InspectorColliderTextBuilder.hpp"
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
 #include "inspection/InspectorLightTextBuilder.hpp"
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
+#include "inspection/InspectorRigidbodyTextBuilder.hpp"
 
 #include <sstream>
 
@@ -74,6 +76,14 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
 
     if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(selected); light != nullptr) {
         InspectorLightTextBuilder{}.Append(text, *light);
+    }
+
+    if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
+        InspectorRigidbodyTextBuilder{}.Append(text, *rigidbody);
+    }
+
+    if (const kb::scene::ColliderComponent* collider = sceneContext.Scene().Components().Colliders().TryGet(selected); collider != nullptr) {
+        InspectorColliderTextBuilder{}.Append(text, *collider);
     }
 
     return text;

@@ -3,7 +3,9 @@
 #include "engine/script/ScriptAssetLoader.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "engine/input/InputAssetLoaders.hpp"
-#include "engine/input/InputPollingSystem.hpp"
+#include "engine/input/InputModule.hpp"
+#include "engine/modules/EngineModuleHost.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
@@ -23,6 +25,9 @@ std::atomic<std::uint64_t> g_nextSceneId{ 1U };
 } // namespace
 
 Scene::Scene()
+    : Scene(kb::project::ProjectDescriptor{}) {}
+
+Scene::Scene(kb::project::ProjectDescriptor descriptor)
     : state_(std::make_unique<SceneState>())
     , id_(g_nextSceneId.fetch_add(1U, std::memory_order_relaxed)) {
     const bool registeredPrefabLoader = state_->assets.RegisterLoader(std::make_unique<ScenePrefabAssetLoader>(*this));
@@ -42,21 +47,23 @@ Scene::Scene()
     static_cast<void>(registeredInputContextLoader);
     static_cast<void>(registeredImportedAssetLoader);
 
-    // Wire the input subsystem so AddMappingContext can resolve action / context
-    // assets straight from this scene's AssetManager, then register the polling
-    // system that re-evaluates actions every runtime tick (Input phase).
-    kb::assets::AssetManager& assetManager = state_->assets;
-    state_->inputSubsystem.SetResolvers(
-        [&assetManager](std::uint64_t id) {
-            return assetManager.Load<kb::input::InputActionAsset>(kb::assets::AssetId{id}).Shared();
-        },
-        [&assetManager](std::uint64_t id) {
-            return assetManager.Load<kb::input::InputMappingContextAsset>(kb::assets::AssetId{id}).Shared();
-        });
-    Runtime().AddSceneSystem(std::make_unique<kb::input::InputPollingSystem>(state_->inputSubsystem));
+    // Subsystems are driven through the engine module host instead of being wired
+    // by hand, so the project's descriptor can enable or disable them. Input is a
+    // built-in module whose OnSceneAttach binds the input resolvers to this scene's
+    // asset manager and installs the polling system. The default constructor passes a
+    // default descriptor (every built-in enabled), so scenes built without project
+    // context (tests, tools) behave exactly as before.
+    moduleHost_ = std::make_unique<kb::modules::EngineModuleHost>(std::move(descriptor));
+    moduleHost_->Add(std::make_unique<kb::input::InputModule>());
+    moduleHost_->Load(state_->world);
+    moduleHost_->AttachScene(*this);
 }
 
 Scene::~Scene() {
+    if (moduleHost_ != nullptr) {
+        moduleHost_->DetachScene(*this);
+        moduleHost_->Unload();
+    }
     state_->sceneSystemScheduler.Shutdown(*this);
     state_->systemScheduler.Shutdown(state_->world);
 }
