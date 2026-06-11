@@ -334,18 +334,23 @@ void RunScriptLogSuite(Report& report) {
     const kb::scene::SceneEntity actor = context.CreateHierarchyObject();
     report.Check(context.AttachScriptToEntity(actor, behaviour), "Attach logging script to actor");
     report.Check(context.BeginPlayModeSceneSession(), "Begin play mode session");
+    report.Check(!context.SaveCurrentScene(), "Scene save is blocked during play mode");
+    for (int frame = 0; frame < 4; ++frame) {
+        static_cast<void>(context.Scene().Runtime().Update(0.016F));
+    }
+    report.Check(context.RestorePlayModeSceneSession(), "Restore play mode session after first script log");
+    report.Check(context.BeginPlayModeSceneSession(), "Begin second play mode session");
     for (int frame = 0; frame < 4; ++frame) {
         static_cast<void>(context.Scene().Runtime().Update(0.016F));
     }
 
-    bool logged = false;
+    int loggedCount = 0;
     for (const EditorConsoleEntry& entry : context.Console().Entries()) {
         if (entry.message.find("PING_FROM_LUA") != std::string::npos) {
-            logged = true;
-            break;
+            ++loggedCount;
         }
     }
-    report.Check(logged, "Log() from a Lua script reached the editor Console");
+    report.Check(loggedCount >= 2, "Lua script local state resets across play mode sessions");
 }
 
 void RunPluginsPanelSuite(Report& report) {
@@ -364,10 +369,19 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(toggleHit.index == 0U, "First plugin checkbox resolves catalog index 0");
 
     EditorPluginsPointerController controller{ context };
-    report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Plugin starts disabled in a fresh scratch project");
     report.Check(controller.UpdateHoverOrClear(std::optional<RECT>{ kContent }, togglePoint.x, togglePoint.y), "Hovering first plugin updates hover state");
     report.Check(context.Plugins().HoveredPluginIndex() == 0U, "Hovered plugin index tracked");
     report.Check(!context.Plugins().HasPendingReload(), "Plugin panel starts without pending reload");
+
+    if (context.IsProjectPluginEnabled(descriptor->id)) {
+        report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking initially enabled plugin checkbox is handled");
+        report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Clicking initially enabled plugin disables it");
+        report.Check(context.Plugins().HasPendingReload(), "Disabling initially enabled plugin marks pending reload");
+        report.Check(context.ReloadSceneFromProject(), "Reload scene with disabled plugin settings");
+        report.Check(!context.Plugins().HasPendingReload(), "Reloading disabled plugin settings clears pending reload");
+    }
+
+    report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Plugin can be disabled before enable checks");
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox is handled");
     report.Check(context.IsProjectPluginEnabled(descriptor->id), "Clicking checkbox enables the plugin");
     report.Check(context.ProjectPluginBinaryPath(descriptor->id) == descriptor->binaryPath, "Enabled plugin stores the catalog binary path");

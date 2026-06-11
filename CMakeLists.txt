@@ -76,6 +76,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(MINIAUDIO_BUILD_EXAMPLES OFF CACHE BOOL "Do not build miniaudio examples" FORCE)
+set(MINIAUDIO_BUILD_TESTS OFF CACHE BOOL "Do not build miniaudio tests" FORCE)
+set(MINIAUDIO_BUILD_TOOLS OFF CACHE BOOL "Do not build miniaudio tools" FORCE)
+set(MINIAUDIO_INSTALL OFF CACHE BOOL "Do not install vendored miniaudio" FORCE)
+add_subdirectory(third_party/miniaudio third_party/miniaudio EXCLUDE_FROM_ALL)
+
 FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
@@ -127,12 +133,14 @@ endif()
 
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
+add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
 
 if(TARGET kb_engine_tests)
-    add_dependencies(kb_engine_tests kb_physics_jolt_plugin)
+    add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin)
     target_compile_definitions(kb_engine_tests
         PRIVATE
             "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
+            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"$<TARGET_FILE:kb_audio_miniaudio_plugin>\""
     )
 endif()
 

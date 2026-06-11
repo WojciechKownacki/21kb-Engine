@@ -1,6 +1,8 @@
 #include "scene/prefab/ScenePrefabNodeStateWriter.hpp"
 
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -44,6 +46,9 @@ void ScenePrefabNodeStateWriter::Write(Scene& scene, SceneObject object, SceneOb
     WriteOptionalComponent(components.Inputs(), entity, node.components.input);
     WriteOptionalComponent(components.Rigidbodies(), entity, node.components.rigidbody);
     WriteOptionalComponent(components.Colliders(), entity, node.components.collider);
+    WriteOptionalComponent(components.Behaviours(), entity, node.components.behaviour);
+    WriteOptionalComponent(components.AudioSources(), entity, node.components.audioSource);
+    WriteOptionalComponent(components.AudioListeners(), entity, node.components.audioListener);
 }
 
 } // namespace kb::scene

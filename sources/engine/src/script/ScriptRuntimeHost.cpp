@@ -4,6 +4,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneSystemContext.hpp"
+#include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
@@ -309,6 +310,9 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     // call covers all three scripting backends.
     if (!ScriptInputApi::Register(*this)) {
         AddDiagnostic("input script API could not be fully registered");
+    }
+    if (!ScriptAudioApi::Register(*this)) {
+        AddDiagnostic("audio script API could not be fully registered");
     }
 }
 

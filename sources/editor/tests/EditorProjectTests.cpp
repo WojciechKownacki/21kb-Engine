@@ -2,9 +2,17 @@
 #include "EditorTestSuites.hpp"
 
 #include "engine/project/ProjectManager.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "scene/EditorDefaultSceneFactory.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <system_error>
 
@@ -33,6 +41,12 @@ private:
     std::filesystem::path previous_;
 };
 
+[[nodiscard]] bool HasEnabledPlugin(const kb::project::ProjectDescriptor& descriptor, std::string_view name) {
+    return std::ranges::any_of(descriptor.plugins, [name](const kb::project::ProjectPluginReference& plugin) {
+        return plugin.name == name && plugin.enabled;
+    });
+}
+
 void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -48,11 +62,15 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::ScenesRoot()), "Editor project scenes folder was not created");
     kb::editor::tests::Require(std::filesystem::is_directory(kb::editor::EditorProjectPaths::PrefabsRoot()), "Editor project prefabs folder was not created");
     kb::editor::tests::Require(created.descriptor.defaultScene == "/Game/Scenes/Main.21kbscene", "Editor project default scene virtual path is invalid");
+    kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Physics.Jolt"), "Editor project default physics plugin was not configured");
+    kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Audio.Miniaudio"), "Editor project default audio plugin was not configured");
 
     const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
     kb::editor::tests::Require(loaded.succeeded, "Created editor project descriptor did not load");
     kb::editor::tests::Require(loaded.descriptor.name == "Project", "Created editor project descriptor name is invalid");
     kb::editor::tests::Require(loaded.descriptor.contentRoot == "Assets", "Created editor project content root is invalid");
+    kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Physics.Jolt"), "Created editor project descriptor did not persist the default physics plugin");
+    kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Audio.Miniaudio"), "Created editor project descriptor did not persist the default audio plugin");
 
     const kb::editor::EditorProjectBootstrapResult reopened = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
     kb::editor::tests::Require(reopened.succeeded, "Editor project bootstrap did not reopen an existing project descriptor");
@@ -62,12 +80,42 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+[[nodiscard]] kb::scene::SceneEntity FindRootByName(const kb::scene::Scene& scene, std::string_view name) {
+    for (const kb::scene::SceneEntity entity : scene.Hierarchy().RootEntities()) {
+        if (scene.Entities().Name(entity) == name) {
+            return entity;
+        }
+    }
+    return {};
+}
+
+void RunDefaultSceneFactorySeedsPhysicsDemoTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity selected = kb::editor::EditorDefaultSceneFactory::Seed(scene);
+    kb::editor::tests::Require(selected.IsValid(), "Editor default scene did not select the main camera");
+
+    const kb::scene::SceneEntity floor = FindRootByName(scene, "Physics Floor");
+    const kb::scene::SceneEntity cube = FindRootByName(scene, "Falling Cube");
+    kb::editor::tests::Require(floor.IsValid(), "Editor default scene did not create the physics floor");
+    kb::editor::tests::Require(cube.IsValid(), "Editor default scene did not create the falling cube");
+
+    const kb::scene::RigidbodyComponent* floorBody = scene.Components().Rigidbodies().TryGet(floor);
+    const kb::scene::RigidbodyComponent* cubeBody = scene.Components().Rigidbodies().TryGet(cube);
+    const kb::scene::ColliderComponent* floorCollider = scene.Components().Colliders().TryGet(floor);
+    const kb::scene::ColliderComponent* cubeCollider = scene.Components().Colliders().TryGet(cube);
+    kb::editor::tests::Require(floorBody != nullptr && floorBody->bodyType == kb::scene::RigidbodyBodyType::Static, "Physics floor is not a static rigidbody");
+    kb::editor::tests::Require(cubeBody != nullptr && cubeBody->bodyType == kb::scene::RigidbodyBodyType::Dynamic, "Falling cube is not a dynamic rigidbody");
+    kb::editor::tests::Require(floorCollider != nullptr && floorCollider->shape == kb::scene::ColliderShape::Box, "Physics floor is missing a box collider");
+    kb::editor::tests::Require(cubeCollider != nullptr && cubeCollider->shape == kb::scene::ColliderShape::Box, "Falling cube is missing a box collider");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
 
 void RunEditorProjectTests() {
     RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest();
+    RunDefaultSceneFactorySeedsPhysicsDemoTest();
 }
 
 } // namespace kb::editor::tests

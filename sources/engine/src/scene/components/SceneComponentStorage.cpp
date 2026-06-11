@@ -13,7 +13,9 @@ SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComp
     , lights_(world, components.LightComponentId())
     , inputs_(world, components.InputComponentId())
     , rigidbodies_(world, components.RigidbodyComponentId())
-    , colliders_(world, components.ColliderComponentId()) {}
+    , colliders_(world, components.ColliderComponentId())
+    , audioSources_(world, components.AudioSourceComponentId())
+    , audioListeners_(world, components.AudioListenerComponentId()) {}
 
 void SceneComponentStorage::SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility) {
     transforms_.Set(entity, transform);
@@ -90,6 +92,22 @@ const SceneColliderComponentStore& SceneComponentStorage::Colliders() const noex
 
 SceneColliderComponentStore& SceneComponentStorage::Colliders() noexcept {
     return colliders_;
+}
+
+const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {
+    return audioSources_;
+}
+
+SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() noexcept {
+    return audioSources_;
+}
+
+const SceneAudioListenerComponentStore& SceneComponentStorage::AudioListeners() const noexcept {
+    return audioListeners_;
+}
+
+SceneAudioListenerComponentStore& SceneComponentStorage::AudioListeners() noexcept {
+    return audioListeners_;
 }
 
 } // namespace kb::scene

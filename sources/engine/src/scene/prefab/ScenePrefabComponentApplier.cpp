@@ -27,6 +27,15 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.collider.has_value()) {
         sceneComponents.Colliders().Set(entity, *components.collider);
     }
+    if (components.behaviour.has_value()) {
+        sceneComponents.Behaviours().Set(entity, *components.behaviour);
+    }
+    if (components.audioSource.has_value()) {
+        sceneComponents.AudioSources().Set(entity, *components.audioSource);
+    }
+    if (components.audioListener.has_value()) {
+        sceneComponents.AudioListeners().Set(entity, *components.audioListener);
+    }
 }
 
 } // namespace kb::scene
