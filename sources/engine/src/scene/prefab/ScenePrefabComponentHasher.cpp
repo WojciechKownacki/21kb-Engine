@@ -50,6 +50,27 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<std::uint32_t>(components.input->priority)));
         ScenePrefabHashBuilder::Mix(hash, components.input->enabled ? 1U : 0U);
     }
+
+    ScenePrefabHashBuilder::Mix(hash, components.rigidbody.has_value() ? 1U : 0U);
+    if (components.rigidbody.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.rigidbody->bodyType));
+        ScenePrefabHashBuilder::MixFloat(hash, components.rigidbody->mass);
+        ScenePrefabHashBuilder::MixVec3(hash, components.rigidbody->linearVelocity);
+        ScenePrefabHashBuilder::MixVec3(hash, components.rigidbody->angularVelocity);
+        ScenePrefabHashBuilder::MixFloat(hash, components.rigidbody->gravityScale);
+        ScenePrefabHashBuilder::Mix(hash, components.rigidbody->useGravity ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.rigidbody->lockRotation ? 1U : 0U);
+    }
+
+    ScenePrefabHashBuilder::Mix(hash, components.collider.has_value() ? 1U : 0U);
+    if (components.collider.has_value()) {
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.collider->shape));
+        ScenePrefabHashBuilder::MixVec3(hash, components.collider->center);
+        ScenePrefabHashBuilder::MixVec3(hash, components.collider->boxSize);
+        ScenePrefabHashBuilder::MixFloat(hash, components.collider->radius);
+        ScenePrefabHashBuilder::MixFloat(hash, components.collider->height);
+        ScenePrefabHashBuilder::Mix(hash, components.collider->trigger ? 1U : 0U);
+    }
 }
 
 } // namespace kb::scene

@@ -3,7 +3,7 @@
 namespace kb::scene {
 
 SceneState::SceneState()
-    : components(*world.NativeHandle())
+    : components(world)
     , componentStorage(world.NativeHandle(), components) {}
 
 SceneState::~SceneState() = default;

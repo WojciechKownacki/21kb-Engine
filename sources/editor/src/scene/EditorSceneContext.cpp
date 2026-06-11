@@ -6,6 +6,9 @@
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
@@ -15,9 +18,9 @@
 #include "engine/input/InputActionAsset.hpp"
 #include "engine/input/InputMappingContextAsset.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
-#include "engine/script/ScriptFunctionRegistry.hpp"
-#include "engine/script/ScriptRuntimeHost.hpp"
+#include "engine/script/ScriptModule.hpp"
 
 #include "scene/EditorScriptAssetGateway.hpp"
 #include "scene/input/EditorInputActionAuthoring.hpp"
@@ -27,6 +30,7 @@
 
 #include "scene/EditorDefaultSceneFactory.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
+#include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorSceneCommandController.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
@@ -139,15 +143,17 @@ void AppendEntityBranchRenderDirty(
 
 } // namespace
 
-EditorSceneContext::EditorSceneContext() {
-    const EditorProjectBootstrapResult project = EditorProjectBootstrap::BootstrapDefaultProject();
-    if (project.succeeded) {
-        project_ = project.descriptor;
-        projectFile_ = project.projectFile;
-        console_.Info("Project", project.created ? "Created project descriptor." : "Loaded project descriptor.");
+EditorSceneContext::EditorSceneContext()
+    // Load the project descriptor first, then construct the scene from it so the
+    // scene's engine module host honours the project's enabled/disabled module set.
+    : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
+    , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
+    , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
+    , scene_(project_) {
+    if (projectBootstrap_.succeeded) {
+        console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
     } else {
-        projectFile_ = EditorProjectPaths::ProjectFile();
-        console_.Error("Project", project.error.empty() ? "Project descriptor bootstrap failed." : project.error);
+        console_.Error("Project", projectBootstrap_.error.empty() ? "Project descriptor bootstrap failed." : projectBootstrap_.error);
     }
 
     if (scene_.Assets().MountProject(EditorProjectPaths::ProjectRoot())) {
@@ -174,38 +180,47 @@ EditorSceneContext::EditorSceneContext() {
 EditorSceneContext::~EditorSceneContext() = default;
 
 void EditorSceneContext::EnsureScriptRuntime() {
-    if (scriptHost_ != nullptr) {
+    if (scriptModuleHost_ != nullptr) {
         return;
     }
-    // Behaviour scripts (Lua / Visual Graph / native) only tick once a script
-    // host is installed into the scene runtime. Created lazily on first play and
-    // reused; the installed scene system only runs while play mode ticks
-    // Runtime().Update, so it is inert in edit mode.
-    scriptHost_ = std::make_unique<kb::script::ScriptRuntimeHost>(
-        scene_, kb::script::ScriptRuntimeHostOptions{ .installSceneSystem = true });
-
-    // Log("...") in any script prints to the editor Console. console_ outlives
-    // scriptHost_ (declared last, destroyed first), so capturing it is safe.
-    kb::script::ScriptFunctionDesc logDesc;
-    logDesc.signature.name = "Log";
-    logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
-    logDesc.signature.outputs = {};
     EditorConsoleState* console = &console_;
-    logDesc.callback = [console](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
-        std::string message;
-        for (const kb::script::ScriptFunctionArgument& argument : arguments) {
-            if (argument.name == "message") {
-                message = argument.value.AsString();
-                break;
-            }
-        }
-        console->Info("Script", message);
-        return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
-    };
-    static_cast<void>(scriptHost_->RegisterFunction(std::move(logDesc)));
 
-    if (!scriptHost_->Succeeded()) {
-        for (const std::string& diagnostic : scriptHost_->Diagnostics()) {
+    kb::script::ScriptModuleOptions scriptOptions;
+    scriptOptions.configureHost = [console](kb::script::ScriptRuntimeHost& host) {
+        // Log("...") in any script prints to the editor Console. console_ outlives
+        // scriptModuleHost_ (declared last, destroyed first), so capturing it is safe.
+        kb::script::ScriptFunctionDesc logDesc;
+        logDesc.signature.name = "Log";
+        logDesc.signature.inputs = { kb::script::ScriptFunctionPin{ "message", kb::script::ScriptValueType::String, true } };
+        logDesc.signature.outputs = {};
+        logDesc.callback = [console](const kb::script::ScriptFunctionCallContext&, std::span<const kb::script::ScriptFunctionArgument> arguments) {
+            std::string message;
+            for (const kb::script::ScriptFunctionArgument& argument : arguments) {
+                if (argument.name == "message") {
+                    message = argument.value.AsString();
+                    break;
+                }
+            }
+            console->Info("Script", message);
+            return kb::script::ScriptFunctionCallResult{ .executed = true, .outputs = {}, .errors = {} };
+        };
+        static_cast<void>(host.RegisterFunction(std::move(logDesc)));
+    };
+
+    auto scriptModule = std::make_unique<kb::script::ScriptModule>(std::move(scriptOptions));
+    kb::script::ScriptModule* scriptModuleView = scriptModule.get();
+    scriptModuleHost_ = std::make_unique<kb::modules::EngineModuleHost>(project_);
+    scriptModuleHost_->Add(std::move(scriptModule));
+    scriptModuleHost_->Load(scene_.Runtime().EcsWorld());
+    scriptModuleHost_->AttachScene(scene_);
+
+    if (!scriptModuleHost_->IsActive("Script")) {
+        console_.Warning("Scripts", "Script module is disabled for this project; behaviours will not run.");
+        return;
+    }
+
+    if (!scriptModuleView->Succeeded()) {
+        for (const std::string& diagnostic : scriptModuleView->Diagnostics()) {
             console_.Error("Scripts", diagnostic);
         }
         console_.Error("Scripts", "Script runtime could not be fully initialized; behaviours may not run.");
@@ -304,6 +319,14 @@ EditorProjectSettingsState& EditorSceneContext::ProjectSettings() noexcept {
 
 const EditorProjectSettingsState& EditorSceneContext::ProjectSettings() const noexcept {
     return projectSettings_;
+}
+
+EditorPluginsState& EditorSceneContext::Plugins() noexcept {
+    return plugins_;
+}
+
+const EditorPluginsState& EditorSceneContext::Plugins() const noexcept {
+    return plugins_;
 }
 
 EditorScriptEditorState& EditorSceneContext::ScriptEditor() noexcept {
@@ -1317,6 +1340,47 @@ bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
     return projectSettings_.CloseDropdowns();
 }
 
+bool EditorSceneContext::IsProjectPluginEnabled(std::string_view pluginId) const noexcept {
+    const auto iter = std::ranges::find_if(project_.plugins, [pluginId](const kb::project::ProjectPluginReference& plugin) {
+        return plugin.name == pluginId;
+    });
+    return iter != project_.plugins.end() && iter->enabled;
+}
+
+std::string EditorSceneContext::ProjectPluginBinaryPath(std::string_view pluginId) const {
+    const auto iter = std::ranges::find_if(project_.plugins, [pluginId](const kb::project::ProjectPluginReference& plugin) {
+        return plugin.name == pluginId;
+    });
+    return iter == project_.plugins.end() ? std::string{} : iter->binaryPath;
+}
+
+bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
+    const EditorPluginDescriptor* descriptor = EditorPluginCatalog::At(catalogIndex);
+    if (descriptor == nullptr) {
+        return false;
+    }
+
+    auto iter = std::ranges::find_if(project_.plugins, [descriptor](const kb::project::ProjectPluginReference& plugin) {
+        return plugin.name == descriptor->id;
+    });
+    if (iter == project_.plugins.end()) {
+        project_.plugins.push_back(kb::project::ProjectPluginReference{
+            .name = std::string{ descriptor->id },
+            .binaryPath = std::string{ descriptor->binaryPath },
+            .enabled = true,
+        });
+        console_.Info("Plugins", std::string{ descriptor->displayName } + " enabled. Reopen the scene or enter play mode after reload to apply.");
+        return SaveProjectDescriptor();
+    }
+
+    iter->enabled = !iter->enabled;
+    if (iter->binaryPath.empty()) {
+        iter->binaryPath = std::string{ descriptor->binaryPath };
+    }
+    console_.Info("Plugins", std::string{ descriptor->displayName } + (iter->enabled ? " enabled." : " disabled.") + " Project plugin changes apply when the scene/module host is rebuilt.");
+    return SaveProjectDescriptor();
+}
+
 void EditorSceneContext::ActivateProjectInput() {
     if (!project_.inputEnabled || project_.inputMappingContext.empty()) {
         return;
@@ -1513,13 +1577,54 @@ bool EditorSceneContext::RemoveScriptFromEntity(kb::scene::SceneEntity entity) {
     if (!entity.IsValid() || !scene_.Components().Behaviours().Has(entity)) {
         return false;
     }
-    return ExecuteSceneCommand("Remove Script", [this, entity]() {
+    return ExecuteSceneCommand("Remove Component", [this, entity]() {
         if (!scene_.Entities().IsAlive(entity)) {
             return false;
         }
         scene_.Components().Behaviours().Remove(entity);
         return true;
     });
+}
+
+bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId) {
+    if (!entity.IsValid() || !scene_.Entities().IsAlive(entity)) {
+        console_.Warning("Inspector", "Component add ignored for invalid entity.");
+        return false;
+    }
+
+    if (componentId == "Camera") {
+        if (scene_.Components().Cameras().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Camera component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Camera Component", [this, entity]() {
+            scene_.Components().Cameras().Set(entity, kb::scene::CameraComponent{});
+            return true;
+        });
+    }
+    if (componentId == "Light") {
+        if (scene_.Components().Lights().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Light component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Light Component", [this, entity]() {
+            scene_.Components().Lights().Set(entity, kb::scene::LightComponent{});
+            return true;
+        });
+    }
+    if (componentId == "MeshRenderer") {
+        if (scene_.Components().MeshRenderers().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has a Mesh Renderer component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Mesh Renderer Component", [this, entity]() {
+            scene_.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
+            return true;
+        });
+    }
+
+    console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
+    return false;
 }
 
 bool EditorSceneContext::ToggleEntityScriptEnabled(kb::scene::SceneEntity entity) {

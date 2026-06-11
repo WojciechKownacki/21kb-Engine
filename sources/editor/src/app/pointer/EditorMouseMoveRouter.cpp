@@ -8,6 +8,7 @@
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/cursor/EditorInternalSplitterCursorController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
@@ -133,6 +134,18 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
     if (projectSettingsPointer.Contains(projectSettingsContent, x, y)) {
+        return;
+    }
+
+    const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    EditorPluginsPointerController pluginsPointer(sceneContext_);
+    if (pluginsPointer.HandlePointerMove(pluginsContent, x, y, leftButtonDown)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        if (sceneContext_.Plugins().IsScrollbarDragging()) {
+            return;
+        }
+    }
+    if (pluginsPointer.Contains(pluginsContent, x, y)) {
         return;
     }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {

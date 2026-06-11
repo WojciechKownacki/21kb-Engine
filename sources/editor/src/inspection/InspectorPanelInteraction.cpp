@@ -7,6 +7,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
+#include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 
 #include <algorithm>
@@ -24,31 +25,44 @@
 namespace kb::editor {
 namespace {
 
-// Unity-style "Add Script" section interaction for the selected entity.
 [[nodiscard]] bool HandleScriptClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     switch (hit.property) {
     case InspectorPropertyId::ScriptEnabled:
         static_cast<void>(sceneContext.ToggleEntityScriptEnabled(entity));
         return true;
-    case InspectorPropertyId::ScriptRemove:
+    case InspectorPropertyId::ComponentRemove:
         static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
-        sceneContext.Inspector().CloseScriptPicker();
+        sceneContext.Inspector().CloseComponentMenus();
         return true;
-    case InspectorPropertyId::ScriptAdd:
-        sceneContext.Inspector().ToggleScriptPicker();
-        return true;
-    case InspectorPropertyId::ScriptOption: {
-        const std::vector<std::pair<kb::assets::AssetId, std::string>> scripts = sceneContext.AvailableScriptAssets();
-        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < scripts.size()) {
-            static_cast<void>(sceneContext.AttachScriptToEntity(entity, scripts[static_cast<std::size_t>(hit.index)].first));
-        }
-        sceneContext.Inspector().CloseScriptPicker();
-        return true;
-    }
     default:
         return true;
     }
+}
+
+[[nodiscard]] bool HandleAddComponentClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    const std::string query = sceneContext.Inspector().EditedProperty() == InspectorPropertyId::AddComponentSearch
+        ? sceneContext.Inspector().EditBuffer()
+        : std::string{};
+    sceneContext.Inspector().CloseComponentMenus();
+    if (hit.property == InspectorPropertyId::AddComponentButton) {
+        sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().ToggleAddComponentBrowser();
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AddComponentSearch) {
+        sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::AddComponentSearch, query);
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::AddComponentOption) {
+        const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(query);
+        if (hit.index >= 0 && static_cast<std::size_t>(hit.index) < tiles.size()) {
+            static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles[static_cast<std::size_t>(hit.index)]->id));
+        }
+        sceneContext.Inspector().CloseAddComponentBrowser();
+        return true;
+    }
+    return true;
 }
 
 [[nodiscard]] float StepFor(InspectorPropertyId property) noexcept {
@@ -227,13 +241,24 @@ void SetTransformValue(kb::scene::Scene& scene, kb::scene::SceneEntity entity, I
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
     if (hit.kind == InspectorHitKind::None) {
         sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().CloseAddComponentBrowser();
+        sceneContext.Inspector().CloseComponentMenus();
         return false;
     }
 
     kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (hit.kind == InspectorHitKind::SectionHeader) {
         sceneContext.Inspector().EndTextEdit();
+        sceneContext.Inspector().CloseAddComponentBrowser();
+        sceneContext.Inspector().CloseComponentMenus();
         sceneContext.Inspector().ToggleCollapsed(hit.section);
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::ComponentMenuButton) {
+        sceneContext.Inspector().EndTextEdit();
+        if (hit.section == InspectorSectionId::Script && hit.property == InspectorPropertyId::ComponentRemove && sceneContext.Scene().Entities().IsAlive(entity)) {
+            static_cast<void>(sceneContext.RemoveScriptFromEntity(entity));
+        }
         return true;
     }
     if (hit.kind == InspectorHitKind::MeshPreviewToolbarButton) {
@@ -266,6 +291,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::AddComponent) {
+        return HandleAddComponentClick(sceneContext, entity, hit);
     }
 
     if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::EntityName) {
@@ -384,9 +412,22 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
         inspector.BackspaceText();
         return true;
     case VK_ESCAPE:
+        if (inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch) {
+            inspector.CloseAddComponentBrowser();
+            return true;
+        }
         inspector.EndTextEdit();
         return true;
     case VK_RETURN: {
+        if (inspector.EditedProperty() == InspectorPropertyId::AddComponentSearch) {
+            const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(inspector.EditBuffer());
+            const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+            if (!tiles.empty() && sceneContext.Scene().Entities().IsAlive(entity)) {
+                static_cast<void>(sceneContext.AddComponentToEntity(entity, tiles.front()->id));
+            }
+            inspector.CloseAddComponentBrowser();
+            return true;
+        }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
             static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().SelectedAsset(), inspector.EditBuffer()));
             inspector.EndTextEdit();
