@@ -113,6 +113,7 @@ public:
     [[nodiscard]] bool BeginPlayModeSceneSession();
     [[nodiscard]] bool RestorePlayModeSceneSession();
     [[nodiscard]] bool HasPlayModeSceneSession() const noexcept;
+    [[nodiscard]] bool ReloadSceneFromProject();
     [[nodiscard]] bool NewScene(EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
     [[nodiscard]] bool OpenDefaultScene();
     [[nodiscard]] bool OpenScene(const std::filesystem::path& path, EditorDirtySceneResolution dirtyResolution = EditorDirtySceneResolution::Save);
@@ -261,7 +262,7 @@ private:
     EditorProjectBootstrapResult projectBootstrap_;
     kb::project::ProjectDescriptor project_;
     std::filesystem::path projectFile_;
-    kb::scene::Scene scene_;
+    std::unique_ptr<kb::scene::Scene> scene_;
     std::filesystem::path currentScenePath_;
     EditorAssetBrowserState assetBrowser_;
     EditorConsoleState console_;
