@@ -10,6 +10,7 @@ public:
 
     virtual void OnCreate(SceneSystemContext& context);
     virtual void OnUpdate(SceneSystemContext& context);
+    virtual void OnFixedUpdate(SceneSystemContext& context);
     virtual void OnDestroy(SceneSystemContext& context);
 };
 

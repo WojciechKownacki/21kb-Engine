@@ -8,9 +8,7 @@
 namespace kb::physics_jolt {
 
 struct JoltPhysicsSceneSystemSettings {
-    float fixedDeltaSeconds = 1.0F / 60.0F;
-    float maxFrameDeltaSeconds = 0.25F;
-    std::size_t maxFixedStepsPerFrame = 8U;
+    int collisionSteps = 1;
 };
 
 class JoltPhysicsSceneSystem final : public kb::scene::SceneSystem {
@@ -25,7 +23,7 @@ public:
     JoltPhysicsSceneSystem& operator=(JoltPhysicsSceneSystem&&) noexcept;
 
     void OnCreate(kb::scene::SceneSystemContext& context) override;
-    void OnUpdate(kb::scene::SceneSystemContext& context) override;
+    void OnFixedUpdate(kb::scene::SceneSystemContext& context) override;
     void OnDestroy(kb::scene::SceneSystemContext& context) override;
 
 private:

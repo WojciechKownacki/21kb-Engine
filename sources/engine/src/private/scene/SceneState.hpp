@@ -5,6 +5,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
 #include "scene/history/SceneHistoryStack.hpp"
@@ -38,6 +39,10 @@ public:
     SceneHistoryStack redoHistory;
     kb::ecs::SystemScheduler systemScheduler;
     SceneSystemScheduler sceneSystemScheduler;
+    SceneRuntimeFixedStepSettings fixedStepSettings;
+    float fixedStepAccumulatorSeconds = 0.0F;
+    float fixedInterpolationAlpha = 0.0F;
+    std::size_t lastFixedStepCount = 0U;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::uint64_t nextHierarchyOrder = 1;
 };
