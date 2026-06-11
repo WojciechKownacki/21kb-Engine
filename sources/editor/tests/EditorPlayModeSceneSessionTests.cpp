@@ -1,7 +1,10 @@
 #include "EditorTestSupport.hpp"
 
 #include "app/EditorPlayModeSceneSession.hpp"
+#include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneBehaviourComponents.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
@@ -40,10 +43,36 @@ void RunRestoreRevertsRuntimeMutationTest() {
         "Play mode restore did not revert runtime transform changes");
 }
 
+void RunRestorePreservesBehaviourComponentTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Scripted" });
+    Require(object.IsValid(), "Play mode scripted object was not created");
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = 123,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
+        .executionOrder = 7,
+    });
+
+    EditorPlayModeSceneSession session;
+    Require(session.Begin(scene, "PlayModeBehaviourSnapshot"), "Play mode behaviour snapshot was not captured");
+    scene.Components().Behaviours().Remove(object.Entity());
+
+    Require(session.Restore(scene), "Play mode behaviour snapshot was not restored");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    Require(roots.size() == 1U, "Play mode behaviour restore should keep the original object");
+    const kb::scene::BehaviourComponent* behaviour = scene.Components().Behaviours().TryGet(roots.front());
+    Require(behaviour != nullptr, "Play mode restore dropped BehaviourComponent");
+    Require(behaviour->behaviourAssetId == 123 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->executionOrder == 7,
+        "Play mode restore did not preserve BehaviourComponent fields");
+}
+
 } // namespace
 
 void RunEditorPlayModeSceneSessionTests() {
     RunRestoreRevertsRuntimeMutationTest();
+    RunRestorePreservesBehaviourComponentTest();
 }
 
 } // namespace kb::editor::tests

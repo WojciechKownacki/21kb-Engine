@@ -10,6 +10,7 @@ extern "C" {
 }
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,50 @@ int LuaLog(lua_State* state) {
     return 0;
 }
 
+int LuaAudioPlay(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        std::size_t length = 0;
+        const char* clip = luaL_tolstring(state, 1, &length);
+        arguments.push_back(ScriptFunctionArgument{
+            .name = "clip",
+            .value = ScriptValue{ std::string{ clip != nullptr ? clip : "", clip != nullptr ? length : std::size_t{ 0 } } },
+        });
+        if (clip != nullptr) {
+            lua_pop(state, 1);
+        }
+        if (lua_gettop(state) >= 2 && lua_istable(state, 2) != 0) {
+            std::vector<ScriptFunctionArgument> options = ArgumentsFromTable(state, 2);
+            arguments.insert(arguments.end(), options.begin(), options.end());
+        }
+    }
+
+    const ScriptFunctionCallResult result = context->CallFunction("Audio.Play", arguments);
+    if (!result.Succeeded()) {
+        lua_pushnil(state);
+        const std::string error = result.errors.empty() ? "audio play failed" : result.errors.front();
+        lua_pushlstring(state, error.data(), error.size());
+        return 2;
+    }
+
+    const std::optional<ScriptValue> voice = result.Output("voice");
+    if (!voice.has_value()) {
+        lua_pushnil(state);
+        return 1;
+    }
+    PucLuaValueBridge::Push(state, *voice);
+    return 1;
+}
+
 } // namespace
 
 void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExecutionContext& context) {
@@ -107,6 +152,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, &LuaLog, 1);
     lua_setfield(state, environmentIndex, "Log");
+
+    lua_createtable(state, 0, 1);
+    lua_pushlightuserdata(state, &context);
+    lua_pushcclosure(state, &LuaAudioPlay, 1);
+    lua_setfield(state, -2, "Play");
+    lua_setfield(state, environmentIndex, "Audio");
 }
 
 } // namespace kb::script

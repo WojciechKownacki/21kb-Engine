@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/SceneAudioListenerComponents.hpp"
+#include "engine/scene/SceneAudioSourceComponents.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneCameraComponents.hpp"
 #include "engine/scene/SceneColliderComponents.hpp"
@@ -26,6 +28,8 @@ public:
     [[nodiscard]] SceneInputComponentQueries Inputs() const noexcept;
     [[nodiscard]] SceneRigidbodyComponentQueries Rigidbodies() const noexcept;
     [[nodiscard]] SceneColliderComponentQueries Colliders() const noexcept;
+    [[nodiscard]] SceneAudioSourceComponentQueries AudioSources() const noexcept;
+    [[nodiscard]] SceneAudioListenerComponentQueries AudioListeners() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
 
 private:

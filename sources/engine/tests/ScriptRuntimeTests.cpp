@@ -1,12 +1,14 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
@@ -45,6 +47,24 @@ namespace {
 #ifndef KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH
 #define KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH ""
 #endif
+
+class ProbeAudioPlaybackBackend final : public kb::audio::IAudioPlaybackBackend {
+public:
+    [[nodiscard]] kb::audio::AudioPlayResult PlayOneShot(kb::scene::Scene& scene, const kb::audio::AudioPlayDesc& desc) override {
+        static_cast<void>(scene);
+        played.push_back(desc);
+        return kb::audio::AudioPlayResult{ .started = true, .voiceId = nextVoiceId++, .error = {} };
+    }
+
+    void StopAll(kb::scene::Scene& scene) noexcept override {
+        static_cast<void>(scene);
+        ++stopAllCount;
+    }
+
+    std::vector<kb::audio::AudioPlayDesc> played;
+    std::uint64_t nextVoiceId = 1U;
+    int stopAllCount = 0;
+};
 
 class FakeLuaRuntime final : public kb::script::ILuaScriptRuntime {
 public:
@@ -1151,6 +1171,85 @@ end
     kb::tests::Require(sawFunctionError, "Visual script function call did not surface the registry error diagnostic");
 }
 
+void RunScriptAudioApiTest() {
+    kb::scene::Scene scene;
+    kb::script::ScriptRuntimeHost host{ scene };
+    ProbeAudioPlaybackBackend audioBackend;
+    kb::audio::AudioPlayback::RegisterBackend(scene, audioBackend);
+    kb::tests::Require(host.Succeeded(), "Script audio API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Audio.Play") != nullptr, "Script audio API did not register Audio.Play");
+    kb::tests::Require(host.VisualGraphRuntimeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.Play") != nullptr,
+        "Script audio API did not register VisualGraph runtime binding");
+    kb::tests::Require(host.VisualGraphNativeBindings().Find(kb::visual::VisualGraphIrOpcode::CallNative, "Function.Audio.Play") != nullptr,
+        "Script audio API did not register VisualGraph native binding");
+
+    const kb::assets::AssetId clipId{ 8801U };
+    kb::tests::Require(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                           .id = clipId,
+                           .type = "AudioClip",
+                           .name = "Ping",
+                           .virtualPath = "/Game/Audio/Ping.wav",
+                           .physicalPath = "Ping.wav",
+                           .contentHash = 1U,
+                       }),
+        "Script audio API test clip asset registration failed");
+
+    const kb::scene::SceneObject caller = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Audio Caller" });
+    const std::vector<kb::script::ScriptFunctionArgument> directArguments{
+        kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
+        kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ 0.25F } },
+        kb::script::ScriptFunctionArgument{ .name = "pitch", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "loop", .value = kb::script::ScriptValue{ true } },
+        kb::script::ScriptFunctionArgument{ .name = "spatial", .value = kb::script::ScriptValue{ false } },
+    };
+    const kb::script::ScriptFunctionCallResult direct = host.Functions().Call(
+        "Audio.Play",
+        std::span<const kb::script::ScriptFunctionArgument>{ directArguments },
+        kb::script::ScriptFunctionCallContext{
+            .scene = &scene,
+            .caller = caller.Entity(),
+        });
+    kb::tests::Require(direct.Succeeded(), "Script audio API direct Audio.Play call failed");
+    const std::optional<kb::script::ScriptValue> directVoiceValue = direct.Output("voice");
+    kb::tests::Require(directVoiceValue.has_value() && directVoiceValue->AsInt() == 1, "Script audio API direct call did not return a voice");
+    kb::tests::Require(audioBackend.played.size() == 1U, "Script audio API direct call did not reach audio backend");
+    const kb::audio::AudioPlayDesc& directPlay = audioBackend.played.back();
+    kb::tests::Require(directPlay.clipAssetId == clipId.value, "Script audio API direct call sent the wrong clip id");
+    kb::tests::Require(kb::tests::NearlyEqual(directPlay.volume, 0.25F), "Script audio API direct call did not preserve volume");
+    kb::tests::Require(kb::tests::NearlyEqual(directPlay.pitch, 1.5F), "Script audio API direct call did not preserve pitch");
+    kb::tests::Require(directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
+
+    const kb::assets::AssetId luaAsset{ 8802U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local voice, err = Audio.Play("/Game/Audio/Ping.wav", { volume = 0.75, spatial = false })
+    if voice == nil then
+        Emit("AudioPlayFailed", { error = err })
+        return
+    end
+    SetShared("luaAudioVoice", voice)
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script audio API Lua wrapper script did not load");
+
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script audio API Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaVoiceValue = host.SharedState().Get("luaAudioVoice");
+    kb::tests::Require(luaVoiceValue.has_value() && luaVoiceValue->AsInt() == 2, "Script audio API Lua wrapper did not return a voice");
+    kb::tests::Require(audioBackend.played.size() == 2U, "Script audio API Lua wrapper did not reach audio backend");
+    const kb::audio::AudioPlayDesc& luaPlay = audioBackend.played.back();
+    kb::tests::Require(luaPlay.clipAssetId == clipId.value, "Script audio API Lua wrapper sent the wrong clip id");
+    kb::tests::Require(kb::tests::NearlyEqual(luaPlay.volume, 0.75F), "Script audio API Lua wrapper did not preserve volume");
+    kb::tests::Require(!luaPlay.spatial, "Script audio API Lua wrapper did not preserve flags");
+    kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -2235,6 +2334,7 @@ void RunScriptRuntimeTests() {
     RunTargetedEventDispatchTest();
     RunCrossBackendSharedStateTest();
     RunScriptFunctionRegistryCrossBackendTest();
+    RunScriptAudioApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

@@ -41,6 +41,14 @@ SceneColliderComponentQueries SceneComponentQueries::Colliders() const noexcept 
     return SceneColliderComponentQueries{ scene_ };
 }
 
+SceneAudioSourceComponentQueries SceneComponentQueries::AudioSources() const noexcept {
+    return SceneAudioSourceComponentQueries{ scene_ };
+}
+
+SceneAudioListenerComponentQueries SceneComponentQueries::AudioListeners() const noexcept {
+    return SceneAudioListenerComponentQueries{ scene_ };
+}
+
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
 }
@@ -75,6 +83,14 @@ SceneRigidbodyComponents SceneComponents::Rigidbodies() const noexcept {
 
 SceneColliderComponents SceneComponents::Colliders() const noexcept {
     return SceneColliderComponents{ scene_ };
+}
+
+SceneAudioSourceComponents SceneComponents::AudioSources() const noexcept {
+    return SceneAudioSourceComponents{ scene_ };
+}
+
+SceneAudioListenerComponents SceneComponents::AudioListeners() const noexcept {
+    return SceneAudioListenerComponents{ scene_ };
 }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {
