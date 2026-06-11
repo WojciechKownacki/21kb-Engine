@@ -59,6 +59,23 @@ set(FLECS_SHARED OFF CACHE BOOL "Do not build Flecs as a shared library" FORCE)
 set(FLECS_TESTS OFF CACHE BOOL "Do not build Flecs tests with the engine" FORCE)
 add_subdirectory(third_party/flecs third_party/flecs EXCLUDE_FROM_ALL)
 
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "Do not enable Jolt warnings for the vendored build" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "Do not enable Jolt LTO from the vendored build" FORCE)
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "Do not let Jolt override project compiler flags" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "Build Jolt with the project MSVC runtime library" FORCE)
+set(TARGET_UNIT_TESTS OFF CACHE BOOL "Do not build Jolt unit tests" FORCE)
+set(TARGET_HELLO_WORLD OFF CACHE BOOL "Do not build Jolt HelloWorld" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "Do not build Jolt performance test" FORCE)
+set(TARGET_SAMPLES OFF CACHE BOOL "Do not build Jolt samples" FORCE)
+set(TARGET_VIEWER OFF CACHE BOOL "Do not build Jolt viewer" FORCE)
+set(JPH_USE_DX12 OFF CACHE BOOL "Do not build Jolt DirectX compute support" FORCE)
+set(JPH_USE_VK OFF CACHE BOOL "Do not build Jolt Vulkan compute support" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "Do not build Jolt Metal compute support" FORCE)
+add_subdirectory(third_party/jolt/Build third_party/jolt EXCLUDE_FROM_ALL)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 FetchContent_Declare(
     kb_lua
     URL https://www.lua.org/ftp/lua-5.4.8.tar.gz
@@ -109,6 +126,15 @@ if(NOT TARGET kb_lua)
 endif()
 
 add_subdirectory(sources/engine engine)
+add_subdirectory(sources/plugins/physics_jolt physics_jolt)
+
+if(TARGET kb_engine_tests)
+    add_dependencies(kb_engine_tests kb_physics_jolt_plugin)
+    target_compile_definitions(kb_engine_tests
+        PRIVATE
+            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
+    )
+endif()
 
 if(KB_BUILD_RENDERER)
     if(NOT WIN32)

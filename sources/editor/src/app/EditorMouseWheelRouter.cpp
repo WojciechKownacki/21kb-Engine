@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/inspector/EditorInspectorPointerController.hpp"
+#include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_files/EditorProjectFilesMouseWheelController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "assets/EditorAssetBrowserGeometry.hpp"
@@ -86,6 +87,16 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
     EditorInspectorPointerController inspectorPointer(sceneContext_);
     if (inspectorContent.has_value() && inspectorPointer.HandleMouseWheel(*inspectorContent, x, y, wheelDelta)) {
+        InvalidateRect(messageWindow_, nullptr, FALSE);
+        if (messageWindow_ != mainWindow_) {
+            InvalidateRect(mainWindow_, nullptr, FALSE);
+        }
+        return true;
+    }
+
+    const std::optional<RECT> pluginsContent = EditorPanelContentResolver::Resolve(DockPanelKind::Plugins, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    EditorPluginsPointerController pluginsPointer(sceneContext_);
+    if (pluginsContent.has_value() && pluginsPointer.HandleMouseWheel(*pluginsContent, x, y, wheelDelta)) {
         InvalidateRect(messageWindow_, nullptr, FALSE);
         if (messageWindow_ != mainWindow_) {
             InvalidateRect(mainWindow_, nullptr, FALSE);

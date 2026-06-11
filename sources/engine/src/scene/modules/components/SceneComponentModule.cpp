@@ -33,6 +33,14 @@ SceneInputComponentQueries SceneComponentQueries::Inputs() const noexcept {
     return SceneInputComponentQueries{ scene_ };
 }
 
+SceneRigidbodyComponentQueries SceneComponentQueries::Rigidbodies() const noexcept {
+    return SceneRigidbodyComponentQueries{ scene_ };
+}
+
+SceneColliderComponentQueries SceneComponentQueries::Colliders() const noexcept {
+    return SceneColliderComponentQueries{ scene_ };
+}
+
 SceneComponentVisitors SceneComponentQueries::Visitors() const noexcept {
     return SceneComponentVisitors{ scene_ };
 }
@@ -59,6 +67,14 @@ SceneLightComponents SceneComponents::Lights() const noexcept {
 
 SceneInputComponents SceneComponents::Inputs() const noexcept {
     return SceneInputComponents{ scene_ };
+}
+
+SceneRigidbodyComponents SceneComponents::Rigidbodies() const noexcept {
+    return SceneRigidbodyComponents{ scene_ };
+}
+
+SceneColliderComponents SceneComponents::Colliders() const noexcept {
+    return SceneColliderComponents{ scene_ };
 }
 
 SceneComponentVisitors SceneComponents::Visitors() const noexcept {

@@ -69,8 +69,10 @@ add_library(kb_engine STATIC
     include/engine/ecs/world/WorldRuntimeApi.inl
     include/engine/ecs/world/WorldSerializationApi.inl
     include/engine/scene/CameraComponent.hpp
+    include/engine/scene/ColliderComponent.hpp
     include/engine/scene/LightComponent.hpp
     include/engine/scene/MeshRendererComponent.hpp
+    include/engine/scene/RigidbodyComponent.hpp
     include/engine/scene/Scene.hpp
     include/engine/scene/SceneAssets.hpp
     include/engine/scene/SceneAssetMeta.hpp
@@ -89,7 +91,9 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneLightComponents.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
+    include/engine/scene/SceneColliderComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
+    include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
@@ -135,6 +139,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
     include/engine/script/ScriptLifecycle.hpp
+    include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
     include/engine/script/ScriptRuntimeAssetPreparer.hpp
     include/engine/script/ScriptRuntimeHost.hpp
@@ -170,6 +175,12 @@ add_library(kb_engine STATIC
     include/engine/visual/VisualGraphRuntimeValue.hpp
     include/engine/visual/VisualGraphTypes.hpp
     include/engine/visual/VisualGraphValidator.hpp
+    include/engine/modules/EngineModuleLoadingPhase.hpp
+    include/engine/modules/EngineModuleMetadata.hpp
+    include/engine/modules/EngineModuleContext.hpp
+    include/engine/modules/IEngineModule.hpp
+    include/engine/modules/EngineModuleHost.hpp
+    src/modules/EngineModuleHost.cpp
     src/assets/AssetId.cpp
     src/assets/AssetDiscoveryService.cpp
     src/assets/AssetFileOperations.cpp
@@ -304,10 +315,14 @@ add_library(kb_engine STATIC
     src/scene/components/SceneLightApi.cpp
     src/scene/components/SceneLightStorage.cpp
     src/scene/components/SceneLightIteration.cpp
+    src/scene/components/SceneColliderApi.cpp
+    src/scene/components/SceneColliderStorage.cpp
     src/scene/components/SceneMeshRendererApi.cpp
     src/scene/components/SceneMeshRendererIterationDispatcher.cpp
     src/scene/components/SceneMeshRendererStorage.cpp
     src/scene/components/SceneMeshRendererIteration.cpp
+    src/scene/components/SceneRigidbodyApi.cpp
+    src/scene/components/SceneRigidbodyStorage.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
@@ -344,7 +359,9 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneComponentModule.cpp
     src/scene/modules/components/SceneInputModule.cpp
     src/scene/modules/components/SceneLightModule.cpp
+    src/scene/modules/components/SceneColliderModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
+    src/scene/modules/components/SceneRigidbodyModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -496,6 +513,7 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
     src/script/ScriptLifecycle.cpp
+    src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp
     src/script/ScriptRuntimeAssetPreparer.cpp
     src/script/ScriptRuntimeHost.cpp
@@ -539,7 +557,9 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneMeshRendererIterationDispatcher.hpp
     src/private/scene/components/SceneInputComponentStore.hpp
     src/private/scene/components/SceneLightComponentStore.hpp
+    src/private/scene/components/SceneColliderComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
+    src/private/scene/components/SceneRigidbodyComponentStore.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp
@@ -810,6 +830,8 @@ add_library(kb_engine STATIC
     include/engine/input/InputMappingContextStack.hpp
     include/engine/input/InputMappingEvaluator.hpp
     include/engine/input/InputPollingSystem.hpp
+    include/engine/input/InputModule.hpp
+    src/input/InputModule.cpp
     src/input/InputKey.cpp
     src/input/InputAssetIO.cpp
     src/input/InputAssetLoaders.cpp
@@ -867,6 +889,7 @@ if(BUILD_TESTING)
         tests/EcsTestSuites.hpp
         tests/EcsTestTypes.hpp
         tests/ProjectSceneTests.cpp
+        tests/PhysicsSceneSystemTests.cpp
         tests/SceneHierarchyTests.cpp
         tests/ScenePrefabCaptureTests.cpp
         tests/ScenePrefabInstantiationTests.cpp
@@ -882,6 +905,7 @@ if(BUILD_TESTING)
         tests/TestSupport.hpp
         tests/VisualGraphTests.cpp
         tests/InputTests.cpp
+        tests/EngineModuleTests.cpp
     )
 
     target_link_libraries(kb_engine_tests

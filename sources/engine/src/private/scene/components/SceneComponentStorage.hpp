@@ -5,9 +5,11 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "scene/components/SceneBehaviourComponentStore.hpp"
 #include "scene/components/SceneCameraComponentStore.hpp"
+#include "scene/components/SceneColliderComponentStore.hpp"
 #include "scene/components/SceneInputComponentStore.hpp"
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
+#include "scene/components/SceneRigidbodyComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/components/SceneVisibilityComponentStore.hpp"
 
@@ -37,6 +39,10 @@ public:
     [[nodiscard]] SceneLightComponentStore& Lights() noexcept;
     [[nodiscard]] const SceneInputComponentStore& Inputs() const noexcept;
     [[nodiscard]] SceneInputComponentStore& Inputs() noexcept;
+    [[nodiscard]] const SceneRigidbodyComponentStore& Rigidbodies() const noexcept;
+    [[nodiscard]] SceneRigidbodyComponentStore& Rigidbodies() noexcept;
+    [[nodiscard]] const SceneColliderComponentStore& Colliders() const noexcept;
+    [[nodiscard]] SceneColliderComponentStore& Colliders() noexcept;
 
 private:
     SceneTransformComponentStore transforms_;
@@ -46,6 +52,8 @@ private:
     SceneMeshRendererComponentStore meshRenderers_;
     SceneLightComponentStore lights_;
     SceneInputComponentStore inputs_;
+    SceneRigidbodyComponentStore rigidbodies_;
+    SceneColliderComponentStore colliders_;
 };
 
 } // namespace kb::scene

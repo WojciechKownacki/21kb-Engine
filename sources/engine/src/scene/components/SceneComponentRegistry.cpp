@@ -1,27 +1,65 @@
 #include "scene/components/SceneComponentRegistry.hpp"
 
+#include "engine/ecs/ComponentReflectionMacros.hpp"
+#include "engine/ecs/World.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
-#include <flecs.h>
-
-#include <stdexcept>
+#include <string_view>
 
 namespace kb::scene {
+namespace {
 
-SceneComponentRegistry::SceneComponentRegistry(ecs_world_t& world)
-    : transformComponentId_(RegisterComponent(world, "kb.scene.TransformComponent", sizeof(TransformComponent), alignof(TransformComponent)))
-    , visibilityComponentId_(RegisterComponent(world, "kb.scene.VisibilityComponent", sizeof(VisibilityComponent), alignof(VisibilityComponent)))
-    , behaviourComponentId_(RegisterComponent(world, "kb.scene.BehaviourComponent", sizeof(BehaviourComponent), alignof(BehaviourComponent)))
-    , cameraComponentId_(RegisterComponent(world, "kb.scene.CameraComponent", sizeof(CameraComponent), alignof(CameraComponent)))
-    , meshRendererComponentId_(RegisterComponent(world, "kb.scene.MeshRendererComponent", sizeof(MeshRendererComponent), alignof(MeshRendererComponent)))
-    , lightComponentId_(RegisterComponent(world, "kb.scene.LightComponent", sizeof(LightComponent), alignof(LightComponent)))
-    , inputComponentId_(RegisterComponent(world, "kb.scene.InputComponent", sizeof(InputComponent), alignof(InputComponent))) {}
+template <typename T>
+[[nodiscard]] std::uint64_t RegisterSceneComponent(kb::ecs::World& world, std::string_view name) {
+    return world.RegisterComponent<T>(name);
+}
+
+void RegisterPhysicsReflection(kb::ecs::World& world) {
+    static_cast<void>(world.RegisterComponentReflection<RigidbodyComponent>(
+        "kb.scene.RigidbodyComponent",
+        {
+            KB_ECS_FIELD(RigidbodyComponent, bodyType, kb::ecs::ComponentFieldType::Enum32),
+            KB_ECS_FIELD(RigidbodyComponent, mass, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(RigidbodyComponent, linearVelocity, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(RigidbodyComponent, angularVelocity, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(RigidbodyComponent, gravityScale, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(RigidbodyComponent, useGravity, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(RigidbodyComponent, lockRotation, kb::ecs::ComponentFieldType::Bool),
+        }));
+    static_cast<void>(world.RegisterComponentReflection<ColliderComponent>(
+        "kb.scene.ColliderComponent",
+        {
+            KB_ECS_FIELD(ColliderComponent, shape, kb::ecs::ComponentFieldType::Enum32),
+            KB_ECS_FIELD(ColliderComponent, center, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(ColliderComponent, boxSize, kb::ecs::ComponentFieldType::Vec3Float32),
+            KB_ECS_FIELD(ColliderComponent, radius, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(ColliderComponent, height, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(ColliderComponent, trigger, kb::ecs::ComponentFieldType::Bool),
+        }));
+}
+
+} // namespace
+
+SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
+    : transformComponentId_(RegisterSceneComponent<TransformComponent>(world, "kb.scene.TransformComponent"))
+    , visibilityComponentId_(RegisterSceneComponent<VisibilityComponent>(world, "kb.scene.VisibilityComponent"))
+    , behaviourComponentId_(RegisterSceneComponent<BehaviourComponent>(world, "kb.scene.BehaviourComponent"))
+    , cameraComponentId_(RegisterSceneComponent<CameraComponent>(world, "kb.scene.CameraComponent"))
+    , meshRendererComponentId_(RegisterSceneComponent<MeshRendererComponent>(world, "kb.scene.MeshRendererComponent"))
+    , lightComponentId_(RegisterSceneComponent<LightComponent>(world, "kb.scene.LightComponent"))
+    , inputComponentId_(RegisterSceneComponent<InputComponent>(world, "kb.scene.InputComponent"))
+    , rigidbodyComponentId_(RegisterSceneComponent<RigidbodyComponent>(world, "kb.scene.RigidbodyComponent"))
+    , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent")) {
+    RegisterPhysicsReflection(world);
+}
 
 std::uint64_t SceneComponentRegistry::TransformComponentId() const noexcept {
     return transformComponentId_;
@@ -51,19 +89,12 @@ std::uint64_t SceneComponentRegistry::InputComponentId() const noexcept {
     return inputComponentId_;
 }
 
-std::uint64_t SceneComponentRegistry::RegisterComponent(ecs_world_t& world, const char* name, std::size_t size, std::size_t alignment) {
-    ecs_component_desc_t desc{};
-    desc.type.size = static_cast<ecs_size_t>(size);
-    desc.type.alignment = static_cast<ecs_size_t>(alignment);
-    desc.type.name = name;
+std::uint64_t SceneComponentRegistry::RigidbodyComponentId() const noexcept {
+    return rigidbodyComponentId_;
+}
 
-    const ecs_entity_t component = ecs_component_init(&world, &desc);
-    if (component == 0) {
-        throw std::runtime_error("Failed to register scene component");
-    }
-
-    ecs_set_name(&world, component, name);
-    return component;
+std::uint64_t SceneComponentRegistry::ColliderComponentId() const noexcept {
+    return colliderComponentId_;
 }
 
 } // namespace kb::scene

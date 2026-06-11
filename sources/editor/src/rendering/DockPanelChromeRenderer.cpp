@@ -64,6 +64,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::ScriptEditor:
         icon = HeroIconKind::CommandLine;
         return true;
+    case DockPanelKind::Plugins:
+        icon = HeroIconKind::AdjustmentsHorizontal;
+        return true;
     default:
         return false;
     }

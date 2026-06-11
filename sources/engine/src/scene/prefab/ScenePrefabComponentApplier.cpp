@@ -21,6 +21,12 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.input.has_value()) {
         sceneComponents.Inputs().Set(entity, *components.input);
     }
+    if (components.rigidbody.has_value()) {
+        sceneComponents.Rigidbodies().Set(entity, *components.rigidbody);
+    }
+    if (components.collider.has_value()) {
+        sceneComponents.Colliders().Set(entity, *components.collider);
+    }
 }
 
 } // namespace kb::scene
