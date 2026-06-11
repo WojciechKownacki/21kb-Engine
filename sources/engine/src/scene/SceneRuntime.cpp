@@ -7,6 +7,8 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 #include "scene/transform/SceneTransformHierarchySystem.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <utility>
 
 namespace kb::scene {
@@ -32,10 +34,54 @@ void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
     SynchronizeTransformHierarchy(state.world, state.components);
 }
 
+void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    state.fixedStepSettings = settings;
+    state.fixedStepAccumulatorSeconds = 0.0F;
+    state.fixedInterpolationAlpha = 0.0F;
+    state.lastFixedStepCount = 0U;
+}
+
+SceneRuntimeFixedStepSettings SceneRuntimeService::FixedStepSettings(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).fixedStepSettings;
+}
+
+float SceneRuntimeService::FixedInterpolationAlpha(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).fixedInterpolationAlpha;
+}
+
+std::size_t SceneRuntimeService::LastFixedStepCount(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).lastFixedStepCount;
+}
+
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
+    state.lastFixedStepCount = 0U;
+
     SynchronizeTransformHierarchy(state.world, state.components);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);
+
+    if (fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
+        const float clampedDelta = std::clamp(deltaSeconds, 0.0F, std::max(0.0F, fixed.maxFrameDeltaSeconds));
+        state.fixedStepAccumulatorSeconds += clampedDelta;
+        while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
+            state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
+            SynchronizeTransformHierarchy(state.world, state.components);
+            state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds);
+            state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
+            ++state.lastFixedStepCount;
+        }
+        if (state.lastFixedStepCount == fixed.maxFixedStepsPerFrame &&
+            state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds) {
+            state.fixedStepAccumulatorSeconds = 0.0F;
+        }
+        state.fixedInterpolationAlpha = std::clamp(state.fixedStepAccumulatorSeconds / fixed.fixedDeltaSeconds, 0.0F, 1.0F);
+    } else {
+        state.fixedStepAccumulatorSeconds = 0.0F;
+        state.fixedInterpolationAlpha = 0.0F;
+    }
+
     state.systemScheduler.Update(state.world, deltaSeconds);
     const bool progressed = state.world.Progress(deltaSeconds);
     SynchronizeTransformHierarchy(state.world, state.components);
