@@ -10,6 +10,10 @@ void SceneSystem::OnUpdate(SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
+void SceneSystem::OnFixedUpdate(SceneSystemContext& context) {
+    static_cast<void>(context);
+}
+
 void SceneSystem::OnDestroy(SceneSystemContext& context) {
     static_cast<void>(context);
 }

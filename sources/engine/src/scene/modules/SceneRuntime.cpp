@@ -19,6 +19,18 @@ const kb::ecs::World& SceneRuntimeQueries::EcsWorld() const noexcept {
     return SceneRuntimeService::EcsWorld(scene_);
 }
 
+SceneRuntimeFixedStepSettings SceneRuntimeQueries::FixedStepSettings() const noexcept {
+    return SceneRuntimeService::FixedStepSettings(scene_);
+}
+
+float SceneRuntimeQueries::FixedInterpolationAlpha() const noexcept {
+    return SceneRuntimeService::FixedInterpolationAlpha(scene_);
+}
+
+std::size_t SceneRuntimeQueries::LastFixedStepCount() const noexcept {
+    return SceneRuntimeService::LastFixedStepCount(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -32,6 +44,22 @@ void SceneRuntime::AddSceneSystem(std::unique_ptr<SceneSystem> system) {
 
 void SceneRuntime::SynchronizeTransforms() {
     SceneRuntimeService::SynchronizeTransforms(scene_);
+}
+
+void SceneRuntime::SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) noexcept {
+    SceneRuntimeService::SetFixedStepSettings(scene_, settings);
+}
+
+SceneRuntimeFixedStepSettings SceneRuntime::FixedStepSettings() const noexcept {
+    return SceneRuntimeService::FixedStepSettings(scene_);
+}
+
+float SceneRuntime::FixedInterpolationAlpha() const noexcept {
+    return SceneRuntimeService::FixedInterpolationAlpha(scene_);
+}
+
+std::size_t SceneRuntime::LastFixedStepCount() const noexcept {
+    return SceneRuntimeService::LastFixedStepCount(scene_);
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {

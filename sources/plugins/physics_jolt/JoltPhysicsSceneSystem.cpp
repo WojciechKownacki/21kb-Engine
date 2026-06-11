@@ -55,8 +55,6 @@ constexpr std::uint32_t MaxBodies = 65536U;
 constexpr std::uint32_t NumBodyMutexes = 0U;
 constexpr std::uint32_t MaxBodyPairs = 65536U;
 constexpr std::uint32_t MaxContactConstraints = 10240U;
-constexpr int CollisionSteps = 1;
-
 namespace Layers {
 constexpr JPH::ObjectLayer NonMoving = 0;
 constexpr JPH::ObjectLayer Moving = 1;
@@ -300,14 +298,13 @@ public:
         RemoveAllBodies();
     }
 
-    void OnUpdate(SceneSystemContext& context) {
+    void OnFixedUpdate(SceneSystemContext& context) {
         SynchronizeBodies(context);
         Step(context.DeltaSeconds());
         WriteBack(context);
     }
 
     void OnDestroy() {
-        accumulatorSeconds_ = 0.0F;
         RemoveAllBodies();
     }
 
@@ -322,7 +319,7 @@ public:
         const BodySignature signature = MakeSignature(*rigidbody, *collider, transform);
         const auto existing = bodies_.find(entity.Id());
         if (existing != bodies_.end() && existing->second.signature == signature) {
-            SynchronizeKinematicOrStaticBody(existing->second.bodyId, *rigidbody, *collider, transform);
+            SynchronizeKinematicOrStaticBody(existing->second.bodyId, *rigidbody, *collider, transform, context.DeltaSeconds());
             return;
         }
 
@@ -386,34 +383,25 @@ private:
         return physicsSystem_.GetBodyInterface().CreateAndAddBody(bodySettings, rigidbody.bodyType == RigidbodyBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
     }
 
-    void SynchronizeKinematicOrStaticBody(JPH::BodyID bodyId, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
+    void SynchronizeKinematicOrStaticBody(JPH::BodyID bodyId, const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform, float fixedDeltaSeconds) {
         if (rigidbody.bodyType == RigidbodyBodyType::Dynamic) {
             return;
         }
 
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
         const Vec3 bodyPosition = Add(transform.worldPosition, collider.center);
-        if (rigidbody.bodyType == RigidbodyBodyType::Kinematic && settings_.fixedDeltaSeconds > 0.0F) {
-            bodyInterface.MoveKinematic(bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), settings_.fixedDeltaSeconds);
+        if (rigidbody.bodyType == RigidbodyBodyType::Kinematic && fixedDeltaSeconds > 0.0F) {
+            bodyInterface.MoveKinematic(bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), fixedDeltaSeconds);
             return;
         }
         bodyInterface.SetPositionAndRotationWhenChanged(bodyId, ToJoltPosition(bodyPosition), ToJolt(transform.worldRotation), JPH::EActivation::DontActivate);
     }
 
-    void Step(float deltaSeconds) {
-        if (settings_.fixedDeltaSeconds <= 0.0F || settings_.maxFixedStepsPerFrame == 0U) {
+    void Step(float fixedDeltaSeconds) {
+        if (fixedDeltaSeconds <= 0.0F) {
             return;
         }
-        accumulatorSeconds_ += std::clamp(deltaSeconds, 0.0F, settings_.maxFrameDeltaSeconds);
-        std::size_t steps = 0U;
-        while (accumulatorSeconds_ >= settings_.fixedDeltaSeconds && steps < settings_.maxFixedStepsPerFrame) {
-            physicsSystem_.Update(settings_.fixedDeltaSeconds, CollisionSteps, &tempAllocator_, &jobSystem_);
-            accumulatorSeconds_ -= settings_.fixedDeltaSeconds;
-            ++steps;
-        }
-        if (steps == settings_.maxFixedStepsPerFrame && accumulatorSeconds_ >= settings_.fixedDeltaSeconds) {
-            accumulatorSeconds_ = 0.0F;
-        }
+        physicsSystem_.Update(fixedDeltaSeconds, settings_.collisionSteps, &tempAllocator_, &jobSystem_);
     }
 
     void WriteBack(SceneSystemContext& context) {
@@ -472,7 +460,6 @@ private:
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
-    float accumulatorSeconds_ = 0.0F;
 };
 
 JoltPhysicsSceneSystem::JoltPhysicsSceneSystem()
@@ -491,8 +478,8 @@ void JoltPhysicsSceneSystem::OnCreate(kb::scene::SceneSystemContext& context) {
     static_cast<void>(context);
 }
 
-void JoltPhysicsSceneSystem::OnUpdate(kb::scene::SceneSystemContext& context) {
-    impl_->OnUpdate(context);
+void JoltPhysicsSceneSystem::OnFixedUpdate(kb::scene::SceneSystemContext& context) {
+    impl_->OnFixedUpdate(context);
 }
 
 void JoltPhysicsSceneSystem::OnDestroy(kb::scene::SceneSystemContext& context) {
