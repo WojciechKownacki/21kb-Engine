@@ -1,12 +1,15 @@
 #include "app/EditorSelfTest.hpp"
 
 #if defined(_WIN32)
+#include "app/plugins/EditorPluginsPointerController.hpp"
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "project/EditorProjectPaths.hpp"
-#include "scene/EditorScriptAssetGateway.hpp"
+#include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/EditorScriptAssetGateway.hpp"
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/input/InputKey.hpp"
@@ -342,6 +345,51 @@ void RunScriptLogSuite(Report& report) {
     report.Check(logged, "Log() from a Lua script reached the editor Console");
 }
 
+void RunPluginsPanelSuite(Report& report) {
+    EditorSceneContext context;
+
+    report.Check(EditorPluginCatalog::Count() > 0U, "Plugin catalog has at least one plugin");
+    const EditorPluginDescriptor* descriptor = EditorPluginCatalog::At(0);
+    if (descriptor == nullptr) {
+        report.Note("Aborting plugin panel checks: catalog entry 0 is missing.");
+        return;
+    }
+
+    constexpr POINT togglePoint{ kContent.left + 30, kContent.top + 87 };
+    const PluginsPanelRenderer::Hit toggleHit = PluginsPanelRenderer::HitTest(kContent, context, togglePoint.x, togglePoint.y);
+    report.Check(toggleHit.kind == PluginsPanelHitKind::Toggle, "First plugin checkbox hit-tests as Toggle");
+    report.Check(toggleHit.index == 0U, "First plugin checkbox resolves catalog index 0");
+
+    EditorPluginsPointerController controller{ context };
+    report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Plugin starts disabled in a fresh scratch project");
+    report.Check(controller.UpdateHoverOrClear(std::optional<RECT>{ kContent }, togglePoint.x, togglePoint.y), "Hovering first plugin updates hover state");
+    report.Check(context.Plugins().HoveredPluginIndex() == 0U, "Hovered plugin index tracked");
+    report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox is handled");
+    report.Check(context.IsProjectPluginEnabled(descriptor->id), "Clicking checkbox enables the plugin");
+    report.Check(context.ProjectPluginBinaryPath(descriptor->id) == descriptor->binaryPath, "Enabled plugin stores the catalog binary path");
+
+    {
+        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
+        report.Check(reloaded.succeeded, "Project descriptor reloads after enabling plugin");
+        const auto iter = std::find_if(reloaded.descriptor.plugins.begin(), reloaded.descriptor.plugins.end(), [descriptor](const kb::project::ProjectPluginReference& plugin) {
+            return plugin.name == descriptor->id;
+        });
+        report.Check(iter != reloaded.descriptor.plugins.end(), "Enabled plugin reference persisted to descriptor");
+        report.Check(iter != reloaded.descriptor.plugins.end() && iter->enabled, "Persisted plugin reference is enabled");
+        report.Check(iter != reloaded.descriptor.plugins.end() && iter->binaryPath == descriptor->binaryPath, "Persisted plugin reference keeps binary path");
+    }
+
+    report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox again is handled");
+    report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Second click disables the plugin");
+    {
+        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
+        const auto iter = std::find_if(reloaded.descriptor.plugins.begin(), reloaded.descriptor.plugins.end(), [descriptor](const kb::project::ProjectPluginReference& plugin) {
+            return plugin.name == descriptor->id;
+        });
+        report.Check(reloaded.succeeded && iter != reloaded.descriptor.plugins.end() && !iter->enabled, "Disabled plugin state persisted to descriptor");
+    }
+}
+
 // Runs one suite in its own freshly-created scratch project (cwd-based bootstrap),
 // then restores the previous working directory.
 void RunSuiteInScratch(Report& report, const std::string& leaf, void (*suite)(Report&)) {
@@ -365,7 +413,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings (inputs panel) + Gameplay loop (input -> script -> movement)\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -383,6 +431,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
+    RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     WriteReport(reportPath, report);
     return report.Ok() ? 0 : 1;
 }
