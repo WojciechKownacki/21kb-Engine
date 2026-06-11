@@ -15,7 +15,10 @@
 #include "engine/input/InputKey.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectManager.hpp"
+#include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
@@ -380,6 +383,41 @@ void RunPluginsPanelSuite(Report& report) {
         report.Check(iter != reloaded.descriptor.plugins.end() && iter->enabled, "Persisted plugin reference is enabled");
         report.Check(iter != reloaded.descriptor.plugins.end() && iter->binaryPath == descriptor->binaryPath, "Persisted plugin reference keeps binary path");
     }
+
+    report.Check(context.ReloadSceneFromProject(), "Reload scene with enabled plugin settings");
+    report.Check(!context.Plugins().HasPendingReload(), "Reloading scene clears pending reload");
+    report.Check(context.IsProjectPluginEnabled(descriptor->id), "Plugin remains enabled after scene reload");
+
+    const kb::scene::SceneEntity floor = context.CreateHierarchyObject();
+    context.Scene().Transforms().Set(floor, kb::scene::TransformComponent{
+        .localPosition = kb::scene::Vec3{ 0.0F, -0.5F, 0.0F },
+    });
+    context.Scene().Components().Rigidbodies().Set(floor, kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Static,
+    });
+    context.Scene().Components().Colliders().Set(floor, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F },
+    });
+
+    const kb::scene::SceneEntity box = context.CreateHierarchyObject();
+    context.Scene().Transforms().Set(box, kb::scene::TransformComponent{
+        .localPosition = kb::scene::Vec3{ 0.0F, 4.0F, 0.0F },
+    });
+    context.Scene().Components().Rigidbodies().Set(box, kb::scene::RigidbodyComponent{
+        .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+        .mass = 1.0F,
+    });
+    context.Scene().Components().Colliders().Set(box, kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+    });
+    for (int frame = 0; frame < 120; ++frame) {
+        static_cast<void>(context.Scene().Runtime().Update(1.0F / 60.0F));
+    }
+    const kb::scene::TransformComponent boxTransform = context.Scene().Transforms().Get(box);
+    report.Check(boxTransform.localPosition.y < 4.0F, "Jolt plugin loaded through editor reload moves a dynamic body");
+    report.Check(boxTransform.localPosition.y > 0.35F, "Jolt plugin loaded through editor reload keeps the body above the floor");
 
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox again is handled");
     report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Second click disables the plugin");
