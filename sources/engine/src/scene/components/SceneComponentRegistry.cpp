@@ -64,6 +64,15 @@ void RegisterAudioReflection(kb::ecs::World& world) {
             KB_ECS_FIELD(AudioSourceComponent, loop, kb::ecs::ComponentFieldType::Bool),
             KB_ECS_FIELD(AudioSourceComponent, spatial, kb::ecs::ComponentFieldType::Bool),
             KB_ECS_FIELD(AudioSourceComponent, autoplay, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioSourceComponent, enabled, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioSourceComponent, mute, kb::ecs::ComponentFieldType::Bool),
+            KB_ECS_FIELD(AudioSourceComponent, pan, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, spatialBlend, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, attenuationModel, kb::ecs::ComponentFieldType::Enum32),
+            KB_ECS_FIELD(AudioSourceComponent, minDistance, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, maxDistance, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, rolloff, kb::ecs::ComponentFieldType::Float32),
+            KB_ECS_FIELD(AudioSourceComponent, dopplerFactor, kb::ecs::ComponentFieldType::Float32),
         }));
 }
 

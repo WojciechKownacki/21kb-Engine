@@ -48,7 +48,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
     return true;
 }
 
-[[nodiscard]] bool ReadNode(ByteReader& input, ScenePrefabNodeDesc& output) {
+[[nodiscard]] bool ReadNode(ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeDesc& output) {
     std::uint32_t nestedOverrideCount = 0;
     if (!input.ReadString(output.name) ||
         !input.ReadString(output.nestedPrefabGuid) ||
@@ -71,7 +71,7 @@ using SceneAssetBinaryIO::ReadAllBytes;
         !SceneAssetPrimitiveCodec::ReadQuat(input, output.transform.localRotation) ||
         !SceneAssetPrimitiveCodec::ReadVec3(input, output.transform.localScale) ||
         !input.ReadBool(output.visibility.visible) ||
-        !SceneAssetComponentCodec::Read(input, output.components)) {
+        !SceneAssetComponentCodec::Read(input, fileVersion, output.components)) {
         return false;
     }
     return true;
@@ -131,7 +131,7 @@ SceneDocumentLoadResult SceneAssetReader::Read(const std::filesystem::path& path
     scene.worldPrefab.Reserve(nodeCount);
     for (std::uint32_t nodeIndex = 0U; nodeIndex < nodeCount; ++nodeIndex) {
         ScenePrefabNodeDesc node;
-        if (!ReadNode(input, node)) {
+        if (!ReadNode(input, fileVersion, node)) {
             return SceneDocumentLoadResult{ .succeeded = false, .document = {}, .error = "Scene asset node list is invalid." };
         }
         static_cast<void>(scene.worldPrefab.AddNode(std::move(node)));
