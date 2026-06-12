@@ -17,8 +17,16 @@ namespace {
     return MiniaudioSoundSettings{
         .volume = source.volume,
         .pitch = source.pitch,
+        .mute = source.mute,
         .loop = source.loop,
         .spatial = source.spatial,
+        .pan = source.pan,
+        .spatialBlend = source.spatialBlend,
+        .attenuationModel = source.attenuationModel,
+        .minDistance = source.minDistance,
+        .maxDistance = source.maxDistance,
+        .rolloff = source.rolloff,
+        .dopplerFactor = source.dopplerFactor,
         .position = transform.worldPosition,
     };
 }
@@ -70,7 +78,7 @@ void MiniaudioSourceRegistry::SyncSource(
     }
 
     seenEntities_.insert(entity.Id());
-    if (!playbackAvailable) {
+    if (!source->enabled || !playbackAvailable) {
         RemoveSound(entity.Id());
         return;
     }
@@ -111,7 +119,7 @@ MiniaudioSourceRegistry::SoundRecord* MiniaudioSourceRegistry::EnsureSound(
     }
 
     sound->Apply(ToSoundSettings(source, transform));
-    if (source.autoplay) {
+    if (source.enabled && source.autoplay) {
         static_cast<void>(sound->Start());
     }
 
