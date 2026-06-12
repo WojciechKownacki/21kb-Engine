@@ -29,8 +29,16 @@ kb::audio::AudioPlayResult MiniaudioVoicePool::PlayOneShot(
     sound->Apply(MiniaudioSoundSettings{
         .volume = desc.volume,
         .pitch = desc.pitch,
+        .mute = desc.mute,
         .loop = desc.loop,
         .spatial = desc.spatial,
+        .pan = desc.pan,
+        .spatialBlend = desc.spatialBlend,
+        .attenuationModel = desc.attenuationModel,
+        .minDistance = desc.minDistance,
+        .maxDistance = desc.maxDistance,
+        .rolloff = desc.rolloff,
+        .dopplerFactor = desc.dopplerFactor,
         .position = desc.position,
     });
 

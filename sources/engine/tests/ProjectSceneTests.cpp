@@ -142,6 +142,15 @@ void RunSceneDocumentRoundTripTest() {
         .loop = true,
         .spatial = false,
         .autoplay = true,
+        .enabled = false,
+        .mute = true,
+        .pan = -0.4F,
+        .spatialBlend = 0.35F,
+        .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
+        .minDistance = 2.0F,
+        .maxDistance = 80.0F,
+        .rolloff = 0.5F,
+        .dopplerFactor = 0.25F,
     });
     source.Components().AudioListeners().Set(secondRoot, kb::scene::AudioListenerComponent{
         .primary = true,
@@ -180,7 +189,7 @@ void RunSceneDocumentRoundTripTest() {
     Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F), "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");
     Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && NearlyEqual(collider->center.y, 1.0F) && NearlyEqual(collider->radius, 0.75F) && NearlyEqual(collider->height, 2.5F) && collider->trigger, "Scene document collider did not roundtrip");
-    Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay, "Scene document audio source did not roundtrip");
+    Require(audioSource != nullptr && audioSource->clipAssetId == 90 && NearlyEqual(audioSource->volume, 0.25F) && NearlyEqual(audioSource->pitch, 1.5F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && NearlyEqual(audioSource->pan, -0.4F) && NearlyEqual(audioSource->spatialBlend, 0.35F) && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && NearlyEqual(audioSource->minDistance, 2.0F) && NearlyEqual(audioSource->maxDistance, 80.0F) && NearlyEqual(audioSource->rolloff, 0.5F) && NearlyEqual(audioSource->dopplerFactor, 0.25F), "Scene document audio source did not roundtrip");
     Require(audioListener != nullptr && audioListener->primary && !audioListener->enabled, "Scene document audio listener did not roundtrip");
     Require(behaviour != nullptr && behaviour->behaviourAssetId == 91 && behaviour->backend == kb::scene::BehaviourBackend::Lua && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Gameplay && behaviour->executionOrder == -3, "Scene document behaviour did not roundtrip");
 }
@@ -219,12 +228,22 @@ void RunSceneAudioSourceComponentReflectionSerializationTest() {
         .loop = true,
         .spatial = false,
         .autoplay = true,
+        .enabled = false,
+        .mute = true,
+        .pan = 0.45F,
+        .spatialBlend = 0.2F,
+        .attenuationModel = kb::audio::AudioAttenuationModel::Exponential,
+        .minDistance = 3.0F,
+        .maxDistance = 30.0F,
+        .rolloff = 2.0F,
+        .dopplerFactor = 0.75F,
     });
 
     kb::ecs::World& sourceWorld = source.Runtime().EcsWorld();
     const kb::ecs::ComponentReflection* reflection = sourceWorld.Reflection("kb.scene.AudioSourceComponent");
     Require(reflection != nullptr, "AudioSourceComponent reflection was not registered");
     Require(reflection->FindField("clipAssetId") != nullptr, "AudioSourceComponent reflection is missing clipAssetId");
+    Require(reflection->FindField("spatialBlend") != nullptr, "AudioSourceComponent reflection is missing spatialBlend");
 
     kb::ecs::SerializedComponent serialized;
     Require(sourceWorld.SerializeComponent(sourceEntity, sourceWorld.Component<kb::scene::AudioSourceComponent>(), serialized), "AudioSourceComponent reflection serialization failed");
@@ -234,7 +253,7 @@ void RunSceneAudioSourceComponentReflectionSerializationTest() {
     Require(target.Runtime().EcsWorld().ApplySerializedComponent(targetEntity, serialized), "AudioSourceComponent reflection apply failed");
 
     const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(targetEntity);
-    Require(restored != nullptr && restored->clipAssetId == 777 && NearlyEqual(restored->volume, 0.6F) && NearlyEqual(restored->pitch, 0.8F) && restored->loop && !restored->spatial && restored->autoplay, "AudioSourceComponent reflection did not roundtrip");
+    Require(restored != nullptr && restored->clipAssetId == 777 && NearlyEqual(restored->volume, 0.6F) && NearlyEqual(restored->pitch, 0.8F) && restored->loop && !restored->spatial && restored->autoplay && !restored->enabled && restored->mute && NearlyEqual(restored->pan, 0.45F) && NearlyEqual(restored->spatialBlend, 0.2F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::Exponential && NearlyEqual(restored->minDistance, 3.0F) && NearlyEqual(restored->maxDistance, 30.0F) && NearlyEqual(restored->rolloff, 2.0F) && NearlyEqual(restored->dopplerFactor, 0.75F), "AudioSourceComponent reflection did not roundtrip");
 }
 
 void RunSceneAudioSourcePrefabRoundTripTest() {
@@ -247,6 +266,15 @@ void RunSceneAudioSourcePrefabRoundTripTest() {
         .loop = true,
         .spatial = true,
         .autoplay = false,
+        .enabled = true,
+        .mute = false,
+        .pan = -0.25F,
+        .spatialBlend = 0.9F,
+        .attenuationModel = kb::audio::AudioAttenuationModel::None,
+        .minDistance = 1.5F,
+        .maxDistance = 150.0F,
+        .rolloff = 0.8F,
+        .dopplerFactor = 1.5F,
     });
 
     kb::scene::ScenePrefab prefab = source.Prefabs().Capture(root);
@@ -255,7 +283,7 @@ void RunSceneAudioSourcePrefabRoundTripTest() {
     Require(!instance.Empty(), "Audio source prefab did not instantiate");
 
     const kb::scene::AudioSourceComponent* restored = target.Components().AudioSources().TryGet(instance.ObjectAt(0).Entity());
-    Require(restored != nullptr && restored->clipAssetId == 1234 && NearlyEqual(restored->volume, 0.7F) && NearlyEqual(restored->pitch, 1.2F) && restored->loop && restored->spatial && !restored->autoplay, "Audio source prefab component did not roundtrip");
+    Require(restored != nullptr && restored->clipAssetId == 1234 && NearlyEqual(restored->volume, 0.7F) && NearlyEqual(restored->pitch, 1.2F) && restored->loop && restored->spatial && !restored->autoplay && restored->enabled && !restored->mute && NearlyEqual(restored->pan, -0.25F) && NearlyEqual(restored->spatialBlend, 0.9F) && restored->attenuationModel == kb::audio::AudioAttenuationModel::None && NearlyEqual(restored->minDistance, 1.5F) && NearlyEqual(restored->maxDistance, 150.0F) && NearlyEqual(restored->rolloff, 0.8F) && NearlyEqual(restored->dopplerFactor, 1.5F), "Audio source prefab component did not roundtrip");
 }
 
 void RunSceneAudioListenerPrefabRoundTripTest() {

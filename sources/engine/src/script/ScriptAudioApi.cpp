@@ -57,6 +57,18 @@ ScriptFunctionCallResult Error(std::string message) {
     return value == nullptr ? fallback : value->AsBool(fallback);
 }
 
+[[nodiscard]] kb::audio::AudioAttenuationModel AttenuationModelArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, kb::audio::AudioAttenuationModel fallback) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    if (value == nullptr) {
+        return fallback;
+    }
+    const int rawValue = value->AsInt(static_cast<int>(fallback));
+    if (rawValue < static_cast<int>(kb::audio::AudioAttenuationModel::None) || rawValue > static_cast<int>(kb::audio::AudioAttenuationModel::Exponential)) {
+        return fallback;
+    }
+    return static_cast<kb::audio::AudioAttenuationModel>(rawValue);
+}
+
 [[nodiscard]] kb::scene::SceneEntity ParentEntity(const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) noexcept {
     const ScriptValue* explicitEntity = FindArg(arguments, "entity");
     if (explicitEntity != nullptr) {
@@ -92,8 +104,16 @@ ScriptFunctionCallResult AudioPlay(const ScriptFunctionCallContext& context, std
         .clipAssetId = clipAssetId.value,
         .volume = FloatArg(arguments, "volume", 1.0F),
         .pitch = FloatArg(arguments, "pitch", 1.0F),
+        .mute = BoolArg(arguments, "mute", false),
         .loop = BoolArg(arguments, "loop", false),
         .spatial = BoolArg(arguments, "spatial", true),
+        .pan = FloatArg(arguments, "pan", 0.0F),
+        .spatialBlend = FloatArg(arguments, "spatialBlend", 1.0F),
+        .attenuationModel = AttenuationModelArg(arguments, "attenuationModel", kb::audio::AudioAttenuationModel::Inverse),
+        .minDistance = FloatArg(arguments, "minDistance", 1.0F),
+        .maxDistance = FloatArg(arguments, "maxDistance", 500.0F),
+        .rolloff = FloatArg(arguments, "rolloff", 1.0F),
+        .dopplerFactor = FloatArg(arguments, "dopplerFactor", 1.0F),
         .position = PlaybackPosition(context, arguments),
     });
     if (!played.Succeeded()) {
@@ -119,8 +139,16 @@ bool ScriptAudioApi::Register(ScriptRuntimeHost& host) {
         ScriptFunctionPin{ "clip", ScriptValueType::String, true },
         ScriptFunctionPin{ "volume", ScriptValueType::Float, false },
         ScriptFunctionPin{ "pitch", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "mute", ScriptValueType::Bool, false },
         ScriptFunctionPin{ "loop", ScriptValueType::Bool, false },
         ScriptFunctionPin{ "spatial", ScriptValueType::Bool, false },
+        ScriptFunctionPin{ "pan", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "spatialBlend", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "attenuationModel", ScriptValueType::Int, false },
+        ScriptFunctionPin{ "minDistance", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "maxDistance", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "rolloff", ScriptValueType::Float, false },
+        ScriptFunctionPin{ "dopplerFactor", ScriptValueType::Float, false },
         ScriptFunctionPin{ "entity", ScriptValueType::Entity, false },
     };
     desc.signature.outputs = {

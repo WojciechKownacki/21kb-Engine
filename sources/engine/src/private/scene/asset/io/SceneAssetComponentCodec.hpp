@@ -12,7 +12,7 @@ class SceneAssetComponentCodec final {
 public:
     SceneAssetComponentCodec() = delete;
 
-    [[nodiscard]] static bool Read(SceneAssetBinaryIO::ByteReader& input, ScenePrefabNodeComponents& output);
+    [[nodiscard]] static bool Read(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeComponents& output);
     static void Write(std::vector<std::uint8_t>& output, const ScenePrefabNodeComponents& components);
 };
 
