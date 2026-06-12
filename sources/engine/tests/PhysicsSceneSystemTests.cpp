@@ -11,6 +11,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <iostream>
 #include <utility>
 
 namespace {
@@ -60,6 +61,14 @@ void RunPhysicsSceneSystemFallingBodyTest() {
     }
 
     const kb::scene::TransformComponent transform = scene.Transforms().Get(box);
+    const kb::scene::RigidbodyComponent* rigidbody = scene.Components().Rigidbodies().TryGet(box.Entity());
+    if (transform.localPosition.y >= 4.0F || transform.localPosition.y <= 0.35F) {
+        std::cerr << "PhysicsSceneSystem final y=" << transform.localPosition.y;
+        if (rigidbody != nullptr) {
+            std::cerr << " linearVelocityY=" << rigidbody->linearVelocity.y;
+        }
+        std::cerr << '\n';
+    }
     kb::tests::Require(transform.localPosition.y < 4.0F, "PhysicsSceneSystem did not move the dynamic body");
     kb::tests::Require(transform.localPosition.y > 0.35F, "PhysicsSceneSystem let the dynamic body tunnel through the floor");
 }
