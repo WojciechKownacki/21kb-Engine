@@ -279,7 +279,7 @@ void RunSceneAudioClipAssetDiscoveryTest() {
 
     const kb::assets::AssetHandle<kb::audio::AudioClipAsset> loaded = scene.Assets().Manager().Load<kb::audio::AudioClipAsset>(metadata->id);
     kb::tests::Require(loaded.IsLoaded(), "Audio clip asset did not load through the runtime asset manager");
-    kb::tests::Require(loaded->path == clipPath, "Audio clip asset did not preserve the resolved physical path");
+    kb::tests::Require(std::filesystem::equivalent(loaded->path, clipPath), "Audio clip asset did not preserve the resolved physical path");
 }
 
 void RunScriptAssetPipelineTest() {
