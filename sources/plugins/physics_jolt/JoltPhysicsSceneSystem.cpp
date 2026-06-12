@@ -292,6 +292,7 @@ public:
         , tempAllocator_(10U * 1024U * 1024U)
         , jobSystem_(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, WorkerThreadCount()) {
         physicsSystem_.Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints, broadPhaseLayers_, objectVsBroadPhaseFilter_, objectLayerPairFilter_);
+        physicsSystem_.SetGravity(JPH::Vec3(0.0F, -9.81F, 0.0F));
     }
 
     ~Impl() {
