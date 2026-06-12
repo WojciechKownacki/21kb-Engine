@@ -3,12 +3,9 @@
 #include "scene/prefab/io/ScenePrefabAssetFormat.hpp"
 #include "scene/prefab/io/ScenePrefabAssetNodeParser.hpp"
 
-#include <charconv>
-#include <cstdint>
 #include <istream>
 #include <sstream>
 #include <string>
-#include <type_traits>
 
 namespace kb::scene {
 
@@ -78,23 +75,5 @@ bool ScenePrefabAssetFieldParser::ParseVec3(const ScenePrefabAssetFieldMap& fiel
 bool ScenePrefabAssetFieldParser::ParseNode(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeDesc& node) {
     return ScenePrefabAssetNodeParser::Parse(fields, node);
 }
-
-template <typename T>
-bool ScenePrefabAssetFieldParser::ParseNumber(std::string_view text, T& output) {
-    if constexpr (std::is_floating_point_v<T>) {
-        std::istringstream stream{ std::string{ text } };
-        std::string extra;
-        return static_cast<bool>(stream >> output) && !(stream >> extra);
-    } else {
-        const char* first = text.data();
-        const char* last = text.data() + text.size();
-        const std::from_chars_result result = std::from_chars(first, last, output);
-        return result.ec == std::errc{} && result.ptr == last;
-    }
-}
-
-template bool ScenePrefabAssetFieldParser::ParseNumber<std::size_t>(std::string_view, std::size_t&);
-template bool ScenePrefabAssetFieldParser::ParseNumber<int>(std::string_view, int&);
-template bool ScenePrefabAssetFieldParser::ParseNumber<float>(std::string_view, float&);
 
 } // namespace kb::scene
