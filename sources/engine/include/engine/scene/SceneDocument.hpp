@@ -8,7 +8,7 @@
 namespace kb::scene {
 
 struct SceneDocument {
-    static constexpr std::uint32_t CurrentFileVersion = 1U;
+    static constexpr std::uint32_t CurrentFileVersion = 2U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string guid;

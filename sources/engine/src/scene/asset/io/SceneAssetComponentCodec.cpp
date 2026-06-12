@@ -48,7 +48,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
 
 } // namespace
 
-bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, ScenePrefabNodeComponents& output) {
+bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, ScenePrefabNodeComponents& output) {
     std::uint32_t componentBits = 0;
     if (!input.ReadUInt32(componentBits) || (componentBits & ~KnownComponentBits) != 0U) {
         return false;
@@ -98,7 +98,7 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, Scene
     }
     if ((componentBits & AudioSourceBit) != 0U) {
         AudioSourceComponent audioSource;
-        if (!SceneAssetAudioComponentCodec::ReadSource(input, audioSource)) {
+        if (!SceneAssetAudioComponentCodec::ReadSource(input, fileVersion, audioSource)) {
             return false;
         }
         output.audioSource = audioSource;

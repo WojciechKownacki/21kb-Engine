@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/audio/AudioSettings.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <miniaudio.h>
@@ -11,8 +12,16 @@ namespace kb::audio_miniaudio {
 struct MiniaudioSoundSettings {
     float volume = 1.0F;
     float pitch = 1.0F;
+    bool mute = false;
     bool loop = false;
     bool spatial = true;
+    float pan = 0.0F;
+    float spatialBlend = 1.0F;
+    kb::audio::AudioAttenuationModel attenuationModel = kb::audio::AudioAttenuationModel::Inverse;
+    float minDistance = 1.0F;
+    float maxDistance = 500.0F;
+    float rolloff = 1.0F;
+    float dopplerFactor = 1.0F;
     kb::scene::Vec3 position{};
 };
 

@@ -2,6 +2,7 @@ add_library(kb_engine STATIC
     include/engine/audio/AudioClipAsset.hpp
     include/engine/audio/AudioClipAssetLoader.hpp
     include/engine/audio/AudioPlayback.hpp
+    include/engine/audio/AudioSettings.hpp
     include/engine/assets/AssetHandle.hpp
     include/engine/assets/AssetId.hpp
     include/engine/assets/AssetImportCatalog.hpp

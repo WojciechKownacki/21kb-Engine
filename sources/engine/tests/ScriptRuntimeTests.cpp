@@ -1199,8 +1199,16 @@ void RunScriptAudioApiTest() {
         kb::script::ScriptFunctionArgument{ .name = "clip", .value = kb::script::ScriptValue{ std::string{ "/Game/Audio/Ping.wav" } } },
         kb::script::ScriptFunctionArgument{ .name = "volume", .value = kb::script::ScriptValue{ 0.25F } },
         kb::script::ScriptFunctionArgument{ .name = "pitch", .value = kb::script::ScriptValue{ 1.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "mute", .value = kb::script::ScriptValue{ true } },
         kb::script::ScriptFunctionArgument{ .name = "loop", .value = kb::script::ScriptValue{ true } },
         kb::script::ScriptFunctionArgument{ .name = "spatial", .value = kb::script::ScriptValue{ false } },
+        kb::script::ScriptFunctionArgument{ .name = "pan", .value = kb::script::ScriptValue{ -0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "spatialBlend", .value = kb::script::ScriptValue{ 0.25F } },
+        kb::script::ScriptFunctionArgument{ .name = "attenuationModel", .value = kb::script::ScriptValue{ static_cast<int>(kb::audio::AudioAttenuationModel::Linear) } },
+        kb::script::ScriptFunctionArgument{ .name = "minDistance", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "maxDistance", .value = kb::script::ScriptValue{ 75.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "rolloff", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "dopplerFactor", .value = kb::script::ScriptValue{ 0.1F } },
     };
     const kb::script::ScriptFunctionCallResult direct = host.Functions().Call(
         "Audio.Play",
@@ -1217,7 +1225,9 @@ void RunScriptAudioApiTest() {
     kb::tests::Require(directPlay.clipAssetId == clipId.value, "Script audio API direct call sent the wrong clip id");
     kb::tests::Require(kb::tests::NearlyEqual(directPlay.volume, 0.25F), "Script audio API direct call did not preserve volume");
     kb::tests::Require(kb::tests::NearlyEqual(directPlay.pitch, 1.5F), "Script audio API direct call did not preserve pitch");
-    kb::tests::Require(directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
+    kb::tests::Require(directPlay.mute && directPlay.loop && !directPlay.spatial, "Script audio API direct call did not preserve playback flags");
+    kb::tests::Require(kb::tests::NearlyEqual(directPlay.pan, -0.5F) && kb::tests::NearlyEqual(directPlay.spatialBlend, 0.25F), "Script audio API direct call did not preserve pan or spatial blend");
+    kb::tests::Require(directPlay.attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(directPlay.minDistance, 2.0F) && kb::tests::NearlyEqual(directPlay.maxDistance, 75.0F) && kb::tests::NearlyEqual(directPlay.rolloff, 0.5F) && kb::tests::NearlyEqual(directPlay.dopplerFactor, 0.1F), "Script audio API direct call did not preserve attenuation settings");
 
     const kb::assets::AssetId luaAsset{ 8802U };
     const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Audio Caller" });
@@ -1228,7 +1238,7 @@ void RunScriptAudioApiTest() {
     });
     const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
 function Tick(self, dt)
-    local voice, err = Audio.Play("/Game/Audio/Ping.wav", { volume = 0.75, spatial = false })
+    local voice, err = Audio.Play("/Game/Audio/Ping.wav", { volume = 0.75, spatial = false, pan = 0.5, spatialBlend = 0.6, attenuationModel = 3, minDistance = 4.0, maxDistance = 120.0, rolloff = 1.4, dopplerFactor = 0.2 })
     if voice == nil then
         Emit("AudioPlayFailed", { error = err })
         return
@@ -1247,6 +1257,8 @@ end
     kb::tests::Require(luaPlay.clipAssetId == clipId.value, "Script audio API Lua wrapper sent the wrong clip id");
     kb::tests::Require(kb::tests::NearlyEqual(luaPlay.volume, 0.75F), "Script audio API Lua wrapper did not preserve volume");
     kb::tests::Require(!luaPlay.spatial, "Script audio API Lua wrapper did not preserve flags");
+    kb::tests::Require(kb::tests::NearlyEqual(luaPlay.pan, 0.5F) && kb::tests::NearlyEqual(luaPlay.spatialBlend, 0.6F), "Script audio API Lua wrapper did not preserve pan or spatial blend");
+    kb::tests::Require(luaPlay.attenuationModel == kb::audio::AudioAttenuationModel::Exponential && kb::tests::NearlyEqual(luaPlay.minDistance, 4.0F) && kb::tests::NearlyEqual(luaPlay.maxDistance, 120.0F) && kb::tests::NearlyEqual(luaPlay.rolloff, 1.4F) && kb::tests::NearlyEqual(luaPlay.dopplerFactor, 0.2F), "Script audio API Lua wrapper did not preserve attenuation settings");
     kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
 }
 

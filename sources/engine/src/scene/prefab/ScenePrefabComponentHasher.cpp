@@ -89,6 +89,15 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.audioSource->loop ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, components.audioSource->spatial ? 1U : 0U);
         ScenePrefabHashBuilder::Mix(hash, components.audioSource->autoplay ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->enabled ? 1U : 0U);
+        ScenePrefabHashBuilder::Mix(hash, components.audioSource->mute ? 1U : 0U);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->pan);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->spatialBlend);
+        ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(components.audioSource->attenuationModel));
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->minDistance);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->maxDistance);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->rolloff);
+        ScenePrefabHashBuilder::MixFloat(hash, components.audioSource->dopplerFactor);
     }
 
     ScenePrefabHashBuilder::Mix(hash, components.audioListener.has_value() ? 1U : 0U);
