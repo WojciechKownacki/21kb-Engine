@@ -13,7 +13,7 @@ class SceneAssetAudioComponentCodec final {
 public:
     SceneAssetAudioComponentCodec() = delete;
 
-    [[nodiscard]] static bool ReadSource(SceneAssetBinaryIO::ByteReader& input, AudioSourceComponent& output);
+    [[nodiscard]] static bool ReadSource(SceneAssetBinaryIO::ByteReader& input, std::uint32_t fileVersion, AudioSourceComponent& output);
     static void WriteSource(std::vector<std::uint8_t>& output, const AudioSourceComponent& audioSource);
 
     [[nodiscard]] static bool ReadListener(SceneAssetBinaryIO::ByteReader& input, AudioListenerComponent& output);
