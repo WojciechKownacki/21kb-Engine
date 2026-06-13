@@ -239,6 +239,7 @@ public:
     [[nodiscard]] bool RemoveScriptFromEntity(kb::scene::SceneEntity entity);
     [[nodiscard]] bool ToggleEntityScriptEnabled(kb::scene::SceneEntity entity);
     [[nodiscard]] bool AddComponentToEntity(kb::scene::SceneEntity entity, std::string_view componentId);
+    [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
     [[nodiscard]] bool CommitActiveTransformEdit();

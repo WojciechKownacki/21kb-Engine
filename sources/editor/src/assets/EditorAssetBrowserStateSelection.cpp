@@ -102,6 +102,7 @@ bool EditorAssetBrowserState::SelectAsset(kb::assets::AssetId id, const kb::asse
     if (!selection_.SelectAsset(id, manager)) {
         return false;
     }
+    inspectorAsset_ = id;
     view_.CloseSortMenu();
     view_.CloseFilterMenu();
     contextMenu_.Close();
@@ -137,6 +138,9 @@ bool EditorAssetBrowserState::SelectAssetAt(std::size_t index, const kb::assets:
     } else {
         static_cast<void>(selection_.SelectAsset(items[globalIndex].asset, manager));
     }
+    if (selection_.SelectedAsset().IsValid()) {
+        inspectorAsset_ = selection_.SelectedAsset();
+    }
 
     contentSelectionAnchor_ = globalIndex;
     hasContentSelectionAnchor_ = true;
@@ -162,6 +166,9 @@ bool EditorAssetBrowserState::SelectAllContent(const kb::assets::AssetManager& m
             static_cast<void>(selection_.AddAsset(item.asset, manager));
         }
     }
+    if (selection_.SelectedAsset().IsValid()) {
+        inspectorAsset_ = selection_.SelectedAsset();
+    }
     contentSelectionAnchor_ = 0;
     hasContentSelectionAnchor_ = true;
     view_.CloseSortMenu();
@@ -185,6 +192,7 @@ bool EditorAssetBrowserState::ToggleFolderExpanded(const std::filesystem::path& 
 
 void EditorAssetBrowserState::ClearSelection() noexcept {
     selection_.ClearSelection();
+    inspectorAsset_ = {};
     hasContentSelectionAnchor_ = false;
     deleteConfirm_.Close();
     CloseDropActionMenu();

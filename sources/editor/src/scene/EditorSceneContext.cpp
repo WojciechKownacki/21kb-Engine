@@ -8,6 +8,8 @@
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
@@ -34,6 +36,7 @@
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneAssetBrowserCommands.hpp"
 #include "scene/EditorSceneCommandController.hpp"
+#include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
@@ -1696,9 +1699,47 @@ bool EditorSceneContext::AddComponentToEntity(kb::scene::SceneEntity entity, std
             return true;
         });
     }
+    if (componentId == "AudioSource") {
+        if (scene_->Components().AudioSources().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Audio Source component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Audio Source Component", [this, entity]() {
+            scene_->Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{});
+            return true;
+        });
+    }
+    if (componentId == "AudioListener") {
+        if (scene_->Components().AudioListeners().Has(entity)) {
+            console_.Warning("Inspector", "Entity already has an Audio Listener component.");
+            return false;
+        }
+        return ExecuteSceneCommand("Add Audio Listener Component", [this, entity]() {
+            scene_->Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{});
+            return true;
+        });
+    }
 
     console_.Warning("Inspector", "Unknown component: " + std::string{ componentId });
     return false;
+}
+
+bool EditorSceneContext::SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !assetId.IsValid()) {
+        return false;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || !EditorSceneAudioAssetActions::IsAudioAsset(*metadata)) {
+        console_.Warning("Inspector", "Only audio assets can be assigned to an Audio Source.");
+        return false;
+    }
+    if (!scene_->Components().AudioSources().Has(entity)) {
+        console_.Warning("Inspector", "Selected entity does not have an Audio Source component.");
+        return false;
+    }
+    return ExecuteSceneCommand("Assign Audio Clip", [this, entity, assetId]() {
+        return EditorSceneAudioAssetActions::AssignAudioClip(*scene_, entity, assetId);
+    });
 }
 
 bool EditorSceneContext::ToggleEntityScriptEnabled(kb::scene::SceneEntity entity) {

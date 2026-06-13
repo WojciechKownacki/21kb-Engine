@@ -48,4 +48,18 @@ const char* InspectorComponentLabelFormatter::ColliderShapeName(kb::scene::Colli
     return "Unknown";
 }
 
+const char* InspectorComponentLabelFormatter::AudioAttenuationModelName(kb::audio::AudioAttenuationModel model) noexcept {
+    switch (model) {
+    case kb::audio::AudioAttenuationModel::None:
+        return "None";
+    case kb::audio::AudioAttenuationModel::Inverse:
+        return "Inverse";
+    case kb::audio::AudioAttenuationModel::Linear:
+        return "Linear";
+    case kb::audio::AudioAttenuationModel::Exponential:
+        return "Exponential";
+    }
+    return "Unknown";
+}
+
 } // namespace kb::editor

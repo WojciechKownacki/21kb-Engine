@@ -30,6 +30,10 @@ namespace {
     return metadata.type == "RenderMesh" && metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model);
 }
 
+[[nodiscard]] bool IsAudioAsset(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "AudioClip" || metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Audio);
+}
+
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetMetadata& metadata, const kb::assets::AssetManager& manager) {
     if (const std::optional<std::filesystem::path> mounted = manager.Mounts().Resolve(metadata.virtualPath)) {
         return *mounted;
@@ -91,6 +95,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetInstantiatesPrefab = IsPrefabLike(*metadata);
             drag.assetCreatesMeshEntity = IsMeshAsset(*metadata);
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
+            drag.assetAssignsAudioClip = IsAudioAsset(*metadata);
             return;
         }
 
