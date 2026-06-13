@@ -1,21 +1,13 @@
 #include "engine/modules/EngineModuleHost.hpp"
 
 #include "engine/modules/EngineModuleContext.hpp"
+#include "engine/modules/EngineModuleExports.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <unordered_map>
 #include <utility>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 namespace kb::modules {
 namespace {
@@ -27,18 +19,15 @@ struct ResolveEntry {
     bool placed = false;
 };
 
-using CreateEngineModuleFn = IEngineModule* (*)();
-using DestroyEngineModuleFn = void (*)(IEngineModule*);
-
 class DynamicEngineModule final : public IEngineModule {
 public:
     DynamicEngineModule(
         std::filesystem::path path,
-        void* library,
+        EngineModuleLibrary library,
         IEngineModule* module,
         DestroyEngineModuleFn destroy) noexcept
         : path_(std::move(path))
-        , library_(library)
+        , library_(std::move(library))
         , module_(module)
         , destroy_(destroy) {}
 
@@ -47,7 +36,7 @@ public:
             destroy_(module_);
             module_ = nullptr;
         }
-        UnloadLibraryHandle();
+        library_.Reset();
     }
 
     [[nodiscard]] EngineModuleMetadata Metadata() const override {
@@ -79,66 +68,63 @@ public:
     }
 
 private:
-    void UnloadLibraryHandle() noexcept {
-        if (library_ == nullptr) {
-            return;
-        }
-#if defined(_WIN32)
-        FreeLibrary(static_cast<HMODULE>(library_));
-#else
-        dlclose(library_);
-#endif
-        library_ = nullptr;
-    }
-
     std::filesystem::path path_;
-    void* library_ = nullptr;
+    EngineModuleLibrary library_;
     IEngineModule* module_ = nullptr;
     DestroyEngineModuleFn destroy_ = nullptr;
 };
 
 [[nodiscard]] std::unique_ptr<IEngineModule> LoadDynamicModule(
-    const std::filesystem::path& path,
+    const kb::project::ProjectPluginReference& plugin,
+    EngineModuleLoader& loader,
     std::vector<std::string>& diagnostics) {
-#if defined(_WIN32)
-    HMODULE library = LoadLibraryW(path.wstring().c_str());
-    if (library == nullptr) {
-        diagnostics.push_back("plugin '" + path.string() + "' could not be loaded");
-        return nullptr;
-    }
-    auto* create = reinterpret_cast<CreateEngineModuleFn>(GetProcAddress(library, "kbCreateEngineModule"));
-    auto* destroy = reinterpret_cast<DestroyEngineModuleFn>(GetProcAddress(library, "kbDestroyEngineModule"));
-#else
-    void* library = dlopen(path.string().c_str(), RTLD_NOW);
-    if (library == nullptr) {
-        diagnostics.push_back("plugin '" + path.string() + "' could not be loaded");
-        return nullptr;
-    }
-    auto* create = reinterpret_cast<CreateEngineModuleFn>(dlsym(library, "kbCreateEngineModule"));
-    auto* destroy = reinterpret_cast<DestroyEngineModuleFn>(dlsym(library, "kbDestroyEngineModule"));
-#endif
-    if (create == nullptr || destroy == nullptr) {
-        diagnostics.push_back("plugin '" + path.string() + "' is missing engine module exports");
-#if defined(_WIN32)
-        FreeLibrary(library);
-#else
-        dlclose(library);
-#endif
+    const std::filesystem::path path = plugin.binaryPath;
+    EngineModuleLoadResult loaded = loader.Load(EngineModuleLoadDesc{
+        .key = plugin.name.empty() ? path.stem().string() : plugin.name,
+        .modulePath = path,
+        .shadowCopy = true,
+        .shadowCopyDirectory = {},
+        .shadowCopyDirectoryName = "21kb_engine_modules",
+        .diagnosticLabel = "engine module plugin",
+    });
+    if (!loaded.Succeeded()) {
+        diagnostics.insert(diagnostics.end(), loaded.errors.begin(), loaded.errors.end());
         return nullptr;
     }
 
+    auto* abiVersion = reinterpret_cast<EngineModuleAbiVersionFn>(loaded.library.FindSymbol(kEngineModuleAbiVersionSymbol, diagnostics, "engine module plugin"));
+    auto* moduleName = reinterpret_cast<EngineModuleNameFn>(loaded.library.FindSymbol(kEngineModuleNameSymbol, diagnostics, "engine module plugin"));
+    auto* create = reinterpret_cast<CreateEngineModuleFn>(loaded.library.FindSymbol(kEngineModuleCreateSymbol, diagnostics, "engine module plugin"));
+    auto* destroy = reinterpret_cast<DestroyEngineModuleFn>(loaded.library.FindSymbol(kEngineModuleDestroySymbol, diagnostics, "engine module plugin"));
+    if (abiVersion == nullptr || moduleName == nullptr || create == nullptr || destroy == nullptr) {
+        diagnostics.push_back("plugin '" + path.string() + "' is missing engine module exports");
+        loaded.library.Reset();
+        return nullptr;
+    }
+    if (abiVersion() != kEngineModuleAbiVersion) {
+        diagnostics.push_back("plugin '" + path.string() + "' has unsupported engine module ABI version");
+        loaded.library.Reset();
+        return nullptr;
+    }
+    const char* exportedName = moduleName();
+    if (exportedName == nullptr || exportedName[0] == '\0') {
+        diagnostics.push_back("plugin '" + path.string() + "' exported an empty engine module name");
+        loaded.library.Reset();
+        return nullptr;
+    }
+    if (!plugin.name.empty() && plugin.name != exportedName) {
+        diagnostics.push_back("plugin '" + path.string() + "' exported module name '" + std::string{ exportedName } + "' but project requested '" + plugin.name + "'");
+        loaded.library.Reset();
+        return nullptr;
+    }
     IEngineModule* module = create();
     if (module == nullptr) {
         diagnostics.push_back("plugin '" + path.string() + "' did not create a module");
-#if defined(_WIN32)
-        FreeLibrary(library);
-#else
-        dlclose(library);
-#endif
+        loaded.library.Reset();
         return nullptr;
     }
 
-    return std::make_unique<DynamicEngineModule>(path, library, module, destroy);
+    return std::make_unique<DynamicEngineModule>(loaded.loadedPath, std::move(loaded.library), module, destroy);
 }
 
 // Topologically order the active modules: a module never loads before a
@@ -253,12 +239,27 @@ void EngineModuleHost::Add(std::unique_ptr<IEngineModule> module) {
     candidates_.push_back(std::move(module));
 }
 
+void EngineModuleHost::ClearProjectPluginModules() noexcept {
+    if (!hasProjectPluginCandidates_) {
+        return;
+    }
+    if (projectPluginCandidateStart_ < candidates_.size()) {
+        candidates_.erase(candidates_.begin() + static_cast<std::ptrdiff_t>(projectPluginCandidateStart_), candidates_.end());
+    }
+    projectPluginCandidateStart_ = 0U;
+    hasProjectPluginCandidates_ = false;
+}
+
 void EngineModuleHost::LoadProjectPluginModules() {
+    ClearProjectPluginModules();
+    projectPluginCandidateStart_ = candidates_.size();
+    hasProjectPluginCandidates_ = true;
+
     for (const kb::project::ProjectPluginReference& plugin : project_.plugins) {
         if (!plugin.enabled || plugin.binaryPath.empty()) {
             continue;
         }
-        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin.binaryPath, diagnostics_);
+        std::unique_ptr<IEngineModule> module = LoadDynamicModule(plugin, moduleLoader_, diagnostics_);
         if (module != nullptr) {
             candidates_.push_back(std::move(module));
         }
@@ -279,6 +280,7 @@ void EngineModuleHost::Load(kb::ecs::World& world) {
         return;
     }
     loaded_ = true;
+    diagnostics_.clear();
 
     LoadProjectPluginModules();
 
@@ -327,6 +329,26 @@ void EngineModuleHost::Unload() {
     }
     active_.clear();
     loaded_ = false;
+}
+
+void EngineModuleHost::Reload(kb::ecs::World& world, std::span<kb::scene::Scene*> attachedScenes) {
+    if (loaded_) {
+        for (auto it = attachedScenes.rbegin(); it != attachedScenes.rend(); ++it) {
+            if (*it != nullptr) {
+                DetachScene(**it);
+            }
+        }
+        Unload();
+    }
+
+    ClearProjectPluginModules();
+    Load(world);
+
+    for (kb::scene::Scene* scene : attachedScenes) {
+        if (scene != nullptr) {
+            AttachScene(*scene);
+        }
+    }
 }
 
 bool EngineModuleHost::IsActive(std::string_view name) const noexcept {
