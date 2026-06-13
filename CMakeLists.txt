@@ -12,6 +12,7 @@ option(KB_BUILD_EDITOR "Build the Win32 editor application and editor tests" ${W
 option(KB_BUILD_RENDERER "Build the bgfx renderer module and smoke executable" ${WIN32})
 option(KB_ENABLE_SANITIZERS "Build project targets with AddressSanitizer and UndefinedBehaviorSanitizer where supported" OFF)
 option(KB_GENERATE_RENDERER_SHADERS "Generate renderer shaders with bgfx shaderc instead of staging prebuilt shaders" OFF)
+option(KB_BUILD_PROVIDER_MODULES_AS_DLL "Build provider engine modules as hot-reloadable DLL/shared libraries instead of static libraries" ON)
 
 function(kb_add_bgfx_subdirectory)
     if(MSVC)
@@ -140,10 +141,17 @@ add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
 
 if(TARGET kb_engine_tests)
     add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_PHYSICS_JOLT_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
+        set(KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_audio_miniaudio_plugin>")
+    else()
+        set(KB_PHYSICS_JOLT_TEST_PLUGIN_PATH "")
+        set(KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH "")
+    endif()
     target_compile_definitions(kb_engine_tests
         PRIVATE
-            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
-            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"$<TARGET_FILE:kb_audio_miniaudio_plugin>\""
+            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"${KB_PHYSICS_JOLT_TEST_PLUGIN_PATH}\""
+            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"${KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH}\""
     )
 endif()
 

@@ -11,12 +11,21 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <filesystem>
 #include <iostream>
 #include <utility>
+
+#if !defined(KB_PHYSICS_JOLT_PLUGIN_PATH)
+#define KB_PHYSICS_JOLT_PLUGIN_PATH ""
+#endif
 
 namespace {
 
 void RunPhysicsSceneSystemFallingBodyTest() {
+    if (std::filesystem::path{ KB_PHYSICS_JOLT_PLUGIN_PATH }.empty()) {
+        return;
+    }
+
     kb::project::ProjectDescriptor descriptor;
     descriptor.disableEnginePluginsByDefault = true;
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{

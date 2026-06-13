@@ -1,6 +1,7 @@
 #include "MiniaudioModule.hpp"
 
 #include "MiniaudioSceneSystem.hpp"
+#include "engine/modules/EngineModuleExports.hpp"
 #include "engine/modules/EngineModuleLoadingPhase.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -24,16 +25,18 @@ void MiniaudioModule::OnSceneAttach(kb::scene::Scene& scene) {
 
 } // namespace kb::audio_miniaudio
 
-#if defined(_WIN32)
-#define KB_AUDIO_MINIAUDIO_EXPORT __declspec(dllexport)
-#else
-#define KB_AUDIO_MINIAUDIO_EXPORT
-#endif
+extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
+    return kb::modules::kEngineModuleAbiVersion;
+}
 
-extern "C" KB_AUDIO_MINIAUDIO_EXPORT kb::modules::IEngineModule* kbCreateEngineModule() {
+extern "C" KB_ENGINE_MODULE_EXPORT const char* kb_engine_module_name() {
+    return "Audio.Miniaudio";
+}
+
+extern "C" KB_ENGINE_MODULE_EXPORT kb::modules::IEngineModule* kb_create_engine_module() {
     return new kb::audio_miniaudio::MiniaudioModule();
 }
 
-extern "C" KB_AUDIO_MINIAUDIO_EXPORT void kbDestroyEngineModule(kb::modules::IEngineModule* module) {
+extern "C" KB_ENGINE_MODULE_EXPORT void kb_destroy_engine_module(kb::modules::IEngineModule* module) {
     delete module;
 }

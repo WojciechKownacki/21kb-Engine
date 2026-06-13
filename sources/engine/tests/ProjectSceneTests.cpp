@@ -5,6 +5,7 @@
 #include "engine/assets/AssetHandle.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "engine/modules/IEngineModule.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
@@ -18,12 +19,19 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSystem.hpp"
+#include "engine/scene/SceneSystemContext.hpp"
 #include "engine/ecs/ComponentSerialization.hpp"
 #include "engine/ecs/World.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace kb::tests {
 namespace {
@@ -42,6 +50,40 @@ void CleanTempRoot() {
     std::filesystem::remove_all(TempRoot(), error);
     std::filesystem::create_directories(TempRoot(), error);
 }
+
+struct SceneDocumentSystemProbe {
+    int updateCount = 0;
+};
+
+class SceneDocumentProbeSystem final : public kb::scene::SceneSystem {
+public:
+    explicit SceneDocumentProbeSystem(SceneDocumentSystemProbe& probe) noexcept
+        : probe_(probe) {}
+
+    void OnUpdate(kb::scene::SceneSystemContext&) override {
+        ++probe_.updateCount;
+    }
+
+private:
+    SceneDocumentSystemProbe& probe_;
+};
+
+class SceneDocumentProbeModule final : public kb::modules::IEngineModule {
+public:
+    explicit SceneDocumentProbeModule(SceneDocumentSystemProbe& probe) noexcept
+        : probe_(probe) {}
+
+    [[nodiscard]] kb::modules::EngineModuleMetadata Metadata() const override {
+        return kb::modules::EngineModuleMetadata{ "SceneDocumentProbe", 1U, {}, kb::modules::EngineModuleLoadingPhase::Default };
+    }
+
+    void OnSceneAttach(kb::scene::Scene& scene) override {
+        scene.Runtime().AddSceneSystem(std::make_unique<SceneDocumentProbeSystem>(probe_));
+    }
+
+private:
+    SceneDocumentSystemProbe& probe_;
+};
 
 void RunProjectDescriptorRoundTripTest() {
     CleanTempRoot();
@@ -343,6 +385,26 @@ void RunEmptySceneDocumentClearsRuntimeSceneTest() {
     Require(scene.Hierarchy().RootEntities().empty(), "Empty scene document did not clear runtime roots");
 }
 
+void RunSceneDocumentLoadDoesNotTickRuntimeSystemsTest() {
+    SceneDocumentSystemProbe probe;
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back(kb::project::ProjectPluginReference{ .name = "SceneDocumentProbe", .enabled = true });
+
+    std::vector<std::unique_ptr<kb::modules::IEngineModule>> modules;
+    modules.push_back(std::make_unique<SceneDocumentProbeModule>(probe));
+    kb::scene::Scene scene{ std::move(project), std::move(modules) };
+
+    kb::scene::SceneDocument document;
+    document.guid = "scene:no-runtime-tick";
+    document.name = "NoRuntimeTick";
+    Require(kb::scene::SceneDocumentService::LoadIntoScene(scene, document), "Scene document did not load for runtime tick guard");
+    Require(probe.updateCount == 0, "Scene document loading must not tick runtime scene systems");
+
+    static_cast<void>(scene.Runtime().Update(0.0F));
+    Require(probe.updateCount == 1, "Runtime scene system did not tick during explicit runtime update");
+}
+
 void RunSceneDocumentAssetDiscoveryTest() {
     CleanTempRoot();
     const std::filesystem::path projectRoot = TempRoot() / "Project";
@@ -432,6 +494,7 @@ void RunProjectSceneTests() {
     RunSceneAudioSourcePrefabRoundTripTest();
     RunScenePhysicsComponentReflectionSerializationTest();
     RunEmptySceneDocumentClearsRuntimeSceneTest();
+    RunSceneDocumentLoadDoesNotTickRuntimeSystemsTest();
     RunSceneDocumentAssetDiscoveryTest();
     RunSceneAssetWritesMetaAndLoadsThroughSceneSystemTest();
     RunSceneAssetRejectsChecksumMismatchTest();

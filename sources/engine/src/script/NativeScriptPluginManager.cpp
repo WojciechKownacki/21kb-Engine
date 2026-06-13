@@ -4,40 +4,9 @@
 #include "engine/script/NativeScriptPluginRegistrar.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <system_error>
 #include <utility>
 
-#if defined(_WIN32)
-#define NOMINMAX
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-
 namespace kb::script {
-namespace {
-
-[[nodiscard]] std::string SanitizeFileName(std::string_view value) {
-    std::string output;
-    output.reserve(value.size());
-    for (const char character : value) {
-        const bool valid = (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-';
-        output.push_back(valid ? character : '_');
-    }
-    return output.empty() ? "native_plugin" : output;
-}
-
-[[nodiscard]] std::string NativeLibraryError() {
-#if defined(_WIN32)
-    return "native script plugin loader error " + std::to_string(static_cast<unsigned long>(GetLastError()));
-#else
-    const char* error = dlerror();
-    return error == nullptr ? "native script plugin loader error" : std::string{ error };
-#endif
-}
-
-} // namespace
 
 NativeScriptPluginManager::NativeScriptPluginManager(NativeScriptBackend& backend) noexcept
     : backend_(backend) {}
@@ -57,22 +26,16 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
         desc.entryPoint = kNativeScriptPluginDefaultEntryPoint;
     }
 
-    const std::filesystem::path sourcePath = std::filesystem::absolute(desc.modulePath);
-    if (!std::filesystem::is_regular_file(sourcePath)) {
-        result.errors.push_back("native script plugin module file is missing: " + sourcePath.string());
-        return result;
-    }
-
-    std::filesystem::path loadPath = sourcePath;
-    if (desc.shadowCopy) {
-        loadPath = ResolveShadowCopyPath(desc.key, sourcePath, desc.shadowCopyDirectory);
-        if (!CopyForLoad(sourcePath, loadPath, result.errors)) {
-            return result;
-        }
-    }
-
-    void* library = LoadNativeLibrary(loadPath, result.errors);
-    if (library == nullptr) {
+    kb::modules::EngineModuleLoadResult loadedModule = loader_.Load(kb::modules::EngineModuleLoadDesc{
+        .key = desc.key,
+        .modulePath = desc.modulePath,
+        .shadowCopy = desc.shadowCopy,
+        .shadowCopyDirectory = desc.shadowCopyDirectory,
+        .shadowCopyDirectoryName = "21kb_native_script_plugins",
+        .diagnosticLabel = "native script plugin",
+    });
+    if (!loadedModule.Succeeded()) {
+        result.errors = std::move(loadedModule.errors);
         return result;
     }
 
@@ -84,8 +47,8 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
     }
 
     std::vector<std::string> registeredSymbols;
-    if (!RegisterPluginSymbols(library, desc.entryPoint, registeredSymbols, result.errors)) {
-        CloseNativeLibrary(library);
+    if (!RegisterPluginSymbols(loadedModule.library, desc.entryPoint, registeredSymbols, result.errors)) {
+        loadedModule.library.Reset();
         if (previous.has_value()) {
             RestoreOrClose(std::move(*previous), result.errors);
         }
@@ -93,18 +56,18 @@ NativeScriptPluginLoadResult NativeScriptPluginManager::LoadOrReload(NativeScrip
     }
 
     if (previous.has_value()) {
-        CloseNativeLibrary(previous->library);
+        previous->library.Reset();
     }
 
     result.loaded = true;
-    result.loadedPath = loadPath;
+    result.loadedPath = loadedModule.loadedPath;
     result.registeredSymbols = registeredSymbols;
     plugins_.push_back(LoadedPlugin{
         .key = desc.key,
-        .originalPath = sourcePath,
-        .loadedPath = loadPath,
+        .originalPath = loadedModule.originalPath,
+        .loadedPath = loadedModule.loadedPath,
         .entryPoint = desc.entryPoint,
-        .library = library,
+        .library = std::move(loadedModule.library),
         .registeredSymbols = result.registeredSymbols,
     });
     return result;
@@ -121,7 +84,7 @@ void NativeScriptPluginManager::Unload(std::string_view key) noexcept {
         for (const std::string& symbol : plugin->registeredSymbols) {
             backend_.UnregisterSymbol(symbol);
         }
-        CloseNativeLibrary(plugin->library);
+        plugin->library.Reset();
     }
 }
 
@@ -130,7 +93,7 @@ void NativeScriptPluginManager::Clear() noexcept {
         for (const std::string& symbol : plugin.registeredSymbols) {
             backend_.UnregisterSymbol(symbol);
         }
-        CloseNativeLibrary(plugin.library);
+        plugin.library.Reset();
     }
     plugins_.clear();
 }
@@ -140,83 +103,6 @@ std::string NativeScriptPluginManager::NormalizeKey(std::string key, const std::
         return key;
     }
     return std::filesystem::absolute(modulePath).string();
-}
-
-std::filesystem::path NativeScriptPluginManager::ResolveShadowCopyPath(
-    std::string_view key,
-    const std::filesystem::path& modulePath,
-    const std::filesystem::path& shadowCopyDirectory) {
-    std::filesystem::path directory = shadowCopyDirectory;
-    if (directory.empty()) {
-        directory = std::filesystem::temp_directory_path() / "21kb_native_script_plugins";
-    }
-    const std::string extension = modulePath.extension().string();
-    return directory / (SanitizeFileName(key) + "_" + std::to_string(reloadSerial_++) + extension);
-}
-
-bool NativeScriptPluginManager::CopyForLoad(
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination,
-    std::vector<std::string>& errors) {
-    std::error_code error;
-    std::filesystem::create_directories(destination.parent_path(), error);
-    if (error) {
-        errors.push_back("native script plugin shadow copy directory could not be created");
-        return false;
-    }
-    std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
-    if (error) {
-        errors.push_back("native script plugin shadow copy failed");
-        return false;
-    }
-    return true;
-}
-
-void* NativeScriptPluginManager::LoadNativeLibrary(const std::filesystem::path& path, std::vector<std::string>& errors) {
-#if defined(_WIN32)
-    HMODULE library = LoadLibraryW(path.wstring().c_str());
-    if (library == nullptr) {
-        errors.push_back(NativeLibraryError());
-    }
-    return reinterpret_cast<void*>(library);
-#else
-    void* library = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (library == nullptr) {
-        errors.push_back(NativeLibraryError());
-    }
-    return library;
-#endif
-}
-
-void* NativeScriptPluginManager::FindNativeSymbol(void* library, const std::string& name, std::vector<std::string>& errors) {
-    if (library == nullptr || name.empty()) {
-        errors.push_back("native script plugin symbol lookup request is invalid");
-        return nullptr;
-    }
-#if defined(_WIN32)
-    FARPROC symbol = GetProcAddress(reinterpret_cast<HMODULE>(library), name.c_str());
-    if (symbol == nullptr) {
-        errors.push_back(NativeLibraryError());
-    }
-    return reinterpret_cast<void*>(symbol);
-#else
-    void* symbol = dlsym(library, name.c_str());
-    if (symbol == nullptr) {
-        errors.push_back(NativeLibraryError());
-    }
-    return symbol;
-#endif
-}
-
-void NativeScriptPluginManager::CloseNativeLibrary(void* library) noexcept {
-    if (library == nullptr) {
-        return;
-    }
-#if defined(_WIN32)
-    FreeLibrary(reinterpret_cast<HMODULE>(library));
-#else
-    dlclose(library);
-#endif
 }
 
 std::optional<NativeScriptPluginManager::LoadedPlugin> NativeScriptPluginManager::Detach(std::string_view key) noexcept {
@@ -232,11 +118,11 @@ std::optional<NativeScriptPluginManager::LoadedPlugin> NativeScriptPluginManager
 }
 
 bool NativeScriptPluginManager::RegisterPluginSymbols(
-    void* library,
+    kb::modules::EngineModuleLibrary& library,
     const std::string& entryPoint,
     std::vector<std::string>& registeredSymbols,
     std::vector<std::string>& errors) {
-    void* symbol = FindNativeSymbol(library, entryPoint, errors);
+    void* symbol = library.FindSymbol(entryPoint, errors, "native script plugin");
     if (symbol == nullptr) {
         return false;
     }
@@ -272,7 +158,7 @@ void NativeScriptPluginManager::RestoreOrClose(LoadedPlugin plugin, std::vector<
 
     errors.push_back("native script plugin rollback failed; previous plugin was unloaded");
     errors.insert(errors.end(), restoreErrors.begin(), restoreErrors.end());
-    CloseNativeLibrary(plugin.library);
+    plugin.library.Reset();
 }
 
 } // namespace kb::script

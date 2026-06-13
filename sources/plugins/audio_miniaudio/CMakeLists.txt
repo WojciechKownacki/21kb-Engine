@@ -1,4 +1,9 @@
-add_library(kb_audio_miniaudio_plugin SHARED
+set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE STATIC)
+if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    set(KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE SHARED)
+endif()
+
+add_library(kb_audio_miniaudio_plugin ${KB_AUDIO_MINIAUDIO_PLUGIN_LIBRARY_TYPE}
     MiniaudioModule.hpp
     MiniaudioModule.cpp
     MiniaudioSceneSystem.hpp
@@ -29,5 +34,12 @@ target_link_libraries(kb_audio_miniaudio_plugin
         kb_engine
         miniaudio
 )
+
+if(NOT KB_BUILD_PROVIDER_MODULES_AS_DLL)
+    target_compile_definitions(kb_audio_miniaudio_plugin
+        PUBLIC
+            KB_ENGINE_MODULE_STATIC_LINK
+    )
+endif()
 
 kb_apply_quality_gates(kb_audio_miniaudio_plugin)

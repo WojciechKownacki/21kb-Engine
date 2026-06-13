@@ -15,6 +15,7 @@
 #include "scene/assets/SceneAssetLoader.hpp"
 #include "scene/assets/ScenePrefabAssetLoader.hpp"
 
+#include <array>
 #include <atomic>
 #include <memory>
 
@@ -29,6 +30,9 @@ Scene::Scene()
     : Scene(kb::project::ProjectDescriptor{}) {}
 
 Scene::Scene(kb::project::ProjectDescriptor descriptor)
+    : Scene(std::move(descriptor), {}) {}
+
+Scene::Scene(kb::project::ProjectDescriptor descriptor, std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules)
     : state_(std::make_unique<SceneState>())
     , id_(g_nextSceneId.fetch_add(1U, std::memory_order_relaxed)) {
     const bool registeredPrefabLoader = state_->assets.RegisterLoader(std::make_unique<ScenePrefabAssetLoader>(*this));
@@ -58,6 +62,9 @@ Scene::Scene(kb::project::ProjectDescriptor descriptor)
     // context (tests, tools) behave exactly as before.
     moduleHost_ = std::make_unique<kb::modules::EngineModuleHost>(std::move(descriptor));
     moduleHost_->Add(std::make_unique<kb::input::InputModule>());
+    for (std::unique_ptr<kb::modules::IEngineModule>& module : staticModules) {
+        moduleHost_->Add(std::move(module));
+    }
     moduleHost_->Load(state_->world);
     moduleHost_->AttachScene(*this);
 }
@@ -79,6 +86,14 @@ kb::input::InputSubsystem& Scene::Input() noexcept {
 
 const kb::input::InputSubsystem& Scene::Input() const noexcept {
     return state_->inputSubsystem;
+}
+
+void Scene::ReloadModules() {
+    if (moduleHost_ == nullptr) {
+        return;
+    }
+    std::array<Scene*, 1U> attachedScenes{ this };
+    moduleHost_->Reload(state_->world, attachedScenes);
 }
 
 SceneState& SceneAccess::State(Scene& scene) noexcept {

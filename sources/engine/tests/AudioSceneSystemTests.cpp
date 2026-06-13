@@ -87,6 +87,10 @@ void WriteSilentWav(const std::filesystem::path& path) {
 }
 
 void RunMiniaudioPluginUpdatesSceneSourcesTest() {
+    if (std::filesystem::path{ KB_AUDIO_MINIAUDIO_PLUGIN_PATH }.empty()) {
+        return;
+    }
+
     ResetTestRoot();
 
     const std::filesystem::path clipPath = TestRoot() / "External" / "Ping.wav";
