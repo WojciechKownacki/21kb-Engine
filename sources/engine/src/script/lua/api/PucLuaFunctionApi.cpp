@@ -315,13 +315,87 @@ int LuaWorldInstantiatePrefab(lua_State* state) {
         lua_pushliteral(state, "lua script execution context is not available");
         return 2;
     }
-    const char* prefab = luaL_checkstring(state, 1);
-    std::vector<ScriptFunctionArgument> arguments{ Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }) };
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        const char* prefab = luaL_checkstring(state, 1);
+        arguments.push_back(Arg("prefab", ScriptValue{ std::string{ prefab != nullptr ? prefab : "" } }));
+    }
     const ScriptFunctionCallResult result = context->CallFunction("World.InstantiatePrefab", arguments);
     if (!result.Succeeded()) {
         return PushCallError(state, result, "prefab instantiate failed");
     }
     PucLuaValueBridge::Push(state, result.Output("entity").value_or(ScriptValue{ 0U, ScriptValueType::Entity }));
+    return 1;
+}
+
+int LuaTransformGetPosition(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        lua_pushliteral(state, "lua script execution context is not available");
+        return 2;
+    }
+    const auto entity = static_cast<std::uint64_t>(luaL_checkinteger(state, 1));
+    std::vector<ScriptFunctionArgument> arguments{ Arg("entity", ScriptValue{ entity, ScriptValueType::Entity }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Transform.GetPosition", arguments);
+    if (!result.Succeeded() || !result.Output("found").value_or(ScriptValue{ false }).AsBool()) {
+        lua_pushnil(state);
+        return 1;
+    }
+
+    lua_createtable(state, 0, 3);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("z").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "z");
+    return 1;
+}
+
+int LuaTransformSetPosition(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+            Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Transform.SetPosition", arguments);
+    lua_pushboolean(state, result.Output("moved").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaTransformTranslate(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    std::vector<ScriptFunctionArgument> arguments;
+    if (lua_istable(state, 1) != 0) {
+        arguments = ArgumentsFromTable(state, 1);
+    } else {
+        arguments = {
+            Arg("entity", ScriptValue{ static_cast<std::uint64_t>(luaL_checkinteger(state, 1)), ScriptValueType::Entity }),
+            Arg("x", ScriptValue{ static_cast<float>(luaL_checknumber(state, 2)) }),
+            Arg("y", ScriptValue{ static_cast<float>(luaL_checknumber(state, 3)) }),
+            Arg("z", ScriptValue{ static_cast<float>(luaL_checknumber(state, 4)) }),
+        };
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Transform.Translate", arguments);
+    lua_pushboolean(state, result.Output("moved").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
     return 1;
 }
 
@@ -408,6 +482,12 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_createtable(state, 0, 1);
     SetClosure(state, "delta", &LuaTimeDelta, context);
     lua_setfield(state, environmentIndex, "Time");
+
+    lua_createtable(state, 0, 3);
+    SetClosure(state, "GetPosition", &LuaTransformGetPosition, context);
+    SetClosure(state, "SetPosition", &LuaTransformSetPosition, context);
+    SetClosure(state, "Translate", &LuaTransformTranslate, context);
+    lua_setfield(state, environmentIndex, "Transform");
 
     lua_createtable(state, 0, 1);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
