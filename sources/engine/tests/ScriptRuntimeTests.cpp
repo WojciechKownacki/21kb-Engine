@@ -3,6 +3,10 @@
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/input/InputActionAsset.hpp"
+#include "engine/input/InputKey.hpp"
+#include "engine/input/InputMappingContextAsset.hpp"
+#include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -42,6 +46,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -1473,6 +1478,134 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
 }
 
+void RunScriptInputApiTest() {
+    using namespace kb::input;
+
+    auto jump = std::make_shared<InputActionAsset>();
+    jump->name = "Jump";
+    jump->valueType = InputActionValueType::Bool;
+
+    auto move = std::make_shared<InputActionAsset>();
+    move->name = "Move";
+    move->valueType = InputActionValueType::Axis1D;
+
+    auto look = std::make_shared<InputActionAsset>();
+    look->name = "Look";
+    look->valueType = InputActionValueType::Axis2D;
+
+    auto thrust = std::make_shared<InputActionAsset>();
+    thrust->name = "Thrust";
+    thrust->valueType = InputActionValueType::Axis3D;
+
+    auto context = std::make_shared<InputMappingContextAsset>();
+    context->mappings.push_back(InputKeyMapping{ .actionId = 1U, .key = InputKey::Space });
+    context->mappings.push_back(InputKeyMapping{ .actionId = 2U, .key = InputKey::W });
+    context->mappings.push_back(InputKeyMapping{ .actionId = 3U, .key = InputKey::MouseX });
+    context->mappings.push_back(InputKeyMapping{ .actionId = 4U, .key = InputKey::GamepadLeftTrigger });
+
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputActionAsset>> actions{
+        { 1U, jump },
+        { 2U, move },
+        { 3U, look },
+        { 4U, thrust },
+    };
+    std::unordered_map<std::uint64_t, std::shared_ptr<InputMappingContextAsset>> contexts{ { 50U, context } };
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [&actions](std::uint64_t id) -> std::shared_ptr<const InputActionAsset> {
+            const auto found = actions.find(id);
+            return found != actions.end() ? found->second : nullptr;
+        },
+        [&contexts](std::uint64_t id) -> std::shared_ptr<const InputMappingContextAsset> {
+            const auto found = contexts.find(id);
+            return found != contexts.end() ? found->second : nullptr;
+        });
+
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script input API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("Input.IsPressed") != nullptr, "Input.IsPressed was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Input.WasReleased") != nullptr, "Input.WasReleased was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Input.Vector3") != nullptr, "Input.Vector3 was not registered");
+
+    const kb::script::ScriptFunctionCallContext callContext{ .scene = &scene, .deltaSeconds = 0.016F };
+    const std::vector<kb::script::ScriptFunctionArgument> addContextArgs{
+        kb::script::ScriptFunctionArgument{ .name = "context", .value = kb::script::ScriptValue{ std::string{ "50" } } },
+        kb::script::ScriptFunctionArgument{ .name = "priority", .value = kb::script::ScriptValue{ 0 } },
+    };
+    const kb::script::ScriptFunctionCallResult added = host.Functions().Call("Input.AddMappingContext", addContextArgs, callContext);
+    kb::tests::Require(added.Succeeded() && added.Output("added").has_value() && added.Output("added")->AsBool(),
+        "Input.AddMappingContext direct call failed");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::W, true);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::MouseX, 0.25F);
+    scene.Input().MutableDeviceState().SetAnalog(InputKey::GamepadLeftTrigger, 0.75F);
+    scene.Input().Evaluate(0.016F);
+
+    const std::vector<kb::script::ScriptFunctionArgument> jumpArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Jump" } } },
+    };
+    const kb::script::ScriptFunctionCallResult isPressed = host.Functions().Call("Input.IsPressed", jumpArgs, callContext);
+    const kb::script::ScriptFunctionCallResult wasPressed = host.Functions().Call("Input.WasPressed", jumpArgs, callContext);
+    kb::tests::Require(isPressed.Succeeded() && isPressed.Output("pressed")->AsBool(), "Input.IsPressed direct call did not see Jump");
+    kb::tests::Require(wasPressed.Succeeded() && wasPressed.Output("pressed")->AsBool(), "Input.WasPressed direct call did not see Jump edge");
+
+    const std::vector<kb::script::ScriptFunctionArgument> moveArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Move" } } },
+    };
+    const kb::script::ScriptFunctionCallResult moveValue = host.Functions().Call("Input.Value", moveArgs, callContext);
+    kb::tests::Require(moveValue.Succeeded() && kb::tests::NearlyEqual(moveValue.Output("value")->AsFloat(), 1.0F),
+        "Input.Value direct call returned wrong Move value");
+
+    const std::vector<kb::script::ScriptFunctionArgument> lookArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Look" } } },
+    };
+    const kb::script::ScriptFunctionCallResult lookVector = host.Functions().Call("Input.Vector2", lookArgs, callContext);
+    kb::tests::Require(lookVector.Succeeded() && kb::tests::NearlyEqual(lookVector.Output("x")->AsFloat(), 0.25F),
+        "Input.Vector2 direct call returned wrong Look value");
+
+    const std::vector<kb::script::ScriptFunctionArgument> thrustArgs{
+        kb::script::ScriptFunctionArgument{ .name = "action", .value = kb::script::ScriptValue{ std::string{ "Thrust" } } },
+    };
+    const kb::script::ScriptFunctionCallResult thrustVector = host.Functions().Call("Input.Vector3", thrustArgs, callContext);
+    kb::tests::Require(thrustVector.Succeeded() && kb::tests::NearlyEqual(thrustVector.Output("x")->AsFloat(), 0.75F),
+        "Input.Vector3 direct call returned wrong Thrust value");
+
+    scene.Input().MutableDeviceState().SetKeyDown(InputKey::Space, false);
+    scene.Input().Evaluate(0.016F);
+
+    const kb::assets::AssetId luaAsset{ 8820U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua Input Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local look = Input.Vector2("Look")
+    local thrust = Input.Vector3("Thrust")
+    SetShared("input.jumpPressed", Input.IsPressed("Jump"))
+    SetShared("input.jumpReleased", Input.WasReleased("Jump"))
+    SetShared("input.move", Input.Value("Move"))
+    SetShared("input.lookX", look.x)
+    SetShared("input.thrustX", thrust.x)
+    SetShared("input.removed", Input.RemoveMappingContext(50))
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script input API Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.016F);
+    kb::tests::Require(tick.Succeeded(), "Script input API Lua wrapper execution failed");
+    kb::tests::Require(!host.SharedState().Get("input.jumpPressed")->AsBool(), "Lua Input.IsPressed should be false after Jump release");
+    kb::tests::Require(host.SharedState().Get("input.jumpReleased")->AsBool(), "Lua Input.WasReleased did not see Jump release");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.move")->AsFloat(), 1.0F), "Lua Input.Value returned wrong Move value");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.lookX")->AsFloat(), 0.25F), "Lua Input.Vector2 returned wrong Look value");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("input.thrustX")->AsFloat(), 0.75F), "Lua Input.Vector3 returned wrong Thrust value");
+    kb::tests::Require(host.SharedState().Get("input.removed")->AsBool() && !scene.Input().HasMappingContext(50U),
+        "Lua Input.RemoveMappingContext did not remove the active context");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -2559,6 +2692,7 @@ void RunScriptRuntimeTests() {
     RunScriptFunctionRegistryCrossBackendTest();
     RunScriptAudioApiTest();
     RunScriptWorldTimePhysicsApiTest();
+    RunScriptInputApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

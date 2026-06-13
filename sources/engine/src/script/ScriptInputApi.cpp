@@ -6,9 +6,12 @@
 #include "engine/script/ScriptRuntimeHost.hpp"
 
 #include <charconv>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::script {
 namespace {
@@ -56,9 +59,9 @@ bool RegisterActionQuery(ScriptRuntimeHost& host, std::string name, std::string 
     return host.RegisterFunction(std::move(desc));
 }
 
-bool RegisterValueQuery(ScriptRuntimeHost& host) {
+bool RegisterValueQuery(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
-    desc.signature.name = "GetActionValue";
+    desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
     desc.signature.outputs = {ScriptFunctionPin{"value", ScriptValueType::Float, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -74,9 +77,9 @@ bool RegisterValueQuery(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
-bool RegisterValueQueryXY(ScriptRuntimeHost& host) {
+bool RegisterValueQueryXY(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
-    desc.signature.name = "GetActionValueXY";
+    desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
     desc.signature.outputs = {ScriptFunctionPin{"x", ScriptValueType::Float, true},
                               ScriptFunctionPin{"y", ScriptValueType::Float, true}};
@@ -94,15 +97,39 @@ bool RegisterValueQueryXY(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
+bool RegisterValueQueryXYZ(ScriptRuntimeHost& host, std::string name) {
+    ScriptFunctionDesc desc;
+    desc.signature.name = std::move(name);
+    desc.signature.inputs = {ScriptFunctionPin{"action", ScriptValueType::String, true}};
+    desc.signature.outputs = {
+        ScriptFunctionPin{"x", ScriptValueType::Float, true},
+        ScriptFunctionPin{"y", ScriptValueType::Float, true},
+        ScriptFunctionPin{"z", ScriptValueType::Float, true},
+    };
+    desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
+        if (context.scene == nullptr) {
+            return NoScene();
+        }
+        const kb::input::InputValue value = context.scene->Input().GetActionValue(ActionName(arguments));
+        return ScriptFunctionCallResult{
+            .executed = true,
+            .outputs = {ScriptFunctionArgument{"x", ScriptValue{value.x}},
+                        ScriptFunctionArgument{"y", ScriptValue{value.y}},
+                        ScriptFunctionArgument{"z", ScriptValue{value.z}}},
+            .errors = {}};
+    };
+    return host.RegisterFunction(std::move(desc));
+}
+
 [[nodiscard]] std::uint64_t ParseAssetId(std::string_view text) {
     std::uint64_t id = 0U;
     std::from_chars(text.data(), text.data() + text.size(), id);
     return id;
 }
 
-bool RegisterAddMappingContext(ScriptRuntimeHost& host) {
+bool RegisterAddMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
-    desc.signature.name = "AddMappingContext";
+    desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true},
                              ScriptFunctionPin{"priority", ScriptValueType::Int, false}};
     desc.signature.outputs = {ScriptFunctionPin{"added", ScriptValueType::Bool, true}};
@@ -120,9 +147,9 @@ bool RegisterAddMappingContext(ScriptRuntimeHost& host) {
     return host.RegisterFunction(std::move(desc));
 }
 
-bool RegisterRemoveMappingContext(ScriptRuntimeHost& host) {
+bool RegisterRemoveMappingContext(ScriptRuntimeHost& host, std::string name) {
     ScriptFunctionDesc desc;
-    desc.signature.name = "RemoveMappingContext";
+    desc.signature.name = std::move(name);
     desc.signature.inputs = {ScriptFunctionPin{"context", ScriptValueType::String, true}};
     desc.signature.outputs = {ScriptFunctionPin{"removed", ScriptValueType::Bool, true}};
     desc.callback = [](const ScriptFunctionCallContext& context, std::span<const ScriptFunctionArgument> arguments) {
@@ -142,14 +169,25 @@ bool RegisterRemoveMappingContext(ScriptRuntimeHost& host) {
 
 bool ScriptInputApi::Register(ScriptRuntimeHost& host) {
     bool ok = true;
+    ok = RegisterActionQuery(host, "Input.IsPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
+    ok = RegisterActionQuery(host, "Input.WasPressed", "pressed", &kb::input::InputSubsystem::WasActionStarted) && ok;
+    ok = RegisterActionQuery(host, "Input.WasReleased", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
+    ok = RegisterValueQuery(host, "Input.Value") && ok;
+    ok = RegisterValueQueryXY(host, "Input.Vector2") && ok;
+    ok = RegisterValueQueryXYZ(host, "Input.Vector3") && ok;
+    ok = RegisterAddMappingContext(host, "Input.AddMappingContext") && ok;
+    ok = RegisterRemoveMappingContext(host, "Input.RemoveMappingContext") && ok;
+
     ok = RegisterActionQuery(host, "IsActionPressed", "pressed", &kb::input::InputSubsystem::IsActionPressed) && ok;
     ok = RegisterActionQuery(host, "WasActionStarted", "started", &kb::input::InputSubsystem::WasActionStarted) && ok;
     ok = RegisterActionQuery(host, "WasActionTriggered", "triggered", &kb::input::InputSubsystem::WasActionTriggered) && ok;
     ok = RegisterActionQuery(host, "WasActionCompleted", "completed", &kb::input::InputSubsystem::WasActionCompleted) && ok;
-    ok = RegisterValueQuery(host) && ok;
-    ok = RegisterValueQueryXY(host) && ok;
-    ok = RegisterAddMappingContext(host) && ok;
-    ok = RegisterRemoveMappingContext(host) && ok;
+    ok = RegisterActionQuery(host, "WasActionReleased", "released", &kb::input::InputSubsystem::WasActionReleased) && ok;
+    ok = RegisterValueQuery(host, "GetActionValue") && ok;
+    ok = RegisterValueQueryXY(host, "GetActionValueXY") && ok;
+    ok = RegisterValueQueryXYZ(host, "GetActionValueXYZ") && ok;
+    ok = RegisterAddMappingContext(host, "AddMappingContext") && ok;
+    ok = RegisterRemoveMappingContext(host, "RemoveMappingContext") && ok;
     return ok;
 }
 

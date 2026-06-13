@@ -135,7 +135,7 @@ bool EditorAssetBrowserPointerHandler::HandleRightButtonDown(
         return false;
     }
 
-    return EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(*content, x, y, sceneContext);
+    return EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(sourceWindow, *content, x, y, sceneContext);
 }
 
 EditorAssetBrowserDoubleClickResult EditorAssetBrowserPointerHandler::HandleDoubleClick(

@@ -737,6 +737,19 @@ if(TARGET kb_audio_miniaudio_plugin)
     )
 endif()
 
+if(TARGET kb_basic_lighting_plugin)
+    add_dependencies(kb_editor kb_basic_lighting_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_BASIC_LIGHTING_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_basic_lighting_plugin>")
+    else()
+        set(KB_BASIC_LIGHTING_EDITOR_PLUGIN_PATH "")
+    endif()
+    target_compile_definitions(kb_editor
+        PRIVATE
+            "KB_BASIC_LIGHTING_PLUGIN_PATH=\"${KB_BASIC_LIGHTING_EDITOR_PLUGIN_PATH}\""
+    )
+endif()
+
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32 xinput)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
