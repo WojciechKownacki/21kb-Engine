@@ -23,6 +23,7 @@ public:
     [[nodiscard]] const std::filesystem::path& SelectedFolder() const noexcept;
     [[nodiscard]] const std::filesystem::path& SelectedContentFolder() const noexcept;
     [[nodiscard]] kb::assets::AssetId SelectedAsset() const noexcept;
+    [[nodiscard]] kb::assets::AssetId InspectorAsset() const noexcept;
     [[nodiscard]] EditorAssetBrowserSelectionKind SelectionKind() const noexcept;
     [[nodiscard]] std::string_view SearchQuery() const noexcept;
     [[nodiscard]] bool IsSearchFocused() const noexcept;
@@ -188,6 +189,7 @@ private:
     int filterMenuHoveredIndex_ = -1;
     int dropActionMenuX_ = 0;
     int dropActionMenuY_ = 0;
+    kb::assets::AssetId inspectorAsset_{};
     kb::assets::AssetId dropActionAsset_{};
     kb::assets::AssetId pendingPreviewAsset_{};
     std::filesystem::path dropActionSourceFolder_{};

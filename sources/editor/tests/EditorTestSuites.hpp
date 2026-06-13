@@ -9,6 +9,7 @@ void RunEditorPlayModeSceneSessionTests();
 void RunEditorViewportPreviewTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
+void RunEditorInspectorTests();
 void RunScriptEditorTests();
 void RunSvgPathTests();
 

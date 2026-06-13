@@ -12,6 +12,7 @@ add_executable(kb_editor WIN32
     src/app/EditorEditCommandPolicy.cpp
     src/app/EditorEditCommandInputHandler.cpp
     src/app/EditorAssetBrowserContextCommandExecutor.cpp
+    src/app/EditorAudioAssetInspectorDropHandler.cpp
     src/app/EditorAssetBrowserContextMenuPointerHandler.cpp
     src/app/EditorAssetBrowserDeleteConfirmPointerHandler.cpp
     src/app/EditorAssetBrowserDoubleClickHandler.cpp
@@ -273,6 +274,7 @@ add_executable(kb_editor WIN32
     src/private/app/cursor/EditorInternalSplitterCursorController.hpp
     src/private/app/docking/EditorMainDockSplitterPointerController.hpp
     src/private/app/EditorAssetFolderProjectFilesDropHandler.hpp
+    src/private/app/EditorAudioAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetHierarchyDropHandler.hpp
     src/private/app/EditorBehaviourAssetInspectorDropHandler.hpp
     src/private/app/EditorBehaviourAssetSceneDropHandler.hpp
@@ -328,6 +330,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowInvalidator.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
+    src/private/inspection/InspectorAudioTextBuilder.hpp
     src/private/inspection/InspectorCameraTextBuilder.hpp
     src/private/inspection/InspectorColliderTextBuilder.hpp
     src/private/inspection/InspectorComponentCatalog.hpp
@@ -474,6 +477,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorScriptAssetGateway.hpp
     src/private/scene/EditorScriptEditorState.hpp
     src/private/scene/EditorSceneAssetBrowserCommands.hpp
+    src/private/scene/EditorSceneAudioAssetActions.hpp
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
@@ -601,6 +605,7 @@ add_executable(kb_editor WIN32
     src/rendering/SvgPathCursor.cpp
     src/rendering/SvgPathFigureBuilder.cpp
     src/inspection/InspectorCameraTextBuilder.cpp
+    src/inspection/InspectorAudioTextBuilder.cpp
     src/inspection/InspectorColliderTextBuilder.cpp
     src/inspection/InspectorComponentCatalog.cpp
     src/inspection/InspectorComponentLabelFormatter.cpp
@@ -625,6 +630,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorPluginCatalog.cpp
     src/scene/EditorScriptAssetGateway.cpp
     src/scene/EditorSceneAssetBrowserCommands.cpp
+    src/scene/EditorSceneAudioAssetActions.cpp
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
@@ -733,6 +739,7 @@ if(BUILD_TESTING)
         tests/EditorViewportPreviewTests.cpp
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
+        tests/EditorInspectorTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
@@ -816,6 +823,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneMeshAssetActions.cpp
         src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportCameraState.cpp
@@ -827,6 +835,9 @@ if(BUILD_TESTING)
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
+        src/inspection/InspectorAudioTextBuilder.cpp
+        src/inspection/InspectorComponentCatalog.cpp
+        src/inspection/InspectorComponentLabelFormatter.cpp
     )
 
     target_include_directories(kb_editor_tests
