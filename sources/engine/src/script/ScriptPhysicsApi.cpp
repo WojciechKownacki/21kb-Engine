@@ -32,10 +32,6 @@ struct Vec3 {
     return Vec3{ value.x, value.y, value.z };
 }
 
-[[nodiscard]] kb::scene::Vec3 ToSceneVec3(Vec3 value) noexcept {
-    return kb::scene::Vec3{ value.x, value.y, value.z };
-}
-
 [[nodiscard]] Vec3 operator+(Vec3 lhs, Vec3 rhs) noexcept {
     return Vec3{ lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z };
 }
