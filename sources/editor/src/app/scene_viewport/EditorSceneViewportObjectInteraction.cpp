@@ -103,6 +103,35 @@ bool EditorSceneViewportObjectInteraction::SelectAt(
     return EditorSceneViewportSelectionInteraction::SelectAt(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
 }
 
+bool EditorSceneViewportObjectInteraction::BeginBoxSelection(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext) {
+    return EditorSceneViewportSelectionInteraction::BeginBoxSelection(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
+}
+
+bool EditorSceneViewportObjectInteraction::UpdateBoxSelection(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext,
+    bool leftButtonDown) {
+    return EditorSceneViewportSelectionInteraction::UpdateBoxSelection(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, leftButtonDown);
+}
+
+bool EditorSceneViewportObjectInteraction::CommitBoxSelection(EditorSceneContext& sceneContext) {
+    return EditorSceneViewportSelectionInteraction::CommitBoxSelection(sceneContext);
+}
+
 } // namespace kb::editor
 
 #endif

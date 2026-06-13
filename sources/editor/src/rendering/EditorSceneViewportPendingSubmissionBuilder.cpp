@@ -113,6 +113,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
         .synchronizeScene = fullSceneSyncRequired,
         .editorGrid = present.settings.editorGrid,
         .editorGizmo = present.settings.editorGizmo,
+        .editorSelectionBox = present.settings.editorSelectionBox,
     };
 }
 
@@ -125,9 +126,6 @@ render::RenderViewportRect EditorSceneBgfxViewport::PendingSubmissionBuilder::Ou
 }
 
 std::span<const std::uint64_t> EditorSceneBgfxViewport::PendingSubmissionBuilder::SelectedEntitySpan(const ViewportSession& session) noexcept {
-    if (session.selectedEntityIds[0] == 0U) {
-        return {};
-    }
     return std::span<const std::uint64_t>{session.selectedEntityIds.data(), session.selectedEntityIds.size()};
 }
 

@@ -195,6 +195,11 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (EditorSceneViewportObjectInteraction::UpdateBoxSelection(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, leftButtonDown)) {
+        sceneViewport_.RequestPresent();
+        return;
+    }
+
     const bool wasGizmoDragging = sceneContext_.Gizmo().IsDragging();
     if (EditorSceneViewportObjectInteraction::UpdateGizmoDragOrHover(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, leftButtonDown)) {
         sceneViewport_.RequestPresent();

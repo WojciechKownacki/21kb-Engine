@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -121,18 +122,18 @@ struct SceneViewportRenderProfileDesc {
         return SceneViewportRenderProfileDesc{
             .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly,
             .shadowPassEnabled = false,
-            .postProcessEnabled = false,
-            .selectionMaskEnabled = false,
-            .selectionOutlineEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = true,
+            .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
         };
     case EditorViewportRenderProfile::Lit:
         return SceneViewportRenderProfileDesc{
             .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
             .shadowPassEnabled = true,
-            .postProcessEnabled = false,
-            .selectionMaskEnabled = false,
-            .selectionOutlineEnabled = false,
+            .postProcessEnabled = true,
+            .selectionMaskEnabled = true,
+            .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
         };
     case EditorViewportRenderProfile::GamePreview:
@@ -146,6 +147,47 @@ struct SceneViewportRenderProfileDesc {
         };
     }
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
+}
+
+[[nodiscard]] std::vector<std::uint64_t> SelectedEntityIds(const EditorSceneContext& sceneContext) {
+    std::vector<std::uint64_t> ids;
+    const std::vector<kb::scene::SceneEntity>& selected = sceneContext.SelectedHierarchyEntities();
+    ids.reserve(selected.size());
+    for (const kb::scene::SceneEntity entity : selected) {
+        if (entity.IsValid()) {
+            ids.push_back(entity.Id());
+        }
+    }
+    return ids;
+}
+
+[[nodiscard]] RECT SelectionBoxLocalRect(const EditorSceneViewportBoxSelectionState& selection) noexcept {
+    RECT rect{selection.start.x, selection.start.y, selection.current.x, selection.current.y};
+    if (rect.left > rect.right) {
+        std::swap(rect.left, rect.right);
+    }
+    if (rect.top > rect.bottom) {
+        std::swap(rect.top, rect.bottom);
+    }
+    return rect;
+}
+
+[[nodiscard]] kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc SelectionBoxDesc(
+    const EditorSceneContext& sceneContext,
+    std::uint32_t panelId) noexcept {
+    const EditorSceneViewportBoxSelectionState& selection = sceneContext.ViewportBoxSelection();
+    if (!selection.active || selection.panelId != panelId) {
+        return {};
+    }
+
+    const RECT rect = SelectionBoxLocalRect(selection);
+    return kb::render::RenderSceneSubmitDesc::EditorSelectionBoxDesc{
+        .x = static_cast<float>(rect.left),
+        .y = static_cast<float>(rect.top),
+        .width = static_cast<float>(std::max<LONG>(0, rect.right - rect.left)),
+        .height = static_cast<float>(std::max<LONG>(0, rect.bottom - rect.top)),
+        .visible = true,
+    };
 }
 
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildViewportPresentSettings(
@@ -180,7 +222,7 @@ struct SceneViewportRenderProfileDesc {
         .fitMode = viewportState.FitMode(),
         .safeArea = profile.safeArea,
         .cameraOverride = BuildEditorCamera(viewportCamera, renderWidth, renderHeight),
-        .selectedEntityIds = std::array<std::uint64_t, 1U>{ sceneContext.SelectedEntity().Id() },
+        .selectedEntityIds = SelectedEntityIds(sceneContext),
         .viewportKey = panelId,
         .editorSceneOverlaysEnabled = true,
         .editorGrid = kb::render::RenderSceneSubmitDesc::EditorGridDesc{
@@ -189,6 +231,7 @@ struct SceneViewportRenderProfileDesc {
             .visible = viewportState.GridVisible(),
         },
         .editorGizmo = gizmo,
+        .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
         .shadowPassEnabled = renderProfile.shadowPassEnabled,
         .postProcessEnabled = renderProfile.postProcessEnabled,

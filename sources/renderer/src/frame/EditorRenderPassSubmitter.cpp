@@ -45,7 +45,7 @@ bool EditorRenderPassSubmitter::Initialize() {
     if (IsInitialized()) {
         return true;
     }
-    if (!gridPass_.Initialize() || !gizmoPass_.Initialize() || !selectionOutlinePass_.Initialize()) {
+    if (!gridPass_.Initialize() || !gizmoPass_.Initialize() || !selectionBoxPass_.Initialize() || !selectionOutlinePass_.Initialize()) {
         Shutdown();
         return false;
     }
@@ -54,12 +54,13 @@ bool EditorRenderPassSubmitter::Initialize() {
 
 void EditorRenderPassSubmitter::Shutdown() noexcept {
     selectionOutlinePass_.Shutdown();
+    selectionBoxPass_.Shutdown();
     gizmoPass_.Shutdown();
     gridPass_.Shutdown();
 }
 
 bool EditorRenderPassSubmitter::IsInitialized() const noexcept {
-    return gridPass_.IsInitialized() && gizmoPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
+    return gridPass_.IsInitialized() && gizmoPass_.IsInitialized() && selectionBoxPass_.IsInitialized() && selectionOutlinePass_.IsInitialized();
 }
 
 void EditorRenderPassSubmitter::SubmitSelectionMask(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc) const {
@@ -130,6 +131,19 @@ void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& view
     const RenderExtent extent = desc.finalComposite.enabled ? desc.finalComposite.extent : desc.target.viewport.extent;
     const bgfx::FrameBufferHandle frameBuffer = desc.finalComposite.enabled ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
     const RenderViewportRect outputRect = desc.finalComposite.enabled ? desc.finalComposite.outputRect : RenderViewportRect{};
+    if (IsInitialized()) {
+        static_cast<void>(selectionBoxPass_.Submit(SelectionBoxOverlayPassDesc{
+            .viewId = viewportPlan.viewIds.editorUiComposite,
+            .frameBuffer = frameBuffer,
+            .extent = extent,
+            .outputRect = outputRect,
+            .x = desc.editorSelectionBox.x,
+            .y = desc.editorSelectionBox.y,
+            .width = desc.editorSelectionBox.width,
+            .height = desc.editorSelectionBox.height,
+            .visible = desc.editorSelectionBox.visible,
+        }));
+    }
     if (selectionOutlineEnabled && IsInitialized() && desc.finalComposite.enabled && bgfx::isValid(desc.postProcess.selectionMaskTexture) && !desc.selectedEntityIds.empty()) {
         static_cast<void>(selectionOutlinePass_.Submit(SelectionOutlineCompositePassDesc{
             .viewId = viewportPlan.viewIds.editorUiComposite,
