@@ -1,10 +1,12 @@
 #pragma once
 
 #include "engine/modules/IEngineModule.hpp"
+#include "engine/modules/EngineModuleLoader.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 
 #include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -57,6 +59,10 @@ public:
     // OnDisable + OnUnload every active module in reverse load order. Idempotent.
     void Unload();
 
+    // Development hot-reload path: detach currently attached scenes, unload active
+    // modules, reload dynamic project plugins, then load and attach again.
+    void Reload(kb::ecs::World& world, std::span<kb::scene::Scene*> attachedScenes);
+
     [[nodiscard]] bool IsActive(std::string_view name) const noexcept;
     [[nodiscard]] std::size_t ActiveCount() const noexcept;
 
@@ -67,11 +73,15 @@ public:
 private:
     [[nodiscard]] bool IsEnabledByProject(const EngineModuleMetadata& metadata) const;
     void LoadProjectPluginModules();
+    void ClearProjectPluginModules() noexcept;
 
     kb::project::ProjectDescriptor project_;
+    EngineModuleLoader moduleLoader_;
     std::vector<std::unique_ptr<IEngineModule>> candidates_;
     std::vector<IEngineModule*> active_; // resolved load order, non-owning
     std::vector<std::string> diagnostics_;
+    std::size_t projectPluginCandidateStart_ = 0U;
+    bool hasProjectPluginCandidates_ = false;
     bool loaded_ = false;
 };
 

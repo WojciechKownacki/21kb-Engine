@@ -53,7 +53,7 @@ bool SceneDocumentService::LoadIntoScene(Scene& scene, const SceneDocument& docu
             return false;
         }
     }
-    static_cast<void>(scene.Runtime().Update(0.0F));
+    scene.Runtime().SynchronizeTransforms();
     return true;
 }
 

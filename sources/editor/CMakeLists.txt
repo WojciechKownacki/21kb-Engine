@@ -713,17 +713,27 @@ target_link_libraries(kb_editor
 
 if(TARGET kb_physics_jolt_plugin)
     add_dependencies(kb_editor kb_physics_jolt_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_PHYSICS_JOLT_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
+    else()
+        set(KB_PHYSICS_JOLT_EDITOR_PLUGIN_PATH "")
+    endif()
     target_compile_definitions(kb_editor
         PRIVATE
-            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"$<TARGET_FILE:kb_physics_jolt_plugin>\""
+            "KB_PHYSICS_JOLT_PLUGIN_PATH=\"${KB_PHYSICS_JOLT_EDITOR_PLUGIN_PATH}\""
     )
 endif()
 
 if(TARGET kb_audio_miniaudio_plugin)
     add_dependencies(kb_editor kb_audio_miniaudio_plugin)
+    if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
+        set(KB_AUDIO_MINIAUDIO_EDITOR_PLUGIN_PATH "$<TARGET_FILE:kb_audio_miniaudio_plugin>")
+    else()
+        set(KB_AUDIO_MINIAUDIO_EDITOR_PLUGIN_PATH "")
+    endif()
     target_compile_definitions(kb_editor
         PRIVATE
-            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"$<TARGET_FILE:kb_audio_miniaudio_plugin>\""
+            "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"${KB_AUDIO_MINIAUDIO_EDITOR_PLUGIN_PATH}\""
     )
 endif()
 
