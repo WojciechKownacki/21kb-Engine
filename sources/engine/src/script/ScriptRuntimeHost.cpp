@@ -9,6 +9,7 @@
 #include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
 #include "engine/script/ScriptTimeApi.hpp"
+#include "engine/script/ScriptTransformApi.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
 #include "engine/script/ScriptSharedVisualGraphBindings.hpp"
@@ -325,6 +326,9 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     }
     if (!ScriptPhysicsApi::Register(*this)) {
         AddDiagnostic("physics script API could not be fully registered");
+    }
+    if (!ScriptTransformApi::Register(*this)) {
+        AddDiagnostic("transform script API could not be fully registered");
     }
 }
 
