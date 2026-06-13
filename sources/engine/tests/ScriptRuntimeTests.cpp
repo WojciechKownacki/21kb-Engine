@@ -1286,6 +1286,7 @@ void RunScriptWorldTimePhysicsApiTest() {
     kb::tests::Require(host.Functions().FindSignature("World.FindByName") != nullptr, "World.FindByName was not registered");
     kb::tests::Require(host.Functions().FindSignature("Time.Delta") != nullptr, "Time.Delta was not registered");
     kb::tests::Require(host.Functions().FindSignature("Physics.Raycast") != nullptr, "Physics.Raycast was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Transform.GetPosition") != nullptr, "Transform.GetPosition was not registered");
 
     const kb::script::ScriptFunctionCallContext context{
         .scene = &scene,
@@ -1293,12 +1294,37 @@ void RunScriptWorldTimePhysicsApiTest() {
     };
     const std::vector<kb::script::ScriptFunctionArgument> spawnArgs{
         kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+        kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 3.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 4.0F } },
     };
     const kb::script::ScriptFunctionCallResult spawned = host.Functions().Call("World.Spawn", spawnArgs, context);
     kb::tests::Require(spawned.Succeeded(), "World.Spawn direct call failed");
     const std::optional<kb::script::ScriptValue> spawnedEntityValue = spawned.Output("entity");
     const kb::scene::SceneEntity enemy{ spawnedEntityValue.has_value() ? spawnedEntityValue->AsUInt64() : 0U };
     kb::tests::Require(enemy.IsValid() && scene.Entities().IsAlive(enemy), "World.Spawn did not create a live entity");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.x, 2.0F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.y, 3.0F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(enemy).localPosition.z, 4.0F),
+        "World.Spawn did not apply direct spawn position");
+
+    const std::vector<kb::script::ScriptFunctionArgument> translateArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ 1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ -1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 0.5F } },
+    };
+    const kb::script::ScriptFunctionCallResult translated = host.Functions().Call("Transform.Translate", translateArgs, context);
+    kb::tests::Require(translated.Succeeded() && translated.Output("moved").has_value() && translated.Output("moved")->AsBool(), "Transform.Translate direct call failed");
+    const std::vector<kb::script::ScriptFunctionArgument> getEnemyPositionArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+    };
+    const kb::script::ScriptFunctionCallResult enemyPosition = host.Functions().Call("Transform.GetPosition", getEnemyPositionArgs, context);
+    kb::tests::Require(enemyPosition.Succeeded() && enemyPosition.Output("found")->AsBool()
+            && kb::tests::NearlyEqual(enemyPosition.Output("x")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(enemyPosition.Output("y")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(enemyPosition.Output("z")->AsFloat(), 4.5F),
+        "Transform.GetPosition direct call returned the wrong translated position");
 
     const std::vector<kb::script::ScriptFunctionArgument> findArgs{
         kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
@@ -1347,11 +1373,18 @@ void RunScriptWorldTimePhysicsApiTest() {
 
     const std::vector<kb::script::ScriptFunctionArgument> prefabArgs{
         kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+        kb::script::ScriptFunctionArgument{ .name = "x", .value = kb::script::ScriptValue{ -2.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "y", .value = kb::script::ScriptValue{ 0.5F } },
+        kb::script::ScriptFunctionArgument{ .name = "z", .value = kb::script::ScriptValue{ 7.0F } },
     };
     const kb::script::ScriptFunctionCallResult prefabInstance = host.Functions().Call("World.InstantiatePrefab", prefabArgs, context);
     kb::tests::Require(prefabInstance.Succeeded() && prefabInstance.Output("entity").has_value(), "World.InstantiatePrefab direct call failed");
     const kb::scene::SceneEntity prefabEntity{ prefabInstance.Output("entity")->AsUInt64() };
     kb::tests::Require(prefabEntity.IsValid() && scene.Entities().Name(prefabEntity) == "Prefab Root", "World.InstantiatePrefab returned the wrong root entity");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(prefabEntity).localPosition.x, -2.0F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(prefabEntity).localPosition.y, 0.5F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(prefabEntity).localPosition.z, 7.0F),
+        "World.InstantiatePrefab did not apply direct root position");
     const kb::scene::TagsComponent* prefabTags = scene.Components().Tags().TryGet(prefabEntity);
     kb::tests::Require(prefabTags != nullptr && kb::scene::TagsText(*prefabTags) == "Prefab, Runtime", "World.InstantiatePrefab did not preserve prefab tags");
 
@@ -1364,8 +1397,13 @@ void RunScriptWorldTimePhysicsApiTest() {
     });
     const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
 function Tick(self, dt)
-    local entity = World.Spawn("LuaSpawned")
+    local entity = World.Spawn({ name = "LuaSpawned", x = 1.0, y = 2.0, z = 3.0 })
     local found = World.FindByName("LuaSpawned")
+    local spawnPosition = Transform.GetPosition(entity)
+    Transform.Translate(entity, 2.0, -1.0, 0.5)
+    local translatedPosition = Transform.GetPosition(entity)
+    Transform.SetPosition({ entity = entity, x = -4.0, y = 8.0, z = 12.0 })
+    local setPosition = Transform.GetPosition(entity)
     World.SetTag(entity, "LuaEnemy")
     local tagged = World.HasTag(entity, "LuaEnemy")
     local foundByTag = World.FindByTag("LuaEnemy")
@@ -1374,9 +1412,18 @@ function Tick(self, dt)
         directionX = 0.0, directionY = -1.0, directionZ = 0.0,
         distance = 10.0
     })
-    local prefabRoot = World.InstantiatePrefab("/Game/Prefabs/RuntimePrefab.kbprefab")
+    local prefabRoot = World.InstantiatePrefab({ prefab = "/Game/Prefabs/RuntimePrefab.kbprefab", x = 9.0, y = 10.0, z = 11.0 })
     SetShared("world.entity", entity)
     SetShared("world.found", found)
+    SetShared("transform.spawnX", spawnPosition.x)
+    SetShared("transform.spawnY", spawnPosition.y)
+    SetShared("transform.spawnZ", spawnPosition.z)
+    SetShared("transform.translatedX", translatedPosition.x)
+    SetShared("transform.translatedY", translatedPosition.y)
+    SetShared("transform.translatedZ", translatedPosition.z)
+    SetShared("transform.setX", setPosition.x)
+    SetShared("transform.setY", setPosition.y)
+    SetShared("transform.setZ", setPosition.z)
     SetShared("world.tagged", tagged)
     SetShared("world.foundByTag", foundByTag)
     SetShared("world.existsBeforeDestroy", World.Exists(entity))
@@ -1395,6 +1442,18 @@ end
     const std::optional<kb::script::ScriptValue> luaEntity = host.SharedState().Get("world.entity");
     const std::optional<kb::script::ScriptValue> luaFound = host.SharedState().Get("world.found");
     kb::tests::Require(luaEntity.has_value() && luaFound.has_value() && luaEntity->AsInt() == luaFound->AsInt(), "Lua World.FindByName did not find Lua-spawned entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("transform.spawnX")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.spawnY")->AsFloat(), 2.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.spawnZ")->AsFloat(), 3.0F),
+        "Lua World.Spawn table position was not applied");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("transform.translatedX")->AsFloat(), 3.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.translatedY")->AsFloat(), 1.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.translatedZ")->AsFloat(), 3.5F),
+        "Lua Transform.Translate returned the wrong position");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("transform.setX")->AsFloat(), -4.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.setY")->AsFloat(), 8.0F)
+            && kb::tests::NearlyEqual(host.SharedState().Get("transform.setZ")->AsFloat(), 12.0F),
+        "Lua Transform.SetPosition returned the wrong position");
     kb::tests::Require(host.SharedState().Get("world.tagged")->AsBool(), "Lua World.HasTag did not see the assigned tag");
     kb::tests::Require(host.SharedState().Get("world.foundByTag")->AsInt() == luaEntity->AsInt(), "Lua World.FindByTag did not find the tagged entity");
     kb::tests::Require(host.SharedState().Get("world.existsBeforeDestroy")->AsBool(), "Lua World.Exists was false before destroy");
@@ -1405,6 +1464,10 @@ end
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("world.raycastDistance")->AsFloat(), 4.5F), "Lua Physics.Raycast returned the wrong distance");
     const kb::scene::SceneEntity luaPrefabRoot{ static_cast<std::uint64_t>(host.SharedState().Get("world.prefabRoot")->AsInt()) };
     kb::tests::Require(luaPrefabRoot.IsValid() && scene.Entities().Name(luaPrefabRoot) == "Prefab Root", "Lua World.InstantiatePrefab returned the wrong root entity");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.x, 9.0F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.y, 10.0F)
+            && kb::tests::NearlyEqual(scene.Transforms().Get(luaPrefabRoot).localPosition.z, 11.0F),
+        "Lua World.InstantiatePrefab table position was not applied");
     const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
     kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
     kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");

@@ -161,6 +161,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
     include/engine/script/ScriptTimeApi.hpp
+    include/engine/script/ScriptTransformApi.hpp
     include/engine/script/ScriptValue.hpp
     include/engine/script/ScriptWorldApi.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
@@ -562,6 +563,7 @@ add_library(kb_engine STATIC
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
     src/script/ScriptTimeApi.cpp
+    src/script/ScriptTransformApi.cpp
     src/script/ScriptValue.cpp
     src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
