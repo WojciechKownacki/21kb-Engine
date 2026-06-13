@@ -14,6 +14,10 @@ kb::assets::AssetId EditorAssetBrowserState::SelectedAsset() const noexcept {
     return selection_.SelectedAsset();
 }
 
+kb::assets::AssetId EditorAssetBrowserState::InspectorAsset() const noexcept {
+    return inspectorAsset_.IsValid() ? inspectorAsset_ : selection_.SelectedAsset();
+}
+
 EditorAssetBrowserSelectionKind EditorAssetBrowserState::SelectionKind() const noexcept {
     return selection_.SelectionKind();
 }
@@ -199,7 +203,7 @@ EditorAssetDropAction EditorAssetBrowserState::DropActionHoveredCommand() const 
 }
 
 const kb::assets::AssetMetadata* EditorAssetBrowserState::SelectedMetadata(const kb::assets::AssetManager& manager) const noexcept {
-    return manager.Registry().Find(selection_.SelectedAsset());
+    return manager.Registry().Find(InspectorAsset());
 }
 
 } // namespace kb::editor

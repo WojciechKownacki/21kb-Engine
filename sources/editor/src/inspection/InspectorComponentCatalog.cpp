@@ -11,6 +11,8 @@ namespace {
         InspectorComponentTile{ .id = "Camera", .category = "Rendering", .label = "Camera" },
         InspectorComponentTile{ .id = "Light", .category = "Rendering", .label = "Light" },
         InspectorComponentTile{ .id = "MeshRenderer", .category = "Rendering", .label = "Mesh Renderer" },
+        InspectorComponentTile{ .id = "AudioSource", .category = "Audio", .label = "Audio Source" },
+        InspectorComponentTile{ .id = "AudioListener", .category = "Audio", .label = "Audio Listener" },
     };
     std::ranges::sort(tiles, [](const InspectorComponentTile& lhs, const InspectorComponentTile& rhs) {
         if (lhs.category != rhs.category) {

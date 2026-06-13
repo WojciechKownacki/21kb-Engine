@@ -4,6 +4,9 @@
 #include "app/EditorTextInputShortcuts.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/scene/AudioListenerComponent.hpp"
+#include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -236,6 +239,71 @@ void SetTransformValue(kb::scene::Scene& scene, kb::scene::SceneEntity entity, I
         property == InspectorPropertyId::ScaleX || property == InspectorPropertyId::ScaleY || property == InspectorPropertyId::ScaleZ;
 }
 
+[[nodiscard]] bool ToggleAudioSourceProperty(kb::scene::AudioSourceComponent& source, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::AudioSourceEnabled:
+        source.enabled = !source.enabled;
+        return true;
+    case InspectorPropertyId::AudioSourceAutoplay:
+        source.autoplay = !source.autoplay;
+        return true;
+    case InspectorPropertyId::AudioSourceLoop:
+        source.loop = !source.loop;
+        return true;
+    case InspectorPropertyId::AudioSourceMute:
+        source.mute = !source.mute;
+        return true;
+    case InspectorPropertyId::AudioSourceSpatial:
+        source.spatial = !source.spatial;
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool ToggleAudioListenerProperty(kb::scene::AudioListenerComponent& listener, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::AudioListenerEnabled:
+        listener.enabled = !listener.enabled;
+        return true;
+    case InspectorPropertyId::AudioListenerPrimary:
+        listener.primary = !listener.primary;
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
+    if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
+        return true;
+    }
+
+    bool changed = false;
+    if (kb::scene::AudioSourceComponent* source = sceneContext.Scene().Components().AudioSources().TryGet(entity); source != nullptr) {
+        changed = ToggleAudioSourceProperty(*source, property);
+        if (changed) {
+            sceneContext.Scene().Components().AudioSources().MarkModified(entity);
+        }
+    }
+
+    if (!changed) {
+        if (kb::scene::AudioListenerComponent* listener = sceneContext.Scene().Components().AudioListeners().TryGet(entity); listener != nullptr) {
+            changed = ToggleAudioListenerProperty(*listener, property);
+            if (changed) {
+                sceneContext.Scene().Components().AudioListeners().MarkModified(entity);
+            }
+        }
+    }
+
+    if (changed) {
+        static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    } else {
+        sceneContext.CancelSceneEditTransaction();
+    }
+    return true;
+}
+
 } // namespace
 
 bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) noexcept {
@@ -304,6 +372,8 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         sceneContext.Inspector().EndTextEdit();
         if (hit.property == InspectorPropertyId::EntityVisible) {
             static_cast<void>(sceneContext.ToggleEntityVisibility(entity));
+        } else if (hit.section == InspectorSectionId::AudioSource || hit.section == InspectorSectionId::AudioListener) {
+            return ToggleAudioProperty(sceneContext, entity, hit.property);
         }
         return true;
     }
@@ -429,7 +499,7 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         if (inspector.EditedProperty() == InspectorPropertyId::InputActionName) {
-            static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().SelectedAsset(), inspector.EditBuffer()));
+            static_cast<void>(sceneContext.SetInputActionName(sceneContext.AssetBrowser().InspectorAsset(), inspector.EditBuffer()));
             inspector.EndTextEdit();
             return true;
         }
@@ -437,7 +507,7 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             float scale = 0.0F;
             const int index = inspector.EditIndex();
             if (index >= 0 && ParseFloat(inspector.EditBuffer(), scale)) {
-                static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().SelectedAsset(), static_cast<std::size_t>(index), scale));
+                static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().InspectorAsset(), static_cast<std::size_t>(index), scale));
             }
             inspector.EndTextEdit();
             return true;

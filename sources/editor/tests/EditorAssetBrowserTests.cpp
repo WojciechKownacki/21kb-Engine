@@ -96,9 +96,11 @@ void RunSelectionAndTypeCycleTest() {
     kb::editor::tests::Require(state.SelectionKind() == kb::editor::EditorAssetBrowserSelectionKind::Asset, "Asset browser asset selection should be inspector-visible");
 
     static_cast<void>(state.SelectFolder("/Game", manager));
+    kb::editor::tests::Require(state.InspectorAsset() == selected, "Asset browser folder navigation should keep the last inspected asset");
     kb::editor::tests::Require(state.SelectContentFolder("/Game/Docs", manager), "Asset browser failed to select a child folder without navigating");
     kb::editor::tests::Require(state.SelectedFolder() == "/Game", "Asset browser child folder selection should not change the open folder");
     kb::editor::tests::Require(state.SelectionKind() == kb::editor::EditorAssetBrowserSelectionKind::Folder, "Asset browser folder selection should be inspector-visible");
+    kb::editor::tests::Require(state.InspectorAsset() == selected, "Asset browser folder selection should not clear the Inspector asset");
     const std::vector<kb::editor::EditorAssetFolderRow> childFolders = state.ChildFolderRows(manager);
     const auto docs = std::ranges::find_if(childFolders, [](const kb::editor::EditorAssetFolderRow& row) {
         return row.virtualPath == "/Game/Docs";
@@ -110,6 +112,7 @@ void RunSelectionAndTypeCycleTest() {
     state.CancelTextEdit();
     state.ClearSelection();
     kb::editor::tests::Require(state.SelectionKind() == kb::editor::EditorAssetBrowserSelectionKind::None, "Asset browser clear selection should clear inspector-visible selection");
+    kb::editor::tests::Require(!state.InspectorAsset().IsValid(), "Asset browser clear selection should clear the Inspector asset");
 
     state.CycleTypeFilter(manager);
     kb::editor::tests::Require(!state.TypeFilter().empty(), "Asset browser type cycling should activate first type filter");

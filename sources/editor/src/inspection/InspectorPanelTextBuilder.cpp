@@ -6,6 +6,7 @@
 #include "engine/scene/SceneAssets.hpp"
 
 #include "inspection/InspectorCameraTextBuilder.hpp"
+#include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorColliderTextBuilder.hpp"
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
 #include "inspection/InspectorLightTextBuilder.hpp"
@@ -26,8 +27,8 @@ namespace {
     const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
     std::ostringstream text;
 
-    if (state.SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
-        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(state.SelectedAsset());
+    if (state.InspectorAsset().IsValid()) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(state.InspectorAsset());
         if (metadata == nullptr) {
             return std::nullopt;
         }
@@ -76,6 +77,14 @@ std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneCon
 
     if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(selected); light != nullptr) {
         InspectorLightTextBuilder{}.Append(text, *light);
+    }
+
+    if (const kb::scene::AudioSourceComponent* audioSource = sceneContext.Scene().Components().AudioSources().TryGet(selected); audioSource != nullptr) {
+        InspectorAudioSourceTextBuilder{}.Append(text, *audioSource);
+    }
+
+    if (const kb::scene::AudioListenerComponent* audioListener = sceneContext.Scene().Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
+        InspectorAudioListenerTextBuilder{}.Append(text, *audioListener);
     }
 
     if (const kb::scene::RigidbodyComponent* rigidbody = sceneContext.Scene().Components().Rigidbodies().TryGet(selected); rigidbody != nullptr) {
