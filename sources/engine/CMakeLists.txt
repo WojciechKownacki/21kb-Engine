@@ -103,6 +103,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneMeshRendererComponents.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
+    include/engine/scene/TagsComponent.hpp
     include/engine/scene/SceneObject.hpp
     include/engine/scene/SceneObjectDesc.hpp
     include/engine/scene/ScenePrefab.hpp
@@ -123,6 +124,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneVisitorTypes.hpp
     include/engine/scene/SceneVisitors.hpp
     include/engine/scene/TransformComponent.hpp
+    include/engine/scene/SceneTagsComponents.hpp
     include/engine/scene/SceneVisibilityComponents.hpp
     include/engine/scene/VisibilityComponent.hpp
     include/engine/render/postfx/PostProcessPipeline.hpp
@@ -147,6 +149,7 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptFunctionRegistry.hpp
     include/engine/script/ScriptFunctionVisualGraphBindings.hpp
     include/engine/script/ScriptInputApi.hpp
+    include/engine/script/ScriptPhysicsApi.hpp
     include/engine/script/ScriptLifecycle.hpp
     include/engine/script/ScriptModule.hpp
     include/engine/script/ScriptRuntime.hpp
@@ -157,7 +160,9 @@ add_library(kb_engine STATIC
     include/engine/script/ScriptSceneVisualGraphBindings.hpp
     include/engine/script/ScriptSharedState.hpp
     include/engine/script/ScriptSharedVisualGraphBindings.hpp
+    include/engine/script/ScriptTimeApi.hpp
     include/engine/script/ScriptValue.hpp
+    include/engine/script/ScriptWorldApi.hpp
     include/engine/script/VisualGraphScriptBackend.hpp
     include/engine/visual/VisualGraphAssetLoader.hpp
     include/engine/visual/VisualGraphAssetWriter.hpp
@@ -316,6 +321,7 @@ add_library(kb_engine STATIC
     src/scene/asset/io/components/SceneAssetInputComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetPhysicsComponentCodec.cpp
     src/scene/asset/io/components/SceneAssetRenderComponentCodec.cpp
+    src/scene/asset/io/components/SceneAssetTagsComponentCodec.cpp
     src/scene/asset/io/SceneAssetIntegrity.cpp
     src/scene/asset/io/SceneAssetMetaReader.cpp
     src/scene/asset/io/SceneAssetMetaWriter.cpp
@@ -348,6 +354,8 @@ add_library(kb_engine STATIC
     src/scene/components/SceneMeshRendererIteration.cpp
     src/scene/components/SceneRigidbodyApi.cpp
     src/scene/components/SceneRigidbodyStorage.cpp
+    src/scene/components/SceneTagsApi.cpp
+    src/scene/components/SceneTagsStorage.cpp
     src/scene/components/SceneTransformApi.cpp
     src/scene/components/SceneTransformStorage.cpp
     src/scene/components/SceneTransformIteration.cpp
@@ -389,6 +397,7 @@ add_library(kb_engine STATIC
     src/scene/modules/components/SceneColliderModule.cpp
     src/scene/modules/components/SceneMeshRendererModule.cpp
     src/scene/modules/components/SceneRigidbodyModule.cpp
+    src/scene/modules/components/SceneTagsModule.cpp
     src/scene/modules/components/SceneVisibilityModule.cpp
     src/scene/modules/ScenePrefabAssetModule.cpp
     src/scene/modules/SceneAssets.cpp
@@ -453,6 +462,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/io/ScenePrefabAssetInputParser.cpp
     src/scene/prefab/io/ScenePrefabAssetLightParser.cpp
     src/scene/prefab/io/ScenePrefabAssetMeshRendererParser.cpp
+    src/scene/prefab/io/ScenePrefabAssetTagsParser.cpp
     src/scene/prefab/io/ScenePrefabAssetNestedOverrideParser.cpp
     src/scene/prefab/io/ScenePrefabAssetNodeFieldParser.cpp
     src/scene/prefab/io/ScenePrefabAssetNodeListReader.cpp
@@ -540,6 +550,7 @@ add_library(kb_engine STATIC
     src/script/ScriptFunctionRegistry.cpp
     src/script/ScriptFunctionVisualGraphBindings.cpp
     src/script/ScriptInputApi.cpp
+    src/script/ScriptPhysicsApi.cpp
     src/script/ScriptLifecycle.cpp
     src/script/ScriptModule.cpp
     src/script/ScriptRuntime.cpp
@@ -550,7 +561,9 @@ add_library(kb_engine STATIC
     src/script/ScriptSceneVisualGraphBindings.cpp
     src/script/ScriptSharedState.cpp
     src/script/ScriptSharedVisualGraphBindings.cpp
+    src/script/ScriptTimeApi.cpp
     src/script/ScriptValue.cpp
+    src/script/ScriptWorldApi.cpp
     src/script/VisualGraphScriptBackend.cpp
     src/private/script/lua/api/PucLuaEventApi.hpp
     src/private/script/lua/api/PucLuaFunctionApi.hpp
@@ -590,6 +603,7 @@ add_library(kb_engine STATIC
     src/private/scene/components/SceneColliderComponentStore.hpp
     src/private/scene/components/SceneMeshRendererComponentStore.hpp
     src/private/scene/components/SceneRigidbodyComponentStore.hpp
+    src/private/scene/components/SceneTagsComponentStore.hpp
     src/private/scene/components/SceneTransformComponentStore.hpp
     src/private/scene/components/SceneVisibilityComponentStore.hpp
     src/private/scene/entities/SceneEntityCounter.hpp
@@ -629,6 +643,7 @@ add_library(kb_engine STATIC
     src/private/scene/asset/io/components/SceneAssetInputComponentCodec.hpp
     src/private/scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp
     src/private/scene/asset/io/components/SceneAssetRenderComponentCodec.hpp
+    src/private/scene/asset/io/components/SceneAssetTagsComponentCodec.hpp
     src/private/scene/asset/io/SceneAssetIntegrity.hpp
     src/private/scene/asset/io/SceneAssetMetaReader.hpp
     src/private/scene/asset/io/SceneAssetMetaWriter.hpp
@@ -672,6 +687,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/io/ScenePrefabAssetInputParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetLightParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetMeshRendererParser.hpp
+    src/private/scene/prefab/io/ScenePrefabAssetTagsParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetNestedOverrideParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp
     src/private/scene/prefab/io/ScenePrefabAssetNodeListReader.hpp

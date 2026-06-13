@@ -35,6 +35,10 @@ ScenePrefabNodeComponents ScenePrefabComponentSnapshot::Capture(Scene& scene, Sc
         components.collider = *collider;
     }
 
+    if (const TagsComponent* tags = sceneComponents.Tags().TryGet(entity)) {
+        components.tags = *tags;
+    }
+
     if (const BehaviourComponent* behaviour = sceneComponents.Behaviours().TryGet(entity)) {
         components.behaviour = *behaviour;
     }
