@@ -15,6 +15,8 @@ enum class InspectorSectionId : std::uint8_t {
     Camera,
     MeshRenderer,
     Light,
+    AudioSource,
+    AudioListener,
     Asset,
     Folder,
     InputAction,
@@ -63,6 +65,18 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingAdd,
     ScriptName,
     ScriptEnabled,
+    AudioSourceClip,
+    AudioSourceVolume,
+    AudioSourcePitch,
+    AudioSourceEnabled,
+    AudioSourceAutoplay,
+    AudioSourceLoop,
+    AudioSourceMute,
+    AudioSourceSpatial,
+    AudioSourceAttenuation,
+    AudioSourceRange,
+    AudioListenerEnabled,
+    AudioListenerPrimary,
     ComponentRemove,
     AddComponentButton,
     AddComponentSearch,
@@ -134,6 +148,8 @@ private:
     bool generalCollapsed_ = false;
     bool transformCollapsed_ = false;
     bool assetCollapsed_ = false;
+    bool audioSourceCollapsed_ = false;
+    bool audioListenerCollapsed_ = false;
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;

@@ -19,6 +19,10 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return transformCollapsed_;
     case InspectorSectionId::Asset:
         return assetCollapsed_;
+    case InspectorSectionId::AudioSource:
+        return audioSourceCollapsed_;
+    case InspectorSectionId::AudioListener:
+        return audioListenerCollapsed_;
     case InspectorSectionId::Folder:
         return folderCollapsed_;
     case InspectorSectionId::InputAction:
@@ -43,6 +47,12 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::Asset:
         target = &assetCollapsed_;
+        break;
+    case InspectorSectionId::AudioSource:
+        target = &audioSourceCollapsed_;
+        break;
+    case InspectorSectionId::AudioListener:
+        target = &audioListenerCollapsed_;
         break;
     case InspectorSectionId::Folder:
         target = &folderCollapsed_;
