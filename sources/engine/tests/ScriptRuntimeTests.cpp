@@ -3,6 +3,7 @@
 
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -10,6 +11,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/script/LuaScriptBackend.hpp"
@@ -1262,6 +1264,152 @@ end
     kb::audio::AudioPlayback::UnregisterBackend(scene, audioBackend);
 }
 
+void RunScriptWorldTimePhysicsApiTest() {
+    ResetTestRoot();
+    const std::filesystem::path projectRoot = TestRoot() / "WorldApiProject";
+    const std::filesystem::path prefabPath = projectRoot / "Assets" / "Prefabs" / "RuntimePrefab.kbprefab";
+    {
+        kb::scene::Scene prefabSource;
+        const kb::scene::SceneObject prefabRoot = prefabSource.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Prefab Root" });
+        kb::scene::TagsComponent prefabTags;
+        kb::scene::SetTagsText(prefabTags, "Prefab, Runtime");
+        prefabSource.Components().Tags().Set(prefabRoot.Entity(), prefabTags);
+        const kb::scene::ScenePrefabHandle prefab = prefabSource.Prefabs().CaptureRegistered(prefabRoot, "RuntimePrefab");
+        kb::tests::Require(prefabSource.Prefabs().Save(prefab, prefabPath), "Script world API prefab fixture was not saved");
+    }
+
+    kb::scene::Scene scene;
+    kb::tests::Require(scene.Assets().MountProject(projectRoot), "Script world API project mount failed");
+    kb::tests::Require(scene.Assets().Discover() == 1U, "Script world API prefab was not discovered");
+    kb::script::ScriptRuntimeHost host{ scene };
+    kb::tests::Require(host.Succeeded(), "Script world/time/physics API host did not initialize");
+    kb::tests::Require(host.Functions().FindSignature("World.FindByName") != nullptr, "World.FindByName was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Time.Delta") != nullptr, "Time.Delta was not registered");
+    kb::tests::Require(host.Functions().FindSignature("Physics.Raycast") != nullptr, "Physics.Raycast was not registered");
+
+    const kb::script::ScriptFunctionCallContext context{
+        .scene = &scene,
+        .deltaSeconds = 0.25F,
+    };
+    const std::vector<kb::script::ScriptFunctionArgument> spawnArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+    };
+    const kb::script::ScriptFunctionCallResult spawned = host.Functions().Call("World.Spawn", spawnArgs, context);
+    kb::tests::Require(spawned.Succeeded(), "World.Spawn direct call failed");
+    const std::optional<kb::script::ScriptValue> spawnedEntityValue = spawned.Output("entity");
+    const kb::scene::SceneEntity enemy{ spawnedEntityValue.has_value() ? spawnedEntityValue->AsUInt64() : 0U };
+    kb::tests::Require(enemy.IsValid() && scene.Entities().IsAlive(enemy), "World.Spawn did not create a live entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> findArgs{
+        kb::script::ScriptFunctionArgument{ .name = "name", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+    };
+    const kb::script::ScriptFunctionCallResult found = host.Functions().Call("World.FindByName", findArgs, context);
+    kb::tests::Require(found.Succeeded() && found.Output("entity").has_value() && found.Output("entity")->AsUInt64() == enemy.Id(), "World.FindByName did not find the spawned entity");
+
+    const std::vector<kb::script::ScriptFunctionArgument> setTagArgs{
+        kb::script::ScriptFunctionArgument{ .name = "entity", .value = kb::script::ScriptValue{ enemy.Id(), kb::script::ScriptValueType::Entity } },
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+    };
+    const kb::script::ScriptFunctionCallResult tagged = host.Functions().Call("World.SetTag", setTagArgs, context);
+    kb::tests::Require(tagged.Succeeded() && tagged.Output("tagged").has_value() && tagged.Output("tagged")->AsBool(), "World.SetTag direct call failed");
+    const kb::scene::TagsComponent* enemyTags = scene.Components().Tags().TryGet(enemy);
+    kb::tests::Require(enemyTags != nullptr && kb::scene::TagsText(*enemyTags) == "Enemy", "World.SetTag did not persist to scene TagsComponent");
+    const std::vector<kb::script::ScriptFunctionArgument> findTagArgs{
+        kb::script::ScriptFunctionArgument{ .name = "tag", .value = kb::script::ScriptValue{ std::string{ "Enemy" } } },
+    };
+    const kb::script::ScriptFunctionCallResult foundByTag = host.Functions().Call("World.FindByTag", findTagArgs, context);
+    kb::tests::Require(foundByTag.Succeeded() && foundByTag.Output("entity").has_value() && foundByTag.Output("entity")->AsUInt64() == enemy.Id(), "World.FindByTag did not find the tagged entity");
+
+    const kb::script::ScriptFunctionCallResult delta = host.Functions().Call("Time.Delta", {}, context);
+    kb::tests::Require(delta.Succeeded() && delta.Output("delta").has_value() && kb::tests::NearlyEqual(delta.Output("delta")->AsFloat(), 0.25F), "Time.Delta direct call returned the wrong delta");
+
+    const kb::scene::SceneObject floor = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Floor",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F } },
+    });
+    scene.Components().Colliders().Set(floor.Entity(), kb::scene::ColliderComponent{
+        .shape = kb::scene::ColliderShape::Box,
+        .boxSize = kb::scene::Vec3{ 10.0F, 1.0F, 10.0F },
+    });
+    const std::vector<kb::script::ScriptFunctionArgument> rayArgs{
+        kb::script::ScriptFunctionArgument{ .name = "originX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originY", .value = kb::script::ScriptValue{ 5.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "originZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionX", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionY", .value = kb::script::ScriptValue{ -1.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "directionZ", .value = kb::script::ScriptValue{ 0.0F } },
+        kb::script::ScriptFunctionArgument{ .name = "distance", .value = kb::script::ScriptValue{ 10.0F } },
+    };
+    const kb::script::ScriptFunctionCallResult ray = host.Functions().Call("Physics.Raycast", rayArgs, context);
+    kb::tests::Require(ray.Succeeded() && ray.Output("hit").has_value() && ray.Output("hit")->AsBool(), "Physics.Raycast direct call did not hit the test floor");
+    kb::tests::Require(ray.Output("entity").has_value() && ray.Output("entity")->AsUInt64() == floor.Entity().Id(), "Physics.Raycast direct call hit the wrong entity");
+    kb::tests::Require(ray.Output("distance").has_value() && kb::tests::NearlyEqual(ray.Output("distance")->AsFloat(), 4.5F), "Physics.Raycast direct call returned the wrong distance");
+
+    const std::vector<kb::script::ScriptFunctionArgument> prefabArgs{
+        kb::script::ScriptFunctionArgument{ .name = "prefab", .value = kb::script::ScriptValue{ std::string{ "/Game/Prefabs/RuntimePrefab.kbprefab" } } },
+    };
+    const kb::script::ScriptFunctionCallResult prefabInstance = host.Functions().Call("World.InstantiatePrefab", prefabArgs, context);
+    kb::tests::Require(prefabInstance.Succeeded() && prefabInstance.Output("entity").has_value(), "World.InstantiatePrefab direct call failed");
+    const kb::scene::SceneEntity prefabEntity{ prefabInstance.Output("entity")->AsUInt64() };
+    kb::tests::Require(prefabEntity.IsValid() && scene.Entities().Name(prefabEntity) == "Prefab Root", "World.InstantiatePrefab returned the wrong root entity");
+    const kb::scene::TagsComponent* prefabTags = scene.Components().Tags().TryGet(prefabEntity);
+    kb::tests::Require(prefabTags != nullptr && kb::scene::TagsText(*prefabTags) == "Prefab, Runtime", "World.InstantiatePrefab did not preserve prefab tags");
+
+    const kb::assets::AssetId luaAsset{ 8810U };
+    const kb::scene::SceneObject luaObject = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Lua World Caller" });
+    scene.Components().Behaviours().Set(luaObject.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = luaAsset.value,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+    });
+    const kb::script::PucLuaLoadResult loadedLua = host.LuaRuntime().LoadScript(luaAsset, R"(
+function Tick(self, dt)
+    local entity = World.Spawn("LuaSpawned")
+    local found = World.FindByName("LuaSpawned")
+    World.SetTag(entity, "LuaEnemy")
+    local tagged = World.HasTag(entity, "LuaEnemy")
+    local foundByTag = World.FindByTag("LuaEnemy")
+    local hit = Physics.Raycast({
+        originX = 0.0, originY = 5.0, originZ = 0.0,
+        directionX = 0.0, directionY = -1.0, directionZ = 0.0,
+        distance = 10.0
+    })
+    local prefabRoot = World.InstantiatePrefab("/Game/Prefabs/RuntimePrefab.kbprefab")
+    SetShared("world.entity", entity)
+    SetShared("world.found", found)
+    SetShared("world.tagged", tagged)
+    SetShared("world.foundByTag", foundByTag)
+    SetShared("world.existsBeforeDestroy", World.Exists(entity))
+    SetShared("world.destroyed", World.Destroy(entity))
+    SetShared("world.existsAfterDestroy", World.Exists(entity))
+    SetShared("world.raycastHit", hit.hit)
+    SetShared("world.raycastEntity", hit.entity)
+    SetShared("world.raycastDistance", hit.distance)
+    SetShared("world.prefabRoot", prefabRoot)
+    SetShared("time.delta", Time.delta())
+end
+)");
+    kb::tests::Require(loadedLua.succeeded, "Script world/time/physics Lua wrapper script did not load");
+    const kb::script::ScriptRuntimeExecutionResult tick = host.Runtime().ExecuteLifecycle(scene, kb::script::ScriptLifecycleEvent::Tick, 0.125F);
+    kb::tests::Require(tick.Succeeded(), "Script world/time/physics Lua wrapper execution failed");
+    const std::optional<kb::script::ScriptValue> luaEntity = host.SharedState().Get("world.entity");
+    const std::optional<kb::script::ScriptValue> luaFound = host.SharedState().Get("world.found");
+    kb::tests::Require(luaEntity.has_value() && luaFound.has_value() && luaEntity->AsInt() == luaFound->AsInt(), "Lua World.FindByName did not find Lua-spawned entity");
+    kb::tests::Require(host.SharedState().Get("world.tagged")->AsBool(), "Lua World.HasTag did not see the assigned tag");
+    kb::tests::Require(host.SharedState().Get("world.foundByTag")->AsInt() == luaEntity->AsInt(), "Lua World.FindByTag did not find the tagged entity");
+    kb::tests::Require(host.SharedState().Get("world.existsBeforeDestroy")->AsBool(), "Lua World.Exists was false before destroy");
+    kb::tests::Require(host.SharedState().Get("world.destroyed")->AsBool(), "Lua World.Destroy did not report success");
+    kb::tests::Require(!host.SharedState().Get("world.existsAfterDestroy")->AsBool(), "Lua World.Exists was true after destroy");
+    kb::tests::Require(host.SharedState().Get("world.raycastHit")->AsBool(), "Lua Physics.Raycast did not hit the test floor");
+    kb::tests::Require(static_cast<std::uint64_t>(host.SharedState().Get("world.raycastEntity")->AsInt()) == floor.Entity().Id(), "Lua Physics.Raycast hit the wrong entity");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("world.raycastDistance")->AsFloat(), 4.5F), "Lua Physics.Raycast returned the wrong distance");
+    const kb::scene::SceneEntity luaPrefabRoot{ static_cast<std::uint64_t>(host.SharedState().Get("world.prefabRoot")->AsInt()) };
+    kb::tests::Require(luaPrefabRoot.IsValid() && scene.Entities().Name(luaPrefabRoot) == "Prefab Root", "Lua World.InstantiatePrefab returned the wrong root entity");
+    const kb::scene::TagsComponent* luaPrefabTags = scene.Components().Tags().TryGet(luaPrefabRoot);
+    kb::tests::Require(luaPrefabTags != nullptr && kb::scene::TagsText(*luaPrefabTags) == "Prefab, Runtime", "Lua World.InstantiatePrefab did not preserve prefab tags");
+    kb::tests::Require(kb::tests::NearlyEqual(host.SharedState().Get("time.delta")->AsFloat(), 0.125F), "Lua Time.delta returned the wrong delta");
+}
+
 void RunScriptRuntimeSceneSystemTest() {
     kb::script::ScriptRuntime runtime;
     kb::scene::Scene scene;
@@ -2347,6 +2495,7 @@ void RunScriptRuntimeTests() {
     RunCrossBackendSharedStateTest();
     RunScriptFunctionRegistryCrossBackendTest();
     RunScriptAudioApiTest();
+    RunScriptWorldTimePhysicsApiTest();
     RunScriptRuntimeSceneSystemTest();
     RunScriptRuntimeSceneSystemDynamicLifecycleTest();
     RunScriptRuntimeSceneSystemFrameFlowTest();

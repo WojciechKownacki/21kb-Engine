@@ -11,6 +11,7 @@
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
@@ -88,6 +89,7 @@ SceneComponentRegistry::SceneComponentRegistry(kb::ecs::World& world)
     , inputComponentId_(RegisterSceneComponent<InputComponent>(world, "kb.scene.InputComponent"))
     , rigidbodyComponentId_(RegisterSceneComponent<RigidbodyComponent>(world, "kb.scene.RigidbodyComponent"))
     , colliderComponentId_(RegisterSceneComponent<ColliderComponent>(world, "kb.scene.ColliderComponent"))
+    , tagsComponentId_(RegisterSceneComponent<TagsComponent>(world, "kb.scene.TagsComponent"))
     , audioSourceComponentId_(RegisterSceneComponent<AudioSourceComponent>(world, "kb.scene.AudioSourceComponent"))
     , audioListenerComponentId_(RegisterSceneComponent<AudioListenerComponent>(world, "kb.scene.AudioListenerComponent")) {
     RegisterPhysicsReflection(world);
@@ -128,6 +130,10 @@ std::uint64_t SceneComponentRegistry::RigidbodyComponentId() const noexcept {
 
 std::uint64_t SceneComponentRegistry::ColliderComponentId() const noexcept {
     return colliderComponentId_;
+}
+
+std::uint64_t SceneComponentRegistry::TagsComponentId() const noexcept {
+    return tagsComponentId_;
 }
 
 std::uint64_t SceneComponentRegistry::AudioSourceComponentId() const noexcept {
