@@ -63,6 +63,13 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    if (EditorSceneViewportObjectInteraction::CommitBoxSelection(sceneContext_)) {
+        ReleaseCapture();
+        sceneViewport_.RequestPresent();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (pointerDrag_.Potential()) {
         const bool wasDragging = pointerDrag_.Active();
         const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);

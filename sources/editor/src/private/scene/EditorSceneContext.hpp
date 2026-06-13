@@ -17,6 +17,7 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
 
@@ -151,6 +152,10 @@ public:
     void ClearHierarchySelection() noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex) noexcept;
     [[nodiscard]] bool SelectHierarchyRow(std::size_t rowIndex, bool additive, bool range) noexcept;
+    [[nodiscard]] const EditorSceneViewportBoxSelectionState& ViewportBoxSelection() const noexcept;
+    void BeginViewportBoxSelection(const EditorSceneViewportBoxSelectionState& selection) noexcept;
+    void UpdateViewportBoxSelection(POINT current, bool active) noexcept;
+    void ClearViewportBoxSelection() noexcept;
 
     [[nodiscard]] const std::vector<EditorHierarchyRow>& HierarchyRows() const;
     [[nodiscard]] std::size_t HierarchyRowCount() const;
@@ -298,6 +303,7 @@ private:
     EditorScriptEditorState scriptEditor_;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
+    EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
     EditorHierarchyExpansionState hierarchyExpansion_;
     EditorHierarchySearchState hierarchySearch_;
     mutable std::vector<EditorHierarchyRow> hierarchyRowsCache_;

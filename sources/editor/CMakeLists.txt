@@ -68,7 +68,9 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportHitResolver.cpp
     src/app/scene_viewport/EditorSceneViewportMath.cpp
     src/app/scene_viewport/EditorSceneViewportMeshDragPreview.cpp
+    src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
     src/app/scene_viewport/EditorSceneViewportObjectInteraction.cpp
+    src/app/scene_viewport/EditorSceneViewportSelectionController.cpp
     src/app/scene_viewport/EditorSceneViewportSelectionInteraction.cpp
     src/app/scene_viewport/EditorSceneViewportToolbarPointerController.cpp
     src/app/EditorWindowPointerMessageDispatcher.cpp
@@ -316,8 +318,11 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp
     src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp
+    src/private/app/scene_viewport/EditorSceneViewportMeshPicker.hpp
     src/private/app/scene_viewport/EditorSceneViewportObjectInteraction.hpp
+    src/private/app/scene_viewport/EditorSceneViewportSelectionController.hpp
     src/private/app/scene_viewport/EditorSceneViewportSelectionInteraction.hpp
+    src/private/app/scene_viewport/EditorSceneViewportSelectionTypes.hpp
     src/private/app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp
     src/private/app/scene_viewport/EditorSceneViewportTypes.hpp
     src/private/app/EditorWindowLifecycleHandler.hpp

@@ -114,6 +114,7 @@ add_library(kb_renderer STATIC
     src/frame/RenderPassKind.cpp
     src/overlay/SceneGizmoPass.cpp
     src/overlay/SceneGridPass.cpp
+    src/overlay/SelectionBoxOverlayPass.cpp
     src/overlay/SelectionOutlineCompositePass.cpp
     src/post/PostProcessChain.cpp
     src/post/PostProcessRenderTarget.cpp
