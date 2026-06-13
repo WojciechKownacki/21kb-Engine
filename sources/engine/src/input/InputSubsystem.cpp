@@ -65,13 +65,15 @@ void InputSubsystem::Evaluate(float deltaSeconds) {
             // analog sticks and sub-threshold movement register; buttons (Bool)
             // only contribute while a trigger is firing.
             const bool isAxis = mapping.valueType != InputActionValueType::Bool;
+            if (!isAxis && result.state == TriggerState::None) {
+                continue;
+            }
+
             InputActionState& actionState = actionStates_[mapping.actionName];
             actionState.value.type = mapping.valueType;
-            if (isAxis || result.state != TriggerState::None) {
-                actionState.value.x += result.value.x;
-                actionState.value.y += result.value.y;
-                actionState.value.z += result.value.z;
-            }
+            actionState.value.x += result.value.x;
+            actionState.value.y += result.value.y;
+            actionState.value.z += result.value.z;
             actionState.combined = MaxState(actionState.combined, result.state);
 
             if (result.state == TriggerState::Triggered && mapping.consumeInput) {
@@ -143,6 +145,11 @@ bool InputSubsystem::WasActionTriggered(std::string_view action) const {
 bool InputSubsystem::WasActionCompleted(std::string_view action) const {
     const InputActionState* state = FindState(action);
     return state != nullptr && state->completed;
+}
+
+bool InputSubsystem::WasActionReleased(std::string_view action) const {
+    const InputActionState* state = FindState(action);
+    return state != nullptr && (state->completed || state->canceled);
 }
 
 } // namespace kb::input

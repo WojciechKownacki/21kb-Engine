@@ -92,6 +92,7 @@ void TestSubsystemAndConsume() {
     // High-priority context maps W -> Move (Down). Low-priority maps W -> Jump.
     auto high = std::make_shared<InputMappingContextAsset>();
     high->mappings.push_back(InputKeyMapping{.actionId = 1U, .key = InputKey::W, .modifiers = {}, .triggers = {}});
+    high->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::Space, .modifiers = {}, .triggers = {}});
     auto low = std::make_shared<InputMappingContextAsset>();
     low->mappings.push_back(InputKeyMapping{.actionId = 2U, .key = InputKey::W, .modifiers = {}, .triggers = {}});
 
@@ -120,6 +121,13 @@ void TestSubsystemAndConsume() {
     Require(!subsystem.IsActionPressed("Jump"),
             "Jump must not fire: the higher-priority context consumes W");
     Require(subsystem.WasActionStarted("Move"), "Move should report Started on its first triggered frame");
+
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Space, true);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.WasActionStarted("Jump"), "Jump should report Started on the Space press");
+    subsystem.MutableDeviceState().SetKeyDown(InputKey::Space, false);
+    subsystem.Evaluate(0.016F);
+    Require(subsystem.WasActionReleased("Jump"), "Jump should report Released when Space goes up");
 }
 
 void TestAxisScaleAndContinuous() {

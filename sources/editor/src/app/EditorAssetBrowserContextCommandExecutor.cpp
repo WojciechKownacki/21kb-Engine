@@ -1,6 +1,7 @@
 #include "app/EditorAssetBrowserContextCommandExecutor.hpp"
 
 #include "assets/EditorAssetBrowserState.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "platform/win32/EditorAssetImportDialog.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -39,6 +40,12 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputMappingContextAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::AddDirectionalLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
+    case EditorAssetContextCommand::AddPointLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Point).IsValid();
+    case EditorAssetContextCommand::AddSpotLight:
+        return sceneContext.CreateLightObject(kb::scene::LightKind::Spot).IsValid();
     case EditorAssetContextCommand::Rename:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.BeginAssetRename(targetAsset);

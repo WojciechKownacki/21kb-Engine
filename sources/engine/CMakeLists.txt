@@ -97,6 +97,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneInputActivation.hpp
     include/engine/scene/SceneInputComponents.hpp
     include/engine/scene/SceneLightComponents.hpp
+    include/engine/scene/SceneLightingAccess.hpp
     include/engine/scene/SceneDocument.hpp
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneColliderComponents.hpp
