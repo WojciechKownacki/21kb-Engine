@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
+#include "app/EditorAudioAssetInspectorDropHandler.hpp"
 #include "app/EditorBehaviourAssetHierarchyDropHandler.hpp"
 #include "app/EditorBehaviourAssetInspectorDropHandler.hpp"
 #include "app/EditorBehaviourAssetSceneDropHandler.hpp"
@@ -33,6 +34,7 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAssignsAudioClip && EditorAudioAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);

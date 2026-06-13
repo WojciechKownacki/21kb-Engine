@@ -62,6 +62,34 @@ constexpr int kAddComponentResultRowHeight = 26;
 constexpr int kAddComponentCategoryHeaderHeight = 22;
 constexpr float kMeshPreviewFitZoom = 1.35F;
 
+enum class InspectorRowValueKind : std::uint8_t {
+    Text,
+    Bool,
+};
+
+struct InspectorRowDefinition {
+    InspectorPropertyId property = InspectorPropertyId::None;
+    InspectorRowValueKind kind = InspectorRowValueKind::Text;
+};
+
+constexpr std::array<InspectorRowDefinition, 10> kAudioSourceRows{ {
+    { InspectorPropertyId::AudioSourceClip, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AudioSourceVolume, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AudioSourcePitch, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AudioSourceEnabled, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioSourceAutoplay, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioSourceLoop, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioSourceMute, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioSourceSpatial, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioSourceAttenuation, InspectorRowValueKind::Text },
+    { InspectorPropertyId::AudioSourceRange, InspectorRowValueKind::Text },
+} };
+
+constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
+    { InspectorPropertyId::AudioListenerEnabled, InspectorRowValueKind::Bool },
+    { InspectorPropertyId::AudioListenerPrimary, InspectorRowValueKind::Bool },
+} };
+
 [[nodiscard]] COLORREF Color(EditorColor color) {
     return GdiDrawing::ToColorRef(color);
 }
@@ -833,8 +861,8 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
     const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
     int y = content.top;
 
-    if (state.SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
-        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(state.SelectedAsset());
+    if (state.InspectorAsset().IsValid()) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(state.InspectorAsset());
         if (metadata == nullptr) {
             DrawEmpty(dc, content, theme);
             return;
@@ -885,6 +913,41 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
 
 }
 
+void PaintAudioSourceSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::AudioSourceComponent& audioSource) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioSource, HeroIconKind::Gamepad2, "Audio Source");
+    section.Field("Clip", AssetDisplayName(sceneContext, audioSource.clipAssetId), InspectorPropertyId::AudioSourceClip);
+    section.Field("Volume", FormatFloat(audioSource.volume, 2), InspectorPropertyId::AudioSourceVolume);
+    section.Field("Pitch", FormatFloat(audioSource.pitch, 2), InspectorPropertyId::AudioSourcePitch);
+    section.Bool("Enabled", audioSource.enabled, InspectorPropertyId::AudioSourceEnabled);
+    section.Bool("Autoplay", audioSource.autoplay, InspectorPropertyId::AudioSourceAutoplay);
+    section.Bool("Loop", audioSource.loop, InspectorPropertyId::AudioSourceLoop);
+    section.Bool("Mute", audioSource.mute, InspectorPropertyId::AudioSourceMute);
+    section.Bool("Spatial", audioSource.spatial, InspectorPropertyId::AudioSourceSpatial);
+    section.Field("Attenuation", InspectorComponentLabelFormatter::AudioAttenuationModelName(audioSource.attenuationModel), InspectorPropertyId::AudioSourceAttenuation);
+    section.Field("Range", FormatFloat(audioSource.minDistance, 2) + " - " + FormatFloat(audioSource.maxDistance, 2), InspectorPropertyId::AudioSourceRange);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintAudioListenerSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::AudioListenerComponent& audioListener) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::Gamepad2, "Audio Listener");
+    section.Bool("Enabled", audioListener.enabled, InspectorPropertyId::AudioListenerEnabled);
+    section.Bool("Primary", audioListener.primary, InspectorPropertyId::AudioListenerPrimary);
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
@@ -919,6 +982,12 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
         y = section.Bottom() + kSectionGap;
     }
+    if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
+        PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
+    }
+    if (const kb::scene::AudioListenerComponent* audioListener = scene.Components().AudioListeners().TryGet(selected); audioListener != nullptr) {
+        PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
+    }
     DrawAddComponent(dc, content, theme, inspector, y);
 }
 
@@ -940,6 +1009,8 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     const int top = CenteredY(row, kValueHeight);
     return Rect(labelRect.right, top, row.right - kRowPadX, top + kValueHeight);
 }
+
+void AdvanceRow(int& y) noexcept;
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitBool(RECT row, InspectorSectionId section, InspectorPropertyId property, int x, int y) noexcept {
     RECT box = CheckboxRectForRow(row);
@@ -963,6 +1034,26 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         return MakeHit(InspectorHitKind::TextField, section, property, value);
     }
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitRows(
+    RECT content,
+    int& y,
+    InspectorSectionId section,
+    std::span<const InspectorRowDefinition> rows,
+    int x,
+    int yPoint) noexcept {
+    for (const InspectorRowDefinition& row : rows) {
+        const RECT rect = RowRect(content, y);
+        const InspectorPanelRenderer::Hit hit = row.kind == InspectorRowValueKind::Bool
+            ? HitBool(rect, section, row.property, x, yPoint)
+            : HitTextRow(rect, section, row.property, x, yPoint);
+        if (hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit HitVec3(RECT row, InspectorSectionId section, InspectorPropertyId px, InspectorPropertyId py, InspectorPropertyId pz, int x, int y) noexcept {
@@ -1107,7 +1198,7 @@ void InspectorPanelRenderer::Paint(
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
     const RECT inner = Rect(content.left, content.top, content.right, content.bottom);
 
-    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
+    if (sceneContext.AssetBrowser().InspectorAsset().IsValid()) {
         PaintAsset(dc, inner, theme, sceneContext);
         RestoreDC(dc, savedDc);
         return;
@@ -1132,9 +1223,9 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     const InspectorPanelState& state = sceneContext.Inspector();
     int y = content.top + kHeaderHeight + kPanelPadTop;
 
-    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset) {
+    if (sceneContext.AssetBrowser().InspectorAsset().IsValid()) {
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sceneContext.AssetBrowser().SelectedAsset());
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sceneContext.AssetBrowser().InspectorAsset());
         if (metadata != nullptr && metadata->type == "InputAction") {
             return HitTestInputActionSection(content, state, x, yPoint, y);
         }
@@ -1216,6 +1307,30 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().AudioSources().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::AudioSource, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::AudioSource)) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(content, y, InspectorSectionId::AudioSource, kAudioSourceRows, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+        }
+        y += kSectionGap;
+    }
+
+    if (sceneContext.Scene().Components().AudioListeners().Has(selected)) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::AudioListener, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(content, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, yPoint); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
         }
         y += kSectionGap;
     }
