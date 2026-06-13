@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -21,7 +22,9 @@ inline std::string_view TagsText(const TagsComponent& component) noexcept {
 inline void SetTagsText(TagsComponent& component, std::string_view tags) noexcept {
     const std::uint32_t length = static_cast<std::uint32_t>(std::min<std::size_t>(tags.size(), TagsComponent::MaxBytes));
     std::fill(component.tags.begin(), component.tags.end(), '\0');
-    std::copy_n(tags.data(), length, component.tags.data());
+    for (std::uint32_t index = 0U; index < length; ++index) {
+        component.tags[index] = tags[index];
+    }
     component.length = length;
 }
 

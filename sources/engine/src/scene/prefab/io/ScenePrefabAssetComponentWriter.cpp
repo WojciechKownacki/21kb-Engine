@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <ostream>
+#include <string_view>
 
 namespace kb::scene {
 namespace {
