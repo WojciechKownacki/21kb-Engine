@@ -23,6 +23,7 @@ public:
     [[nodiscard]] std::uint64_t InputComponentId() const noexcept;
     [[nodiscard]] std::uint64_t RigidbodyComponentId() const noexcept;
     [[nodiscard]] std::uint64_t ColliderComponentId() const noexcept;
+    [[nodiscard]] std::uint64_t TagsComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioSourceComponentId() const noexcept;
     [[nodiscard]] std::uint64_t AudioListenerComponentId() const noexcept;
 
@@ -36,6 +37,7 @@ private:
     std::uint64_t inputComponentId_ = 0;
     std::uint64_t rigidbodyComponentId_ = 0;
     std::uint64_t colliderComponentId_ = 0;
+    std::uint64_t tagsComponentId_ = 0;
     std::uint64_t audioSourceComponentId_ = 0;
     std::uint64_t audioListenerComponentId_ = 0;
 };

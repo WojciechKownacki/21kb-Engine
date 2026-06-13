@@ -27,6 +27,9 @@ void ScenePrefabComponentApplier::Apply(Scene& scene, SceneObject object, const 
     if (components.collider.has_value()) {
         sceneComponents.Colliders().Set(entity, *components.collider);
     }
+    if (components.tags.has_value()) {
+        sceneComponents.Tags().Set(entity, *components.tags);
+    }
     if (components.behaviour.has_value()) {
         sceneComponents.Behaviours().Set(entity, *components.behaviour);
     }

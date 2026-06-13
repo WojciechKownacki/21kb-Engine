@@ -12,6 +12,7 @@
 #include "scene/components/SceneLightComponentStore.hpp"
 #include "scene/components/SceneMeshRendererComponentStore.hpp"
 #include "scene/components/SceneRigidbodyComponentStore.hpp"
+#include "scene/components/SceneTagsComponentStore.hpp"
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/components/SceneVisibilityComponentStore.hpp"
 
@@ -45,6 +46,8 @@ public:
     [[nodiscard]] SceneRigidbodyComponentStore& Rigidbodies() noexcept;
     [[nodiscard]] const SceneColliderComponentStore& Colliders() const noexcept;
     [[nodiscard]] SceneColliderComponentStore& Colliders() noexcept;
+    [[nodiscard]] const SceneTagsComponentStore& Tags() const noexcept;
+    [[nodiscard]] SceneTagsComponentStore& Tags() noexcept;
     [[nodiscard]] const SceneAudioSourceComponentStore& AudioSources() const noexcept;
     [[nodiscard]] SceneAudioSourceComponentStore& AudioSources() noexcept;
     [[nodiscard]] const SceneAudioListenerComponentStore& AudioListeners() const noexcept;
@@ -60,6 +63,7 @@ private:
     SceneInputComponentStore inputs_;
     SceneRigidbodyComponentStore rigidbodies_;
     SceneColliderComponentStore colliders_;
+    SceneTagsComponentStore tags_;
     SceneAudioSourceComponentStore audioSources_;
     SceneAudioListenerComponentStore audioListeners_;
 };

@@ -6,10 +6,13 @@
 #include "engine/scene/SceneSystemContext.hpp"
 #include "engine/script/ScriptAudioApi.hpp"
 #include "engine/script/ScriptInputApi.hpp"
+#include "engine/script/ScriptPhysicsApi.hpp"
 #include "engine/script/ScriptRuntimeSceneSystem.hpp"
+#include "engine/script/ScriptTimeApi.hpp"
 #include "engine/script/ScriptFunctionVisualGraphBindings.hpp"
 #include "engine/script/ScriptSceneVisualGraphBindings.hpp"
 #include "engine/script/ScriptSharedVisualGraphBindings.hpp"
+#include "engine/script/ScriptWorldApi.hpp"
 
 #include <memory>
 #include <utility>
@@ -313,6 +316,15 @@ void ScriptRuntimeHost::RegisterDefaultBackends() {
     }
     if (!ScriptAudioApi::Register(*this)) {
         AddDiagnostic("audio script API could not be fully registered");
+    }
+    if (!ScriptWorldApi::Register(*this)) {
+        AddDiagnostic("world script API could not be fully registered");
+    }
+    if (!ScriptTimeApi::Register(*this)) {
+        AddDiagnostic("time script API could not be fully registered");
+    }
+    if (!ScriptPhysicsApi::Register(*this)) {
+        AddDiagnostic("physics script API could not be fully registered");
     }
 }
 
