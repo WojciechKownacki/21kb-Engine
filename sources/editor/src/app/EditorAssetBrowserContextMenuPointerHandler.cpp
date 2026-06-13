@@ -8,6 +8,140 @@
 #include "scene/EditorSceneContext.hpp"
 
 namespace kb::editor {
+namespace {
+
+constexpr UINT_PTR kAssetMenuImport = 2001;
+constexpr UINT_PTR kAssetMenuNewFolder = 2002;
+constexpr UINT_PTR kAssetMenuNewLuaScript = 2003;
+constexpr UINT_PTR kAssetMenuNewInputAction = 2004;
+constexpr UINT_PTR kAssetMenuNewInputMappingContext = 2005;
+constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
+constexpr UINT_PTR kAssetMenuPointLight = 2102;
+constexpr UINT_PTR kAssetMenuSpotLight = 2103;
+constexpr UINT_PTR kAssetMenuRename = 2201;
+constexpr UINT_PTR kAssetMenuDelete = 2202;
+constexpr UINT_PTR kAssetMenuRefresh = 2203;
+
+[[nodiscard]] UINT_PTR CommandId(EditorAssetContextCommand command) noexcept {
+    switch (command) {
+    case EditorAssetContextCommand::Import:
+        return kAssetMenuImport;
+    case EditorAssetContextCommand::NewFolder:
+        return kAssetMenuNewFolder;
+    case EditorAssetContextCommand::NewLuaScript:
+        return kAssetMenuNewLuaScript;
+    case EditorAssetContextCommand::NewInputAction:
+        return kAssetMenuNewInputAction;
+    case EditorAssetContextCommand::NewInputMappingContext:
+        return kAssetMenuNewInputMappingContext;
+    case EditorAssetContextCommand::AddDirectionalLight:
+        return kAssetMenuDirectionalLight;
+    case EditorAssetContextCommand::AddPointLight:
+        return kAssetMenuPointLight;
+    case EditorAssetContextCommand::AddSpotLight:
+        return kAssetMenuSpotLight;
+    case EditorAssetContextCommand::Rename:
+        return kAssetMenuRename;
+    case EditorAssetContextCommand::Delete:
+        return kAssetMenuDelete;
+    case EditorAssetContextCommand::Refresh:
+        return kAssetMenuRefresh;
+    case EditorAssetContextCommand::AddLighting:
+    case EditorAssetContextCommand::None:
+    default:
+        return 0;
+    }
+}
+
+[[nodiscard]] EditorAssetContextCommand CommandFromId(UINT command) noexcept {
+    switch (command) {
+    case kAssetMenuImport:
+        return EditorAssetContextCommand::Import;
+    case kAssetMenuNewFolder:
+        return EditorAssetContextCommand::NewFolder;
+    case kAssetMenuNewLuaScript:
+        return EditorAssetContextCommand::NewLuaScript;
+    case kAssetMenuNewInputAction:
+        return EditorAssetContextCommand::NewInputAction;
+    case kAssetMenuNewInputMappingContext:
+        return EditorAssetContextCommand::NewInputMappingContext;
+    case kAssetMenuDirectionalLight:
+        return EditorAssetContextCommand::AddDirectionalLight;
+    case kAssetMenuPointLight:
+        return EditorAssetContextCommand::AddPointLight;
+    case kAssetMenuSpotLight:
+        return EditorAssetContextCommand::AddSpotLight;
+    case kAssetMenuRename:
+        return EditorAssetContextCommand::Rename;
+    case kAssetMenuDelete:
+        return EditorAssetContextCommand::Delete;
+    case kAssetMenuRefresh:
+        return EditorAssetContextCommand::Refresh;
+    default:
+        return EditorAssetContextCommand::None;
+    }
+}
+
+[[nodiscard]] HMENU CreateLightingSubmenu() {
+    HMENU lighting = CreatePopupMenu();
+    AppendMenuA(lighting, MF_STRING, kAssetMenuDirectionalLight, "Directional Light");
+    AppendMenuA(lighting, MF_STRING, kAssetMenuPointLight, "Point Light");
+    AppendMenuA(lighting, MF_STRING, kAssetMenuSpotLight, "Spot Light");
+    return lighting;
+}
+
+void AppendAddSubmenu(HMENU menu) {
+    HMENU add = CreatePopupMenu();
+    AppendMenuA(add, MF_POPUP, reinterpret_cast<UINT_PTR>(CreateLightingSubmenu()), "Lighting");
+    AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(add), "Add");
+}
+
+[[nodiscard]] UINT ShowProjectFilesSystemMenu(HWND window, int x, int y, const std::vector<EditorAssetContextMenuItem>& items) {
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) {
+        return 0;
+    }
+
+    for (const EditorAssetContextMenuItem& item : items) {
+        if (item.command == EditorAssetContextCommand::AddLighting) {
+            continue;
+        } else if (const UINT_PTR id = CommandId(item.command); id != 0) {
+            AppendMenuA(menu, MF_STRING, id, item.label);
+        }
+        if (item.separatorAfter) {
+            AppendMenuA(menu, MF_SEPARATOR, 0, nullptr);
+        }
+    }
+
+    POINT screenPoint{ x, y };
+    ClientToScreen(window, &screenPoint);
+    SetForegroundWindow(window);
+    const UINT command = TrackPopupMenu(
+        menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN,
+        screenPoint.x,
+        screenPoint.y,
+        0,
+        window,
+        nullptr);
+    DestroyMenu(menu);
+    return command;
+}
+
+[[nodiscard]] bool ExecuteNativeProjectFilesMenu(HWND window, int x, int y, EditorSceneContext& sceneContext) {
+    EditorAssetBrowserState& state = sceneContext.AssetBrowser();
+    const std::vector<EditorAssetContextMenuItem> items = state.ContextMenuItems(sceneContext.Scene().Assets().Manager());
+    state.CloseContextMenu();
+    InvalidateRect(window, nullptr, FALSE);
+    UpdateWindow(window);
+    const EditorAssetContextCommand command = CommandFromId(ShowProjectFilesSystemMenu(window, x, y, items));
+    if (command == EditorAssetContextCommand::None) {
+        return true;
+    }
+    return EditorAssetBrowserContextCommandExecutor::Execute(command, sceneContext);
+}
+
+} // namespace
 
 std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuPointerDown(const EditorAssetBrowserHit& hit, EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
@@ -16,6 +150,10 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
     }
 
     if (hit.kind == EditorAssetBrowserHitKind::ContextMenuCommand) {
+        if (hit.command == EditorAssetContextCommand::AddLighting) {
+            static_cast<void>(state.SetContextMenuHoveredCommand(EditorAssetContextCommand::AddLighting));
+            return true;
+        }
         static_cast<void>(EditorAssetBrowserContextCommandExecutor::Execute(hit.command, sceneContext));
         state.CloseContextMenu();
         return true;
@@ -28,7 +166,7 @@ std::optional<bool> EditorAssetBrowserContextMenuPointerHandler::HandleOpenMenuP
     return std::nullopt;
 }
 
-bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(const RECT& content, int x, int y, EditorSceneContext& sceneContext) {
+bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(HWND window, const RECT& content, int x, int y, EditorSceneContext& sceneContext) {
     EditorAssetBrowserState& state = sceneContext.AssetBrowser();
     if (state.IsTextEditing()) {
         static_cast<void>(sceneContext.CommitAssetTextEdit());
@@ -45,7 +183,7 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(const RE
             return false;
         }
         static_cast<void>(state.SelectAsset(*id, manager));
-        return state.OpenContextMenuForAsset(x, y, *id, manager);
+        return state.OpenContextMenuForAsset(x, y, *id, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::ContentFolder: {
         const std::optional<std::filesystem::path> folder = EditorAssetBrowserHitPayloadResolver::FolderAt(hit, state, manager);
@@ -53,7 +191,7 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(const RE
             return false;
         }
         static_cast<void>(state.SelectContentFolder(*folder, manager));
-        return state.OpenContextMenuForFolder(x, y, *folder, manager);
+        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::FolderDisclosure:
     case EditorAssetBrowserHitKind::Folder: {
@@ -62,11 +200,11 @@ bool EditorAssetBrowserContextMenuPointerHandler::HandleRightButtonDown(const RE
             return false;
         }
         static_cast<void>(state.SelectFolder(*folder, manager));
-        return state.OpenContextMenuForFolder(x, y, *folder, manager);
+        return state.OpenContextMenuForFolder(x, y, *folder, manager) && ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
     }
     case EditorAssetBrowserHitKind::DropTarget:
         state.OpenContextMenuForBackground(x, y);
-        return true;
+        return ExecuteNativeProjectFilesMenu(window, x, y, sceneContext);
     case EditorAssetBrowserHitKind::DeleteConfirmBody:
     case EditorAssetBrowserHitKind::DeleteConfirmListBody:
     case EditorAssetBrowserHitKind::DeleteConfirmCheckbox:

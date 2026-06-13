@@ -59,6 +59,7 @@ public:
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
+    bool basicLightingEnabled = false;
 };
 
 } // namespace kb::scene

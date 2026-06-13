@@ -8,6 +8,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -87,6 +88,7 @@ struct SyncContext {
     std::vector<std::uint64_t>* meshes = nullptr;
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
+    bool basicLightingEnabled = false;
 };
 
 void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* context) {
@@ -181,8 +183,12 @@ void SyncEntity(kb::scene::SceneEntity entity, SyncContext& context) {
         static_cast<void>(context.renderScene->RemoveMesh(entity.Id()));
     }
 
-    if (const kb::scene::LightComponent* light = components.Lights().TryGet(entity); light != nullptr && transform != nullptr) {
-        SyncLight(entity, *transform, *light, &context);
+    if (context.basicLightingEnabled) {
+        if (const kb::scene::LightComponent* light = components.Lights().TryGet(entity); light != nullptr && transform != nullptr) {
+            SyncLight(entity, *transform, *light, &context);
+        } else {
+            static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
+        }
     } else {
         static_cast<void>(context.renderScene->RemoveLight(entity.Id()));
     }
@@ -223,12 +229,15 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
     const kb::scene::SceneComponentVisitors visitors = scene.Components().Visitors();
     visitors.ForEachCamera(&SyncCamera, &context);
     visitors.ForEachMeshRenderer(&SyncMesh, &context);
-    visitors.ForEachLight(&SyncLight, &context);
+    if (context.basicLightingEnabled) {
+        visitors.ForEachLight(&SyncLight, &context);
+    }
 
     std::ranges::sort(seenMeshes_);
     std::ranges::sort(seenCameras_);
@@ -256,6 +265,7 @@ void EcsRenderSceneSynchronizer::SyncEntities(
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
+        .basicLightingEnabled = kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
     };
 
     for (const std::uint64_t entityId : entityIds) {

@@ -443,6 +443,113 @@ int LuaPhysicsRaycast(lua_State* state) {
     return 1;
 }
 
+[[nodiscard]] std::vector<ScriptFunctionArgument> InputActionArgs(lua_State* state) {
+    const char* action = luaL_checkstring(state, 1);
+    return { Arg("action", ScriptValue{ std::string{ action != nullptr ? action : "" } }) };
+}
+
+int LuaInputBool(lua_State* state, std::string_view functionName, std::string_view outputName) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction(functionName, InputActionArgs(state));
+    lua_pushboolean(state, result.Output(outputName).value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputIsPressed(lua_State* state) {
+    return LuaInputBool(state, "Input.IsPressed", "pressed");
+}
+
+int LuaInputWasPressed(lua_State* state) {
+    return LuaInputBool(state, "Input.WasPressed", "pressed");
+}
+
+int LuaInputWasReleased(lua_State* state) {
+    return LuaInputBool(state, "Input.WasReleased", "released");
+}
+
+int LuaInputValue(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnumber(state, 0.0);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.Value", InputActionArgs(state));
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("value").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    return 1;
+}
+
+int LuaInputVector2(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.Vector2", InputActionArgs(state));
+    lua_createtable(state, 0, 2);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    return 1;
+}
+
+int LuaInputVector3(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushnil(state);
+        return 1;
+    }
+    const ScriptFunctionCallResult result = context->CallFunction("Input.Vector3", InputActionArgs(state));
+    lua_createtable(state, 0, 3);
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("x").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "x");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("y").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "y");
+    lua_pushnumber(state, static_cast<lua_Number>(result.Output("z").value_or(ScriptValue{ 0.0F }).AsFloat()));
+    lua_setfield(state, -2, "z");
+    return 1;
+}
+
+[[nodiscard]] std::string LuaContextId(lua_State* state, int index) {
+    if (lua_isinteger(state, index) != 0) {
+        return std::to_string(static_cast<std::uint64_t>(lua_tointeger(state, index)));
+    }
+    const char* context = luaL_checkstring(state, index);
+    return std::string{ context != nullptr ? context : "" };
+}
+
+int LuaInputAddMappingContext(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const int priority = static_cast<int>(luaL_optinteger(state, 2, 0));
+    const std::vector<ScriptFunctionArgument> arguments{
+        Arg("context", ScriptValue{ LuaContextId(state, 1) }),
+        Arg("priority", ScriptValue{ priority }),
+    };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.AddMappingContext", arguments);
+    lua_pushboolean(state, result.Output("added").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
+int LuaInputRemoveMappingContext(lua_State* state) {
+    ScriptExecutionContext* context = ContextFromUpvalue(state);
+    if (context == nullptr) {
+        lua_pushboolean(state, 0);
+        return 1;
+    }
+    const std::vector<ScriptFunctionArgument> arguments{ Arg("context", ScriptValue{ LuaContextId(state, 1) }) };
+    const ScriptFunctionCallResult result = context->CallFunction("Input.RemoveMappingContext", arguments);
+    lua_pushboolean(state, result.Output("removed").value_or(ScriptValue{ false }).AsBool() ? 1 : 0);
+    return 1;
+}
+
 void SetClosure(lua_State* state, const char* name, lua_CFunction function, ScriptExecutionContext& context) {
     lua_pushlightuserdata(state, &context);
     lua_pushcclosure(state, function, 1);
@@ -492,6 +599,17 @@ void PucLuaFunctionApi::Attach(lua_State* state, int environmentIndex, ScriptExe
     lua_createtable(state, 0, 1);
     SetClosure(state, "Raycast", &LuaPhysicsRaycast, context);
     lua_setfield(state, environmentIndex, "Physics");
+
+    lua_createtable(state, 0, 8);
+    SetClosure(state, "IsPressed", &LuaInputIsPressed, context);
+    SetClosure(state, "WasPressed", &LuaInputWasPressed, context);
+    SetClosure(state, "WasReleased", &LuaInputWasReleased, context);
+    SetClosure(state, "Value", &LuaInputValue, context);
+    SetClosure(state, "Vector2", &LuaInputVector2, context);
+    SetClosure(state, "Vector3", &LuaInputVector3, context);
+    SetClosure(state, "AddMappingContext", &LuaInputAddMappingContext, context);
+    SetClosure(state, "RemoveMappingContext", &LuaInputRemoveMappingContext, context);
+    lua_setfield(state, environmentIndex, "Input");
 }
 
 } // namespace kb::script

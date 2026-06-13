@@ -173,15 +173,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
-    // Diagnostic: echo every pressed button to the console so input is observable.
-    state.inputDebugLogger.LogPresses(input.DeviceState(), [&state](std::string_view button) {
-        state.sceneContext.Console().Info("Input", "Pressed: " + std::string{ button });
-    });
     static_cast<void>(state.sceneContext.Scene().Runtime().Update(deltaSeconds));
-    // Diagnostic: echo configured action events (Started/Triggered/Completed) too.
-    state.inputDebugLogger.LogActionEvents(input.FrameEvents(), [&state](std::string_view action) {
-        state.sceneContext.Console().Info("Input", "Action " + std::string{ action });
-    });
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();

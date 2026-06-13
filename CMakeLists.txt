@@ -138,20 +138,24 @@ endif()
 add_subdirectory(sources/engine engine)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
 add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
+add_subdirectory(sources/plugins/basic_lighting basic_lighting)
 
 if(TARGET kb_engine_tests)
-    add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin)
+    add_dependencies(kb_engine_tests kb_physics_jolt_plugin kb_audio_miniaudio_plugin kb_basic_lighting_plugin)
     if(KB_BUILD_PROVIDER_MODULES_AS_DLL)
         set(KB_PHYSICS_JOLT_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_physics_jolt_plugin>")
         set(KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_audio_miniaudio_plugin>")
+        set(KB_BASIC_LIGHTING_TEST_PLUGIN_PATH "$<TARGET_FILE:kb_basic_lighting_plugin>")
     else()
         set(KB_PHYSICS_JOLT_TEST_PLUGIN_PATH "")
         set(KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH "")
+        set(KB_BASIC_LIGHTING_TEST_PLUGIN_PATH "")
     endif()
     target_compile_definitions(kb_engine_tests
         PRIVATE
             "KB_PHYSICS_JOLT_PLUGIN_PATH=\"${KB_PHYSICS_JOLT_TEST_PLUGIN_PATH}\""
             "KB_AUDIO_MINIAUDIO_PLUGIN_PATH=\"${KB_AUDIO_MINIAUDIO_TEST_PLUGIN_PATH}\""
+            "KB_BASIC_LIGHTING_PLUGIN_PATH=\"${KB_BASIC_LIGHTING_TEST_PLUGIN_PATH}\""
     )
 endif()
 

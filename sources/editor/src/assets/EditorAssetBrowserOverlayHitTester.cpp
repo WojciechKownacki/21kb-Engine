@@ -4,7 +4,115 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 
+#include <algorithm>
+#include <iterator>
+
 namespace kb::editor {
+namespace {
+
+constexpr int kLightingSubmenuWidth = 190;
+constexpr int kLightingSubmenuRows = 4;
+constexpr int kLightingSubmenuGap = 4;
+
+[[nodiscard]] bool IsLightingSubmenuCommand(EditorAssetContextCommand command) noexcept {
+    return command == EditorAssetContextCommand::AddLighting
+        || command == EditorAssetContextCommand::AddDirectionalLight
+        || command == EditorAssetContextCommand::AddPointLight
+        || command == EditorAssetContextCommand::AddSpotLight;
+}
+
+[[nodiscard]] std::optional<int> AddLightingIndex(const std::vector<EditorAssetContextMenuItem>& items) {
+    const auto iter = std::ranges::find_if(items, [](const EditorAssetContextMenuItem& item) {
+        return item.command == EditorAssetContextCommand::AddLighting;
+    });
+    if (iter == items.end()) {
+        return std::nullopt;
+    }
+    return static_cast<int>(std::distance(items.begin(), iter));
+}
+
+[[nodiscard]] bool HasLightingSubmenu(const std::vector<EditorAssetContextMenuItem>& items) noexcept {
+    return std::ranges::any_of(items, [](const EditorAssetContextMenuItem& item) {
+        return item.command == EditorAssetContextCommand::AddLighting;
+    });
+}
+
+[[nodiscard]] RECT ContextMenuRectForItems(const RECT& content, int x, int y, const std::vector<EditorAssetContextMenuItem>& items) noexcept {
+    return EditorAssetBrowserLayout::ContextMenuRect(content, x, y, static_cast<int>(items.size()));
+}
+
+[[nodiscard]] RECT LightingSubmenuRect(const RECT& content, const RECT& menu, const std::vector<EditorAssetContextMenuItem>& items) {
+    const std::optional<int> addIndex = AddLightingIndex(items);
+    if (!addIndex.has_value()) {
+        return {};
+    }
+    const RECT addRow = EditorAssetBrowserLayout::ContextMenuItemRect(menu, *addIndex);
+    RECT submenu{
+        addRow.right + kLightingSubmenuGap,
+        addRow.top,
+        addRow.right + kLightingSubmenuGap + kLightingSubmenuWidth,
+        addRow.top + EditorAssetBrowserLayout::ContextMenuPadding * 2
+            + kLightingSubmenuRows * EditorAssetBrowserLayout::ContextMenuRowHeight
+            + (kLightingSubmenuRows - 1) * EditorAssetBrowserLayout::ContextMenuSeparatorHeight,
+    };
+    if (submenu.right > content.right) {
+        const int width = submenu.right - submenu.left;
+        const int height = submenu.bottom - submenu.top;
+        const int left = std::clamp(static_cast<int>(menu.left), static_cast<int>(content.left), std::max(static_cast<int>(content.left), static_cast<int>(content.right) - width));
+        int top = menu.bottom + kLightingSubmenuGap;
+        if (top + height > content.bottom) {
+            top = menu.top - height - kLightingSubmenuGap;
+        }
+        top = std::clamp(top, static_cast<int>(content.top), std::max(static_cast<int>(content.top), static_cast<int>(content.bottom) - height));
+        submenu = RECT{ left, top, left + width, top + height };
+    } else if (submenu.bottom > content.bottom) {
+        OffsetRect(&submenu, 0, content.bottom - submenu.bottom);
+    }
+    return submenu;
+}
+
+[[nodiscard]] EditorAssetContextCommand LightingCommandAt(const RECT& submenu, int x, int y) noexcept {
+    if (!EditorAssetBrowserGeometry::Contains(submenu, x, y)) {
+        return EditorAssetContextCommand::None;
+    }
+    for (int index = 1; index < kLightingSubmenuRows; ++index) {
+        if (!EditorAssetBrowserGeometry::Contains(EditorAssetBrowserLayout::ContextMenuItemRect(submenu, index), x, y)) {
+            continue;
+        }
+        switch (index) {
+        case 1:
+            return EditorAssetContextCommand::AddDirectionalLight;
+        case 2:
+            return EditorAssetContextCommand::AddPointLight;
+        case 3:
+            return EditorAssetContextCommand::AddSpotLight;
+        default:
+            return EditorAssetContextCommand::None;
+        }
+    }
+    return EditorAssetContextCommand::AddLighting;
+}
+
+[[nodiscard]] bool InLightingSubmenuBridge(const RECT& menu, const RECT& submenu, const std::vector<EditorAssetContextMenuItem>& items, int x, int y) {
+    const std::optional<int> addIndex = AddLightingIndex(items);
+    if (!addIndex.has_value()) {
+        return false;
+    }
+    const RECT addRow = EditorAssetBrowserLayout::ContextMenuItemRect(menu, *addIndex);
+    RECT bridge{};
+    if (submenu.left >= addRow.right) {
+        bridge = RECT{ addRow.right, addRow.top, submenu.left, addRow.bottom };
+    } else if (submenu.top >= addRow.bottom) {
+        bridge = RECT{ addRow.left, addRow.bottom, addRow.right, submenu.top };
+    } else if (submenu.bottom <= addRow.top) {
+        bridge = RECT{ addRow.left, submenu.bottom, addRow.right, addRow.top };
+    } else {
+        return false;
+    }
+    return EditorAssetBrowserGeometry::Contains(bridge, x, y);
+}
+
+} // namespace
 
 std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTestDeleteConfirm(
     const RECT& content,
@@ -64,7 +172,24 @@ std::optional<EditorAssetBrowserHit> EditorAssetBrowserOverlayHitTester::HitTest
         return std::nullopt;
     }
 
-    const RECT menu = EditorAssetBrowserLayout::ContextMenuRect(content, state.ContextMenuX(), state.ContextMenuY(), static_cast<int>(items.size()));
+    const RECT menu = ContextMenuRectForItems(content, state.ContextMenuX(), state.ContextMenuY(), items);
+    if (IsLightingSubmenuCommand(state.ContextMenuHoveredCommand())) {
+        const RECT submenu = LightingSubmenuRect(content, menu, items);
+        if (InLightingSubmenuBridge(menu, submenu, items, x, y)) {
+            return EditorAssetBrowserHit{
+                .kind = EditorAssetBrowserHitKind::ContextMenuCommand,
+                .command = EditorAssetContextCommand::AddLighting,
+            };
+        }
+        const EditorAssetContextCommand submenuCommand = LightingCommandAt(submenu, x, y);
+        if (submenuCommand != EditorAssetContextCommand::None) {
+            return EditorAssetBrowserHit{
+                .kind = EditorAssetBrowserHitKind::ContextMenuCommand,
+                .command = submenuCommand,
+            };
+        }
+    }
+
     if (!EditorAssetBrowserGeometry::Contains(menu, x, y)) {
         return std::nullopt;
     }

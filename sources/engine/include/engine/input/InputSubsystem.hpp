@@ -78,6 +78,7 @@ public:
     [[nodiscard]] bool WasActionStarted(std::string_view action) const;
     [[nodiscard]] bool WasActionTriggered(std::string_view action) const;
     [[nodiscard]] bool WasActionCompleted(std::string_view action) const;
+    [[nodiscard]] bool WasActionReleased(std::string_view action) const;
 
     [[nodiscard]] const std::vector<InputActionEvent>& FrameEvents() const noexcept {
         return frameEvents_;

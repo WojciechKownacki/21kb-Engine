@@ -56,6 +56,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
     case EditorAssetContextTargetKind::Background:
@@ -64,6 +65,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputMappingContext, .label = "New Input Mapping Context", .separatorAfter = true });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::AddLighting, .label = "Add", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
         break;
     case EditorAssetContextTargetKind::None:
