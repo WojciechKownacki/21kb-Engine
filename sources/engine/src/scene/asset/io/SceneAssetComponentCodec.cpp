@@ -6,6 +6,7 @@
 #include "scene/asset/io/components/SceneAssetInputComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetPhysicsComponentCodec.hpp"
 #include "scene/asset/io/components/SceneAssetRenderComponentCodec.hpp"
+#include "scene/asset/io/components/SceneAssetTagsComponentCodec.hpp"
 
 namespace kb::scene {
 namespace {
@@ -20,6 +21,7 @@ enum SceneNodeComponentBits : std::uint32_t {
     AudioSourceBit = 1U << 6U,
     AudioListenerBit = 1U << 7U,
     BehaviourBit = 1U << 8U,
+    TagsBit = 1U << 9U,
 };
 
 constexpr std::uint32_t KnownComponentBits = CameraBit |
@@ -30,7 +32,8 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     ColliderBit |
     AudioSourceBit |
     AudioListenerBit |
-    BehaviourBit;
+    BehaviourBit |
+    TagsBit;
 
 [[nodiscard]] std::uint32_t ComponentBits(const ScenePrefabNodeComponents& components) noexcept {
     std::uint32_t componentBits = 0;
@@ -43,6 +46,7 @@ constexpr std::uint32_t KnownComponentBits = CameraBit |
     componentBits |= components.audioSource.has_value() ? AudioSourceBit : 0U;
     componentBits |= components.audioListener.has_value() ? AudioListenerBit : 0U;
     componentBits |= components.behaviour.has_value() ? BehaviourBit : 0U;
+    componentBits |= components.tags.has_value() ? TagsBit : 0U;
     return componentBits;
 }
 
@@ -96,6 +100,13 @@ bool SceneAssetComponentCodec::Read(SceneAssetBinaryIO::ByteReader& input, std::
         }
         output.collider = collider;
     }
+    if ((componentBits & TagsBit) != 0U) {
+        TagsComponent tags;
+        if (!SceneAssetTagsComponentCodec::Read(input, tags)) {
+            return false;
+        }
+        output.tags = tags;
+    }
     if ((componentBits & AudioSourceBit) != 0U) {
         AudioSourceComponent audioSource;
         if (!SceneAssetAudioComponentCodec::ReadSource(input, fileVersion, audioSource)) {
@@ -139,6 +150,9 @@ void SceneAssetComponentCodec::Write(std::vector<std::uint8_t>& output, const Sc
     }
     if (components.collider.has_value()) {
         SceneAssetPhysicsComponentCodec::WriteCollider(output, *components.collider);
+    }
+    if (components.tags.has_value()) {
+        SceneAssetTagsComponentCodec::Write(output, *components.tags);
     }
     if (components.audioSource.has_value()) {
         SceneAssetAudioComponentCodec::WriteSource(output, *components.audioSource);

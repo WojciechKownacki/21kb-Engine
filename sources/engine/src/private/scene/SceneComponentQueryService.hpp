@@ -10,6 +10,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/TagsComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
 namespace kb::scene {
@@ -43,6 +44,9 @@ public:
 
     [[nodiscard]] static bool HasCollider(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const ColliderComponent* TryGetCollider(const Scene& scene, SceneEntity entity) noexcept;
+
+    [[nodiscard]] static bool HasTags(const Scene& scene, SceneEntity entity) noexcept;
+    [[nodiscard]] static const TagsComponent* TryGetTags(const Scene& scene, SceneEntity entity) noexcept;
 
     [[nodiscard]] static bool HasAudioSource(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static const AudioSourceComponent* TryGetAudioSource(const Scene& scene, SceneEntity entity) noexcept;

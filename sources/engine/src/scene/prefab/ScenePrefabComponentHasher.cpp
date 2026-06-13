@@ -72,6 +72,13 @@ void ScenePrefabComponentHasher::Mix(std::uint64_t& hash, const ScenePrefabNodeC
         ScenePrefabHashBuilder::Mix(hash, components.collider->trigger ? 1U : 0U);
     }
 
+    ScenePrefabHashBuilder::Mix(hash, components.tags.has_value() ? 1U : 0U);
+    if (components.tags.has_value()) {
+        for (char character : TagsText(*components.tags)) {
+            ScenePrefabHashBuilder::Mix(hash, static_cast<std::uint64_t>(static_cast<unsigned char>(character)));
+        }
+    }
+
     ScenePrefabHashBuilder::Mix(hash, components.behaviour.has_value() ? 1U : 0U);
     if (components.behaviour.has_value()) {
         ScenePrefabHashBuilder::Mix(hash, components.behaviour->behaviourAssetId);
