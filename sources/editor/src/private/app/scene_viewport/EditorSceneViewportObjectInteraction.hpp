@@ -93,6 +93,29 @@ public:
         const EditorFloatingWindowManager& floatingWindows,
         const EditorMetrics& metrics,
         EditorSceneContext& sceneContext);
+
+    [[nodiscard]] static bool BeginBoxSelection(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        int y,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext);
+
+    [[nodiscard]] static bool UpdateBoxSelection(
+        HWND sourceWindow,
+        HWND mainWindow,
+        int x,
+        int y,
+        const EditorDockModel& dockModel,
+        const EditorFloatingWindowManager& floatingWindows,
+        const EditorMetrics& metrics,
+        EditorSceneContext& sceneContext,
+        bool leftButtonDown);
+
+    [[nodiscard]] static bool CommitBoxSelection(EditorSceneContext& sceneContext);
 };
 
 #endif

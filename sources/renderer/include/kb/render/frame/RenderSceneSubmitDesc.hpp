@@ -136,6 +136,14 @@ struct RenderSceneSubmitDesc {
         bool visible = false;
     };
 
+    struct EditorSelectionBoxDesc {
+        float x = 0.0F;
+        float y = 0.0F;
+        float width = 0.0F;
+        float height = 0.0F;
+        bool visible = false;
+    };
+
     RenderSceneTargetBinding target{};
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
@@ -157,6 +165,7 @@ struct RenderSceneSubmitDesc {
     bool synchronizeScene = true;
     EditorGridDesc editorGrid{};
     EditorGizmoDesc editorGizmo{};
+    EditorSelectionBoxDesc editorSelectionBox{};
 
     [[nodiscard]] bool IsValid() const noexcept {
         return target.IsValid() && postProcess.IsValid() && finalComposite.IsValid() &&
