@@ -53,6 +53,27 @@ ScriptFunctionCallResult NoScene() {
     return value == nullptr ? std::move(fallback) : value->AsString();
 }
 
+[[nodiscard]] float FloatArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name, float fallback = 0.0F) noexcept {
+    const ScriptValue* value = FindArg(arguments, name);
+    return value == nullptr ? fallback : value->AsFloat(fallback);
+}
+
+[[nodiscard]] bool HasArg(std::span<const ScriptFunctionArgument> arguments, std::string_view name) noexcept {
+    return FindArg(arguments, name) != nullptr;
+}
+
+void ApplyPositionArgs(kb::scene::TransformComponent& transform, std::span<const ScriptFunctionArgument> arguments) noexcept {
+    if (HasArg(arguments, "x")) {
+        transform.localPosition.x = FloatArg(arguments, "x", transform.localPosition.x);
+    }
+    if (HasArg(arguments, "y")) {
+        transform.localPosition.y = FloatArg(arguments, "y", transform.localPosition.y);
+    }
+    if (HasArg(arguments, "z")) {
+        transform.localPosition.z = FloatArg(arguments, "z", transform.localPosition.z);
+    }
+}
+
 ScriptFunctionCallResult EntityResult(std::string_view pin, kb::scene::SceneEntity entity) {
     return ScriptFunctionCallResult{
         .executed = true,
@@ -171,6 +192,7 @@ ScriptFunctionCallResult Spawn(const ScriptFunctionCallContext& context, std::sp
     }
     kb::scene::SceneObjectDesc desc;
     desc.name = StringArg(arguments, "name", "Entity");
+    ApplyPositionArgs(desc.transform, arguments);
     const kb::scene::SceneEntity parent = EntityArg(arguments, "parent");
     if (parent.IsValid() && context.scene->Entities().IsAlive(parent)) {
         desc.parent = context.scene->Entities().Object(parent);
@@ -297,6 +319,11 @@ ScriptFunctionCallResult InstantiatePrefab(const ScriptFunctionCallContext& cont
     }
     const kb::scene::ScenePrefabInstance instance = context.scene->Prefabs().Instantiate(*prefab.Get());
     const kb::scene::SceneEntity root = instance.Empty() ? kb::scene::SceneEntity{} : instance.ObjectAt(0).Entity();
+    if (root.IsValid() && (HasArg(arguments, "x") || HasArg(arguments, "y") || HasArg(arguments, "z"))) {
+        kb::scene::TransformComponent transform = context.scene->Transforms().Get(root);
+        ApplyPositionArgs(transform, arguments);
+        context.scene->Transforms().Set(root, transform);
+    }
     return ScriptFunctionCallResult{
         .executed = true,
         .outputs = {
@@ -338,7 +365,13 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "name", ScriptValueType::String, true } },
         &Name) && ok;
     ok = RegisterFunction(host, "World.Spawn",
-        { ScriptFunctionPin{ "name", ScriptValueType::String, false }, ScriptFunctionPin{ "parent", ScriptValueType::Entity, false } },
+        {
+            ScriptFunctionPin{ "name", ScriptValueType::String, false },
+            ScriptFunctionPin{ "parent", ScriptValueType::Entity, false },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, false },
+        },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true } },
         &Spawn) && ok;
     ok = RegisterFunction(host, "World.Destroy",
@@ -362,7 +395,12 @@ bool ScriptWorldApi::Register(ScriptRuntimeHost& host) {
         { ScriptFunctionPin{ "parented", ScriptValueType::Bool, true } },
         &SetParent) && ok;
     ok = RegisterFunction(host, "World.InstantiatePrefab",
-        { ScriptFunctionPin{ "prefab", ScriptValueType::String, true } },
+        {
+            ScriptFunctionPin{ "prefab", ScriptValueType::String, true },
+            ScriptFunctionPin{ "x", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "y", ScriptValueType::Float, false },
+            ScriptFunctionPin{ "z", ScriptValueType::Float, false },
+        },
         { ScriptFunctionPin{ "entity", ScriptValueType::Entity, true }, ScriptFunctionPin{ "count", ScriptValueType::Int, true } },
         &InstantiatePrefab) && ok;
     return ok;
