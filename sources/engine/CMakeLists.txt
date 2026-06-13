@@ -187,8 +187,11 @@ add_library(kb_engine STATIC
     include/engine/modules/EngineModuleLoadingPhase.hpp
     include/engine/modules/EngineModuleMetadata.hpp
     include/engine/modules/EngineModuleContext.hpp
+    include/engine/modules/EngineModuleExports.hpp
     include/engine/modules/IEngineModule.hpp
+    include/engine/modules/EngineModuleLoader.hpp
     include/engine/modules/EngineModuleHost.hpp
+    src/modules/EngineModuleLoader.cpp
     src/modules/EngineModuleHost.cpp
     src/audio/AudioClipAssetLoader.cpp
     src/audio/AudioPlayback.cpp

@@ -1,6 +1,7 @@
 #include "JoltPhysicsModule.hpp"
 
 #include "JoltPhysicsSceneSystem.hpp"
+#include "engine/modules/EngineModuleExports.hpp"
 #include "engine/modules/EngineModuleLoadingPhase.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -24,16 +25,18 @@ void JoltPhysicsModule::OnSceneAttach(kb::scene::Scene& scene) {
 
 } // namespace kb::physics_jolt
 
-#if defined(_WIN32)
-#define KB_PHYSICS_JOLT_EXPORT __declspec(dllexport)
-#else
-#define KB_PHYSICS_JOLT_EXPORT
-#endif
+extern "C" KB_ENGINE_MODULE_EXPORT std::uint32_t kb_engine_module_abi_version() {
+    return kb::modules::kEngineModuleAbiVersion;
+}
 
-extern "C" KB_PHYSICS_JOLT_EXPORT kb::modules::IEngineModule* kbCreateEngineModule() {
+extern "C" KB_ENGINE_MODULE_EXPORT const char* kb_engine_module_name() {
+    return "Physics.Jolt";
+}
+
+extern "C" KB_ENGINE_MODULE_EXPORT kb::modules::IEngineModule* kb_create_engine_module() {
     return new kb::physics_jolt::JoltPhysicsModule();
 }
 
-extern "C" KB_PHYSICS_JOLT_EXPORT void kbDestroyEngineModule(kb::modules::IEngineModule* module) {
+extern "C" KB_ENGINE_MODULE_EXPORT void kb_destroy_engine_module(kb::modules::IEngineModule* module) {
     delete module;
 }
