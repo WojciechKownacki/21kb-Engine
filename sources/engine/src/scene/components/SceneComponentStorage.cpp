@@ -14,6 +14,7 @@ SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComp
     , inputs_(world, components.InputComponentId())
     , rigidbodies_(world, components.RigidbodyComponentId())
     , colliders_(world, components.ColliderComponentId())
+    , tags_(world, components.TagsComponentId())
     , audioSources_(world, components.AudioSourceComponentId())
     , audioListeners_(world, components.AudioListenerComponentId()) {}
 
@@ -92,6 +93,14 @@ const SceneColliderComponentStore& SceneComponentStorage::Colliders() const noex
 
 SceneColliderComponentStore& SceneComponentStorage::Colliders() noexcept {
     return colliders_;
+}
+
+const SceneTagsComponentStore& SceneComponentStorage::Tags() const noexcept {
+    return tags_;
+}
+
+SceneTagsComponentStore& SceneComponentStorage::Tags() noexcept {
+    return tags_;
 }
 
 const SceneAudioSourceComponentStore& SceneComponentStorage::AudioSources() const noexcept {

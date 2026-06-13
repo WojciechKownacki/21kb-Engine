@@ -10,6 +10,7 @@
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneVisibilityComponents.hpp"
 
 namespace kb::scene {
@@ -28,6 +29,7 @@ public:
     [[nodiscard]] SceneInputComponents Inputs() const noexcept;
     [[nodiscard]] SceneRigidbodyComponents Rigidbodies() const noexcept;
     [[nodiscard]] SceneColliderComponents Colliders() const noexcept;
+    [[nodiscard]] SceneTagsComponents Tags() const noexcept;
     [[nodiscard]] SceneAudioSourceComponents AudioSources() const noexcept;
     [[nodiscard]] SceneAudioListenerComponents AudioListeners() const noexcept;
     [[nodiscard]] SceneComponentVisitors Visitors() const noexcept;
