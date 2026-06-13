@@ -7,6 +7,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -83,6 +84,7 @@ void RunCreatesStableRenderProxiesTest() {
 
 void RunRenderSceneSyncsLightPipelineFieldsTest() {
     kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
     const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Key Light",
         .transform = TransformAt(2.0F, 3.0F, 4.0F),
@@ -128,6 +130,26 @@ void RunRenderSceneSyncsLightPipelineFieldsTest() {
     Require(NearlyEqual(snapshot.lights[0].contactShadowLength, 0.25F), "RenderScene snapshot did not publish contact shadow length");
     Require(NearlyEqual(snapshot.lights[0].volumetricScattering, 0.4F), "RenderScene snapshot did not publish volumetric scattering");
     Require(!snapshot.lights[0].castsShadow, "RenderScene snapshot did not publish light shadow flag");
+}
+
+void RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Provider Gated Light",
+        .transform = TransformAt(0.0F, 3.0F, 0.0F),
+    });
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Directional,
+        .intensity = 4.0F,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer{}.Sync(scene, renderScene);
+
+    Require(renderScene.LightProxyCount() == 0U, "RenderScene synced a light while Basic Lighting provider was inactive");
+    SceneRenderSnapshot snapshot;
+    renderScene.BuildSnapshotInto(1280, 720, snapshot);
+    Require(snapshot.lights.empty(), "RenderScene snapshot exposed lights while Basic Lighting provider was inactive");
 }
 
 void RunTracksUpdatesWithoutReplacingProxyTest() {
@@ -249,6 +271,7 @@ void RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest() {
 
 void RunDeletesRemovedComponentsAndEntitiesTest() {
     kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
     const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Mesh",
         .transform = TransformAt(0.0F, 0.0F, 0.0F),
@@ -544,6 +567,7 @@ void RunEcsSyncPropagatesMaterialSlotOverridesTest() {
 
 void RunEcsSyncScratchCapacityIsReusableAndVisibleTest() {
     kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
     const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
         .name = "Camera",
         .transform = TransformAt(0.0F, 0.0F, -5.0F),
@@ -1494,6 +1518,7 @@ void RunScenesHaveStableUniqueIdsTest() {
 void RunRenderSceneSyncTests() {
     RunCreatesStableRenderProxiesTest();
     RunRenderSceneSyncsLightPipelineFieldsTest();
+    RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();

@@ -10,6 +10,16 @@ class ScriptRuntimeHost;
 // exposes input to all three scripting backends from one source of truth.
 //
 // Registered functions (all take/return well-typed pins):
+//   Input.IsPressed(action:String)        -> pressed:Bool
+//   Input.WasPressed(action:String)       -> pressed:Bool
+//   Input.WasReleased(action:String)      -> released:Bool
+//   Input.Value(action:String)            -> value:Float        (axis1D / bool as 0/1)
+//   Input.Vector2(action:String)          -> x:Float, y:Float
+//   Input.Vector3(action:String)          -> x:Float, y:Float, z:Float
+//   Input.AddMappingContext(context:String, priority:Int) -> added:Bool
+//   Input.RemoveMappingContext(context:String)            -> removed:Bool
+//
+// Legacy aliases kept for existing scripts/graphs:
 //   IsActionPressed(action:String)        -> pressed:Bool
 //   GetActionValue(action:String)         -> value:Float        (axis1D / bool as 0/1)
 //   GetActionValueXY(action:String)       -> x:Float, y:Float   (axis2D)

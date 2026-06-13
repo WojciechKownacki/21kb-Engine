@@ -21,7 +21,15 @@ namespace {
 #endif
 #endif
 
-constexpr std::array<EditorPluginDescriptor, 2> kPlugins{{
+#if !defined(KB_BASIC_LIGHTING_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_BASIC_LIGHTING_PLUGIN_PATH "kb_basic_lighting_plugin.dll"
+#else
+#define KB_BASIC_LIGHTING_PLUGIN_PATH "libkb_basic_lighting_plugin.so"
+#endif
+#endif
+
+constexpr std::array<EditorPluginDescriptor, 3> kPlugins{{
     EditorPluginDescriptor{
         .id = "Physics.Jolt",
         .displayName = "Jolt Physics",
@@ -37,6 +45,14 @@ constexpr std::array<EditorPluginDescriptor, 2> kPlugins{{
         .provider = "miniaudio",
         .description = "Audio playback provider loaded as an engine plugin.",
         .binaryPath = KB_AUDIO_MINIAUDIO_PLUGIN_PATH,
+    },
+    EditorPluginDescriptor{
+        .id = "Rendering.BasicLighting",
+        .displayName = "Basic Lighting",
+        .category = "Rendering",
+        .provider = "21kb",
+        .description = "Directional, point and spot lighting provider for scene rendering.",
+        .binaryPath = KB_BASIC_LIGHTING_PLUGIN_PATH,
     },
 }};
 
