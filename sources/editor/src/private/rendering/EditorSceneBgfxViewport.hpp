@@ -41,11 +41,12 @@ public:
         EditorViewportFitMode fitMode = EditorViewportFitMode::Fit;
         EditorViewportSafeArea safeArea{};
         std::optional<render::SceneRenderCamera> cameraOverride{};
-        std::array<std::uint64_t, 1U> selectedEntityIds{};
+        std::vector<std::uint64_t> selectedEntityIds;
         std::uint64_t viewportKey = 0;
         bool editorSceneOverlaysEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
+        render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         bool shadowPassEnabled = true;
         bool postProcessEnabled = true;
@@ -124,7 +125,7 @@ private:
         std::uint64_t key = 0;
         std::uint32_t viewportIndex = 0;
         bool presentedInCurrentPaint = false;
-        std::array<std::uint64_t, 1U> selectedEntityIds{};
+        std::vector<std::uint64_t> selectedEntityIds;
         std::uint64_t submittedSceneRevision = 0U;
         render::SceneRenderTarget sceneTarget;
         render::ScenePostProcessTargets postProcessTargets;

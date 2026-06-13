@@ -4,6 +4,7 @@
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
 #include "kb/render/overlay/SceneGizmoPass.hpp"
 #include "kb/render/overlay/SceneGridPass.hpp"
+#include "kb/render/overlay/SelectionBoxOverlayPass.hpp"
 #include "kb/render/overlay/SelectionOutlineCompositePass.hpp"
 
 namespace kb::render {
@@ -21,6 +22,7 @@ public:
 private:
     SceneGridPass gridPass_;
     SceneGizmoPass gizmoPass_;
+    SelectionBoxOverlayPass selectionBoxPass_;
     SelectionOutlineCompositePass selectionOutlinePass_;
 };
 

@@ -308,7 +308,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             return;
         }
 
+        const bool boxSelectionReady = EditorSceneViewportObjectInteraction::BeginBoxSelection(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_);
         if (EditorSceneViewportObjectInteraction::SelectAt(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
+            if (boxSelectionReady) {
+                SetCapture(messageWindow);
+            }
             sceneContext_.AssetBrowser().FocusSelection(false);
             EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
             sceneViewport_.RequestPresent();

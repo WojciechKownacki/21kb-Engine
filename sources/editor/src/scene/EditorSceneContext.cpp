@@ -756,6 +756,23 @@ bool EditorSceneContext::SelectHierarchyRow(std::size_t rowIndex, bool additive,
     return selected;
 }
 
+const EditorSceneViewportBoxSelectionState& EditorSceneContext::ViewportBoxSelection() const noexcept {
+    return viewportBoxSelection_;
+}
+
+void EditorSceneContext::BeginViewportBoxSelection(const EditorSceneViewportBoxSelectionState& selection) noexcept {
+    viewportBoxSelection_ = selection;
+}
+
+void EditorSceneContext::UpdateViewportBoxSelection(POINT current, bool active) noexcept {
+    viewportBoxSelection_.current = current;
+    viewportBoxSelection_.active = active;
+}
+
+void EditorSceneContext::ClearViewportBoxSelection() noexcept {
+    viewportBoxSelection_ = {};
+}
+
 const std::vector<EditorHierarchyRow>& EditorSceneContext::HierarchyRows() const {
     RebuildHierarchyRowsIfNeeded();
     return hierarchyRowsCache_;
