@@ -3,6 +3,7 @@
 #include "scene/prefab/ScenePrefabHashBuilder.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace kb::scene {
 
