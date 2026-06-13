@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace kb::input {
 
@@ -12,6 +13,7 @@ class InputSubsystem;
 namespace kb::modules {
 
 class EngineModuleHost;
+class IEngineModule;
 
 } // namespace kb::modules
 
@@ -46,6 +48,7 @@ public:
     // honour its enabled/disabled module set. The default constructor delegates here
     // with a default descriptor (every built-in engine module enabled).
     explicit Scene(kb::project::ProjectDescriptor descriptor);
+    explicit Scene(kb::project::ProjectDescriptor descriptor, std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules);
     ~Scene();
 
     Scene(const Scene&) = delete;
@@ -68,6 +71,7 @@ public:
     [[nodiscard]] ScenePrefabs Prefabs() const noexcept;
     [[nodiscard]] SceneRuntime Runtime() noexcept;
     [[nodiscard]] SceneRuntimeQueries Runtime() const noexcept;
+    void ReloadModules();
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     [[nodiscard]] std::uint64_t Id() const noexcept;
