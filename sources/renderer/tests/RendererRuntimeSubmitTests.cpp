@@ -7,6 +7,7 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
@@ -242,6 +243,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     WriteTexture(emissivePath, 16U, 32U, 64U);
 
     kb::scene::Scene scene;
+    kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Runtime submit test could not register mesh loader");
     Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Runtime submit test could not register material loader");

@@ -13,6 +13,7 @@
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 
 #include <cstdint>
@@ -26,6 +27,10 @@ namespace {
 
 #ifndef KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH
 #define KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH ""
+#endif
+
+#ifndef KB_BASIC_LIGHTING_PLUGIN_PATH
+#define KB_BASIC_LIGHTING_PLUGIN_PATH ""
 #endif
 
 [[nodiscard]] std::filesystem::path ModuleTestRoot() {
@@ -342,6 +347,33 @@ void RunSceneInputToggleTest() {
     }
 }
 
+void RunBasicLightingPluginTogglesSceneLightingTest() {
+    const std::filesystem::path pluginPath = KB_BASIC_LIGHTING_PLUGIN_PATH;
+    kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "Basic Lighting plugin DLL is missing");
+
+    kb::project::ProjectDescriptor project;
+    project.disableEnginePluginsByDefault = true;
+    project.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Rendering.BasicLighting",
+        .binaryPath = pluginPath.string(),
+        .enabled = true,
+    });
+
+    kb::scene::Scene scene;
+    EngineModuleHost host{ project };
+    host.Load(scene.Runtime().EcsWorld());
+    kb::tests::Require(host.IsActive("Rendering.BasicLighting"), "Basic Lighting plugin was not active after host load");
+    host.AttachScene(scene);
+    kb::tests::Require(
+        kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
+        "Basic Lighting plugin did not enable scene lighting on attach");
+
+    host.DetachScene(scene);
+    kb::tests::Require(
+        !kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
+        "Basic Lighting plugin did not disable scene lighting on detach");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -356,6 +388,7 @@ void RunEngineModuleTests() {
     RunPhaseOrderTest();
     RunEngineModuleLoaderShadowCopyTest();
     RunSceneInputToggleTest();
+    RunBasicLightingPluginTogglesSceneLightingTest();
 }
 
 } // namespace kb::tests

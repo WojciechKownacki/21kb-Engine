@@ -14,6 +14,7 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/script/ScriptBehaviourAsset.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneRuntime.hpp"
@@ -830,6 +831,22 @@ std::string_view EditorSceneContext::HierarchyRenameBuffer() const noexcept {
     return hierarchyRenameBuffer_;
 }
 
+bool EditorSceneContext::IsHierarchyContextMenuOpen() const noexcept {
+    return hierarchyContextMenuOpen_;
+}
+
+int EditorSceneContext::HierarchyContextMenuX() const noexcept {
+    return hierarchyContextMenuX_;
+}
+
+int EditorSceneContext::HierarchyContextMenuY() const noexcept {
+    return hierarchyContextMenuY_;
+}
+
+EditorHierarchyContextCommand EditorSceneContext::HierarchyContextMenuHoveredCommand() const noexcept {
+    return hierarchyContextMenuHovered_;
+}
+
 void EditorSceneContext::FocusHierarchySearch(bool focused) noexcept {
     if (focused) {
         static_cast<void>(CommitHierarchyRename());
@@ -989,6 +1006,30 @@ void EditorSceneContext::CancelHierarchyRename() noexcept {
     if (changed) {
         InvalidateHierarchyRows();
     }
+}
+
+void EditorSceneContext::OpenHierarchyContextMenu(int x, int y) noexcept {
+    hierarchyContextMenuOpen_ = true;
+    hierarchyContextMenuX_ = x;
+    hierarchyContextMenuY_ = y;
+    hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
+    hierarchySearch_.Focus(false);
+    assetBrowser_.CloseContextMenu();
+}
+
+void EditorSceneContext::CloseHierarchyContextMenu() noexcept {
+    hierarchyContextMenuOpen_ = false;
+    hierarchyContextMenuX_ = 0;
+    hierarchyContextMenuY_ = 0;
+    hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
+}
+
+bool EditorSceneContext::SetHierarchyContextMenuHoveredCommand(EditorHierarchyContextCommand command) noexcept {
+    if (hierarchyContextMenuHovered_ == command) {
+        return false;
+    }
+    hierarchyContextMenuHovered_ = command;
+    return true;
 }
 
 bool EditorSceneContext::BeginAssetFolderCreation() {
@@ -1233,6 +1274,42 @@ kb::scene::SceneEntity EditorSceneContext::CreateHierarchyObject() {
             return true;
         })) {
         console_.Info("Hierarchy", "Entity created.");
+    }
+    return created;
+}
+
+kb::scene::SceneEntity EditorSceneContext::CreateLightObject(kb::scene::LightKind kind) {
+    const char* name = "Point Light";
+    const char* label = "Create Point Light";
+    switch (kind) {
+    case kb::scene::LightKind::Directional:
+        name = "Directional Light";
+        label = "Create Directional Light";
+        break;
+    case kb::scene::LightKind::Spot:
+        name = "Spot Light";
+        label = "Create Spot Light";
+        break;
+    case kb::scene::LightKind::Point:
+    default:
+        break;
+    }
+
+    kb::scene::SceneEntity created{};
+    if (ExecuteSceneCommand(label, [this, &created, kind, name]() {
+            kb::scene::SceneObjectDesc desc{};
+            desc.name = name;
+            created = scene_->Entities().CreateEntity(std::move(desc));
+            if (!created.IsValid()) {
+                return false;
+            }
+            kb::scene::LightComponent light{};
+            light.kind = kind;
+            scene_->Components().Lights().Set(created, light);
+            SelectEntity(created);
+            return true;
+        })) {
+        console_.Info("Hierarchy", std::string{ name } + " created.");
     }
     return created;
 }

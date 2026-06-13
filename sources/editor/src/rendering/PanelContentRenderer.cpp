@@ -334,6 +334,10 @@ void PanelContentRenderer::Paint(
     }
 
     RestoreDC(dc, savedDc);
+
+    if (panel.kind == DockPanelKind::Hierarchy) {
+        HierarchyPanelRenderer{}.PaintContextMenu(dc, overlayBounds, theme, sceneContext);
+    }
 }
 
 } // namespace kb::editor

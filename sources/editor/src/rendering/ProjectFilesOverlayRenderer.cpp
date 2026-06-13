@@ -11,6 +11,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ using Draw = ProjectFilesPanelDrawing;
 constexpr int kSummaryHeaderHeight = 26;
 constexpr int kSummaryRowHeight = 24;
 constexpr int kSummaryScrollbarWidth = 12;
+constexpr int kLightingSubmenuWidth = 190;
+constexpr int kLightingSubmenuRows = 4;
+constexpr int kLightingSubmenuGap = 4;
 
 [[nodiscard]] int Width(const RECT& rect) noexcept {
     return static_cast<int>(rect.right - rect.left);
@@ -59,6 +63,24 @@ void DrawCheckbox(HDC dc, RECT row, const EditorTheme& theme, bool checked) {
         summary.right - 1,
         summary.bottom - 1,
     };
+}
+
+[[nodiscard]] bool IsLightingSubmenuCommand(EditorAssetContextCommand command) noexcept {
+    return command == EditorAssetContextCommand::AddLighting
+        || command == EditorAssetContextCommand::AddDirectionalLight
+        || command == EditorAssetContextCommand::AddPointLight
+        || command == EditorAssetContextCommand::AddSpotLight;
+}
+
+[[nodiscard]] bool HasLightingSubmenu(const std::vector<EditorAssetContextMenuItem>& items) noexcept {
+    return std::ranges::any_of(items, [](const EditorAssetContextMenuItem& item) {
+        return item.command == EditorAssetContextCommand::AddLighting;
+    });
+}
+
+[[nodiscard]] RECT ContextMenuRectForItems(const RECT& content, int x, int y, const std::vector<EditorAssetContextMenuItem>& items) noexcept {
+    (void)items;
+    return EditorAssetBrowserLayout::ContextMenuRect(content, x, y, static_cast<int>(items.size()));
 }
 
 void DrawSelectionSummaryScrollbar(HDC dc, RECT viewport, const EditorTheme& theme, int rowCount, int scroll) {
@@ -147,7 +169,7 @@ void DrawContextMenu(HDC dc, const RECT& content, const EditorTheme& theme, cons
         return;
     }
 
-    const RECT menu = EditorAssetBrowserLayout::ContextMenuRect(content, state.ContextMenuX(), state.ContextMenuY(), static_cast<int>(items.size()));
+    const RECT menu = ContextMenuRectForItems(content, state.ContextMenuX(), state.ContextMenuY(), items);
     RECT shadow = menu;
     OffsetRect(&shadow, 3, 3);
     GdiDrawing::FillRectAlpha(dc, shadow, RGB(0, 0, 0), 90);
@@ -155,13 +177,87 @@ void DrawContextMenu(HDC dc, const RECT& content, const EditorTheme& theme, cons
 
     for (std::size_t index = 0; index < items.size(); ++index) {
         const RECT row = EditorAssetBrowserLayout::ContextMenuItemRect(menu, static_cast<int>(index));
-        const bool hovered = state.ContextMenuHoveredCommand() == items[index].command;
+        const bool hovered = state.ContextMenuHoveredCommand() == items[index].command
+            || (items[index].command == EditorAssetContextCommand::AddLighting && IsLightingSubmenuCommand(state.ContextMenuHoveredCommand()));
         if (hovered) {
             GdiDrawing::FillRectAlpha(dc, row, Draw::Color(theme.accent), 38);
         }
         Draw::DrawLabel(dc, Draw::Inset(row, 9, 0), items[index].label, hovered ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
+        if (items[index].command == EditorAssetContextCommand::AddLighting) {
+            Draw::DrawLabel(dc, RECT{ row.right - 20, row.top, row.right - 6, row.bottom }, ">", hovered ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
+        }
         if (index + 1 < items.size()) {
             RECT separator{ menu.left + 8, row.bottom + 3, menu.right - 8, row.bottom + 4 };
+            Draw::DrawHairline(dc, separator, Draw::Color(theme.borderPanel));
+        }
+    }
+
+    const EditorAssetContextCommand hoveredCommand = state.ContextMenuHoveredCommand();
+    const bool showLightingSubmenu = hoveredCommand == EditorAssetContextCommand::AddLighting
+        || hoveredCommand == EditorAssetContextCommand::AddDirectionalLight
+        || hoveredCommand == EditorAssetContextCommand::AddPointLight
+        || hoveredCommand == EditorAssetContextCommand::AddSpotLight;
+    if (!showLightingSubmenu) {
+        return;
+    }
+
+    const auto addIter = std::ranges::find_if(items, [](const EditorAssetContextMenuItem& item) {
+        return item.command == EditorAssetContextCommand::AddLighting;
+    });
+    if (addIter == items.end()) {
+        return;
+    }
+    const int addIndex = static_cast<int>(std::distance(items.begin(), addIter));
+    const RECT addRow = EditorAssetBrowserLayout::ContextMenuItemRect(menu, addIndex);
+    RECT submenu{
+        addRow.right + kLightingSubmenuGap,
+        addRow.top,
+        addRow.right + kLightingSubmenuGap + kLightingSubmenuWidth,
+        addRow.top + EditorAssetBrowserLayout::ContextMenuPadding * 2
+            + kLightingSubmenuRows * EditorAssetBrowserLayout::ContextMenuRowHeight
+            + (kLightingSubmenuRows - 1) * EditorAssetBrowserLayout::ContextMenuSeparatorHeight,
+    };
+    if (submenu.right > content.right) {
+        const int width = submenu.right - submenu.left;
+        const int height = submenu.bottom - submenu.top;
+        const int left = std::clamp(static_cast<int>(menu.left), static_cast<int>(content.left), std::max(static_cast<int>(content.left), static_cast<int>(content.right) - width));
+        int top = menu.bottom + kLightingSubmenuGap;
+        if (top + height > content.bottom) {
+            top = menu.top - height - kLightingSubmenuGap;
+        }
+        top = std::clamp(top, static_cast<int>(content.top), std::max(static_cast<int>(content.top), static_cast<int>(content.bottom) - height));
+        submenu = RECT{ left, top, left + width, top + height };
+    } else if (submenu.bottom > content.bottom) {
+        OffsetRect(&submenu, 0, content.bottom - submenu.bottom);
+    }
+
+    RECT submenuShadow = submenu;
+    OffsetRect(&submenuShadow, 3, 3);
+    GdiDrawing::FillRectAlpha(dc, submenuShadow, RGB(0, 0, 0), 90);
+    GdiDrawing::DrawSharpFrame(dc, submenu, Draw::Color(theme.strip), Draw::Color(theme.borderPanel));
+
+    struct LightingRow {
+        EditorAssetContextCommand command;
+        const char* label;
+    };
+    constexpr LightingRow rows[] = {
+        { EditorAssetContextCommand::AddLighting, "Lighting" },
+        { EditorAssetContextCommand::AddDirectionalLight, "Directional Light" },
+        { EditorAssetContextCommand::AddPointLight, "Point Light" },
+        { EditorAssetContextCommand::AddSpotLight, "Spot Light" },
+    };
+    for (int index = 0; index < kLightingSubmenuRows; ++index) {
+        const RECT row = EditorAssetBrowserLayout::ContextMenuItemRect(submenu, index);
+        const bool hovered = hoveredCommand == rows[index].command && rows[index].command != EditorAssetContextCommand::AddLighting;
+        if (hovered) {
+            GdiDrawing::FillRectAlpha(dc, row, Draw::Color(theme.accent), 38);
+        }
+        const COLORREF color = index == 0
+            ? Draw::Color(theme.textSecondary)
+            : (hovered ? Draw::Color(theme.textPrimary) : Draw::Color(theme.textSecondary));
+        Draw::DrawLabel(dc, Draw::Inset(row, 9, 0), rows[index].label, color);
+        if (index == 0) {
+            RECT separator{ submenu.left + 8, row.bottom + 3, submenu.right - 8, row.bottom + 4 };
             Draw::DrawHairline(dc, separator, Draw::Color(theme.borderPanel));
         }
     }

@@ -8,6 +8,7 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/visual/VisualGraphAssetLoader.hpp"
 
 #include "scene/SceneAccess.hpp"
@@ -106,6 +107,14 @@ const SceneState& SceneAccess::State(const Scene& scene) noexcept {
 
 std::uint64_t Scene::Id() const noexcept {
     return id_;
+}
+
+void SceneLightingAccess::SetBasicLightingEnabled(Scene& scene, bool enabled) noexcept {
+    SceneAccess::State(scene).basicLightingEnabled = enabled;
+}
+
+bool SceneLightingAccess::BasicLightingEnabled(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).basicLightingEnabled;
 }
 
 SceneObject SceneAccess::MakeObject(Scene& scene, SceneEntity entity) noexcept {

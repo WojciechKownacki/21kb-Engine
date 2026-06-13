@@ -24,6 +24,14 @@ namespace {
 #endif
 #endif
 
+#if !defined(KB_BASIC_LIGHTING_PLUGIN_PATH)
+#if defined(_WIN32)
+#define KB_BASIC_LIGHTING_PLUGIN_PATH "kb_basic_lighting_plugin.dll"
+#else
+#define KB_BASIC_LIGHTING_PLUGIN_PATH "libkb_basic_lighting_plugin.so"
+#endif
+#endif
+
 [[nodiscard]] kb::project::ProjectDescriptor DefaultDescriptor() {
     kb::project::ProjectDescriptor descriptor;
     const std::string projectName = EditorProjectPaths::ProjectFile().stem().string();
@@ -41,6 +49,11 @@ namespace {
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Audio.Miniaudio",
         .binaryPath = KB_AUDIO_MINIAUDIO_PLUGIN_PATH,
+        .enabled = true,
+    });
+    descriptor.plugins.push_back(kb::project::ProjectPluginReference{
+        .name = "Rendering.BasicLighting",
+        .binaryPath = KB_BASIC_LIGHTING_PLUGIN_PATH,
         .enabled = true,
     });
     return descriptor;

@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
@@ -56,6 +57,14 @@ namespace kb::editor {
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
+
+enum class EditorHierarchyContextCommand {
+    None,
+    AddLighting,
+    AddDirectionalLight,
+    AddPointLight,
+    AddSpotLight,
+};
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -158,6 +167,10 @@ public:
     [[nodiscard]] bool IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept;
     [[nodiscard]] bool IsHierarchyRenameSelectingAll() const noexcept;
     [[nodiscard]] std::string_view HierarchyRenameBuffer() const noexcept;
+    [[nodiscard]] bool IsHierarchyContextMenuOpen() const noexcept;
+    [[nodiscard]] int HierarchyContextMenuX() const noexcept;
+    [[nodiscard]] int HierarchyContextMenuY() const noexcept;
+    [[nodiscard]] EditorHierarchyContextCommand HierarchyContextMenuHoveredCommand() const noexcept;
 
     void FocusHierarchySearch(bool focused) noexcept;
     void SetHierarchySearchQuery(std::string query);
@@ -175,6 +188,9 @@ public:
     void ClearHierarchyRename() noexcept;
     [[nodiscard]] bool CommitHierarchyRename();
     void CancelHierarchyRename() noexcept;
+    void OpenHierarchyContextMenu(int x, int y) noexcept;
+    void CloseHierarchyContextMenu() noexcept;
+    [[nodiscard]] bool SetHierarchyContextMenuHoveredCommand(EditorHierarchyContextCommand command) noexcept;
     [[nodiscard]] bool BeginAssetFolderCreation();
     [[nodiscard]] bool BeginAssetRename();
     [[nodiscard]] bool BeginAssetRename(kb::assets::AssetId id);
@@ -197,6 +213,7 @@ public:
     [[nodiscard]] bool ToggleHierarchyRowExpanded(std::size_t rowIndex);
     [[nodiscard]] bool ToggleEntityVisibility(kb::scene::SceneEntity entity);
     [[nodiscard]] kb::scene::SceneEntity CreateHierarchyObject();
+    [[nodiscard]] kb::scene::SceneEntity CreateLightObject(kb::scene::LightKind kind);
     [[nodiscard]] bool ReparentEntity(kb::scene::SceneEntity child, kb::scene::SceneEntity parent);
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
@@ -288,6 +305,10 @@ private:
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
+    bool hierarchyContextMenuOpen_ = false;
+    int hierarchyContextMenuX_ = 0;
+    int hierarchyContextMenuY_ = 0;
+    EditorHierarchyContextCommand hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
     std::optional<std::string> pendingSceneTransactionLabel_;
     EditorSceneActiveTransformEdit activeTransformEdit_;
     std::uint64_t sceneRenderRevision_ = 1U;
