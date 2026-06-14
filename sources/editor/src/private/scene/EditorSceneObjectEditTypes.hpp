@@ -23,6 +23,7 @@ struct EditorSceneObjectPrefabPayload {
 struct EditorSceneActiveTransformEdit {
     std::string label;
     kb::scene::SceneEntity primary{};
+    kb::scene::Vec3 targetStart{};
     std::vector<EditorSceneObjectTransformChange> changes;
 
     [[nodiscard]] bool Active() const noexcept {
@@ -32,6 +33,7 @@ struct EditorSceneActiveTransformEdit {
     void Clear() noexcept {
         label.clear();
         primary = {};
+        targetStart = {};
         changes.clear();
     }
 };

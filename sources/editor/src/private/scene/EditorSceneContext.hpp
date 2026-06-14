@@ -248,6 +248,10 @@ public:
     [[nodiscard]] bool CycleInputMappingTrigger(kb::assets::AssetId id, std::size_t index);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, kb::scene::SceneEntity parent);
     [[nodiscard]] bool InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent);
+    [[nodiscard]] bool InstantiatePrefabAssetAt(
+        const std::filesystem::path& path,
+        const std::filesystem::path& virtualPath,
+        kb::scene::Vec3 position);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId);
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);

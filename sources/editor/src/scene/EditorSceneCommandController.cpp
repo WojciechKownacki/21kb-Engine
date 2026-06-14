@@ -9,6 +9,7 @@
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
+#include "scene/EditorHierarchySelectionNormalizer.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
@@ -123,21 +124,9 @@ std::vector<EditorHierarchyRow> EditorSceneCommandController::HierarchyRows() co
 }
 
 void EditorSceneCommandController::NormalizeHierarchySelectionAfterSceneRestore() {
-    const kb::scene::SceneEntity selected = hierarchySelection_.Primary();
-    if (selected.IsValid() && scene_.Entities().IsAlive(selected)) {
-        return;
-    }
-
     const std::vector<EditorHierarchyRow> rows = HierarchyRows();
-    for (const EditorHierarchyRow& row : rows) {
-        if (row.entity.IsValid() && scene_.Entities().IsAlive(row.entity)) {
-            hierarchySelection_.SelectEntity(row.entity);
-            assetBrowser_.ClearSelection();
-            return;
-        }
-    }
-
-    hierarchySelection_.Clear();
+    EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene_, hierarchySelection_, rows);
+    assetBrowser_.ClearSelection();
 }
 
 void EditorSceneCommandController::NotifySceneChanged(bool documentChanged) {

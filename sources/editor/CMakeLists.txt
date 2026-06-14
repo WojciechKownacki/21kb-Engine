@@ -33,6 +33,7 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
+    src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
     src/app/EditorMouseWheelRouter.cpp
     src/app/inspector/EditorInspectorPointerController.cpp
@@ -284,6 +285,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
+    src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
     src/private/app/EditorMouseWheelRouter.hpp
     src/private/app/inspector/EditorInspectorPointerController.hpp
@@ -343,6 +345,7 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
     src/private/inspection/InspectorMeshRendererTextBuilder.hpp
+    src/private/inspection/InspectorMultiSelectionTextBuilder.hpp
     src/private/inspection/InspectorPanelTextBuilder.hpp
     src/private/inspection/InspectorRigidbodyTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
@@ -467,6 +470,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorHierarchyMainContentResolver.hpp
     src/private/scene/EditorHierarchyMetrics.hpp
     src/private/scene/EditorHierarchyExpansionState.hpp
+    src/private/scene/EditorHierarchySelectionNormalizer.hpp
     src/private/scene/EditorHierarchyObjectFactory.hpp
     src/private/scene/EditorHierarchyRow.hpp
     src/private/scene/EditorHierarchyRowBuilder.hpp
@@ -490,6 +494,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
     src/private/scene/EditorScenePrefabActions.hpp
+    src/private/scene/EditorSceneSelectionPivot.hpp
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
@@ -617,6 +622,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMeshRendererTextBuilder.cpp
+    src/inspection/InspectorMultiSelectionTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
     src/inspection/InspectorRigidbodyTextBuilder.cpp
     src/scene/EditorDefaultSceneFactory.cpp
@@ -630,6 +636,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorHierarchySearchState.cpp
     src/scene/EditorHierarchySearchMatcher.cpp
     src/scene/EditorHierarchySelectionState.cpp
+    src/scene/EditorHierarchySelectionNormalizer.cpp
     src/scene/EditorHierarchyRowPicker.cpp
     src/scene/EditorHierarchySelectionController.cpp
     src/scene/EditorPluginCatalog.cpp
@@ -642,6 +649,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
+    src/scene/EditorSceneSelectionPivot.cpp
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
@@ -850,7 +858,9 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchyRowFactory.cpp
         src/scene/EditorHierarchySearchMatcher.cpp
         src/scene/EditorHierarchySearchState.cpp
+        src/scene/EditorHierarchySelectionNormalizer.cpp
         src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneMeshAssetActions.cpp
         src/scene/EditorScenePrefabActions.cpp

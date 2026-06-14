@@ -6,14 +6,15 @@
 
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneTransforms.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 
 #include <bx/math.h>
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace kb::editor {
@@ -206,8 +207,8 @@ struct SceneViewportRenderProfileDesc {
     kb::render::RenderSceneSubmitDesc::EditorGizmoDesc gizmo{};
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (selected.IsValid() && sceneContext.Scene().Entities().IsAlive(selected)) {
-        if (const kb::scene::TransformComponent* transform = sceneContext.Scene().Transforms().TryGet(selected); transform != nullptr) {
-            const kb::scene::Vec3 target = transform->localPosition;
+        if (const std::optional<kb::scene::Vec3> pivot = EditorSceneSelectionPivot::Resolve(sceneContext.Scene(), sceneContext.SelectedHierarchyEntities(), selected)) {
+            const kb::scene::Vec3 target = *pivot;
             gizmo.visible = true;
             gizmo.targetPosition = {target.x, target.y, target.z};
             gizmo.worldScale = GizmoScreenSpaceScale(viewportCamera, axes, target, renderHeight);
