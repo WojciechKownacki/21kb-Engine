@@ -140,6 +140,7 @@ private:
         void MarkHostNotPresented(HWND host) noexcept;
         void MarkAllNotPresented() noexcept;
         void ShutdownFramebuffers() noexcept;
+        void ResetSubmittedSceneRevisions() noexcept;
 
     private:
         std::vector<std::unique_ptr<ViewportSession>> sessions_;

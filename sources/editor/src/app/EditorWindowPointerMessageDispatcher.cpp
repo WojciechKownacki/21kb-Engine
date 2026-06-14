@@ -16,6 +16,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
         context_.dockController,
         context_.hierarchySelection,
         context_.sceneContext,
+        context_.renderBackendSettings,
         context_.sceneViewport,
         context_.playMode,
         context_.shellInteraction,

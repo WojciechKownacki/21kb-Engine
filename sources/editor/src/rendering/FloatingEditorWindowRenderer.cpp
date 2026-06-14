@@ -10,7 +10,7 @@
 
 namespace kb::editor {
 
-void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport* sceneViewport) const {
+void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport* sceneViewport) const {
     ScopedFont titleFont(16, FW_SEMIBOLD);
     ScopedFont bodyFont(14, FW_NORMAL);
 
@@ -28,7 +28,7 @@ void FloatingEditorWindowRenderer::Paint(HDC dc, HWND window, const RECT& client
     const bool viewportPanel = panel.kind == DockPanelKind::Scene;
     RECT content = viewportPanel ? panelRect : GdiDrawing::Inset(panelRect, metrics.panelPadding);
     content.top += metrics.tabStripHeight;
-    PanelContentRenderer{}.Paint(dc, content, panelRect, content, client, panel, theme, metrics, sceneContext, true, sceneViewport, window);
+    PanelContentRenderer{}.Paint(dc, content, panelRect, content, client, panel, theme, metrics, sceneContext, renderBackendSettings, true, sceneViewport, window);
 }
 
 } // namespace kb::editor

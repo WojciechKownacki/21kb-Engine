@@ -6,6 +6,7 @@
 #include "app/EditorPlayModeState.hpp"
 #include "app/EditorPointerDragState.hpp"
 #include "app/EditorShellInteractionState.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorHierarchySelectionController.hpp"
 #include "scene/EditorSceneContext.hpp"
@@ -28,6 +29,7 @@ public:
         EditorDockController& dockController,
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
+        EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport& sceneViewport,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
@@ -43,6 +45,7 @@ private:
     EditorDockController& dockController_;
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
+    EditorRenderBackendSettings& renderBackendSettings_;
     EditorSceneBgfxViewport& sceneViewport_;
     EditorPlayModeState& playMode_;
     EditorShellInteractionState& shellInteraction_;

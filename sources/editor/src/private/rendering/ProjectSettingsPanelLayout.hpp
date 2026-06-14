@@ -24,6 +24,10 @@ struct ProjectSettingsPanelLayoutRects {
     RECT mappingField{};   // Mapping Context row cell (selector lives inset within).
     RECT enabledLabel{};
     RECT enabledCheckbox{};
+    RECT backendLabel{};
+    RECT backendAutoButton{};
+    RECT backendDx12Button{};
+    RECT backendVulkanButton{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -43,6 +47,8 @@ public:
 
     // Bounding box enclosing `count` stacked option rows under the selector box.
     [[nodiscard]] static RECT OptionListBounds(const RECT& fieldBox, int count) noexcept;
+
+    [[nodiscard]] static RECT BackendOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
 };
 
 #endif

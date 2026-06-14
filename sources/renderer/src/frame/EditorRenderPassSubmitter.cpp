@@ -104,19 +104,13 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
                 .majorEvery = desc.editorGrid.majorEvery,
             };
             static_cast<void>(gridPass_.Submit(gridDesc));
+        } else {
+            SubmitEmptyEditorView(
+                viewportPlan.viewIds.sceneOverlays,
+                frameBuffer,
+                extent,
+                "KB Editor Scene Overlays");
         }
-        static_cast<void>(gizmoPass_.Submit(SceneGizmoPassDesc{
-            .viewId = viewportPlan.viewIds.sceneOverlays,
-            .frameBuffer = frameBuffer,
-            .extent = extent,
-            .outputRect = outputRect,
-            .camera = camera,
-            .targetPosition = desc.editorGizmo.targetPosition,
-            .worldScale = desc.editorGizmo.worldScale,
-            .hoveredAxis = desc.editorGizmo.hoveredAxis,
-            .draggedAxis = desc.editorGizmo.draggedAxis,
-            .visible = desc.editorGizmo.visible,
-        }));
         return;
     }
 
@@ -158,6 +152,35 @@ void EditorRenderPassSubmitter::SubmitUiComposite(const RenderViewportPlan& view
         frameBuffer,
         extent,
         "KB Editor UI Composite");
+}
+
+void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& viewportPlan, const RenderSceneSubmitDesc& desc, const SceneRenderCamera* camera) const {
+    if (camera != nullptr && IsInitialized()) {
+        const bool overlayFinalTarget = desc.finalComposite.enabled;
+        const bgfx::FrameBufferHandle frameBuffer = overlayFinalTarget ? desc.finalComposite.frameBuffer : desc.target.frameBuffer;
+        const RenderExtent extent = overlayFinalTarget ? desc.finalComposite.extent : desc.target.viewport.extent;
+        const RenderViewportRect outputRect = overlayFinalTarget ? desc.finalComposite.outputRect : RenderViewportRect{};
+        static_cast<void>(gizmoPass_.Submit(SceneGizmoPassDesc{
+            .viewId = viewportPlan.viewIds.editorGizmoOverlay,
+            .frameBuffer = frameBuffer,
+            .extent = extent,
+            .outputRect = outputRect,
+            .camera = camera,
+            .targetPosition = desc.editorGizmo.targetPosition,
+            .worldScale = desc.editorGizmo.worldScale,
+            .hoveredAxis = desc.editorGizmo.hoveredAxis,
+            .draggedAxis = desc.editorGizmo.draggedAxis,
+            .mode = desc.editorGizmo.mode,
+            .visible = desc.editorGizmo.visible,
+        }));
+        return;
+    }
+
+    SubmitEmptyEditorView(
+        viewportPlan.viewIds.editorGizmoOverlay,
+        desc.finalComposite.enabled ? desc.finalComposite.frameBuffer : desc.target.frameBuffer,
+        desc.finalComposite.enabled ? desc.finalComposite.extent : desc.target.viewport.extent,
+        "KB Editor Gizmo Overlay");
 }
 
 } // namespace kb::render

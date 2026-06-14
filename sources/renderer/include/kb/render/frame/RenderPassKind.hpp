@@ -23,9 +23,10 @@ enum class RenderPassKind : std::uint8_t {
     EditorSceneOverlays,
     FinalComposite,
     EditorUiComposite,
+    EditorGizmoOverlay,
 };
 
-constexpr std::size_t RenderPassKindCount = 16U;
+constexpr std::size_t RenderPassKindCount = 17U;
 
 [[nodiscard]] const char* RenderPassKindName(RenderPassKind kind) noexcept;
 [[nodiscard]] std::span<const RenderPassKind> RequiredRenderPassKinds() noexcept;

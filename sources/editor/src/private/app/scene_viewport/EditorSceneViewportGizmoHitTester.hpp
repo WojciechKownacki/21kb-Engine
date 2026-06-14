@@ -29,6 +29,14 @@ public:
         float localX,
         float localY) noexcept;
 
+    [[nodiscard]] static int HitRotationAxis(
+        const EditorViewportCameraState& camera,
+        const RECT& renderArea,
+        kb::scene::Vec3 targetPosition,
+        float worldScale,
+        float localX,
+        float localY) noexcept;
+
     [[nodiscard]] static bool HitCenter(
         const EditorViewportCameraState& camera,
         const RECT& renderArea,

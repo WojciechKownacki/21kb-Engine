@@ -14,6 +14,7 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
+#include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
 #include <algorithm>
@@ -56,6 +57,11 @@ EditorMouseMoveRouter::EditorMouseMoveRouter(
     , metrics_(metrics) {}
 
 void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown) {
+    const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+    }
+
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandlePointerMove(messageWindow, x, y)) {
         return;

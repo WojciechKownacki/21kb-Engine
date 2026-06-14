@@ -18,18 +18,24 @@ namespace {
         return false;
     }
 
-    const std::size_t count = dropdown == EditorViewportToolbarDropdown::GridSpacing
-        ? EditorViewportGridSpacingOptionCount()
-        : EditorViewportSnapStepOptionCount();
+    std::size_t count = EditorViewportSnapStepOptionCount();
+    if (dropdown == EditorViewportToolbarDropdown::GridSpacing) {
+        count = EditorViewportGridSpacingOptionCount();
+    } else if (dropdown == EditorViewportToolbarDropdown::RotationSnap) {
+        count = EditorViewportRotationSnapOptionCount();
+    }
     for (std::size_t index = 0; index < count && index < toolbar.dropdownItems.size(); ++index) {
         if (!PointInRect(toolbar.dropdownItems[index], x, y)) {
             continue;
         }
         if (dropdown == EditorViewportToolbarDropdown::GridSpacing) {
             preview.SetGridSpacing(EditorViewportGridSpacingOption(index));
-        } else {
+        } else if (dropdown == EditorViewportToolbarDropdown::SnapStep) {
             preview.SetSnapStep(EditorViewportSnapStepOption(index));
+        } else if (dropdown == EditorViewportToolbarDropdown::RotationSnap) {
+            preview.SetRotationSnapDegrees(EditorViewportRotationSnapOption(index));
         }
+        preview.CloseToolbarDropdown();
         return true;
     }
     return false;
@@ -73,6 +79,11 @@ bool EditorSceneViewportToolbarPointerController::HandlePointerDown(const Editor
     }
     if (PointInRect(toolbar.snapStepButton, x, y)) {
         preview.ToggleToolbarDropdown(EditorViewportToolbarDropdown::SnapStep);
+        sceneViewport_.RequestPresent();
+        return true;
+    }
+    if (PointInRect(toolbar.rotationSnapButton, x, y)) {
+        preview.ToggleToolbarDropdown(EditorViewportToolbarDropdown::RotationSnap);
         sceneViewport_.RequestPresent();
         return true;
     }

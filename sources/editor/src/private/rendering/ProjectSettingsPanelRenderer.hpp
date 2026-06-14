@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -23,12 +24,14 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     MappingContextField,  // The closed selector box (click toggles the dropdown).
     MappingContextOption, // A row inside the open dropdown list (see Hit::index).
     EnabledCheckbox,
+    RenderBackendOption,
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
 // each maps to a content page rendered in the right pane.
 enum class ProjectSettingsCategory : int {
     Inputs = 0,
+    Graphics,
     Count,
 };
 #endif
@@ -46,7 +49,8 @@ public:
         HDC dc,
         const RECT& content,
         const EditorTheme& theme,
-        const EditorSceneContext& sceneContext) const;
+        const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
 #endif
 };

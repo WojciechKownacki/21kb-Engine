@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <string>
@@ -12,35 +13,76 @@ namespace kb::editor {
 EditorProjectSettingsPointerController::EditorProjectSettingsPointerController(EditorSceneContext& sceneContext) noexcept
     : sceneContext_(sceneContext) {}
 
-bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y) {
-    const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext_, x, y);
+namespace {
+
+[[nodiscard]] EditorRenderBackend BackendForOption(int index) noexcept {
+    switch (index) {
+    case 1:
+        return EditorRenderBackend::DirectX12;
+    case 2:
+        return EditorRenderBackend::Vulkan;
+    case 0:
+    default:
+        return EditorRenderBackend::Auto;
+    }
+}
+
+[[nodiscard]] bool HandleProjectSettingsPointerDown(
+    EditorSceneContext& sceneContext,
+    EditorRenderBackendSettings* renderBackendSettings,
+    const RECT& content,
+    int x,
+    int y) {
+    const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext, x, y);
     switch (hit.kind) {
     case ProjectSettingsHitKind::CategoryItem:
         // SelectCategory also closes any open dropdown; always repaint to show the
         // pressed row even when the same category is re-clicked.
-        static_cast<void>(sceneContext_.ProjectSettings().SelectCategory(hit.index));
+        static_cast<void>(sceneContext.ProjectSettings().SelectCategory(hit.index));
         return true;
     case ProjectSettingsHitKind::MappingContextField:
-        sceneContext_.ProjectSettings().ToggleMappingContextDropdown();
+        sceneContext.ProjectSettings().ToggleMappingContextDropdown();
         return true;
     case ProjectSettingsHitKind::MappingContextOption: {
-        const std::vector<std::string> options = sceneContext_.ProjectInputMappingContextOptions();
+        const std::vector<std::string> options = sceneContext.ProjectInputMappingContextOptions();
         const bool changed = hit.index >= 0 && static_cast<std::size_t>(hit.index) < options.size() &&
-                             sceneContext_.SetProjectInputMappingContext(options[static_cast<std::size_t>(hit.index)]);
-        static_cast<void>(sceneContext_.CloseProjectSettingsDropdowns());
+                             sceneContext.SetProjectInputMappingContext(options[static_cast<std::size_t>(hit.index)]);
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         // Always repaint to dismiss the list, even when the selection was unchanged.
         static_cast<void>(changed);
         return true;
     }
     case ProjectSettingsHitKind::EnabledCheckbox: {
-        const bool closed = sceneContext_.CloseProjectSettingsDropdowns();
-        return sceneContext_.ToggleProjectInputEnabled() || closed;
+        const bool closed = sceneContext.CloseProjectSettingsDropdowns();
+        return sceneContext.ToggleProjectInputEnabled() || closed;
+    }
+    case ProjectSettingsHitKind::RenderBackendOption: {
+        if (renderBackendSettings == nullptr) {
+            return sceneContext.CloseProjectSettingsDropdowns();
+        }
+        const EditorRenderBackend previousBackend = renderBackendSettings->Backend();
+        renderBackendSettings->SetBackend(BackendForOption(hit.index));
+        if (renderBackendSettings->Backend() != previousBackend) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
     }
     case ProjectSettingsHitKind::None:
     default:
         // A click anywhere else in the panel dismisses an open dropdown.
-        return sceneContext_.CloseProjectSettingsDropdowns();
+        return sceneContext.CloseProjectSettingsDropdowns();
     }
+}
+
+} // namespace
+
+bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y) {
+    return HandleProjectSettingsPointerDown(sceneContext_, nullptr, content, x, y);
+}
+
+bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& content, int x, int y, EditorRenderBackendSettings& renderBackendSettings) {
+    return HandleProjectSettingsPointerDown(sceneContext_, &renderBackendSettings, content, x, y);
 }
 
 bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, int x, int y) {

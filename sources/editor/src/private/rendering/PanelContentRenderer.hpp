@@ -2,6 +2,7 @@
 
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -26,6 +27,7 @@ public:
         const EditorTheme& theme,
         const EditorMetrics& metrics,
         const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings,
         bool floating,
         EditorSceneBgfxViewport* sceneViewport = nullptr,
         HWND sceneViewportHost = nullptr) const;

@@ -11,6 +11,7 @@
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
+#include "scene/transform_edit/EditorTransformProperty.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -167,12 +168,6 @@ namespace {
         }
     }
     return text == "-0" ? "0" : text;
-}
-
-[[nodiscard]] bool IsTransformProperty(InspectorPropertyId property) noexcept {
-    return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ ||
-        property == InspectorPropertyId::RotationX || property == InspectorPropertyId::RotationY || property == InspectorPropertyId::RotationZ ||
-        property == InspectorPropertyId::ScaleX || property == InspectorPropertyId::ScaleY || property == InspectorPropertyId::ScaleZ;
 }
 
 [[nodiscard]] bool ToggleAudioSourceProperty(kb::scene::AudioSourceComponent& source, InspectorPropertyId property) noexcept {
@@ -453,7 +448,7 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                     sceneContext.Scene().Entities().SetName(entity, inspector.EditBuffer().empty() ? "Entity" : inspector.EditBuffer());
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
-            } else if (IsTransformProperty(property)) {
+            } else if (EditorTransformProperty::IsTransform(property)) {
                 if (sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
                     float value = 0.0F;
                     if (EvaluateMath(inspector.EditBuffer(), sceneContext.ActiveTransformEditPropertyStart(property), value)) {

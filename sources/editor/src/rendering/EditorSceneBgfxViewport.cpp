@@ -452,6 +452,7 @@ void EditorSceneBgfxViewport::ShutdownGpuResources() noexcept {
 
 void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
     sessionStore_.ShutdownFramebuffers();
+    sessionStore_.ResetSubmittedSceneRevisions();
     hostSurfaceStore_.ShutdownPresentTargets();
 }
 

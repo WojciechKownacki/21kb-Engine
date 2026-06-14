@@ -125,7 +125,7 @@ struct CachedRasterIcon {
 };
 
 [[nodiscard]] CachedHeroIconGlyph& CachedGlyph(HeroIconKind icon) {
-    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::Gamepad2) + 1U> cache{};
+    static std::array<CachedHeroIconGlyph, static_cast<std::size_t>(HeroIconKind::RotationSnap) + 1U> cache{};
     CachedHeroIconGlyph& cached = cache[static_cast<std::size_t>(icon)];
     if (cached.initialized) {
         return cached;

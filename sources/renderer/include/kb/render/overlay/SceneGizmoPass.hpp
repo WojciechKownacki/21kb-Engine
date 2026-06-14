@@ -21,6 +21,7 @@ struct SceneGizmoPassDesc {
     float worldScale = 1.0F;
     int hoveredAxis = -1;
     int draggedAxis = -1;
+    std::uint8_t mode = 0U;
     bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;
@@ -64,6 +65,8 @@ private:
     std::vector<std::uint32_t> indices_{};
     MeshRange shaft_{};
     MeshRange tip_{};
+    MeshRange scaleTip_{};
+    MeshRange rotateRing_{};
     MeshRange hub_{};
     bool initialized_ = false;
 };

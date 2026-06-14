@@ -18,9 +18,14 @@ constexpr float kAxisLength = 1.160F;
 constexpr float kShaftRadius = 0.026F;
 constexpr float kTipRadius = 0.086F;
 constexpr float kHubRadius = 0.106F;
+constexpr float kScaleTipHalfSize = 0.085F;
+constexpr float kRotateRingRadius = 0.792F;
+constexpr float kRotateRingTubeRadius = 0.014F;
 constexpr float kTipLength = kAxisLength - kShaftEnd;
 constexpr std::uint32_t kShaftSegments = 36U;
 constexpr std::uint32_t kTipSegments = 48U;
+constexpr std::uint32_t kRotateRingSegments = 96U;
+constexpr std::uint32_t kRotateRingTubeSegments = 8U;
 constexpr std::uint32_t kHubStacks = 16U;
 constexpr std::uint32_t kHubSlices = 32U;
 
@@ -149,6 +154,79 @@ void AppendConeTip(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& in
     range.indexCount = static_cast<std::uint32_t>(indices.size()) - baseIndex;
 }
 
+void AppendBoxTip(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, MeshRange& range) {
+    const std::uint32_t baseVertex = static_cast<std::uint32_t>(vertices.size());
+    const std::uint32_t baseIndex = static_cast<std::uint32_t>(indices.size());
+    const float min = -kScaleTipHalfSize;
+    const float max = kScaleTipHalfSize;
+    const float center = kShaftEnd + kScaleTipHalfSize;
+    vertices.push_back(Vertex{.x = min, .y = min, .z = center - kScaleTipHalfSize, .nx = -1.0F, .ny = -1.0F, .nz = -1.0F});
+    vertices.push_back(Vertex{.x = max, .y = min, .z = center - kScaleTipHalfSize, .nx = 1.0F, .ny = -1.0F, .nz = -1.0F});
+    vertices.push_back(Vertex{.x = max, .y = max, .z = center - kScaleTipHalfSize, .nx = 1.0F, .ny = 1.0F, .nz = -1.0F});
+    vertices.push_back(Vertex{.x = min, .y = max, .z = center - kScaleTipHalfSize, .nx = -1.0F, .ny = 1.0F, .nz = -1.0F});
+    vertices.push_back(Vertex{.x = min, .y = min, .z = center + kScaleTipHalfSize, .nx = -1.0F, .ny = -1.0F, .nz = 1.0F});
+    vertices.push_back(Vertex{.x = max, .y = min, .z = center + kScaleTipHalfSize, .nx = 1.0F, .ny = -1.0F, .nz = 1.0F});
+    vertices.push_back(Vertex{.x = max, .y = max, .z = center + kScaleTipHalfSize, .nx = 1.0F, .ny = 1.0F, .nz = 1.0F});
+    vertices.push_back(Vertex{.x = min, .y = max, .z = center + kScaleTipHalfSize, .nx = -1.0F, .ny = 1.0F, .nz = 1.0F});
+
+    constexpr std::array<std::uint32_t, 36U> boxIndices{{
+        0, 2, 1, 0, 3, 2,
+        4, 5, 6, 4, 6, 7,
+        0, 1, 5, 0, 5, 4,
+        1, 2, 6, 1, 6, 5,
+        2, 3, 7, 2, 7, 6,
+        3, 0, 4, 3, 4, 7,
+    }};
+    for (const std::uint32_t index : boxIndices) {
+        indices.push_back(baseVertex + index);
+    }
+
+    range.indexStart = baseIndex;
+    range.indexCount = static_cast<std::uint32_t>(indices.size()) - baseIndex;
+}
+
+void AppendRotateRing(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, MeshRange& range) {
+    const std::uint32_t baseVertex = static_cast<std::uint32_t>(vertices.size());
+    const std::uint32_t baseIndex = static_cast<std::uint32_t>(indices.size());
+
+    for (std::uint32_t ring = 0; ring <= kRotateRingSegments; ++ring) {
+        const float rt = static_cast<float>(ring) / static_cast<float>(kRotateRingSegments);
+        const float ringAngle = rt * 2.0F * kPi;
+        const float ringCos = std::cos(ringAngle);
+        const float ringSin = std::sin(ringAngle);
+        for (std::uint32_t tube = 0; tube <= kRotateRingTubeSegments; ++tube) {
+            const float tt = static_cast<float>(tube) / static_cast<float>(kRotateRingTubeSegments);
+            const float tubeAngle = tt * 2.0F * kPi;
+            const float tubeCos = std::cos(tubeAngle);
+            const float tubeSin = std::sin(tubeAngle);
+            const float radius = kRotateRingRadius + kRotateRingTubeRadius * tubeCos;
+            vertices.push_back(Vertex{
+                .x = radius * ringCos,
+                .y = radius * ringSin,
+                .z = kRotateRingTubeRadius * tubeSin,
+                .nx = tubeCos * ringCos,
+                .ny = tubeCos * ringSin,
+                .nz = tubeSin,
+            });
+        }
+    }
+
+    const std::uint32_t row = kRotateRingTubeSegments + 1U;
+    for (std::uint32_t ring = 0; ring < kRotateRingSegments; ++ring) {
+        for (std::uint32_t tube = 0; tube < kRotateRingTubeSegments; ++tube) {
+            const std::uint32_t i0 = baseVertex + ring * row + tube;
+            const std::uint32_t i1 = i0 + 1U;
+            const std::uint32_t i2 = i0 + row;
+            const std::uint32_t i3 = i2 + 1U;
+            indices.push_back(i0); indices.push_back(i2); indices.push_back(i1);
+            indices.push_back(i1); indices.push_back(i2); indices.push_back(i3);
+        }
+    }
+
+    range.indexStart = baseIndex;
+    range.indexCount = static_cast<std::uint32_t>(indices.size()) - baseIndex;
+}
+
 void AppendCenterSphere(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices, MeshRange& range) {
     const std::uint32_t baseIndex = static_cast<std::uint32_t>(indices.size());
     const std::uint32_t baseVertex = static_cast<std::uint32_t>(vertices.size());
@@ -258,19 +336,21 @@ void AppendDraw(
         std::min(1.0F, baseColor[2] * pass.tintB * boost),
     };
 
+    const float activeScale = boost > 1.01F ? 1.065F : 1.0F;
+    const float alpha = std::min(1.0F, pass.tintA * (boost > 1.01F ? 1.7F : 1.0F));
     const std::uint32_t end = range.indexStart + range.indexCount;
     for (std::uint32_t index = range.indexStart; index < end; ++index) {
-        output.push_back(TransformVertex(sourceVertices[sourceIndices[index]], basis, target, scale * pass.scaleFactor, color, pass.tintA));
+        output.push_back(TransformVertex(sourceVertices[sourceIndices[index]], basis, target, scale * pass.scaleFactor * activeScale, color, alpha));
     }
 }
 
 [[nodiscard]] float AxisBoost(GizmoAxis axis, int hoveredAxis, int draggedAxis) noexcept {
     const int axisIndex = static_cast<int>(axis);
     if (axisIndex == draggedAxis) {
-        return 1.18F;
+        return 1.75F;
     }
     if (axisIndex == hoveredAxis) {
-        return 1.10F;
+        return 1.45F;
     }
     return 1.0F;
 }
@@ -294,9 +374,11 @@ bool SceneGizmoPass::Initialize() {
     vertices_.clear();
     indices_.clear();
     vertices_.reserve(768);
-    indices_.reserve(4096);
+    indices_.reserve(12000);
     AppendCylinderShaft(vertices_, indices_, shaft_);
     AppendConeTip(vertices_, indices_, tip_);
+    AppendBoxTip(vertices_, indices_, scaleTip_);
+    AppendRotateRing(vertices_, indices_, rotateRing_);
     AppendCenterSphere(vertices_, indices_, hub_);
     initialized_ = true;
     if (!IsInitialized()) {
@@ -319,6 +401,8 @@ void SceneGizmoPass::Shutdown() noexcept {
     indices_.clear();
     shaft_ = {};
     tip_ = {};
+    scaleTip_ = {};
+    rotateRing_ = {};
     hub_ = {};
     initialized_ = false;
 }
@@ -334,13 +418,27 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
     }};
 
     std::vector<Vertex> drawVertices;
-    drawVertices.reserve(12000);
+    drawVertices.reserve(18000);
     for (const PassDesc& pass : passes) {
         for (const GizmoAxis axis : {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z}) {
             const AxisBasis basis = AxisRotation(axis);
             const float boost = AxisBoost(axis, desc.hoveredAxis, desc.draggedAxis);
-            AppendDraw(drawVertices, vertices_, indices_, shaft_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
-            AppendDraw(drawVertices, vertices_, indices_, tip_, basis, desc.targetPosition, desc.worldScale, ConeColor(axis), pass, boost);
+            if (desc.mode == 1U) {
+                AppendDraw(drawVertices, vertices_, indices_, rotateRing_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
+            } else {
+                AppendDraw(drawVertices, vertices_, indices_, shaft_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
+                AppendDraw(
+                    drawVertices,
+                    vertices_,
+                    indices_,
+                    desc.mode == 2U ? scaleTip_ : tip_,
+                    basis,
+                    desc.targetPosition,
+                    desc.worldScale,
+                    ConeColor(axis),
+                    pass,
+                    boost);
+            }
         }
         AppendDraw(drawVertices, vertices_, indices_, hub_, AxisRotation(GizmoAxis::None), desc.targetPosition, desc.worldScale, {1.0F, 0.957F, 0.941F}, pass, 1.0F);
     }

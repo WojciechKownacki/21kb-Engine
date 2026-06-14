@@ -27,6 +27,7 @@ struct SceneViewportToolbarRects {
     RECT gridStepButton{};
     RECT snapToggleButton{};
     RECT snapStepButton{};
+    RECT rotationSnapButton{};
     RECT dropdownPanel{};
     std::array<RECT, 6U> dropdownItems{};
     RECT renderArea{};
@@ -54,6 +55,7 @@ public:
     [[nodiscard]] static SceneViewportToolbarRects Resolve(const RECT& content, const EditorViewportPreviewState& state) noexcept;
     static void RecordPresentedFrame() noexcept;
     static void RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept;
+    [[nodiscard]] static bool UpdateInfoHover(const RECT& content, int x, int y) noexcept;
     static void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorViewportPreviewState& state);
 };
 

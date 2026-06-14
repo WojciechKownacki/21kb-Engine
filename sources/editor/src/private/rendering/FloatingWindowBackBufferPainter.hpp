@@ -2,6 +2,7 @@
 
 #include "docking/EditorDockModel.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -16,7 +17,7 @@ namespace kb::editor {
 class FloatingWindowBackBufferPainter {
 public:
 #if defined(_WIN32)
-    static void Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport);
+    static void Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport);
 #endif
 };
 

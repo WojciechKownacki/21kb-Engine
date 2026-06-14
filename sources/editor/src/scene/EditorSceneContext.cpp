@@ -43,6 +43,10 @@
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
+#include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
+#include "scene/transform_edit/EditorSceneTransformEditController.hpp"
+#include "scene/transform_edit/EditorSceneTransformSnapshotBuilder.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 
@@ -93,111 +97,6 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
         }
     }
     return false;
-}
-
-[[nodiscard]] bool SameVec3(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
-}
-
-[[nodiscard]] bool SameQuat(kb::scene::Quat lhs, kb::scene::Quat rhs) noexcept {
-    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
-}
-
-[[nodiscard]] bool SameTransform(const kb::scene::TransformComponent& lhs, const kb::scene::TransformComponent& rhs) noexcept {
-    return SameVec3(lhs.localPosition, rhs.localPosition) &&
-        SameQuat(lhs.localRotation, rhs.localRotation) &&
-        SameVec3(lhs.localScale, rhs.localScale);
-}
-
-[[nodiscard]] bool IsTransformProperty(InspectorPropertyId property) noexcept {
-    return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ ||
-        property == InspectorPropertyId::RotationX || property == InspectorPropertyId::RotationY || property == InspectorPropertyId::RotationZ ||
-        property == InspectorPropertyId::ScaleX || property == InspectorPropertyId::ScaleY || property == InspectorPropertyId::ScaleZ;
-}
-
-[[nodiscard]] bool IsPositionProperty(InspectorPropertyId property) noexcept {
-    return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ;
-}
-
-[[nodiscard]] float ReadTransformProperty(const kb::scene::TransformComponent& transform, InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::PositionX:
-        return transform.localPosition.x;
-    case InspectorPropertyId::PositionY:
-        return transform.localPosition.y;
-    case InspectorPropertyId::PositionZ:
-        return transform.localPosition.z;
-    case InspectorPropertyId::RotationX:
-        return transform.localRotation.x;
-    case InspectorPropertyId::RotationY:
-        return transform.localRotation.y;
-    case InspectorPropertyId::RotationZ:
-        return transform.localRotation.z;
-    case InspectorPropertyId::ScaleX:
-        return transform.localScale.x;
-    case InspectorPropertyId::ScaleY:
-        return transform.localScale.y;
-    case InspectorPropertyId::ScaleZ:
-        return transform.localScale.z;
-    default:
-        return 0.0F;
-    }
-}
-
-[[nodiscard]] float ReadVec3Axis(kb::scene::Vec3 value, InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::PositionX:
-        return value.x;
-    case InspectorPropertyId::PositionY:
-        return value.y;
-    case InspectorPropertyId::PositionZ:
-        return value.z;
-    default:
-        return 0.0F;
-    }
-}
-
-void SetTransformProperty(kb::scene::TransformComponent& transform, InspectorPropertyId property, float value) noexcept {
-    switch (property) {
-    case InspectorPropertyId::PositionX:
-        transform.localPosition.x = value;
-        break;
-    case InspectorPropertyId::PositionY:
-        transform.localPosition.y = value;
-        break;
-    case InspectorPropertyId::PositionZ:
-        transform.localPosition.z = value;
-        break;
-    case InspectorPropertyId::RotationX:
-        transform.localRotation.x = value;
-        break;
-    case InspectorPropertyId::RotationY:
-        transform.localRotation.y = value;
-        break;
-    case InspectorPropertyId::RotationZ:
-        transform.localRotation.z = value;
-        break;
-    case InspectorPropertyId::ScaleX:
-        transform.localScale.x = std::max(0.01F, value);
-        break;
-    case InspectorPropertyId::ScaleY:
-        transform.localScale.y = std::max(0.01F, value);
-        break;
-    case InspectorPropertyId::ScaleZ:
-        transform.localScale.z = std::max(0.01F, value);
-        break;
-    default:
-        break;
-    }
-}
-
-[[nodiscard]] EditorSceneObjectTransformChange* FindTransformChange(
-    std::vector<EditorSceneObjectTransformChange>& changes,
-    kb::scene::SceneEntity entity) noexcept {
-    const auto iter = std::ranges::find_if(changes, [entity](const EditorSceneObjectTransformChange& change) {
-        return change.entity == entity;
-    });
-    return iter == changes.end() ? nullptr : &*iter;
 }
 
 void AppendEntityBranchRenderDirty(
@@ -1949,154 +1848,66 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
         editing.push_back(primary);
     }
 
-    activeTransformEdit_.label = std::move(label);
-    activeTransformEdit_.primary = primary;
-    activeTransformEdit_.changes.clear();
-    activeTransformEdit_.changes.reserve(editing.size());
-    for (const kb::scene::SceneEntity entity : editing) {
-        if (!scene_->Entities().IsAlive(entity) || FindTransformChange(activeTransformEdit_.changes, entity) != nullptr) {
-            continue;
-        }
-        const kb::scene::TransformComponent* transform = scene_->Transforms().TryGet(entity);
-        if (transform == nullptr) {
-            continue;
-        }
-        activeTransformEdit_.changes.push_back(EditorSceneObjectTransformChange{
-            .entity = entity,
-            .before = *transform,
-            .after = *transform,
-        });
-    }
-
-    if (activeTransformEdit_.changes.empty()) {
-        activeTransformEdit_.Clear();
+    std::vector<EditorSceneObjectTransformChange> changes = EditorSceneTransformSnapshotBuilder::Capture(*scene_, editing);
+    if (changes.empty()) {
         return false;
     }
-    activeTransformEdit_.targetStart = EditorSceneSelectionPivot::Resolve(
+
+    const kb::scene::Vec3 targetStart = EditorSceneSelectionPivot::Resolve(
         *scene_,
         hierarchySelection_.SelectedEntities(),
         primary).value_or(scene_->Transforms().Get(primary).localPosition);
+    activeTransformEdit_.Begin(std::move(label), primary, targetStart, std::move(changes));
     return true;
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position) {
-    if (!activeTransformEdit_.Active()) {
-        return false;
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryPosition(position);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
     }
+    return result.changed;
+}
 
-    const kb::scene::Vec3 delta{
-        position.x - activeTransformEdit_.targetStart.x,
-        position.y - activeTransformEdit_.targetStart.y,
-        position.z - activeTransformEdit_.targetStart.z,
-    };
-
-    bool changed = false;
-    std::vector<kb::scene::SceneEntity> touched;
-    touched.reserve(activeTransformEdit_.changes.size());
-    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_->Entities().IsAlive(change.entity)) {
-            continue;
-        }
-        kb::scene::TransformComponent next = change.before;
-        next.localPosition = kb::scene::Vec3{
-            change.before.localPosition.x + delta.x,
-            change.before.localPosition.y + delta.y,
-            change.before.localPosition.z + delta.z,
-        };
-        change.after = next;
-
-        const kb::scene::TransformComponent current = scene_->Transforms().Get(change.entity);
-        if (SameTransform(current, next)) {
-            continue;
-        }
-        scene_->Transforms().Set(change.entity, next);
-        touched.push_back(change.entity);
-        changed = true;
+bool EditorSceneContext::ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation) {
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryRotation(rotation);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
     }
+    return result.changed;
+}
 
-    if (changed) {
-        MarkSceneEntitiesRenderDirty(touched);
+bool EditorSceneContext::ApplyActiveTransformEditRotationDelta(kb::scene::Quat delta) {
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyRotationDelta(delta);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
     }
-    return changed;
+    return result.changed;
+}
+
+bool EditorSceneContext::ApplyActiveTransformEditPrimaryScale(kb::scene::Vec3 scale) {
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyPrimaryScale(scale);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
+    }
+    return result.changed;
 }
 
 bool EditorSceneContext::ApplyActiveTransformEditProperty(InspectorPropertyId property, float value) {
-    if (!activeTransformEdit_.Active() || !IsTransformProperty(property)) {
-        return false;
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditController{ *scene_, activeTransformEdit_ }.ApplyProperty(property, value);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
     }
-
-    if (IsPositionProperty(property)) {
-        kb::scene::Vec3 position = activeTransformEdit_.targetStart;
-        switch (property) {
-        case InspectorPropertyId::PositionX:
-            position.x = value;
-            break;
-        case InspectorPropertyId::PositionY:
-            position.y = value;
-            break;
-        case InspectorPropertyId::PositionZ:
-            position.z = value;
-            break;
-        default:
-            break;
-        }
-        return ApplyActiveTransformEditPrimaryPosition(position);
-    }
-
-    const EditorSceneObjectTransformChange* primaryChange = nullptr;
-    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (change.entity == activeTransformEdit_.primary) {
-            primaryChange = &change;
-            break;
-        }
-    }
-    if (primaryChange == nullptr) {
-        return false;
-    }
-
-    const float delta = value - ReadTransformProperty(primaryChange->before, property);
-    bool changed = false;
-    std::vector<kb::scene::SceneEntity> touched;
-    touched.reserve(activeTransformEdit_.changes.size());
-    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_->Entities().IsAlive(change.entity)) {
-            continue;
-        }
-
-        kb::scene::TransformComponent next = change.before;
-        SetTransformProperty(next, property, ReadTransformProperty(change.before, property) + delta);
-        change.after = next;
-
-        const kb::scene::TransformComponent current = scene_->Transforms().Get(change.entity);
-        if (SameTransform(current, next)) {
-            continue;
-        }
-        scene_->Transforms().Set(change.entity, next);
-        touched.push_back(change.entity);
-        changed = true;
-    }
-
-    if (changed) {
-        MarkSceneEntitiesRenderDirty(touched);
-    }
-    return changed;
+    return result.changed;
 }
 
 float EditorSceneContext::ActiveTransformEditPropertyStart(InspectorPropertyId property) const noexcept {
-    if (!activeTransformEdit_.Active() || !IsTransformProperty(property)) {
-        return 0.0F;
-    }
-
-    if (IsPositionProperty(property)) {
-        return ReadVec3Axis(activeTransformEdit_.targetStart, property);
-    }
-
-    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (change.entity == activeTransformEdit_.primary) {
-            return ReadTransformProperty(change.before, property);
-        }
-    }
-    return 0.0F;
+    return EditorSceneTransformEditController::PropertyStart(activeTransformEdit_, property);
 }
 
 bool EditorSceneContext::CommitActiveTransformEdit() {
@@ -2105,31 +1916,14 @@ bool EditorSceneContext::CommitActiveTransformEdit() {
         return false;
     }
 
-    std::vector<EditorSceneObjectTransformChange> committed;
-    committed.reserve(activeTransformEdit_.changes.size());
-    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_->Entities().IsAlive(change.entity)) {
-            continue;
-        }
-        if (const kb::scene::TransformComponent* current = scene_->Transforms().TryGet(change.entity); current != nullptr) {
-            change.after = *current;
-        }
-        if (!SameTransform(change.before, change.after)) {
-            committed.push_back(change);
-        }
-    }
-
-    const std::string label = activeTransformEdit_.label.empty() ? std::string{ "Move Entity" } : activeTransformEdit_.label;
+    std::vector<EditorSceneObjectTransformChange> committed = EditorSceneTransformCommitBuilder::Build(*scene_, activeTransformEdit_);
+    const std::string label = activeTransformEdit_.LabelOrDefault();
     activeTransformEdit_.Clear();
     if (committed.empty()) {
         return false;
     }
 
-    std::vector<kb::scene::SceneEntity> touched;
-    touched.reserve(committed.size());
-    for (const EditorSceneObjectTransformChange& change : committed) {
-        touched.push_back(change.entity);
-    }
+    const std::vector<kb::scene::SceneEntity> touched = EditorSceneTransformCommitBuilder::TouchedEntities(committed);
     commandStack_.PushExecuted(std::make_unique<EditorSceneTransformDeltaCommand>(*this, label, std::move(committed)));
     MarkSceneEntitiesRenderDirty(touched);
     MarkSceneDocumentDirty();
@@ -2143,20 +1937,11 @@ void EditorSceneContext::CancelActiveTransformEdit() noexcept {
         return;
     }
 
-    bool changed = false;
-    std::vector<kb::scene::SceneEntity> touched;
-    touched.reserve(activeTransformEdit_.changes.size());
-    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
-        if (!scene_->Entities().IsAlive(change.entity)) {
-            continue;
-        }
-        scene_->Transforms().Set(change.entity, change.before);
-        touched.push_back(change.entity);
-        changed = true;
-    }
+    const EditorSceneTransformEditApplyResult result =
+        EditorSceneTransformEditApplier::RestoreBefore(*scene_, activeTransformEdit_.Changes());
     activeTransformEdit_.Clear();
-    if (changed) {
-        MarkSceneEntitiesRenderDirty(touched);
+    if (result.changed) {
+        MarkSceneEntitiesRenderDirty(result.touched);
         scene_->Runtime().SynchronizeTransforms();
     }
 }
