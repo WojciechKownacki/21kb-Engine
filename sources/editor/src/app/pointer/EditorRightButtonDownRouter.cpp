@@ -19,6 +19,7 @@ namespace {
 constexpr UINT_PTR kHierarchyMenuCreateEmpty = 1001;
 constexpr UINT_PTR kHierarchyMenuDelete = 1002;
 constexpr UINT_PTR kHierarchyMenuDuplicate = 1003;
+constexpr UINT_PTR kHierarchyMenuRename = 1004;
 constexpr UINT_PTR kHierarchyMenuDirectionalLight = 1101;
 constexpr UINT_PTR kHierarchyMenuPointLight = 1102;
 constexpr UINT_PTR kHierarchyMenuSpotLight = 1103;
@@ -43,7 +44,7 @@ void AppendSeparator(HMENU menu) {
     AppendSeparator(menu);
     AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
     AppendMenuA(menu, MF_STRING, kHierarchyMenuDuplicate, "Duplicate\tCtrl+D");
-    AppendDisabled(menu, "Rename");
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuRename, "Rename\tF2");
     AppendDisabled(menu, "Paste Special");
     AppendDisabled(menu, "Paste\tCtrl+V");
     AppendDisabled(menu, "Copy\tCtrl+C");
@@ -80,6 +81,8 @@ void AppendSeparator(HMENU menu) {
         return sceneContext.DeleteSelectedHierarchyEntity();
     case kHierarchyMenuDuplicate:
         return sceneContext.DuplicateSelectedHierarchyEntities();
+    case kHierarchyMenuRename:
+        return sceneContext.BeginHierarchyRename();
     case kHierarchyMenuDirectionalLight:
         return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
     case kHierarchyMenuPointLight:
