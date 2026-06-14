@@ -167,19 +167,25 @@ void DrawFastCube(HDC dc, RECT icon, COLORREF color) {
     if (icon.right <= icon.left || icon.bottom <= icon.top) {
         return;
     }
-    const int cx = (icon.left + icon.right) / 2;
-    const int top = icon.top + 1;
-    const int midY = icon.top + ProjectFilesPanelDrawing::RectHeight(icon) / 3;
-    const int bottom = icon.bottom - 1;
-    const int left = icon.left + 1;
-    const int right = icon.right - 1;
+    const int width = ProjectFilesPanelDrawing::RectWidth(icon);
+    const int height = ProjectFilesPanelDrawing::RectHeight(icon);
+    const int depth = std::max(4, std::min(width, height) / 5);
+    const int faceSize = std::max(8, std::min(width - depth - 4, height - depth - 4));
+    const int frontLeft = icon.left + std::max(2, (width - faceSize - depth) / 2);
+    const int frontTop = icon.top + std::max(2, (height - faceSize + depth) / 2);
+    const int frontRight = frontLeft + faceSize;
+    const int frontBottom = frontTop + faceSize;
+    const int backLeft = frontLeft + depth;
+    const int backTop = frontTop - depth;
+    const int backRight = frontRight + depth;
+    const int backBottom = frontBottom - depth;
     const COLORREF topColor = ProjectFilesPanelDrawing::Blend(color, RGB(255, 255, 255), 24);
-    const COLORREF leftColor = ProjectFilesPanelDrawing::Blend(color, RGB(0, 0, 0), 10);
+    const COLORREF frontColor = ProjectFilesPanelDrawing::Blend(color, RGB(255, 255, 255), 4);
     const COLORREF rightColor = ProjectFilesPanelDrawing::Blend(color, RGB(0, 0, 0), 24);
 
-    POINT topFace[4]{ POINT{ cx, top }, POINT{ right, midY }, POINT{ cx, midY + (midY - top) }, POINT{ left, midY } };
-    POINT leftFace[4]{ POINT{ left, midY }, POINT{ cx, midY + (midY - top) }, POINT{ cx, bottom }, POINT{ left, bottom - (midY - top) } };
-    POINT rightFace[4]{ POINT{ right, midY }, POINT{ cx, midY + (midY - top) }, POINT{ cx, bottom }, POINT{ right, bottom - (midY - top) } };
+    POINT topFace[4]{ POINT{ frontLeft, frontTop }, POINT{ backLeft, backTop }, POINT{ backRight, backTop }, POINT{ frontRight, frontTop } };
+    POINT rightFace[4]{ POINT{ frontRight, frontTop }, POINT{ backRight, backTop }, POINT{ backRight, backBottom }, POINT{ frontRight, frontBottom } };
+    POINT frontFace[4]{ POINT{ frontLeft, frontTop }, POINT{ frontRight, frontTop }, POINT{ frontRight, frontBottom }, POINT{ frontLeft, frontBottom } };
 
     ScopedPen pen{ 1, ProjectFilesPanelDrawing::Blend(color, RGB(18, 24, 34), 35) };
     const ScopedGdiObject selectedPen(dc, pen.handle);
@@ -189,14 +195,14 @@ void DrawFastCube(HDC dc, RECT icon, COLORREF color) {
         Polygon(dc, topFace, 4);
     }
     {
-        ScopedBrush brush{ leftColor };
-        const ScopedGdiObject selectedBrush(dc, brush.handle);
-        Polygon(dc, leftFace, 4);
-    }
-    {
         ScopedBrush brush{ rightColor };
         const ScopedGdiObject selectedBrush(dc, brush.handle);
         Polygon(dc, rightFace, 4);
+    }
+    {
+        ScopedBrush brush{ frontColor };
+        const ScopedGdiObject selectedBrush(dc, brush.handle);
+        Polygon(dc, frontFace, 4);
     }
 }
 

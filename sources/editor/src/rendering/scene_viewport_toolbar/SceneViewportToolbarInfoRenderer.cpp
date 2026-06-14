@@ -162,13 +162,7 @@ void SceneViewportToolbarInfoRenderer::PaintPipelineStats(HDC dc, RECT rect, con
     const COLORREF border = SceneViewportToolbarDrawing::Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
     SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, SceneViewportToolbarMetrics::ButtonRadius);
 
-    const SceneViewportToolbarRenderStats stats = SceneViewportToolbarState::RenderStats();
-    RECT inner = GdiDrawing::Inset(rect, 4);
-    int cursor = inner.left;
-    DrawStatusChip(dc, InfoChipRect(inner, cursor, 32), "FX", stats.postProcessActive && stats.finalCompositeActive);
-    DrawStatusChip(dc, InfoChipRect(inner, cursor, 38), "TAA", stats.temporalAntiAliasingActive);
-    DrawStatusChip(dc, InfoChipRect(inner, cursor, 54), "Bloom", stats.bloomActive);
-    DrawStatusChip(dc, InfoChipRect(inner, cursor, std::max<int>(48, static_cast<int>(inner.right - cursor))), "MSAA", stats.msaaSamples > 0U);
+    DrawCenteredChipText(dc, rect, "Pipeline", GdiDrawing::ToColorRef(theme.textSecondary));
 }
 
 void SceneViewportToolbarInfoRenderer::PaintTooltip(HDC dc, const RECT& content, const SceneViewportToolbarRects& rects) {

@@ -19,6 +19,8 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return transformCollapsed_;
     case InspectorSectionId::Asset:
         return assetCollapsed_;
+    case InspectorSectionId::Details:
+        return detailsCollapsed_;
     case InspectorSectionId::AudioSource:
         return audioSourceCollapsed_;
     case InspectorSectionId::AudioListener:
@@ -47,6 +49,9 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::Asset:
         target = &assetCollapsed_;
+        break;
+    case InspectorSectionId::Details:
+        target = &detailsCollapsed_;
         break;
     case InspectorSectionId::AudioSource:
         target = &audioSourceCollapsed_;
@@ -392,6 +397,34 @@ void InspectorPanelState::CycleMeshPreviewLightPreset() noexcept {
         meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Studio;
         break;
     }
+}
+
+bool InspectorPanelState::SetScrollOffset(int offset, int maxOffset) noexcept {
+    const int clamped = std::clamp(offset, 0, std::max(0, maxOffset));
+    if (scrollOffset_ == clamped) {
+        return false;
+    }
+    scrollOffset_ = clamped;
+    return true;
+}
+
+void InspectorPanelState::BeginScrollbarDrag(int y) noexcept {
+    scrollbarDragging_ = true;
+    scrollbarDragStartY_ = y;
+    scrollbarDragStartOffset_ = scrollOffset_;
+}
+
+void InspectorPanelState::DragScrollbar(int y, int trackPixels, int maxOffset) noexcept {
+    if (!scrollbarDragging_) {
+        return;
+    }
+    const int delta = y - scrollbarDragStartY_;
+    const int offsetDelta = trackPixels <= 0 ? 0 : (delta * std::max(0, maxOffset)) / trackPixels;
+    static_cast<void>(SetScrollOffset(scrollbarDragStartOffset_ + offsetDelta, maxOffset));
+}
+
+void InspectorPanelState::EndScrollbarDrag() noexcept {
+    scrollbarDragging_ = false;
 }
 
 } // namespace kb::editor

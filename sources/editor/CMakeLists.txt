@@ -409,6 +409,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/GdiDrawing.hpp
     src/private/rendering/GdiResources.hpp
     src/private/rendering/EditorSurfaceStyle.hpp
+    src/private/rendering/EditorTexturePreviewService.hpp
     src/private/rendering/MainWindowBackBufferPainter.hpp
     src/private/rendering/gdi/GdiAlphaBlender.hpp
     src/private/rendering/gdi/GdiColor.hpp
@@ -437,6 +438,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/InspectorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
+    src/private/rendering/ProjectFilesAssetIconResolver.hpp
     src/private/rendering/ProjectFilesAssetTileFrameRenderer.hpp
     src/private/rendering/ProjectFilesAssetTileMetrics.hpp
     src/private/rendering/ProjectFilesAssetTileRenderer.hpp
@@ -571,6 +573,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorSceneViewportSessionStore.cpp
     src/rendering/EditorSurfacePainter.cpp
     src/rendering/EditorSurfaceStyle.cpp
+    src/rendering/EditorTexturePreviewService.cpp
     src/rendering/EditorTabIndicatorPainter.cpp
     src/rendering/EditorToolbarLayout.cpp
     src/rendering/EditorToolbarRenderer.cpp
@@ -608,6 +611,7 @@ add_executable(kb_editor WIN32
     src/rendering/MainWindowBackBufferPainter.cpp
     src/rendering/PanelContentRenderer.cpp
     src/rendering/ProjectFilesAssetListRenderer.cpp
+    src/rendering/ProjectFilesAssetIconResolver.cpp
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
     src/rendering/ProjectFilesAssetTileRenderer.cpp
@@ -805,7 +809,7 @@ if(TARGET kb_basic_lighting_plugin)
     )
 endif()
 
-target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus dwmapi msimg32 comdlg32 shell32 xinput)
+target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
 
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
