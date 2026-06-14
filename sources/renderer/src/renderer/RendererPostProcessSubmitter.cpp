@@ -9,6 +9,9 @@ namespace kb::render {
 bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProcessSubmitDesc& desc) {
     ScenePostProcessSettings postProcessSettings = desc.postProcessOutput.postProcessSettings;
     postProcessSettings.bloomEnabled = desc.postProcessOutput.bloomEnabled;
+    postProcessSettings.fxaaEnabled = desc.postProcessOutput.fxaaEnabled;
+    postProcessSettings.temporalAntiAliasingEnabled = desc.postProcessOutput.temporalAntiAliasingEnabled;
+    postProcessSettings.temporalJitterEnabled = desc.postProcessOutput.temporalAntiAliasingEnabled;
 
     RenderPostProcessTargetBinding postProcessTarget = desc.sceneDesc.postProcess;
     postProcessTarget.SelectTemporalHistory(desc.frameIndex);

@@ -27,8 +27,20 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
     if (actual != nullptr && expected.has_value() && Equal(*actual, *expected)) {
         return;
     }
-    if (actual == nullptr || !expected.has_value()) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer", actual == nullptr ? "null" : "present", ScenePrefabOverrideFlag::MeshRenderer);
+    if (actual == nullptr) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer", "null", ScenePrefabOverrideFlag::MeshRenderer);
+        return;
+    }
+    if (!expected.has_value()) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer", "present", ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.meshAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->meshAssetId), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.materialAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->materialAssetId), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.materialSlotOverrideCount", ScenePrefabOverrideValueFormatter::ToString(static_cast<std::uint64_t>(actual->materialSlotOverrideCount)), ScenePrefabOverrideFlag::MeshRenderer);
+        for (std::uint32_t slotIndex = 0U; slotIndex < actual->materialSlotOverrideCount && slotIndex < kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.materialSlotAssetId." + std::to_string(slotIndex), ScenePrefabOverrideValueFormatter::ToString(actual->materialSlotAssetIds[slotIndex]), ScenePrefabOverrideFlag::MeshRenderer);
+        }
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.castsShadow", ScenePrefabOverrideValueFormatter::ToString(actual->castsShadow), ScenePrefabOverrideFlag::MeshRenderer);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.receivesShadow", ScenePrefabOverrideValueFormatter::ToString(actual->receivesShadow), ScenePrefabOverrideFlag::MeshRenderer);
         return;
     }
     if (actual->meshAssetId != expected->meshAssetId) {
@@ -42,7 +54,7 @@ void ScenePrefabMeshRendererOverrideReporter::Append(SceneComponents components,
     }
     for (std::uint32_t slotIndex = 0U; slotIndex < actual->materialSlotOverrideCount && slotIndex < kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
         if (actual->materialSlotAssetIds[slotIndex] != expected->materialSlotAssetIds[slotIndex]) {
-            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.materialSlotAssetId", ScenePrefabOverrideValueFormatter::ToString(actual->materialSlotAssetIds[slotIndex]), ScenePrefabOverrideFlag::MeshRenderer);
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "meshRenderer.materialSlotAssetId." + std::to_string(slotIndex), ScenePrefabOverrideValueFormatter::ToString(actual->materialSlotAssetIds[slotIndex]), ScenePrefabOverrideFlag::MeshRenderer);
         }
     }
     if (actual->castsShadow != expected->castsShadow) {

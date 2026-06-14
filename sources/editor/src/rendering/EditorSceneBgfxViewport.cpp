@@ -370,7 +370,7 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
 
 bool EditorSceneBgfxViewport::EnsureRenderer() {
     if (renderer_.IsInitialized()) {
-        const std::uint64_t requestedGeneration = backendSettings_ == nullptr ? 0U : backendSettings_->Generation();
+        const std::uint64_t requestedGeneration = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
         if (rendererBackendGeneration_ == requestedGeneration) {
             return true;
         }
@@ -385,6 +385,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     config.syncMode = render::DisplaySyncMode::Uncapped;
     config.targetFps = 180;
     config.flushAfterRender = false;
+    config.msaaSamples = backendSettings_ == nullptr ? 0U : backendSettings_->MsaaSamples();
     rendererMsaaSamples_ = config.msaaSamples;
     bgfx::RendererType::Enum supportedBackends[bgfx::RendererType::Count]{};
     const std::uint8_t supportedBackendCount = bgfx::getSupportedRenderers(static_cast<std::uint8_t>(bgfx::RendererType::Count), supportedBackends);
@@ -396,7 +397,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     }
 
     renderer_.SetRuntimeAssetDiscoveryIntervalFrames(kEditorSceneAssetDiscoveryIntervalFrames);
-    rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->Generation();
+    rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
     return true;
 }
 

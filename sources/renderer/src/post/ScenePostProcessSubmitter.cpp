@@ -30,6 +30,7 @@ struct PostProcessSubmitSettings {
     float height = 1.0F;
     bool bloomEnabled = false;
     bool taaEnabled = false;
+    bool fxaaEnabled = false;
     float bloomStrength = 0.0F;
     float bloomThreshold = 0.0F;
     float bloomSoftKnee = 0.0F;
@@ -44,6 +45,7 @@ struct PostProcessSubmitSettings {
         .height = static_cast<float>(std::max(1U, desc.target.extent.height)),
         .bloomEnabled = desc.settings.bloomEnabled && desc.settings.bloomStrength > 0.0F,
         .taaEnabled = desc.settings.temporalAntiAliasingEnabled && bgfx::isValid(desc.sceneDepth) && desc.temporal.IsValid(),
+        .fxaaEnabled = !desc.settings.temporalAntiAliasingEnabled && desc.settings.fxaaEnabled,
         .bloomStrength = std::max(desc.settings.bloomStrength, 0.0F),
         .bloomThreshold = std::max(desc.settings.bloomThreshold, 0.0F),
         .bloomSoftKnee = std::clamp(desc.settings.bloomSoftKnee, 0.0F, 1.0F),
@@ -65,7 +67,7 @@ public:
 
     [[nodiscard]] bgfx::TextureHandle Submit(const ScenePostProcessSubmitDesc& desc) const {
         const PostProcessSubmitSettings settings = ResolveSettings(desc);
-        const bgfx::TextureHandle postSource = SubmitTemporal(desc, settings);
+        const bgfx::TextureHandle postSource = SubmitAntiAliasing(desc, settings);
         if (!settings.bloomEnabled) {
             return SubmitWithoutBloom(desc, postSource);
         }
@@ -76,7 +78,7 @@ public:
     }
 
 private:
-    [[nodiscard]] bgfx::TextureHandle SubmitTemporal(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
+    [[nodiscard]] bgfx::TextureHandle SubmitAntiAliasing(const ScenePostProcessSubmitDesc& desc, const PostProcessSubmitSettings& settings) const {
         if (settings.taaEnabled) {
             ConfigureFullscreenView(
                 desc.viewIds.postProcessMotionVectors,
@@ -100,7 +102,14 @@ private:
             desc.viewIds.postProcessTaaResolve,
             desc.target.temporalHistoryFrameBuffer,
             desc.target.extent,
-            settings.taaEnabled ? "KB Post TAA Resolve" : "KB Post TAA Copy");
+            settings.taaEnabled ? "KB Post TAA Resolve" : (settings.fxaaEnabled ? "KB Post FXAA" : "KB Post AA Copy"));
+        if (settings.fxaaEnabled) {
+            const float fxaaParams[4] = {1.0F / settings.width, 1.0F / settings.height, 0.0F, 0.0F};
+            bgfx::setUniform(renderer_.temporalParamsUniform_, fxaaParams);
+            bgfx::setTexture(0, renderer_.sourceSampler_, desc.sceneColor);
+            SubmitFullscreen(desc.viewIds.postProcessTaaResolve, renderer_.fxaaProgram_, renderer_.fullscreenVertexBuffer_);
+            return desc.target.temporalHistoryTexture;
+        }
         const float temporalParams[4] = {
             settings.historyBlend,
             settings.taaEnabled && desc.temporal.historyValid ? 1.0F : 0.0F,

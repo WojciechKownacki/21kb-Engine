@@ -32,6 +32,48 @@ void RevertComponentProperty(Scene& scene, SceneObject object, const ScenePrefab
         } else {
             components.Lights().Remove(entity);
         }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "input")) {
+        if (node.components.input.has_value()) {
+            components.Inputs().Set(entity, *node.components.input);
+        } else {
+            components.Inputs().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "rigidbody")) {
+        if (node.components.rigidbody.has_value()) {
+            components.Rigidbodies().Set(entity, *node.components.rigidbody);
+        } else {
+            components.Rigidbodies().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "collider")) {
+        if (node.components.collider.has_value()) {
+            components.Colliders().Set(entity, *node.components.collider);
+        } else {
+            components.Colliders().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "tags")) {
+        if (node.components.tags.has_value()) {
+            components.Tags().Set(entity, *node.components.tags);
+        } else {
+            components.Tags().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "behaviour")) {
+        if (node.components.behaviour.has_value()) {
+            components.Behaviours().Set(entity, *node.components.behaviour);
+        } else {
+            components.Behaviours().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "audioSource")) {
+        if (node.components.audioSource.has_value()) {
+            components.AudioSources().Set(entity, *node.components.audioSource);
+        } else {
+            components.AudioSources().Remove(entity);
+        }
+    } else if (ScenePrefabPropertyPath::StartsWith(propertyPath, "audioListener")) {
+        if (node.components.audioListener.has_value()) {
+            components.AudioListeners().Set(entity, *node.components.audioListener);
+        } else {
+            components.AudioListeners().Remove(entity);
+        }
     }
 }
 

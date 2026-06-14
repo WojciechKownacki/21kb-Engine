@@ -10,6 +10,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
+#include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/GdiResources.hpp"
 #include "rendering/HeroIconPainter.hpp"
@@ -61,6 +62,9 @@ constexpr int kAddComponentBrowserMaxHeight = 280;
 constexpr int kAddComponentSearchHeight = 24;
 constexpr int kAddComponentResultRowHeight = 26;
 constexpr int kAddComponentCategoryHeaderHeight = 22;
+constexpr int kScrollbarWidth = 12;
+constexpr int kScrollbarInset = 3;
+constexpr int kScrollbarMinThumb = 28;
 constexpr float kMeshPreviewFitZoom = 1.35F;
 
 enum class InspectorRowValueKind : std::uint8_t {
@@ -127,6 +131,21 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
 
 [[nodiscard]] bool Contains(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] int RectHeight(const RECT& rect) noexcept {
+    return std::max(0L, rect.bottom - rect.top);
+}
+
+[[nodiscard]] int RectWidth(const RECT& rect) noexcept {
+    return std::max(0L, rect.right - rect.left);
+}
+
+[[nodiscard]] RECT ContentViewportRect(RECT content, bool reserveScrollbar) noexcept {
+    if (reserveScrollbar) {
+        content.right -= kScrollbarWidth + 4;
+    }
+    return content;
 }
 
 [[nodiscard]] std::string FormatFloat(float value, int precision = 3) {
@@ -598,6 +617,20 @@ void DrawAddComponent(HDC dc, RECT content, const EditorTheme& theme, const Insp
     return Rect(content.left + 12, y, content.right - 12, y + MeshPreviewPanelHeight(content));
 }
 
+[[nodiscard]] int TextureDetailsImageWidth(const RECT& content) noexcept {
+    return std::max(48, static_cast<int>(content.right - content.left) - 24);
+}
+
+[[nodiscard]] int TextureDetailsImageHeight(const RECT& content, const EditorTexturePreviewImage& image) noexcept {
+    const int width = TextureDetailsImageWidth(content);
+    return std::max(48, (width * image.height) / std::max(1, image.width));
+}
+
+[[nodiscard]] RECT TextureDetailsPanelRect(const RECT& content, int y, const EditorTexturePreviewImage* image) noexcept {
+    const int imageHeight = image == nullptr ? 92 : TextureDetailsImageHeight(content, *image);
+    return Rect(content.left, y, content.right, y + kSectionHeaderHeight + kDividerHeight + imageHeight + 20);
+}
+
 void DrawPreviewResetIcon(HDC dc, RECT rect, COLORREF color) {
     ScopedPen pen(2, color);
     const ScopedGdiObject selectedPen(dc, pen.handle);
@@ -761,6 +794,41 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     return panel.bottom + kSectionGap;
 }
 
+[[nodiscard]] int DrawTextureDetails(
+    HDC dc,
+    RECT content,
+    int y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::assets::AssetMetadata& metadata) {
+    if (!EditorTexturePreviewService::IsTextureAsset(metadata)) {
+        return y;
+    }
+
+    const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
+    const RECT header = Rect(content.left, y, content.right, y + kSectionHeaderHeight);
+    DrawSectionHeader(dc, header, theme, inspector, InspectorSectionId::Details, HeroIconKind::Eye, "Details");
+    y += kSectionHeaderHeight;
+    if (inspector.IsCollapsed(InspectorSectionId::Details)) {
+        return y + kSectionGap;
+    }
+
+    DrawDivider(dc, content.left, content.right, y);
+    y += kDividerHeight;
+    const int imageWidth = TextureDetailsImageWidth(content);
+    const int imageHeight = image == nullptr ? 92 : TextureDetailsImageHeight(content, *image);
+    RECT frame = Rect(content.left + 12, y + 10, content.left + 12 + imageWidth, y + 10 + imageHeight);
+    DrawFrame(dc, frame, Rgb(14, 16, 20), Color(theme.borderPanel));
+    if (image != nullptr) {
+        EditorTexturePreviewService::DrawContain(dc, frame, *image, false);
+    } else {
+        ScopedFont font(12, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, frame, "Texture preview unavailable", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    return frame.bottom + 10 + kSectionGap;
+}
+
 [[nodiscard]] std::string FormatValidationIssue(const EditorMeshValidationIssue& issue) {
     switch (issue.severity) {
     case EditorMeshValidationSeverity::Error:
@@ -880,6 +948,7 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
 
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
         y += kHeaderHeight + kPanelPadTop;
+        y = DrawTextureDetails(dc, content, y, theme, inspector, *metadata);
         y = DrawMeshPreview(dc, content, y, theme, inspector, *metadata, deferMeshPreviewWork);
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
         if (!metadata->importCategory.empty()) {
@@ -1036,6 +1105,89 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         PaintAudioListenerSection(dc, content, y, theme, inspector, *audioListener);
     }
     DrawAddComponent(dc, content, theme, inspector, y);
+}
+
+[[nodiscard]] int SectionHeight(const InspectorPanelState& inspector, InspectorSectionId section, int rows) noexcept {
+    if (inspector.IsCollapsed(section)) {
+        return kSectionHeaderHeight;
+    }
+    return kSectionHeaderHeight + kDividerHeight + rows * (kFieldRowHeight + kDividerHeight);
+}
+
+[[nodiscard]] int InputMappingRows(const EditorSceneContext& sceneContext, kb::assets::AssetId id) {
+    const std::optional<kb::input::InputMappingContextAsset> context = sceneContext.ReadInputMappingContextAsset(id);
+    return static_cast<int>((context.has_value() ? context->mappings.size() : 0U) * 5U + 1U);
+}
+
+[[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    int rows = metadata.importCategory.empty() ? 0 : 1;
+    const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
+    if (!deferMeshPreviewWork) {
+        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(metadata); stats != nullptr) {
+            rows += 6;
+        }
+        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(metadata); validation != nullptr) {
+            rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
+        }
+    }
+    rows += 6;
+    return rows;
+}
+
+[[nodiscard]] int AssetContentHeight(const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    int height = kHeaderHeight + kPanelPadTop;
+    if (metadata.type == "InputAction") {
+        height += SectionHeight(inspector, InspectorSectionId::InputAction, 3) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
+        return height;
+    }
+    if (metadata.type == "InputMappingContext") {
+        height += SectionHeight(inspector, InspectorSectionId::InputMappings, InputMappingRows(sceneContext, metadata.id));
+        return height;
+    }
+
+    if (EditorTexturePreviewService::IsTextureAsset(metadata)) {
+        const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
+        const int imageHeight = image == nullptr ? 92 : TextureDetailsImageHeight(content, *image);
+        height += inspector.IsCollapsed(InspectorSectionId::Details)
+            ? kSectionHeaderHeight + kSectionGap
+            : kSectionHeaderHeight + kDividerHeight + imageHeight + 20 + kSectionGap;
+    }
+    if (EditorMeshPreviewCache().StatsFor(metadata) != nullptr) {
+        height += MeshPreviewPanelHeight(content) + kSectionGap;
+    }
+    height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
+    return height;
+}
+
+[[nodiscard]] int EntityContentHeight(const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const kb::scene::Scene& scene = sceneContext.Scene();
+    int height = kHeaderHeight + kPanelPadTop;
+    height += SectionHeight(inspector, InspectorSectionId::General, 2) + kSectionGap;
+    height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
+    if (sceneContext.HasEntityScript(selected)) {
+        height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
+    }
+    if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
+    }
+    if (scene.Components().AudioListeners().TryGet(selected) != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::AudioListener, 2) + kSectionGap;
+    }
+    height += kAddComponentButtonHeight;
+    if (inspector.IsAddComponentBrowserOpen()) {
+        height += 8 + kAddComponentBrowserMaxHeight;
+    }
+    return height;
+}
+
+[[nodiscard]] int MultiSelectionContentHeight(const EditorSceneContext& sceneContext) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    return kHeaderHeight + kPanelPadTop
+        + SectionHeight(inspector, InspectorSectionId::General, 3) + kSectionGap
+        + SectionHeight(inspector, InspectorSectionId::Transform, 3);
 }
 
 [[nodiscard]] InspectorPanelRenderer::Hit MakeHit(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property, RECT rect) noexcept {
@@ -1269,6 +1421,56 @@ void AdvanceRow(int& y) noexcept {
 
 } // namespace
 
+int InspectorPanelRenderer::ContentHeight(const RECT& content, const EditorSceneContext& sceneContext) {
+    const EditorAssetBrowserState& assetBrowser = sceneContext.AssetBrowser();
+    if (assetBrowser.InspectorAsset().IsValid()) {
+        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetBrowser.InspectorAsset());
+        return metadata == nullptr ? RectHeight(content) : AssetContentHeight(content, sceneContext, *metadata);
+    }
+
+    const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
+    if (!sceneContext.Scene().Entities().IsAlive(selected)) {
+        return RectHeight(content);
+    }
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        return MultiSelectionContentHeight(sceneContext);
+    }
+    return EntityContentHeight(sceneContext, selected);
+}
+
+int InspectorPanelRenderer::MaxScrollOffset(const RECT& content, const EditorSceneContext& sceneContext) {
+    const RECT viewport = ContentViewportRect(content, false);
+    const int contentHeight = ContentHeight(ContentViewportRect(content, true), sceneContext);
+    return std::max(0, contentHeight - RectHeight(viewport));
+}
+
+RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
+    return RECT{
+        .left = content.right - kScrollbarWidth,
+        .top = content.top + kScrollbarInset,
+        .right = content.right - kScrollbarInset,
+        .bottom = content.bottom - kScrollbarInset,
+    };
+}
+
+RECT InspectorPanelRenderer::ScrollbarThumbRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    const int maxOffset = InspectorPanelRenderer::MaxScrollOffset(content, sceneContext);
+    if (maxOffset <= 0) {
+        return {};
+    }
+
+    const RECT track = ScrollbarTrackRect(content);
+    const int trackHeight = RectHeight(track);
+    const int viewportHeight = RectHeight(content);
+    const int totalHeight = viewportHeight + maxOffset;
+    const int thumbHeight = std::clamp((trackHeight * viewportHeight) / std::max(1, totalHeight), kScrollbarMinThumb, std::max(kScrollbarMinThumb, trackHeight));
+    const int travel = std::max(0, trackHeight - thumbHeight);
+    const int offset = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxOffset);
+    const int thumbTop = track.top + (travel * offset) / maxOffset;
+    return RECT{ track.left + 2, thumbTop, track.right - 2, thumbTop + thumbHeight };
+}
+
 void InspectorPanelRenderer::Paint(
     HDC dc,
     const RECT& content,
@@ -1278,10 +1480,25 @@ void InspectorPanelRenderer::Paint(
     IntersectClipRect(dc, content.left, content.top, content.right, content.bottom);
 
     GdiDrawing::FillRectColor(dc, content, Color(theme.panel));
-    const RECT inner = Rect(content.left, content.top, content.right, content.bottom);
+    const int maxScroll = MaxScrollOffset(content, sceneContext);
+    const bool scrollable = maxScroll > 0;
+    const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
+    RECT inner = ContentViewportRect(content, scrollable);
+    OffsetRect(&inner, 0, -scroll);
+    const RECT viewport = ContentViewportRect(content, scrollable);
+
+    SaveDC(dc);
+    IntersectClipRect(dc, viewport.left, viewport.top, viewport.right, viewport.bottom);
 
     if (sceneContext.AssetBrowser().InspectorAsset().IsValid()) {
         PaintAsset(dc, inner, theme, sceneContext);
+        RestoreDC(dc, -1);
+        if (scrollable) {
+            const RECT track = ScrollbarTrackRect(content);
+            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        }
         RestoreDC(dc, savedDc);
         return;
     }
@@ -1289,17 +1506,32 @@ void InspectorPanelRenderer::Paint(
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
         DrawEmpty(dc, inner, theme);
+        RestoreDC(dc, -1);
         RestoreDC(dc, savedDc);
         return;
     }
 
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
         PaintMultiSelection(dc, inner, theme, sceneContext, selected);
+        RestoreDC(dc, -1);
+        if (scrollable) {
+            const RECT track = ScrollbarTrackRect(content);
+            const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+            DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
+            DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+        }
         RestoreDC(dc, savedDc);
         return;
     }
 
     PaintEntity(dc, inner, theme, sceneContext, selected);
+    RestoreDC(dc, -1);
+    if (scrollable) {
+        const RECT track = ScrollbarTrackRect(content);
+        const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+        DrawFrame(dc, track, Rgb(18, 20, 24), Rgb(38, 43, 50));
+        DrawFrame(dc, thumb, sceneContext.Inspector().IsScrollbarDragging() ? Rgb(104, 116, 130) : Rgb(76, 86, 98), Rgb(94, 105, 118));
+    }
     RestoreDC(dc, savedDc);
 }
 
@@ -1307,6 +1539,21 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     if (!Contains(content, x, yPoint)) {
         return {};
     }
+    const int maxScroll = MaxScrollOffset(content, sceneContext);
+    const bool scrollable = maxScroll > 0;
+    if (scrollable && Contains(ScrollbarTrackRect(content), x, yPoint)) {
+        const RECT thumb = ScrollbarThumbRect(content, sceneContext);
+        if (Contains(thumb, x, yPoint)) {
+            return MakeHit(InspectorHitKind::ScrollbarThumb, InspectorSectionId::None, InspectorPropertyId::None, thumb);
+        }
+        return MakeHit(InspectorHitKind::ScrollbarTrack, InspectorSectionId::None, InspectorPropertyId::None, ScrollbarTrackRect(content));
+    }
+
+    const RECT viewport = ContentViewportRect(content, scrollable);
+    if (!Contains(viewport, x, yPoint)) {
+        return {};
+    }
+    const int scrolledY = yPoint + std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
 
     const InspectorPanelState& state = sceneContext.Inspector();
     int y = content.top + kHeaderHeight + kPanelPadTop;
@@ -1315,29 +1562,41 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(sceneContext.AssetBrowser().InspectorAsset());
         if (metadata != nullptr && metadata->type == "InputAction") {
-            return HitTestInputActionSection(content, state, x, yPoint, y);
+            return HitTestInputActionSection(viewport, state, x, scrolledY, y);
         }
         if (metadata != nullptr && metadata->type == "InputMappingContext") {
-            return HitTestInputMappingSection(content, state, sceneContext, metadata->id, x, yPoint, y);
+            return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
         }
         if (metadata != nullptr) {
+            if (EditorTexturePreviewService::IsTextureAsset(*metadata)) {
+                const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(*metadata);
+                if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Details, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                if (!state.IsCollapsed(InspectorSectionId::Details)) {
+                    const int imageHeight = image == nullptr ? 92 : TextureDetailsImageHeight(content, *image);
+                    y += imageHeight + 20 + kSectionGap;
+                } else {
+                    y += kSectionGap;
+                }
+            }
             if (EditorMeshPreviewCache().StatsFor(*metadata) != nullptr) {
-                const RECT preview = MeshPreviewPanelRect(content, y);
+                const RECT preview = MeshPreviewPanelRect(viewport, y);
                 const RECT toolbar = MeshPreviewToolbarRect(preview);
                 const std::array<InspectorPropertyId, 4> properties = MeshPreviewToolbarProperties();
                 for (int index = 0; index < static_cast<int>(properties.size()); ++index) {
                     const RECT button = MeshPreviewToolbarButtonRect(toolbar, index);
-                    if (Contains(button, x, yPoint)) {
+                    if (Contains(button, x, scrolledY)) {
                         return MakeHit(InspectorHitKind::MeshPreviewToolbarButton, InspectorSectionId::Asset, properties[static_cast<std::size_t>(index)], button);
                     }
                 }
-                if (Contains(preview, x, yPoint)) {
+                if (Contains(preview, x, scrolledY)) {
                     return MakeHit(InspectorHitKind::MeshPreview, InspectorSectionId::Asset, InspectorPropertyId::None, preview);
                 }
-                y += MeshPreviewPanelHeight(content) + kSectionGap;
+                y += MeshPreviewPanelHeight(viewport) + kSectionGap;
             }
         }
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Asset, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Asset, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         return {};
@@ -1349,37 +1608,37 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
-        return HitTestMultiSelection(content, state, x, yPoint, y);
+        return HitTestMultiSelection(viewport, state, x, scrolledY, y);
     }
 
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::General, x, scrolledY); hit.kind != InspectorHitKind::None) {
         return hit;
     }
     if (!state.IsCollapsed(InspectorSectionId::General)) {
-        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::General, InspectorPropertyId::EntityName, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityName, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::General, InspectorPropertyId::EntityVisible, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::General, InspectorPropertyId::EntityVisible, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
     }
     y += kSectionGap;
 
-    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Transform, x, yPoint); hit.kind != InspectorHitKind::None) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Transform, x, scrolledY); hit.kind != InspectorHitKind::None) {
         return hit;
     }
     if (!state.IsCollapsed(InspectorSectionId::Transform)) {
-        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(content, y), InspectorSectionId::Transform, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitRotation(RowRect(content, y), x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitRotation(RowRect(viewport, y), x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
-        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(content, y), InspectorSectionId::Transform, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(viewport, y), InspectorSectionId::Transform, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         AdvanceRow(y);
@@ -1387,15 +1646,15 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     y += kSectionGap;
 
     if (sceneContext.HasEntityScript(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Script, x, yPoint, true); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Script, x, scrolledY, true); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::Script)) {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, x, yPoint); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptName, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Script, InspectorPropertyId::ScriptEnabled, x, yPoint); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
@@ -1404,11 +1663,11 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioSources().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::AudioSource, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioSource, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioSource)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(content, y, InspectorSectionId::AudioSource, kAudioSourceRows, x, yPoint); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioSource, kAudioSourceRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
@@ -1416,25 +1675,25 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     }
 
     if (sceneContext.Scene().Components().AudioListeners().Has(selected)) {
-        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::AudioListener, x, yPoint); hit.kind != InspectorHitKind::None) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::AudioListener, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::AudioListener)) {
-            if (InspectorPanelRenderer::Hit hit = HitRows(content, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, yPoint); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitRows(viewport, y, InspectorSectionId::AudioListener, kAudioListenerRows, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
         }
         y += kSectionGap;
     }
 
-    const RECT addButton = AddComponentButtonRect(content, y);
-    if (Contains(addButton, x, yPoint)) {
+    const RECT addButton = AddComponentButtonRect(viewport, y);
+    if (Contains(addButton, x, scrolledY)) {
         return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentButton, addButton);
     }
     if (state.IsAddComponentBrowserOpen()) {
-        const RECT browser = AddComponentBrowserRect(content, y);
+        const RECT browser = AddComponentBrowserRect(viewport, y);
         const RECT search = AddComponentSearchRect(browser);
-        if (Contains(search, x, yPoint)) {
+        if (Contains(search, x, scrolledY)) {
             return MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentSearch, search);
         }
         const std::vector<const InspectorComponentTile*> tiles = InspectorComponentCatalog::Search(AddComponentQuery(state));
@@ -1451,7 +1710,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 rowTop += kAddComponentCategoryHeaderHeight;
             }
             RECT row = Rect(results.left, rowTop, results.right, rowTop + kAddComponentResultRowHeight);
-            if (Contains(row, x, yPoint)) {
+            if (Contains(row, x, scrolledY)) {
                 InspectorPanelRenderer::Hit hit = MakeHit(InspectorHitKind::TextField, InspectorSectionId::AddComponent, InspectorPropertyId::AddComponentOption, row);
                 hit.index = static_cast<int>(index);
                 return hit;

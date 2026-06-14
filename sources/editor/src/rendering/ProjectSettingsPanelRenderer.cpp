@@ -7,6 +7,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 
 #include <filesystem>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,9 @@ namespace {
 
 constexpr int kPadding = 16;
 constexpr int kCategoryCount = static_cast<int>(ProjectSettingsCategory::Count);
+constexpr int kTooltipWidth = 312;
+constexpr int kTooltipPaddingX = 12;
+constexpr int kTooltipPaddingY = 10;
 
 [[nodiscard]] const char* CategoryLabel(int index) noexcept {
     switch (static_cast<ProjectSettingsCategory>(index)) {
@@ -33,6 +37,14 @@ constexpr int kCategoryCount = static_cast<int>(ProjectSettingsCategory::Count);
 }
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    ScopedFont font{ pointSize, weight };
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+}
+
+void DrawTooltipText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 11, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
     const ScopedGdiObject selectedFont(dc, font.handle);
     SetBkMode(dc, TRANSPARENT);
@@ -68,12 +80,21 @@ void DrawSelectorBox(HDC dc, const RECT& box, const std::string& display, bool i
     DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", RGB(150, 158, 168), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawOptionButton(HDC dc, const RECT& rect, const char* label, bool selected) {
-    const COLORREF fill = selected ? RGB(46, 95, 138) : RGB(34, 37, 42);
-    const COLORREF border = selected ? RGB(79, 129, 184) : RGB(58, 61, 66);
-    const COLORREF text = selected ? RGB(232, 236, 240) : RGB(196, 205, 214);
+void DrawOptionButton(HDC dc, const RECT& rect, const char* label, bool selected, bool enabled = true) {
+    const COLORREF fill = selected ? RGB(46, 95, 138) : (enabled ? RGB(34, 37, 42) : RGB(29, 31, 35));
+    const COLORREF border = selected ? RGB(79, 129, 184) : (enabled ? RGB(58, 61, 66) : RGB(43, 46, 51));
+    const COLORREF text = selected ? RGB(232, 236, 240) : (enabled ? RGB(196, 205, 214) : RGB(104, 111, 121));
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, text, 12, selected ? FW_SEMIBOLD : FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawCheckbox(HDC dc, const RECT& rect, bool checked) {
+    const COLORREF boxFill = checked ? RGB(46, 95, 138) : RGB(34, 37, 42);
+    const COLORREF boxBorder = checked ? RGB(79, 129, 184) : RGB(58, 61, 66);
+    GdiDrawing::DrawSharpFrame(dc, rect, boxFill, boxBorder);
+    if (checked) {
+        DrawText(dc, rect, "x", RGB(232, 236, 240), 12, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
 }
 
 void DrawDropdownList(HDC dc, const RECT& fieldBox, const std::vector<std::string>& options, const std::string& selected, int hoveredOption) {
@@ -92,6 +113,109 @@ void DrawDropdownList(HDC dc, const RECT& fieldBox, const std::vector<std::strin
         const std::string label = MappingContextDisplayName(options[index]);
         DrawText(dc, RECT{ row.left + 8, row.top, row.right - 8, row.bottom }, label.c_str(), options[index].empty() ? RGB(150, 158, 168) : RGB(214, 220, 226), 12);
     }
+}
+
+struct TooltipContent {
+    const char* title = "";
+    const char* body = "";
+};
+
+[[nodiscard]] TooltipContent TooltipForKind(ProjectSettingsTooltipKind kind) noexcept {
+    switch (kind) {
+    case ProjectSettingsTooltipKind::MappingContext:
+        return TooltipContent{
+            "Mapping Context",
+            "Selects the project-wide input mapping asset used by the runtime input system.",
+        };
+    case ProjectSettingsTooltipKind::InputEnabled:
+        return TooltipContent{
+            "Input Enabled",
+            "Enables or disables project input processing. Disable it for scenes that should ignore gameplay input.",
+        };
+    case ProjectSettingsTooltipKind::RenderBackend:
+        return TooltipContent{
+            "bgfx Backend",
+            "Chooses the rendering backend for the editor viewport. Changing it recreates renderer resources.",
+        };
+    case ProjectSettingsTooltipKind::PostProcess:
+        return TooltipContent{
+            "Post FX",
+            "Master switch for scene post-processing such as anti-aliasing, bloom, selection outline and final composition.",
+        };
+    case ProjectSettingsTooltipKind::AntiAliasing:
+        return TooltipContent{
+            "Anti-Aliasing",
+            "Chooses exactly one AA path for the scene. TAA and FXAA run in post-process, while MSAA changes the render target setup.",
+        };
+    case ProjectSettingsTooltipKind::MsaaSamples:
+        return TooltipContent{
+            "MSAA Samples",
+            "Controls the hardware multisample count when Anti-Aliasing is set to MSAA. It is inactive for None, FXAA and TAA.",
+        };
+    case ProjectSettingsTooltipKind::Bloom:
+        return TooltipContent{
+            "Bloom",
+            "Adds a soft glow around bright pixels in the post-process chain. It depends on Post FX being enabled.",
+        };
+    case ProjectSettingsTooltipKind::Shadows:
+        return TooltipContent{
+            "Shadows",
+            "Enables shadow submission for scene lighting. Turning it off reduces rendering cost while previewing layout or materials.",
+        };
+    case ProjectSettingsTooltipKind::SelectionOutline:
+        return TooltipContent{
+            "Selection Outline",
+            "Draws the editor outline around selected objects through the post-process chain. It depends on Post FX being enabled.",
+        };
+    case ProjectSettingsTooltipKind::GpuDriven:
+        return TooltipContent{
+            "GPU Driven",
+            "Enables runtime GPU-driven scene submission where supported. The renderer falls back when the selected backend lacks required features.",
+        };
+    case ProjectSettingsTooltipKind::None:
+    default:
+        return {};
+    }
+}
+
+void DrawTooltip(HDC dc, const RECT& content, const EditorProjectSettingsState& state) {
+    const TooltipContent tooltip = TooltipForKind(state.TooltipKind());
+    if (tooltip.title[0] == '\0') {
+        return;
+    }
+
+    constexpr int titleHeight = 19;
+    constexpr int bodyHeight = 48;
+    constexpr int gap = 5;
+    const int width = kTooltipWidth;
+    const int height = (kTooltipPaddingY * 2) + titleHeight + gap + bodyHeight;
+    int left = state.TooltipX() + 16;
+    int top = state.TooltipY() + 18;
+    left = std::clamp(left, static_cast<int>(content.left) + 8, std::max(static_cast<int>(content.left) + 8, static_cast<int>(content.right) - width - 8));
+    if (top + height > content.bottom - 8) {
+        top = state.TooltipY() - height - 12;
+    }
+    top = std::clamp(top, static_cast<int>(content.top) + 8, std::max(static_cast<int>(content.top) + 8, static_cast<int>(content.bottom) - height - 8));
+
+    const RECT popup{ left, top, left + width, top + height };
+    GdiDrawing::DrawSharpFrame(dc, popup, RGB(20, 23, 28), RGB(74, 88, 108));
+    GdiDrawing::FillRectColor(dc, RECT{ popup.left + 1, popup.top + 1, popup.right - 1, popup.top + 3 }, RGB(72, 102, 132));
+
+    RECT title{
+        popup.left + kTooltipPaddingX,
+        popup.top + kTooltipPaddingY,
+        popup.right - kTooltipPaddingX,
+        popup.top + kTooltipPaddingY + titleHeight,
+    };
+    DrawTooltipText(dc, title, tooltip.title, RGB(230, 236, 244), 12, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    RECT body{
+        title.left,
+        title.bottom + gap,
+        title.right,
+        title.bottom + gap + bodyHeight,
+    };
+    DrawTooltipText(dc, body, tooltip.body, RGB(177, 187, 199));
 }
 
 void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorSceneContext& sceneContext) {
@@ -127,6 +251,28 @@ void DrawGraphicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, cons
     DrawOptionButton(dc, rects.backendAutoButton, "Auto", backend == EditorRenderBackend::Auto);
     DrawOptionButton(dc, rects.backendDx12Button, "DX12", backend == EditorRenderBackend::DirectX12);
     DrawOptionButton(dc, rects.backendVulkanButton, "Vulkan", backend == EditorRenderBackend::Vulkan);
+
+    DrawText(dc, rects.postProcessLabel, "Post FX", RGB(196, 205, 214), 12);
+    DrawCheckbox(dc, rects.postProcessCheckbox, renderBackendSettings.PostProcessEnabled());
+    DrawText(dc, rects.antiAliasingLabel, "Anti-Aliasing", RGB(196, 205, 214), 12);
+    const EditorAntiAliasingMode aaMode = renderBackendSettings.AntiAliasingMode();
+    DrawOptionButton(dc, rects.antiAliasingNoneButton, "None", aaMode == EditorAntiAliasingMode::None);
+    DrawOptionButton(dc, rects.antiAliasingFxaaButton, "FXAA", aaMode == EditorAntiAliasingMode::Fxaa);
+    DrawOptionButton(dc, rects.antiAliasingTaaButton, "TAA", aaMode == EditorAntiAliasingMode::Taa);
+    DrawOptionButton(dc, rects.antiAliasingMsaaButton, "MSAA", aaMode == EditorAntiAliasingMode::Msaa);
+    const bool msaaActive = aaMode == EditorAntiAliasingMode::Msaa;
+    DrawText(dc, rects.msaaLabel, "MSAA Samples", msaaActive ? RGB(196, 205, 214) : RGB(104, 111, 121), 12);
+    DrawOptionButton(dc, rects.msaaOffButton, "Off", msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
+    DrawOptionButton(dc, rects.msaa2xButton, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
+    DrawOptionButton(dc, rects.msaa4xButton, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
+    DrawText(dc, rects.bloomLabel, "Bloom", RGB(196, 205, 214), 12);
+    DrawCheckbox(dc, rects.bloomCheckbox, renderBackendSettings.BloomEnabled());
+    DrawText(dc, rects.shadowsLabel, "Shadows", RGB(196, 205, 214), 12);
+    DrawCheckbox(dc, rects.shadowsCheckbox, renderBackendSettings.ShadowsEnabled());
+    DrawText(dc, rects.selectionOutlineLabel, "Selection Outline", RGB(196, 205, 214), 12);
+    DrawCheckbox(dc, rects.selectionOutlineCheckbox, renderBackendSettings.SelectionOutlineEnabled());
+    DrawText(dc, rects.gpuDrivenLabel, "GPU Driven", RGB(196, 205, 214), 12);
+    DrawCheckbox(dc, rects.gpuDrivenCheckbox, renderBackendSettings.GpuDrivenEnabled());
 }
 
 } // namespace
@@ -161,6 +307,8 @@ void ProjectSettingsPanelRenderer::Paint(
     default:
         break;
     }
+
+    DrawTooltip(dc, content, sceneContext.ProjectSettings());
 }
 
 ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
@@ -180,6 +328,25 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
             const RECT button = ProjectSettingsPanelLayout::BackendOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
+            }
+        }
+        for (int index = 0; index < 5; ++index) {
+            const RECT checkbox = ProjectSettingsPanelLayout::GraphicsToggleCheckbox(rects, index);
+            const RECT label = ProjectSettingsPanelLayout::GraphicsToggleLabel(rects, index);
+            if (PointInRect(checkbox, x, y) || PointInRect(label, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::GraphicsToggle, .index = index, .rect = checkbox };
+            }
+        }
+        for (int index = 0; index < 4; ++index) {
+            const RECT button = ProjectSettingsPanelLayout::AntiAliasingModeButton(rects, index);
+            if (PointInRect(button, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = index, .rect = button };
+            }
+        }
+        for (int index = 0; index < 3; ++index) {
+            const RECT button = ProjectSettingsPanelLayout::MsaaOptionButton(rects, index);
+            if (PointInRect(button, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = index, .rect = button };
             }
         }
         return Hit{};
@@ -208,6 +375,39 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         return Hit{ .kind = ProjectSettingsHitKind::EnabledCheckbox, .index = -1, .rect = rects.enabledCheckbox };
     }
     return Hit{};
+}
+
+ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) {
+    const Hit direct = HitTest(content, sceneContext, x, y);
+    if (direct.kind != ProjectSettingsHitKind::None && direct.kind != ProjectSettingsHitKind::CategoryItem && direct.kind != ProjectSettingsHitKind::MappingContextOption) {
+        return direct;
+    }
+
+    const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(content);
+    const ProjectSettingsCategory category = static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory());
+    if (category == ProjectSettingsCategory::Inputs) {
+        if (PointInRect(rects.mappingLabel, x, y) || PointInRect(rects.mappingField, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::MappingContextField, .index = -1, .rect = rects.mappingField };
+        }
+        if (PointInRect(rects.enabledLabel, x, y) || PointInRect(rects.enabledCheckbox, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::EnabledCheckbox, .index = -1, .rect = rects.enabledCheckbox };
+        }
+        return direct;
+    }
+
+    if (category == ProjectSettingsCategory::Graphics) {
+        if (PointInRect(rects.backendLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = -1, .rect = rects.backendLabel };
+        }
+        if (PointInRect(rects.antiAliasingLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = -1, .rect = rects.antiAliasingLabel };
+        }
+        if (PointInRect(rects.msaaLabel, x, y)) {
+            return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = -1, .rect = rects.msaaLabel };
+        }
+    }
+
+    return direct;
 }
 
 } // namespace kb::editor

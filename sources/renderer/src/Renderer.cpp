@@ -634,6 +634,12 @@ bool Renderer::GpuDrivenRuntimeDispatchEnabled() const noexcept {
 }
 
 void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {
+    if (settings.temporalAntiAliasingEnabled) {
+        settings.fxaaEnabled = false;
+    }
+    if (!settings.temporalAntiAliasingEnabled) {
+        settings.temporalJitterEnabled = false;
+    }
     settings.bloomStrength = std::max(settings.bloomStrength, 0.0F);
     settings.bloomThreshold = std::max(settings.bloomThreshold, 0.0F);
     settings.bloomSoftKnee = std::clamp(settings.bloomSoftKnee, 0.0F, 1.0F);
@@ -646,6 +652,11 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
     settings.outputTransform.autoExposure.brightAdaptationRate = std::max(settings.outputTransform.autoExposure.brightAdaptationRate, 0.0F);
     settings.outputTransform.autoExposure.darkAdaptationRate = std::max(settings.outputTransform.autoExposure.darkAdaptationRate, 0.0F);
     defaultPostProcessSettings_ = settings;
+    if (std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing); antiAliasing.has_value()) {
+        antiAliasing->enabled = settings.temporalAntiAliasingEnabled || settings.fxaaEnabled;
+        antiAliasing->postProcessSettings = settings;
+        static_cast<void>(postProcessChain_.SetPass(*antiAliasing));
+    }
     if (std::optional<PostProcessPass> bloom = postProcessChain_.FindPass(PostProcessPassKind::Bloom); bloom.has_value()) {
         bloom->enabled = settings.bloomEnabled;
         bloom->postProcessSettings = settings;

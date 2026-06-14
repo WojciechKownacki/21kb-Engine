@@ -26,6 +26,9 @@ public:
     [[nodiscard]] static HeroIconGlyph ListBullet() noexcept;
     [[nodiscard]] static HeroIconGlyph AdjustmentsHorizontal() noexcept;
     [[nodiscard]] static HeroIconGlyph CommandLine() noexcept;
+    [[nodiscard]] static HeroIconGlyph DocumentText() noexcept;
+    [[nodiscard]] static HeroIconGlyph Bolt() noexcept;
+    [[nodiscard]] static HeroIconGlyph RectangleGroup() noexcept;
     [[nodiscard]] static HeroIconGlyph Gamepad2() noexcept;
     [[nodiscard]] static HeroIconGlyph RotationSnap() noexcept;
 };

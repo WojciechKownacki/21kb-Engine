@@ -19,6 +19,13 @@ enum class ScenePrefabOverrideFlag : std::uint32_t {
     Light = 1U << 6U,
     MissingObject = 1U << 7U,
     AddedChild = 1U << 8U,
+    Input = 1U << 9U,
+    Rigidbody = 1U << 10U,
+    Collider = 1U << 11U,
+    Tags = 1U << 12U,
+    Behaviour = 1U << 13U,
+    AudioSource = 1U << 14U,
+    AudioListener = 1U << 15U,
 };
 
 [[nodiscard]] constexpr ScenePrefabOverrideFlag operator|(ScenePrefabOverrideFlag lhs, ScenePrefabOverrideFlag rhs) noexcept {

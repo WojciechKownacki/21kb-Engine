@@ -89,6 +89,14 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     if (viewport_.pendingSubmissions_.empty()) {
         return true;
     }
+    if (viewport_.backendSettings_ != nullptr) {
+        render::ScenePostProcessSettings settings = viewport_.renderer_.DefaultPostProcessSettings();
+        settings.fxaaEnabled = viewport_.backendSettings_->FxaaEnabled();
+        settings.temporalAntiAliasingEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
+        settings.temporalJitterEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
+        settings.bloomEnabled = viewport_.backendSettings_->BloomEnabled();
+        viewport_.renderer_.SetDefaultPostProcessSettings(settings);
+    }
     if (!viewport_.renderer_.BeginFrame()) {
         return false;
     }

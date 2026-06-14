@@ -131,7 +131,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         return false;
     }
 
-    ScenePanelContentRenderer::PresentViewport(state.sceneViewport, host, content, panel, state.sceneContext);
+    ScenePanelContentRenderer::PresentViewport(state.sceneViewport, host, content, panel, state.sceneContext, state.renderBackendSettings);
     if (refreshToolbar) {
         InvalidateSceneToolbar(host, content, state.sceneContext.ViewportPreview(panel.id));
     }

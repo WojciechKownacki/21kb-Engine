@@ -23,6 +23,9 @@ enum class HeroIconKind : std::uint8_t {
     ListBullet,
     AdjustmentsHorizontal,
     CommandLine,
+    DocumentText,
+    Bolt,
+    RectangleGroup,
     Gamepad2,
     RotationSnap,
 };

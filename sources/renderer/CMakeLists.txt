@@ -277,6 +277,7 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_post_bloom_combine.sc
     fs_post_bloom_prefilter.sc
     fs_post_exposure_luminance.sc
+    fs_post_fxaa.sc
     fs_post_motion_vectors.sc
     fs_post_taa_resolve.sc
     fs_present_tex.sc
@@ -338,6 +339,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_blur.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_bloom_combine.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_exposure_luminance.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_fxaa.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
