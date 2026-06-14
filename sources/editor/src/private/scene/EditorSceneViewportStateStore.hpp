@@ -8,6 +8,12 @@
 
 namespace kb::editor {
 
+enum class EditorTransformToolMode : std::uint8_t {
+    Translate,
+    Rotate,
+    Scale,
+};
+
 struct EditorSceneGizmoAxisDrag {
     float axis[3]{};
     float planeNormal[3]{};
@@ -18,6 +24,7 @@ struct EditorSceneGizmoAxisDrag {
 struct EditorSceneGizmoState {
     int hoveredAxis = -1;
     int draggedAxis = -1;
+    EditorTransformToolMode toolMode = EditorTransformToolMode::Translate;
     bool centerDrag = false;
     std::uintptr_t pendingDragSourceWindow = 0U;
     int pendingDragX = 0;
@@ -27,6 +34,7 @@ struct EditorSceneGizmoState {
     float dragStartTargetX = 0.0F;
     float dragStartTargetY = 0.0F;
     float dragStartTargetZ = 0.0F;
+    float dragStartScreenAngle = 0.0F;
     float centerPlaneNx = 0.0F;
     float centerPlaneNy = 0.0F;
     float centerPlaneNz = 1.0F;

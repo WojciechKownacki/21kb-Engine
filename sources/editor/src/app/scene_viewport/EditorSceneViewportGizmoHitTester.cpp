@@ -11,7 +11,10 @@ constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoHitThresholdPixels = 10.0F;
 constexpr float kGizmoCenterHitRadiusPixels = 15.0F;
+constexpr float kGizmoRotationRingRadius = 0.792F;
+constexpr float kGizmoRotationHitThresholdPixels = 12.0F;
 constexpr float kMinGizmoDepth = 0.25F;
+constexpr float kPi = 3.14159265358979323846F;
 
 [[nodiscard]] float DistanceToSegment2D(float px, float py, float ax, float ay, float bx, float by) noexcept {
     const float abX = bx - ax;
@@ -31,6 +34,26 @@ constexpr float kMinGizmoDepth = 0.25F;
     const float dx = px - closestX;
     const float dy = py - closestY;
     return std::sqrt(dx * dx + dy * dy);
+}
+
+[[nodiscard]] kb::scene::Vec3 RingBasisU(int axis) noexcept {
+    switch (axis) {
+    case 0: return kb::scene::Vec3{0.0F, 1.0F, 0.0F};
+    case 1: return kb::scene::Vec3{1.0F, 0.0F, 0.0F};
+    case 2:
+    default:
+        return kb::scene::Vec3{1.0F, 0.0F, 0.0F};
+    }
+}
+
+[[nodiscard]] kb::scene::Vec3 RingBasisV(int axis) noexcept {
+    switch (axis) {
+    case 0: return kb::scene::Vec3{0.0F, 0.0F, 1.0F};
+    case 1: return kb::scene::Vec3{0.0F, 0.0F, 1.0F};
+    case 2:
+    default:
+        return kb::scene::Vec3{0.0F, 1.0F, 0.0F};
+    }
 }
 
 } // namespace
@@ -77,6 +100,52 @@ int EditorSceneViewportGizmoHitTester::HitAxis(
             bestAxis = axis;
         }
     }
+    return bestAxis;
+}
+
+int EditorSceneViewportGizmoHitTester::HitRotationAxis(
+    const EditorViewportCameraState& camera,
+    const RECT& renderArea,
+    kb::scene::Vec3 targetPosition,
+    float worldScale,
+    float localX,
+    float localY) noexcept {
+    constexpr int kSegments = 72;
+    int bestAxis = -1;
+    float bestDistance = kGizmoRotationHitThresholdPixels;
+    const float radius = worldScale * kGizmoRotationRingRadius;
+
+    for (int axis = 0; axis < 3; ++axis) {
+        const kb::scene::Vec3 u = RingBasisU(axis);
+        const kb::scene::Vec3 v = RingBasisV(axis);
+        float prevX = 0.0F;
+        float prevY = 0.0F;
+        bool hasPrev = false;
+        for (int segment = 0; segment <= kSegments; ++segment) {
+            const float angle = (static_cast<float>(segment) / static_cast<float>(kSegments)) * 2.0F * kPi;
+            const kb::scene::Vec3 point = EditorSceneViewportMath::Add(
+                targetPosition,
+                EditorSceneViewportMath::Mul(
+                    EditorSceneViewportMath::Add(
+                        EditorSceneViewportMath::Mul(u, std::cos(angle)),
+                        EditorSceneViewportMath::Mul(v, std::sin(angle))),
+                    radius));
+            float screenX = 0.0F;
+            float screenY = 0.0F;
+            const bool visible = EditorSceneViewportMath::WorldToScreen(camera, renderArea, point, screenX, screenY);
+            if (visible && hasPrev) {
+                const float distance = DistanceToSegment2D(localX, localY, prevX, prevY, screenX, screenY);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestAxis = axis;
+                }
+            }
+            hasPrev = visible;
+            prevX = screenX;
+            prevY = screenY;
+        }
+    }
+
     return bestAxis;
 }
 

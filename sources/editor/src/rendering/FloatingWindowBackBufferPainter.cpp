@@ -18,6 +18,7 @@ struct FloatingWindowPaintContext {
     const EditorTheme* theme = nullptr;
     const EditorMetrics* metrics = nullptr;
     const EditorSceneContext* sceneContext = nullptr;
+    const EditorRenderBackendSettings* renderBackendSettings = nullptr;
     EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
 
@@ -38,7 +39,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
     SetBkMode(paint.dc, TRANSPARENT);
-    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, nullptr);
+    FloatingEditorWindowRenderer{}.Paint(paint.dc, paintContext->window, paint.client, *paintContext->panel, *paintContext->theme, *paintContext->metrics, *paintContext->sceneContext, *paintContext->renderBackendSettings, nullptr);
 }
 
 [[nodiscard]] SceneViewportToolbarDropdownOverlayWindow& FloatingSceneToolbarDropdownOverlay() {
@@ -48,13 +49,14 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 
 } // namespace
 
-void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, EditorSceneBgfxViewport& sceneViewport) {
+void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const EditorRenderBackendSettings& renderBackendSettings, EditorSceneBgfxViewport& sceneViewport) {
     FloatingWindowPaintContext context{
         .window = window,
         .panel = &panel,
         .theme = &theme,
         .metrics = &metrics,
         .sceneContext = &sceneContext,
+        .renderBackendSettings = &renderBackendSettings,
         .sceneViewport = &sceneViewport,
     };
     GdiBackBufferRenderer::Paint(window, &PaintBackBuffer, &context);

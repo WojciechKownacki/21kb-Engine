@@ -30,6 +30,7 @@ struct RenderViewportViewIds {
     std::uint16_t sceneOverlays = ViewId::Invalid;
     std::uint16_t finalComposite = ViewId::Invalid;
     std::uint16_t editorUiComposite = ViewId::Invalid;
+    std::uint16_t editorGizmoOverlay = ViewId::Invalid;
 
     [[nodiscard]] constexpr std::uint16_t ViewFor(RenderPassKind kind) const noexcept {
         switch (kind) {
@@ -65,6 +66,8 @@ struct RenderViewportViewIds {
             return finalComposite;
         case RenderPassKind::EditorUiComposite:
             return editorUiComposite;
+        case RenderPassKind::EditorGizmoOverlay:
+            return editorGizmoOverlay;
         }
         return ViewId::Invalid;
     }
@@ -80,7 +83,8 @@ struct RenderViewportViewIds {
                ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
                BloomMipViewsAreValid(postProcessBloomMipBlurHViews) && BloomMipViewsAreValid(postProcessBloomMipBlurVViews) &&
                ViewId::IsValid(postProcessHdrCombine) && ViewId::IsValid(postProcessHdrFinalize) &&
-               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite);
+               ViewId::IsValid(sceneOverlays) && ViewId::IsValid(finalComposite) && ViewId::IsValid(editorUiComposite) &&
+               ViewId::IsValid(editorGizmoOverlay);
     }
 
 private:
@@ -117,6 +121,7 @@ public:
                 .sceneOverlays = ViewId::Overlay,
                 .finalComposite = ViewId::FinalComposite,
                 .editorUiComposite = ViewId::EditorUi,
+                .editorGizmoOverlay = ViewId::EditorGizmoOverlay,
             };
         }
 
@@ -144,6 +149,7 @@ public:
             .sceneOverlays = static_cast<std::uint16_t>(base + 12U),
             .finalComposite = static_cast<std::uint16_t>(base + 13U),
             .editorUiComposite = static_cast<std::uint16_t>(base + 14U),
+            .editorGizmoOverlay = static_cast<std::uint16_t>(base + 30U),
         };
     }
 

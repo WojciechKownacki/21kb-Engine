@@ -22,6 +22,7 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::FinalComposite,
     RenderPassKind::EditorSceneOverlays,
     RenderPassKind::EditorUiComposite,
+    RenderPassKind::EditorGizmoOverlay,
 };
 
 } // namespace
@@ -60,6 +61,8 @@ const char* RenderPassKindName(RenderPassKind kind) noexcept {
         return "FinalComposite";
     case RenderPassKind::EditorUiComposite:
         return "EditorUiComposite";
+    case RenderPassKind::EditorGizmoOverlay:
+        return "EditorGizmoOverlay";
     }
     return "Unknown";
 }

@@ -206,11 +206,17 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
         kDropdownRadius);
 
     const EditorViewportPreviewState& state = sceneContext_->ViewportPreview(panelId_);
-    const bool gridDropdown = state.ToolbarDropdown() == EditorViewportToolbarDropdown::GridSpacing;
-    const std::size_t count = gridDropdown ? EditorViewportGridSpacingOptionCount() : EditorViewportSnapStepOptionCount();
-    const float active = gridDropdown ? state.GridSpacing() : state.SnapStep();
+    const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
+    const bool gridDropdown = dropdown == EditorViewportToolbarDropdown::GridSpacing;
+    const bool rotationDropdown = dropdown == EditorViewportToolbarDropdown::RotationSnap;
+    const std::size_t count = gridDropdown
+        ? EditorViewportGridSpacingOptionCount()
+        : (rotationDropdown ? EditorViewportRotationSnapOptionCount() : EditorViewportSnapStepOptionCount());
+    const float active = gridDropdown ? state.GridSpacing() : (rotationDropdown ? state.RotationSnapDegrees() : state.SnapStep());
     for (std::size_t index = 0; index < count; ++index) {
-        const float value = gridDropdown ? EditorViewportGridSpacingOption(index) : EditorViewportSnapStepOption(index);
+        const float value = gridDropdown
+            ? EditorViewportGridSpacingOption(index)
+            : (rotationDropdown ? EditorViewportRotationSnapOption(index) : EditorViewportSnapStepOption(index));
         const bool selected = NearlyEqual(value, active);
         const bool hovered = static_cast<int>(index) == hoveredItem_;
         RECT item = ItemRect(client, index, count);
@@ -224,7 +230,9 @@ void SceneViewportToolbarDropdownOverlayWindow::Paint(HDC dc) const {
         GdiDrawing::DrawCenteredText(
             dc,
             item,
-            gridDropdown ? EditorViewportGridSpacingLabel(value) : EditorViewportSnapStepLabel(value),
+            gridDropdown
+                ? EditorViewportGridSpacingLabel(value)
+                : (rotationDropdown ? EditorViewportRotationSnapLabel(value) : EditorViewportSnapStepLabel(value)),
             selected ? RGB(235, 250, 255) : (hovered ? RGB(226, 236, 246) : GdiDrawing::ToColorRef(theme_.textPrimary)));
     }
 }
@@ -236,8 +244,10 @@ int SceneViewportToolbarDropdownOverlayWindow::ItemIndexAt(int clientX, int clie
     RECT client{};
     GetClientRect(window_, &client);
     const EditorViewportPreviewState& state = sceneContext_->ViewportPreview(panelId_);
-    const bool gridDropdown = state.ToolbarDropdown() == EditorViewportToolbarDropdown::GridSpacing;
-    const std::size_t count = gridDropdown ? EditorViewportGridSpacingOptionCount() : EditorViewportSnapStepOptionCount();
+    const EditorViewportToolbarDropdown dropdown = state.ToolbarDropdown();
+    const std::size_t count = dropdown == EditorViewportToolbarDropdown::GridSpacing
+        ? EditorViewportGridSpacingOptionCount()
+        : (dropdown == EditorViewportToolbarDropdown::RotationSnap ? EditorViewportRotationSnapOptionCount() : EditorViewportSnapStepOptionCount());
     for (std::size_t index = 0; index < count; ++index) {
         const RECT item = ItemRect(client, index, count);
         if (clientX >= item.left && clientX < item.right && clientY >= item.top && clientY < item.bottom) {

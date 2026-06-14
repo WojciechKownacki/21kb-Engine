@@ -159,6 +159,7 @@ void PrimaryViewportIdsUseCanonicalRuntimeViews() {
     Require(ids.sceneOverlays == ViewId::Overlay, "Primary overlay view id is not canonical");
     Require(ids.finalComposite == ViewId::FinalComposite, "Primary final composite view id is not canonical");
     Require(ids.editorUiComposite == ViewId::EditorUi, "Primary editor UI view id is not canonical");
+    Require(ids.editorGizmoOverlay == ViewId::EditorGizmoOverlay, "Primary editor gizmo overlay view id is not canonical");
 }
 
 void DetachedViewportIdsAreContiguousAndBounded() {
@@ -170,7 +171,7 @@ void DetachedViewportIdsAreContiguousAndBounded() {
     Require(first.opaqueScene == ViewId::DetachedViewportStart + 1U, "First detached viewport scene view id is wrong");
     Require(first.transparentScene == ViewId::DetachedViewportStart + 2U, "First detached viewport transparent scene view id is wrong");
     Require(first.editorUiComposite == ViewId::DetachedViewportStart + 14U, "First detached viewport editor UI view id is wrong");
-    Require(first.postProcessBloomMipBlurVViews.back() == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport stride is wrong");
+    Require(first.editorGizmoOverlay == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport gizmo overlay view id is wrong");
     Require(second.shadowDepth == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride, "Second detached viewport shadow view id is wrong");
     Require(second.opaqueScene == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride + 1U, "Second detached viewport scene view id is wrong");
     Require(RenderViewportViewIdAllocator::ForViewportIndex(7U).IsValid(), "Last supported detached viewport should be valid");
@@ -207,6 +208,7 @@ void FramePipelineBuildsCanonicalPassOrder() {
         RenderPassKind::FinalComposite,
         RenderPassKind::EditorSceneOverlays,
         RenderPassKind::EditorUiComposite,
+        RenderPassKind::EditorGizmoOverlay,
     };
 
     Require(viewport.passes.size() == expectedPasses.size(), "RenderFramePipeline pass count is wrong");
@@ -256,6 +258,7 @@ void FramePipelineBuildsCanonicalPassOrder() {
         ViewId::FinalComposite,
         ViewId::Overlay,
         ViewId::EditorUi,
+        ViewId::EditorGizmoOverlay,
     };
     Require(viewport.viewOrder.size() == expectedViewOrder.size(), "RenderFramePipeline view order count is wrong");
     for (std::size_t index = 0; index < expectedViewOrder.size(); ++index) {
@@ -301,7 +304,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 61U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 63U> expectedViewOrder{
         ViewId::ShadowDepth,
         ViewId::GpuCompute,
         ViewId::Scene3D,
@@ -333,6 +336,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::FinalComposite,
         ViewId::Overlay,
         ViewId::EditorUi,
+        ViewId::EditorGizmoOverlay,
         ViewId::DetachedViewportStart,
         ViewId::DetachedViewportStart + 1U,
         ViewId::DetachedViewportStart + 2U,
@@ -363,6 +367,7 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 13U,
         ViewId::DetachedViewportStart + 12U,
         ViewId::DetachedViewportStart + 14U,
+        ViewId::DetachedViewportStart + 30U,
     };
 
     const std::span<const std::uint16_t> viewOrder = state.ViewOrder();
