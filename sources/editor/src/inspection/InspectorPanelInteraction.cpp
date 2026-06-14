@@ -8,18 +8,15 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -172,67 +169,6 @@ namespace {
     return text == "-0" ? "0" : text;
 }
 
-[[nodiscard]] float ReadTransformValue(const kb::scene::TransformComponent& transform, InspectorPropertyId property) noexcept {
-    switch (property) {
-    case InspectorPropertyId::PositionX:
-        return transform.localPosition.x;
-    case InspectorPropertyId::PositionY:
-        return transform.localPosition.y;
-    case InspectorPropertyId::PositionZ:
-        return transform.localPosition.z;
-    case InspectorPropertyId::RotationX:
-        return transform.localRotation.x;
-    case InspectorPropertyId::RotationY:
-        return transform.localRotation.y;
-    case InspectorPropertyId::RotationZ:
-        return transform.localRotation.z;
-    case InspectorPropertyId::ScaleX:
-        return transform.localScale.x;
-    case InspectorPropertyId::ScaleY:
-        return transform.localScale.y;
-    case InspectorPropertyId::ScaleZ:
-        return transform.localScale.z;
-    default:
-        return 0.0F;
-    }
-}
-
-void SetTransformValue(kb::scene::Scene& scene, kb::scene::SceneEntity entity, InspectorPropertyId property, float value) {
-    kb::scene::TransformComponent transform = scene.Transforms().Get(entity);
-    switch (property) {
-    case InspectorPropertyId::PositionX:
-        transform.localPosition.x = value;
-        break;
-    case InspectorPropertyId::PositionY:
-        transform.localPosition.y = value;
-        break;
-    case InspectorPropertyId::PositionZ:
-        transform.localPosition.z = value;
-        break;
-    case InspectorPropertyId::RotationX:
-        transform.localRotation.x = value;
-        break;
-    case InspectorPropertyId::RotationY:
-        transform.localRotation.y = value;
-        break;
-    case InspectorPropertyId::RotationZ:
-        transform.localRotation.z = value;
-        break;
-    case InspectorPropertyId::ScaleX:
-        transform.localScale.x = std::max(0.01F, value);
-        break;
-    case InspectorPropertyId::ScaleY:
-        transform.localScale.y = std::max(0.01F, value);
-        break;
-    case InspectorPropertyId::ScaleZ:
-        transform.localScale.z = std::max(0.01F, value);
-        break;
-    default:
-        return;
-    }
-    scene.Transforms().Set(entity, transform);
-}
-
 [[nodiscard]] bool IsTransformProperty(InspectorPropertyId property) noexcept {
     return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ ||
         property == InspectorPropertyId::RotationX || property == InspectorPropertyId::RotationY || property == InspectorPropertyId::RotationZ ||
@@ -378,11 +314,10 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return true;
     }
     if (hit.kind == InspectorHitKind::FloatField) {
-        const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
         if (!sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
             return true;
         }
-        sceneContext.Inspector().BeginFloatDrag(hit.property, ReadTransformValue(transform, hit.property), x, y);
+        sceneContext.Inspector().BeginFloatDrag(hit.property, sceneContext.ActiveTransformEditPropertyStart(hit.property), x, y);
         return true;
     }
     return true;
@@ -410,9 +345,7 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     }
     sceneContext.Inspector().MarkFloatDragMoved();
     const float delta = static_cast<float>(dx - dy) * StepFor(property) * 0.08F;
-    SetTransformValue(sceneContext.Scene(), entity, property, sceneContext.Inspector().DragStartValue() + delta);
-    const std::array<kb::scene::SceneEntity, 1U> touched{ entity };
-    sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ touched.data(), touched.size() });
+    static_cast<void>(sceneContext.ApplyActiveTransformEditProperty(property, sceneContext.Inspector().DragStartValue() + delta));
     return true;
 }
 
@@ -521,14 +454,13 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
                     static_cast<void>(sceneContext.CommitSceneEditTransaction());
                 }
             } else if (IsTransformProperty(property)) {
-                const kb::scene::TransformComponent transform = sceneContext.Scene().Transforms().Get(entity);
-                float value = 0.0F;
-                if (EvaluateMath(inspector.EditBuffer(), ReadTransformValue(transform, property), value)) {
-                    if (sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
-                        SetTransformValue(sceneContext.Scene(), entity, property, value);
-                        const std::array<kb::scene::SceneEntity, 1U> touched{ entity };
-                        sceneContext.MarkSceneEntitiesRenderDirty(std::span<const kb::scene::SceneEntity>{ touched.data(), touched.size() });
+                if (sceneContext.BeginSelectedTransformEdit("Edit Transform")) {
+                    float value = 0.0F;
+                    if (EvaluateMath(inspector.EditBuffer(), sceneContext.ActiveTransformEditPropertyStart(property), value)) {
+                        static_cast<void>(sceneContext.ApplyActiveTransformEditProperty(property, value));
                         static_cast<void>(sceneContext.CommitActiveTransformEdit());
+                    } else {
+                        sceneContext.CancelActiveTransformEdit();
                     }
                 }
             }
