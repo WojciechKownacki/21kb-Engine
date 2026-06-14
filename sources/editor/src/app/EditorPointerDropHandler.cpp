@@ -11,6 +11,7 @@
 #include "app/EditorMeshAssetSceneDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
+#include "app/EditorPrefabAssetSceneDropHandler.hpp"
 
 namespace kb::editor {
 
@@ -29,7 +30,8 @@ bool EditorPointerDropHandler::Drop(
         return EditorHierarchyEntityAssetDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entity)
             || EditorHierarchyEntityHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.entities);
     case EditorPointerDragKind::PrefabAsset:
-        return (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
+        return (drag.assetInstantiatesPrefab && EditorPrefabAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
+            || (drag.assetInstantiatesPrefab && EditorPrefabAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetPath, drag.assetVirtualPath))
             || (drag.assetCreatesMeshEntity && EditorMeshAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetHierarchyDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))

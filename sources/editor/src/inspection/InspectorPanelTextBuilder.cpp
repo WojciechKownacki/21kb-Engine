@@ -11,6 +11,7 @@
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
 #include "inspection/InspectorLightTextBuilder.hpp"
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
+#include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 
 #include <sstream>
@@ -58,6 +59,10 @@ namespace {
 std::optional<std::string> InspectorPanelTextBuilder::Build(const EditorSceneContext& sceneContext) const {
     if (std::optional<std::string> assetText = BuildAssetInspectorText(sceneContext)) {
         return assetText;
+    }
+
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        return InspectorMultiSelectionTextBuilder{}.Build(sceneContext);
     }
 
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();

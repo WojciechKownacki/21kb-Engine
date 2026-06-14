@@ -42,6 +42,7 @@
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
+#include "scene/EditorSceneSelectionPivot.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 
@@ -1624,6 +1625,29 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
     return true;
 }
 
+bool EditorSceneContext::InstantiatePrefabAssetAt(
+    const std::filesystem::path& path,
+    const std::filesystem::path& virtualPath,
+    kb::scene::Vec3 position) {
+    std::optional<kb::scene::SceneEntity> root;
+    if (!ExecuteSceneCommand("Instantiate Prefab", [this, &root, path, virtualPath, position]() {
+            root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, {});
+            if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
+                return false;
+            }
+            kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
+            transform.localPosition = position;
+            scene_->Transforms().Set(*root, transform);
+            SelectEntity(*root);
+            return true;
+        })) {
+        console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
+        return false;
+    }
+    console_.Info("Prefabs", "Prefab instantiated: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
+    return true;
+}
+
 kb::scene::SceneEntity EditorSceneContext::CreateMeshAssetEntity(kb::assets::AssetId assetId) {
     return CreateMeshAssetEntity(assetId, {}, true);
 }
@@ -1888,10 +1912,14 @@ bool EditorSceneContext::BeginSelectedTransformEdit(std::string label) {
         });
     }
 
-    if (activeTransformEdit_.changes.empty() || FindTransformChange(activeTransformEdit_.changes, primary) == nullptr) {
+    if (activeTransformEdit_.changes.empty()) {
         activeTransformEdit_.Clear();
         return false;
     }
+    activeTransformEdit_.targetStart = EditorSceneSelectionPivot::Resolve(
+        *scene_,
+        hierarchySelection_.SelectedEntities(),
+        primary).value_or(scene_->Transforms().Get(primary).localPosition);
     return true;
 }
 
@@ -1900,15 +1928,10 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
         return false;
     }
 
-    EditorSceneObjectTransformChange* primaryChange = FindTransformChange(activeTransformEdit_.changes, activeTransformEdit_.primary);
-    if (primaryChange == nullptr) {
-        return false;
-    }
-
     const kb::scene::Vec3 delta{
-        position.x - primaryChange->before.localPosition.x,
-        position.y - primaryChange->before.localPosition.y,
-        position.z - primaryChange->before.localPosition.z,
+        position.x - activeTransformEdit_.targetStart.x,
+        position.y - activeTransformEdit_.targetStart.y,
+        position.z - activeTransformEdit_.targetStart.z,
     };
 
     bool changed = false;

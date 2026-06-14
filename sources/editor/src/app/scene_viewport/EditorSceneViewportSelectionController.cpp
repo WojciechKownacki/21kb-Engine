@@ -56,12 +56,20 @@ void EditorSceneViewportSelectionController::ApplyBox(
 
     std::vector<kb::scene::SceneEntity> selected = sceneContext.SelectedHierarchyEntities();
     for (const kb::scene::SceneEntity entity : entities) {
-        if (entity.IsValid() && !Contains(selected, entity)) {
+        if (!entity.IsValid()) {
+            continue;
+        }
+        const auto existing = std::ranges::find(selected, entity);
+        if (existing == selected.end()) {
             selected.push_back(entity);
+        } else {
+            selected.erase(existing);
         }
     }
 
-    if (!selected.empty()) {
+    if (selected.empty()) {
+        sceneContext.ClearHierarchySelection();
+    } else {
         sceneContext.SelectHierarchyEntities(selected);
     }
 }
