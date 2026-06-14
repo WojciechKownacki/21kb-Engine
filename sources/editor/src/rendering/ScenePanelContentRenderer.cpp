@@ -214,6 +214,7 @@ struct SceneViewportRenderProfileDesc {
             gizmo.worldScale = GizmoScreenSpaceScale(viewportCamera, axes, target, renderHeight);
             gizmo.hoveredAxis = sceneContext.Gizmo().hoveredAxis;
             gizmo.draggedAxis = sceneContext.Gizmo().draggedAxis;
+            gizmo.mode = static_cast<std::uint8_t>(sceneContext.Gizmo().toolMode);
         }
     }
 

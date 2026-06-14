@@ -78,7 +78,6 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         if (!wasDragging) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
             if (pending.IsValid() && sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
-                sceneContext_.ClearHierarchySelection(); // Selecting an asset deselects the entity.
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }
         } else {

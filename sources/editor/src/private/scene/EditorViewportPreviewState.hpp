@@ -38,6 +38,7 @@ enum class EditorViewportToolbarDropdown : std::uint8_t {
     None,
     GridSpacing,
     SnapStep,
+    RotationSnap,
 };
 
 struct EditorViewportSafeArea {
@@ -70,6 +71,7 @@ public:
     [[nodiscard]] std::uint32_t GridMajorEvery() const noexcept;
     [[nodiscard]] bool SnapEnabled() const noexcept;
     [[nodiscard]] float SnapStep() const noexcept;
+    [[nodiscard]] float RotationSnapDegrees() const noexcept;
     [[nodiscard]] EditorViewportToolbarDropdown ToolbarDropdown() const noexcept;
 
     void SetProfile(EditorViewportProfileKind kind) noexcept;
@@ -81,6 +83,7 @@ public:
     void SetGridSpacing(float spacing) noexcept;
     void SetSnapEnabled(bool enabled) noexcept;
     void SetSnapStep(float step) noexcept;
+    void SetRotationSnapDegrees(float degrees) noexcept;
     void CycleProfile() noexcept;
     void CycleFitMode() noexcept;
     void CycleCameraMode() noexcept;
@@ -89,6 +92,7 @@ public:
     void ToggleSnapEnabled() noexcept;
     void CycleGridSpacing() noexcept;
     void CycleSnapStep() noexcept;
+    void CycleRotationSnapDegrees() noexcept;
     void OpenToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept;
     void ToggleToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept;
     void CloseToolbarDropdown() noexcept;
@@ -96,6 +100,7 @@ public:
     [[nodiscard]] kb::scene::Vec3 SnapPosition(kb::scene::Vec3 position) const noexcept;
     [[nodiscard]] kb::scene::Vec3 SnapGroundPosition(kb::scene::Vec3 position) const noexcept;
     [[nodiscard]] kb::scene::Vec3 SnapPositionAxis(kb::scene::Vec3 position, int axis) const noexcept;
+    [[nodiscard]] float SnapRotationRadians(float radians) const noexcept;
 
     [[nodiscard]] std::uint32_t RenderWidthForPanel(std::uint32_t panelWidth) const noexcept;
     [[nodiscard]] std::uint32_t RenderHeightForPanel(std::uint32_t panelHeight) const noexcept;
@@ -112,6 +117,7 @@ private:
     std::uint32_t gridMajorEvery_ = 10U;
     bool snapEnabled_ = false;
     float snapStep_ = 1.0F;
+    float rotationSnapDegrees_ = 0.0F;
     EditorViewportToolbarDropdown toolbarDropdown_ = EditorViewportToolbarDropdown::None;
 };
 
@@ -120,9 +126,12 @@ private:
 [[nodiscard]] const char* EditorViewportRenderProfileLabel(EditorViewportRenderProfile profile) noexcept;
 [[nodiscard]] const char* EditorViewportGridSpacingLabel(float spacing) noexcept;
 [[nodiscard]] const char* EditorViewportSnapStepLabel(float step) noexcept;
+[[nodiscard]] const char* EditorViewportRotationSnapLabel(float degrees) noexcept;
 [[nodiscard]] std::size_t EditorViewportGridSpacingOptionCount() noexcept;
 [[nodiscard]] float EditorViewportGridSpacingOption(std::size_t index) noexcept;
 [[nodiscard]] std::size_t EditorViewportSnapStepOptionCount() noexcept;
 [[nodiscard]] float EditorViewportSnapStepOption(std::size_t index) noexcept;
+[[nodiscard]] std::size_t EditorViewportRotationSnapOptionCount() noexcept;
+[[nodiscard]] float EditorViewportRotationSnapOption(std::size_t index) noexcept;
 
 } // namespace kb::editor

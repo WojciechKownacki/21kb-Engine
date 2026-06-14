@@ -6,6 +6,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "scene/EditorSceneContext.hpp"
+#include "scene/transform_edit/EditorSceneTransformEquality.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -20,20 +21,6 @@ namespace {
         }
     }
     return false;
-}
-
-[[nodiscard]] bool SameVec3(kb::scene::Vec3 lhs, kb::scene::Vec3 rhs) noexcept {
-    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
-}
-
-[[nodiscard]] bool SameQuat(kb::scene::Quat lhs, kb::scene::Quat rhs) noexcept {
-    return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z && lhs.w == rhs.w;
-}
-
-[[nodiscard]] bool SameTransform(const kb::scene::TransformComponent& lhs, const kb::scene::TransformComponent& rhs) noexcept {
-    return SameVec3(lhs.localPosition, rhs.localPosition) &&
-        SameQuat(lhs.localRotation, rhs.localRotation) &&
-        SameVec3(lhs.localScale, rhs.localScale);
 }
 
 [[nodiscard]] kb::scene::SceneObject AliveParentObject(kb::scene::Scene& scene, kb::scene::SceneEntity parent) noexcept {
@@ -106,7 +93,7 @@ bool EditorSceneTransformDeltaCommand::Apply(bool after) {
 
         const kb::scene::TransformComponent& target = after ? change.after : change.before;
         const kb::scene::TransformComponent current = scene.Transforms().Get(change.entity);
-        if (SameTransform(current, target)) {
+        if (EditorSceneTransformEquality::Same(current, target)) {
             continue;
         }
 

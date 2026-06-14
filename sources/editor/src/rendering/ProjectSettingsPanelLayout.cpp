@@ -17,6 +17,7 @@ constexpr int kRowGap = 6;
 constexpr int kLabelWidth = 150;
 constexpr int kCheckboxSize = 18;
 constexpr int kOptionHeight = 28;
+constexpr int kBackendButtonWidth = 86;
 
 } // namespace
 
@@ -42,6 +43,12 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.enabledLabel = RECT{ left, row2Top, left + kLabelWidth, row2Top + kRowHeight };
     const int checkTop = row2Top + (kRowHeight - kCheckboxSize) / 2;
     rects.enabledCheckbox = RECT{ left + kLabelWidth, checkTop, left + kLabelWidth + kCheckboxSize, checkTop + kCheckboxSize };
+
+    const int graphicsRowTop = rects.sectionHeader.bottom + kRowGap;
+    rects.backendLabel = RECT{ left, graphicsRowTop, left + kLabelWidth, graphicsRowTop + kRowHeight };
+    rects.backendAutoButton = RECT{ left + kLabelWidth, graphicsRowTop + 3, left + kLabelWidth + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
+    rects.backendDx12Button = RECT{ rects.backendAutoButton.right + 6, graphicsRowTop + 3, rects.backendAutoButton.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
+    rects.backendVulkanButton = RECT{ rects.backendDx12Button.right + 6, graphicsRowTop + 3, rects.backendDx12Button.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
     return rects;
 }
 
@@ -61,6 +68,19 @@ RECT ProjectSettingsPanelLayout::OptionRow(const RECT& fieldBox, int index) noex
 
 RECT ProjectSettingsPanelLayout::OptionListBounds(const RECT& fieldBox, int count) noexcept {
     return RECT{ fieldBox.left, fieldBox.bottom, fieldBox.right, fieldBox.bottom + (count * kOptionHeight) };
+}
+
+RECT ProjectSettingsPanelLayout::BackendOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {
+    switch (index) {
+    case 0:
+        return rects.backendAutoButton;
+    case 1:
+        return rects.backendDx12Button;
+    case 2:
+        return rects.backendVulkanButton;
+    default:
+        return {};
+    }
 }
 
 } // namespace kb::editor

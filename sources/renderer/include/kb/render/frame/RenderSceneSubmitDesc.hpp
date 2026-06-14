@@ -133,6 +133,7 @@ struct RenderSceneSubmitDesc {
         float worldScale = 1.0F;
         int hoveredAxis = -1;
         int draggedAxis = -1;
+        std::uint8_t mode = 0U;
         bool visible = false;
     };
 

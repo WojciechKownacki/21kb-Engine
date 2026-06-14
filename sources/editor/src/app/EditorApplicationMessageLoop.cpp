@@ -8,6 +8,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 
@@ -92,6 +93,36 @@ void CoalesceConsecutiveMouseMoveMessages(MSG& message) noexcept {
         }
         static_cast<void>(PeekMessageW(&next, nullptr, 0, 0, PM_REMOVE));
         message = next;
+    }
+}
+
+void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
+    if (state.window != nullptr && IsWindow(state.window) != 0) {
+        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Inspector,
+                state.window,
+                state.window,
+                state.dockModel,
+                state.floatingWindows,
+                state.metrics)) {
+            InvalidateRect(state.window, &*inspector, FALSE);
+        }
+    }
+
+    const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
+    for (HWND window : queries.Windows()) {
+        if (window == nullptr || IsWindow(window) == 0) {
+            continue;
+        }
+        if (const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
+                DockPanelKind::Inspector,
+                window,
+                state.window,
+                state.dockModel,
+                state.floatingWindows,
+                state.metrics)) {
+            InvalidateRect(window, &*inspector, FALSE);
+        }
     }
 }
 
@@ -202,6 +233,7 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         state.sceneContext);
     if (gizmoChanged) {
         state.sceneViewport.RequestPresent();
+        InvalidateInspectorPanels(state);
     }
 
     return PresentVisibleScenePanels(state) || navigationChanged || gizmoChanged;

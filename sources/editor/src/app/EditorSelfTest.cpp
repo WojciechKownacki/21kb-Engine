@@ -8,6 +8,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorPluginCatalog.hpp"
 #include "scene/EditorSceneContext.hpp"
 #include "scene/EditorScriptAssetGateway.hpp"
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -78,10 +80,12 @@ constexpr RECT kContent{ 0, 0, 900, 560 };
 
 // Centers of each interactive control, derived from the shared panel layout.
 struct ProjectSettingsClickPoints {
-    POINT category{};   // First sidebar category ("Inputs").
+    POINT inputCategory{};    // First sidebar category ("Inputs").
+    POINT graphicsCategory{}; // Second sidebar category ("Graphics").
     POINT field{};      // Mapping Context selector box.
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
+    POINT vulkanBackend{};
     POINT elsewhere{};  // Empty space in the right content pane.
 };
 
@@ -89,10 +93,12 @@ struct ProjectSettingsClickPoints {
     const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(kContent);
     const RECT fieldBox = ProjectSettingsPanelLayout::MappingFieldBox(rects);
     return ProjectSettingsClickPoints{
-        .category = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 0)),
+        .inputCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 0)),
+        .graphicsCategory = Center(ProjectSettingsPanelLayout::CategoryRow(rects.sidebar, 1)),
         .field = Center(fieldBox),
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
+        .vulkanBackend = Center(rects.backendVulkanButton),
         .elsewhere = POINT{ Center(rects.content).x, rects.content.bottom - 40 },
     };
 }
@@ -122,9 +128,9 @@ void RunProjectSettingsSuite(Report& report) {
     EditorProjectSettingsPointerController controller{ context };
 
     // Left sidebar (master) lists categories; Inputs is selected by default.
-    report.Check(HitKindAt(context, click.category) == ProjectSettingsHitKind::CategoryItem, "Sidebar point hit-tests as CategoryItem");
+    report.Check(HitKindAt(context, click.inputCategory) == ProjectSettingsHitKind::CategoryItem, "Sidebar point hit-tests as CategoryItem");
     report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Inputs), "Inputs category selected by default");
-    report.Check(controller.HandlePointerDown(kContent, click.category.x, click.category.y), "Clicking the Inputs category is handled");
+    report.Check(controller.HandlePointerDown(kContent, click.inputCategory.x, click.inputCategory.y), "Clicking the Inputs category is handled");
     report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Inputs), "Inputs category active after click");
 
     // Dropdown starts closed.
@@ -172,6 +178,15 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(HitKindAt(context, click.elsewhere) == ProjectSettingsHitKind::None, "Empty panel point hit-tests as None");
     report.Check(controller.HandlePointerDown(kContent, click.elsewhere.x, click.elsewhere.y), "Clicking empty space dismisses dropdown");
     report.Check(!context.ProjectSettings().IsMappingContextDropdownOpen(), "Dropdown closed after clicking empty space");
+
+    EditorRenderBackendSettings renderBackendSettings;
+    report.Check(controller.HandlePointerDown(kContent, click.graphicsCategory.x, click.graphicsCategory.y), "Clicking the Graphics category is handled");
+    report.Check(context.ProjectSettings().SelectedCategory() == static_cast<int>(ProjectSettingsCategory::Graphics), "Graphics category active after click");
+    report.Check(HitKindAt(context, click.vulkanBackend) == ProjectSettingsHitKind::RenderBackendOption, "Vulkan backend point hit-tests as RenderBackendOption");
+    const std::uint64_t generationBefore = renderBackendSettings.Generation();
+    report.Check(controller.HandlePointerDown(kContent, click.vulkanBackend.x, click.vulkanBackend.y, renderBackendSettings), "Clicking Vulkan backend is handled");
+    report.Check(renderBackendSettings.Backend() == EditorRenderBackend::Vulkan, "Graphics backend setting changed to Vulkan");
+    report.Check(renderBackendSettings.Generation() == generationBefore + 1U, "Graphics backend generation increments");
 }
 
 // Finds the first registered asset matching a predicate, or an invalid id.

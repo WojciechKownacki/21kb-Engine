@@ -291,6 +291,7 @@ void PanelContentRenderer::Paint(
     const EditorTheme& theme,
     const EditorMetrics& metrics,
     const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings,
     bool floating,
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
@@ -319,7 +320,7 @@ void PanelContentRenderer::Paint(
         ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
-        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
+        ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);
         break;
     case DockPanelKind::Plugins:
         PluginsPanelRenderer{}.Paint(dc, content, theme, sceneContext);
