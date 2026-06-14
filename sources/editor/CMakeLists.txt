@@ -21,6 +21,8 @@ add_executable(kb_editor WIN32
     src/app/EditorAssetBrowserPointerPanelResolver.cpp
     src/app/EditorAssetBrowserPrimaryClickHandler.cpp
     src/app/EditorAssetBrowserThumbnailScaleDragHandler.cpp
+    src/app/EditorAssetDropActionMenu.cpp
+    src/app/EditorAssetProjectFilesDropActionExecutor.cpp
     src/app/EditorTextInputShortcuts.cpp
     src/app/console/EditorConsolePointerController.cpp
     src/app/cursor/EditorInternalSplitterCursorController.cpp
@@ -66,6 +68,12 @@ add_executable(kb_editor WIN32
     src/app/scene_viewport/EditorSceneViewportGizmoDragSolver.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoHitTester.cpp
     src/app/scene_viewport/EditorSceneViewportGizmoInteraction.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoDragState.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoDragUpdater.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoRotationDrag.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.cpp
+    src/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.cpp
     src/app/scene_viewport/EditorSceneViewportHitResolver.cpp
     src/app/scene_viewport/EditorSceneViewportMath.cpp
     src/app/scene_viewport/EditorSceneViewportMeshDragPreview.cpp
@@ -272,6 +280,8 @@ add_executable(kb_editor WIN32
     src/private/app/EditorAssetBrowserPointerPanelResolver.hpp
     src/private/app/EditorAssetBrowserPrimaryClickHandler.hpp
     src/private/app/EditorAssetBrowserThumbnailScaleDragHandler.hpp
+    src/private/app/EditorAssetDropActionMenu.hpp
+    src/private/app/EditorAssetProjectFilesDropActionExecutor.hpp
     src/private/app/EditorTextInputShortcuts.hpp
     src/private/app/console/EditorConsolePointerController.hpp
     src/private/app/cursor/EditorInternalSplitterCursorController.hpp
@@ -318,6 +328,12 @@ add_executable(kb_editor WIN32
     src/private/app/scene_viewport/EditorSceneViewportGizmoDragSolver.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoHitTester.hpp
     src/private/app/scene_viewport/EditorSceneViewportGizmoInteraction.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoAltDuplicate.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoDragState.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoDragUpdater.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoRotationDrag.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoTargetResolver.hpp
+    src/private/app/scene_viewport/gizmo/EditorSceneViewportGizmoToolBehavior.hpp
     src/private/app/scene_viewport/EditorSceneViewportHitResolver.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshDragPreview.hpp
     src/private/app/scene_viewport/EditorSceneViewportMeshPicker.hpp
@@ -450,6 +466,11 @@ add_executable(kb_editor WIN32
     src/private/rendering/script_editor/ScriptSourceFile.hpp
     src/private/rendering/ScriptEditorPanelRenderer.hpp
     src/private/rendering/SceneViewportToolbarRenderer.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarMetrics.hpp
+    src/private/rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp
     src/private/rendering/SceneViewportToolbarDropdownOverlayWindow.hpp
     src/private/rendering/ScenePanelContentRenderer.hpp
     src/private/rendering/HierarchyRowLayout.hpp
@@ -498,6 +519,15 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
+    src/private/scene/transform_edit/EditorSceneTransformChange.hpp
+    src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp
+    src/private/scene/transform_edit/EditorSceneTransformEditApplier.hpp
+    src/private/scene/transform_edit/EditorSceneTransformEditController.hpp
+    src/private/scene/transform_edit/EditorSceneTransformEditSession.hpp
+    src/private/scene/transform_edit/EditorSceneTransformEquality.hpp
+    src/private/scene/transform_edit/EditorSceneTransformMath.hpp
+    src/private/scene/transform_edit/EditorSceneTransformSnapshotBuilder.hpp
+    src/private/scene/transform_edit/EditorTransformProperty.hpp
     src/private/scene/input/EditorInputAssetGateway.hpp
     src/private/scene/input/EditorInputAssetCatalog.hpp
     src/private/scene/input/EditorInputActionAuthoring.hpp
@@ -606,6 +636,10 @@ add_executable(kb_editor WIN32
     src/rendering/script_editor/ScriptSourceFile.cpp
     src/rendering/ScriptEditorPanelRenderer.cpp
     src/rendering/SceneViewportToolbarRenderer.cpp
+    src/rendering/scene_viewport_toolbar/SceneViewportToolbarDrawing.cpp
+    src/rendering/scene_viewport_toolbar/SceneViewportToolbarInfoRenderer.cpp
+    src/rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.cpp
+    src/rendering/scene_viewport_toolbar/SceneViewportToolbarState.cpp
     src/rendering/SceneViewportToolbarDropdownOverlayWindow.cpp
     src/rendering/ScenePanelContentRenderer.cpp
     src/rendering/SvgGraphicsPathBuilder.cpp
@@ -653,6 +687,14 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
+    src/scene/transform_edit/EditorSceneTransformCommitBuilder.cpp
+    src/scene/transform_edit/EditorSceneTransformEditApplier.cpp
+    src/scene/transform_edit/EditorSceneTransformEditController.cpp
+    src/scene/transform_edit/EditorSceneTransformEditSession.cpp
+    src/scene/transform_edit/EditorSceneTransformEquality.cpp
+    src/scene/transform_edit/EditorSceneTransformMath.cpp
+    src/scene/transform_edit/EditorSceneTransformSnapshotBuilder.cpp
+    src/scene/transform_edit/EditorTransformProperty.cpp
     src/scene/input/EditorInputAssetGateway.cpp
     src/scene/input/EditorInputAssetCatalog.cpp
     src/scene/input/EditorInputActionAuthoring.cpp

@@ -24,6 +24,7 @@ enum class HeroIconKind : std::uint8_t {
     AdjustmentsHorizontal,
     CommandLine,
     Gamepad2,
+    RotationSnap,
 };
 
 } // namespace kb::editor

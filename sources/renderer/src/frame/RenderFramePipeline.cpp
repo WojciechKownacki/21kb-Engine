@@ -133,6 +133,9 @@ void AddViewportResources(RenderPassGraph& graph, RenderExtent extent) {
     case RenderPassKind::EditorUiComposite:
         pass.Reads(RenderGraphResource::FinalOutput).Reads(RenderGraphResource::SelectionMask).Writes(RenderGraphResource::FinalOutput);
         break;
+    case RenderPassKind::EditorGizmoOverlay:
+        pass.Reads(RenderGraphResource::SceneDepth).Reads(RenderGraphResource::FinalOutput).Writes(RenderGraphResource::FinalOutput);
+        break;
     }
     return pass;
 }

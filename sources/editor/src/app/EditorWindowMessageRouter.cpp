@@ -14,6 +14,44 @@
 #include "inspection/InspectorPanelInteraction.hpp"
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool ModifierDown(int virtualKey) noexcept {
+    return (GetKeyState(virtualKey) & 0x8000) != 0;
+}
+
+[[nodiscard]] bool HandleTransformToolShortcut(EditorSceneContext& sceneContext, WPARAM key) noexcept {
+    if (ModifierDown(VK_CONTROL) || ModifierDown(VK_MENU) || sceneContext.HasActiveViewportCameraNavigation() || sceneContext.Gizmo().IsDragging()) {
+        return false;
+    }
+
+    EditorTransformToolMode mode = sceneContext.Gizmo().toolMode;
+    switch (key) {
+    case 'W':
+        mode = EditorTransformToolMode::Translate;
+        break;
+    case 'E':
+        mode = EditorTransformToolMode::Rotate;
+        break;
+    case 'R':
+        mode = EditorTransformToolMode::Scale;
+        break;
+    default:
+        return false;
+    }
+
+    EditorSceneGizmoState& gizmo = sceneContext.Gizmo();
+    if (gizmo.toolMode == mode) {
+        return true;
+    }
+    gizmo.toolMode = mode;
+    gizmo.hoveredAxis = -1;
+    gizmo.draggedAxis = -1;
+    sceneContext.MarkSceneRenderDirty();
+    return true;
+}
+
+} // namespace
 
 EditorWindowMessageRouter::EditorWindowMessageRouter(EditorWindowMessageContext context) noexcept
     : context_(context) {}
@@ -137,6 +175,14 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
             context_.sceneViewport.RequestPresent();
+            return 0;
+        }
+        if (HandleTransformToolShortcut(context_.sceneContext, wparam)) {
+            context_.sceneViewport.RequestPresent();
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != context_.mainWindow) {
+                InvalidateRect(context_.mainWindow, nullptr, FALSE);
+            }
             return 0;
         }
         if (EditorEditCommandInputHandler{ context_.sceneContext }.HandleKeyDown(wparam)) {

@@ -27,6 +27,7 @@ public:
     [[nodiscard]] static HeroIconGlyph AdjustmentsHorizontal() noexcept;
     [[nodiscard]] static HeroIconGlyph CommandLine() noexcept;
     [[nodiscard]] static HeroIconGlyph Gamepad2() noexcept;
+    [[nodiscard]] static HeroIconGlyph RotationSnap() noexcept;
 };
 
 } // namespace kb::editor

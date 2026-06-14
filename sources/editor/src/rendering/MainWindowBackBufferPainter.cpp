@@ -26,6 +26,7 @@ struct MainWindowPaintContext {
     const EditorTheme* theme = nullptr;
     const EditorMetrics* metrics = nullptr;
     const EditorSceneContext* sceneContext = nullptr;
+    const EditorRenderBackendSettings* renderBackendSettings = nullptr;
     const DockDropPreview* preview = nullptr;
     const DockPointerDrag* dockDrag = nullptr;
     const EditorPointerDragState* drag = nullptr;
@@ -149,6 +150,7 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         *paintContext->theme,
         *paintContext->metrics,
         *paintContext->sceneContext,
+        *paintContext->renderBackendSettings,
         nullptr,
         paintContext->dockDrag,
         *paintContext->playMode,
@@ -180,13 +182,13 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
 } // namespace
 
 void MainWindowBackBufferPainter::Paint(HWND window, const EditorDockModel& dockModel, const EditorTheme& theme, const EditorMetrics& metrics, const EditorSceneContext& sceneContext, const DockDropPreview* preview, const DockPointerDrag* dockDrag, const EditorPointerDragState& drag, const EditorRenderBackendSettings& renderBackendSettings, const EditorPlayModeState& playMode, const EditorShellInteractionState& shellInteraction, EditorSceneBgfxViewport& sceneViewport) {
-    static_cast<void>(renderBackendSettings);
     MainWindowPaintContext context{
         .window = window,
         .dockModel = &dockModel,
         .theme = &theme,
         .metrics = &metrics,
         .sceneContext = &sceneContext,
+        .renderBackendSettings = &renderBackendSettings,
         .preview = preview,
         .dockDrag = dockDrag,
         .drag = &drag,

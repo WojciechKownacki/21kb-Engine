@@ -20,6 +20,8 @@ constexpr int kCategoryCount = static_cast<int>(ProjectSettingsCategory::Count);
     switch (static_cast<ProjectSettingsCategory>(index)) {
     case ProjectSettingsCategory::Inputs:
         return "Inputs";
+    case ProjectSettingsCategory::Graphics:
+        return "Graphics";
     case ProjectSettingsCategory::Count:
     default:
         return "";
@@ -66,6 +68,14 @@ void DrawSelectorBox(HDC dc, const RECT& box, const std::string& display, bool i
     DrawText(dc, RECT{ box.right - 20, box.top, box.right - 4, box.bottom }, open ? "^" : "v", RGB(150, 158, 168), 11, FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+void DrawOptionButton(HDC dc, const RECT& rect, const char* label, bool selected) {
+    const COLORREF fill = selected ? RGB(46, 95, 138) : RGB(34, 37, 42);
+    const COLORREF border = selected ? RGB(79, 129, 184) : RGB(58, 61, 66);
+    const COLORREF text = selected ? RGB(232, 236, 240) : RGB(196, 205, 214);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+    DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, text, 12, selected ? FW_SEMIBOLD : FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 void DrawDropdownList(HDC dc, const RECT& fieldBox, const std::vector<std::string>& options, const std::string& selected, int hoveredOption) {
     if (options.empty()) {
         return;
@@ -108,13 +118,25 @@ void DrawInputsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const 
     }
 }
 
+void DrawGraphicsPage(HDC dc, const ProjectSettingsPanelLayoutRects& rects, const EditorRenderBackendSettings& renderBackendSettings) {
+    GdiDrawing::FillRectColor(dc, rects.sectionHeader, RGB(34, 37, 42));
+    DrawText(dc, RECT{ rects.sectionHeader.left + 8, rects.sectionHeader.top, rects.sectionHeader.right - 8, rects.sectionHeader.bottom }, "GRAPHICS", RGB(150, 158, 168), 11, FW_SEMIBOLD);
+
+    DrawText(dc, RECT{ rects.backendLabel.left, rects.backendLabel.top, rects.backendLabel.right - 8, rects.backendLabel.bottom }, "bgfx Backend", RGB(196, 205, 214), 12);
+    const EditorRenderBackend backend = renderBackendSettings.Backend();
+    DrawOptionButton(dc, rects.backendAutoButton, "Auto", backend == EditorRenderBackend::Auto);
+    DrawOptionButton(dc, rects.backendDx12Button, "DX12", backend == EditorRenderBackend::DirectX12);
+    DrawOptionButton(dc, rects.backendVulkanButton, "Vulkan", backend == EditorRenderBackend::Vulkan);
+}
+
 } // namespace
 
 void ProjectSettingsPanelRenderer::Paint(
     HDC dc,
     const RECT& content,
     const EditorTheme& theme,
-    const EditorSceneContext& sceneContext) const {
+    const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings) const {
     static_cast<void>(theme);
     const ProjectSettingsPanelLayoutRects rects = ProjectSettingsPanelLayout::Resolve(content);
     const int selectedCategory = sceneContext.ProjectSettings().SelectedCategory();
@@ -131,6 +153,9 @@ void ProjectSettingsPanelRenderer::Paint(
     switch (static_cast<ProjectSettingsCategory>(selectedCategory)) {
     case ProjectSettingsCategory::Inputs:
         DrawInputsPage(dc, rects, sceneContext);
+        break;
+    case ProjectSettingsCategory::Graphics:
+        DrawGraphicsPage(dc, rects, renderBackendSettings);
         break;
     case ProjectSettingsCategory::Count:
     default:
@@ -149,8 +174,19 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
         }
     }
 
+    const ProjectSettingsCategory category = static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory());
+    if (category == ProjectSettingsCategory::Graphics) {
+        for (int index = 0; index < 3; ++index) {
+            const RECT button = ProjectSettingsPanelLayout::BackendOptionButton(rects, index);
+            if (PointInRect(button, x, y)) {
+                return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
+            }
+        }
+        return Hit{};
+    }
+
     // Right pane controls only exist for the Inputs category.
-    if (static_cast<ProjectSettingsCategory>(sceneContext.ProjectSettings().SelectedCategory()) != ProjectSettingsCategory::Inputs) {
+    if (category != ProjectSettingsCategory::Inputs) {
         return Hit{};
     }
 

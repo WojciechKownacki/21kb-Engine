@@ -10,6 +10,8 @@ namespace {
 
 constexpr std::array<float, 6U> kGridSpacings{ 0.25F, 0.5F, 1.0F, 2.0F, 5.0F, 10.0F };
 constexpr std::array<float, 6U> kSnapSteps{ 0.25F, 0.5F, 1.0F, 2.0F, 5.0F, 10.0F };
+constexpr std::array<float, 5U> kRotationSnapDegrees{ 0.0F, 5.0F, 10.0F, 15.0F, 20.0F };
+constexpr float kPi = 3.14159265358979323846F;
 
 constexpr EditorViewportProfile kProfiles[] = {
     EditorViewportProfile{
@@ -78,6 +80,13 @@ constexpr EditorViewportProfile kProfiles[] = {
         return 1.0F;
     }
     return std::clamp(value, 0.01F, 1000.0F);
+}
+
+[[nodiscard]] float ClampRotationSnap(float value) noexcept {
+    if (!std::isfinite(value) || value <= 0.0F) {
+        return 0.0F;
+    }
+    return std::clamp(value, 1.0F, 360.0F);
 }
 
 [[nodiscard]] float CycleFloat(std::span<const float> values, float current) noexcept {
@@ -158,6 +167,10 @@ float EditorViewportPreviewState::SnapStep() const noexcept {
     return snapStep_;
 }
 
+float EditorViewportPreviewState::RotationSnapDegrees() const noexcept {
+    return rotationSnapDegrees_;
+}
+
 EditorViewportToolbarDropdown EditorViewportPreviewState::ToolbarDropdown() const noexcept {
     return toolbarDropdown_;
 }
@@ -197,6 +210,10 @@ void EditorViewportPreviewState::SetSnapEnabled(bool enabled) noexcept {
 
 void EditorViewportPreviewState::SetSnapStep(float step) noexcept {
     snapStep_ = ClampStep(step);
+}
+
+void EditorViewportPreviewState::SetRotationSnapDegrees(float degrees) noexcept {
+    rotationSnapDegrees_ = ClampRotationSnap(degrees);
 }
 
 void EditorViewportPreviewState::CycleProfile() noexcept {
@@ -263,6 +280,11 @@ void EditorViewportPreviewState::CycleSnapStep() noexcept {
     CloseToolbarDropdown();
 }
 
+void EditorViewportPreviewState::CycleRotationSnapDegrees() noexcept {
+    rotationSnapDegrees_ = CycleFloat(kRotationSnapDegrees, rotationSnapDegrees_);
+    CloseToolbarDropdown();
+}
+
 void EditorViewportPreviewState::OpenToolbarDropdown(EditorViewportToolbarDropdown dropdown) noexcept {
     toolbarDropdown_ = dropdown;
 }
@@ -312,6 +334,14 @@ kb::scene::Vec3 EditorViewportPreviewState::SnapPositionAxis(kb::scene::Vec3 pos
         return SnapPosition(position);
     }
     return position;
+}
+
+float EditorViewportPreviewState::SnapRotationRadians(float radians) const noexcept {
+    if (rotationSnapDegrees_ <= 0.0F) {
+        return radians;
+    }
+    const float stepRadians = rotationSnapDegrees_ * kPi / 180.0F;
+    return std::round(radians / stepRadians) * stepRadians;
 }
 
 std::uint32_t EditorViewportPreviewState::RenderWidthForPanel(std::uint32_t panelWidth) const noexcept {
@@ -370,6 +400,11 @@ const char* EditorViewportSnapStepLabel(float step) noexcept {
     return StepLabel(kSnapSteps, labels, step);
 }
 
+const char* EditorViewportRotationSnapLabel(float degrees) noexcept {
+    constexpr std::array<const char*, 5U> labels{ "Off", "5deg", "10deg", "15deg", "20deg" };
+    return StepLabel(kRotationSnapDegrees, labels, degrees);
+}
+
 std::size_t EditorViewportGridSpacingOptionCount() noexcept {
     return kGridSpacings.size();
 }
@@ -384,6 +419,14 @@ std::size_t EditorViewportSnapStepOptionCount() noexcept {
 
 float EditorViewportSnapStepOption(std::size_t index) noexcept {
     return index < kSnapSteps.size() ? kSnapSteps[index] : kSnapSteps.front();
+}
+
+std::size_t EditorViewportRotationSnapOptionCount() noexcept {
+    return kRotationSnapDegrees.size();
+}
+
+float EditorViewportRotationSnapOption(std::size_t index) noexcept {
+    return index < kRotationSnapDegrees.size() ? kRotationSnapDegrees[index] : kRotationSnapDegrees.front();
 }
 
 } // namespace kb::editor

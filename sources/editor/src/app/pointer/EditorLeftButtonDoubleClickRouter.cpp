@@ -35,9 +35,6 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
     if (assetResult == EditorAssetBrowserDoubleClickResult::None) {
         return false;
     }
-    if (assetResult == EditorAssetBrowserDoubleClickResult::BrowserNavigation) {
-        sceneContext_.ClearHierarchySelection();
-    }
     if (assetResult == EditorAssetBrowserDoubleClickResult::ScriptEditorOpened) {
         for (const DockPanel& panel : dockModel_.Queries().Panels()) {
             if (panel.kind == DockPanelKind::ScriptEditor) {

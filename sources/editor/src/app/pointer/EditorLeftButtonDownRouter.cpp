@@ -83,6 +83,7 @@ EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
     EditorDockController& dockController,
     EditorHierarchySelectionController& hierarchySelection,
     EditorSceneContext& sceneContext,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport& sceneViewport,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction,
@@ -94,6 +95,7 @@ EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
     , dockController_(dockController)
     , hierarchySelection_(hierarchySelection)
     , sceneContext_(sceneContext)
+    , renderBackendSettings_(renderBackendSettings)
     , sceneViewport_(sceneViewport)
     , playMode_(playMode)
     , shellInteraction_(shellInteraction)
@@ -197,13 +199,8 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (EditorAssetBrowserPointerHandler::HandlePointerDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {
-        // A deferred plain asset click must not change anything on press (so a
-        // press-and-drag keeps the current Inspector / entity context). Selection
-        // and the hierarchy deselect happen on release. Other browser actions
-        // (folder select, toolbar) still clear the hierarchy selection here.
-        if (!sceneContext_.AssetBrowser().HasPendingPreviewAsset()) {
-            sceneContext_.ClearHierarchySelection();
-        }
+        // Project Files has its own selection/focus. Clicking it must not clear
+        // the current scene entity selection or hide the scene gizmo.
         if (EditorAssetBrowserPointerHandler::RequiresMouseCapture(sceneContext_)) {
             SetCapture(messageWindow);
         }
@@ -235,7 +232,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (panelHit.inProjectSettingsPanel) {
         EditorProjectSettingsPointerController projectSettingsPointer(sceneContext_);
-        static_cast<void>(projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y));
+        if (projectSettingsPointer.HandlePointerDown(*panelHit.projectSettingsContent, x, y, renderBackendSettings_)) {
+            sceneViewport_.RequestPresent();
+        }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }

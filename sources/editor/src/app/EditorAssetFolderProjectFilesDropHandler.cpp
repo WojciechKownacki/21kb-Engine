@@ -1,6 +1,7 @@
 #include "app/EditorAssetFolderProjectFilesDropHandler.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorAssetProjectFilesDropActionExecutor.hpp"
 #include "app/EditorDropPanelResolver.hpp"
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -19,7 +20,13 @@ bool EditorAssetFolderProjectFilesDropHandler::Drop(HWND sourceWindow, HWND main
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
         const std::optional<std::filesystem::path> targetFolder = EditorAssetBrowserHitTester::FolderDropTargetAt(*assets, x, y, sceneContext.AssetBrowser(), manager);
         if (targetFolder.has_value()) {
-            sceneContext.AssetBrowser().OpenDropActionMenuForFolder(x, y, sourceVirtualFolder, *targetFolder);
+            static_cast<void>(EditorAssetProjectFilesDropActionExecutor::ExecuteFolderDropMenu(
+                sourceWindow,
+                x,
+                y,
+                sceneContext,
+                sourceVirtualFolder,
+                *targetFolder));
         } else {
             static_cast<void>(sceneContext.MoveAssetFolderToFolder(sourceVirtualFolder, sceneContext.AssetBrowser().SelectedFolder()));
         }

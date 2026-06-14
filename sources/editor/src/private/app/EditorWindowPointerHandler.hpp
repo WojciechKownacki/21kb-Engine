@@ -13,6 +13,7 @@ class EditorDockModel;
 class EditorFloatingWindowManager;
 class EditorHierarchySelectionController;
 class EditorPlayModeState;
+class EditorRenderBackendSettings;
 class EditorSceneBgfxViewport;
 class EditorSceneContext;
 class EditorShellInteractionState;
@@ -29,6 +30,7 @@ public:
         EditorDockController& dockController,
         EditorHierarchySelectionController& hierarchySelection,
         EditorSceneContext& sceneContext,
+        EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport& sceneViewport,
         EditorPlayModeState& playMode,
         EditorShellInteractionState& shellInteraction,
@@ -55,6 +57,7 @@ private:
     EditorDockController& dockController_;
     EditorHierarchySelectionController& hierarchySelection_;
     EditorSceneContext& sceneContext_;
+    EditorRenderBackendSettings& renderBackendSettings_;
     EditorSceneBgfxViewport& sceneViewport_;
     EditorPlayModeState& playMode_;
     EditorShellInteractionState& shellInteraction_;

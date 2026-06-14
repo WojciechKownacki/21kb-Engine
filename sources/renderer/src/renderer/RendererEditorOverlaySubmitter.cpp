@@ -10,6 +10,7 @@ void RendererEditorOverlaySubmitter::Submit(
     bool selectionOutlineEnabled) {
     editorPassSubmitter.SubmitSceneOverlays(viewportPlan, desc, desc.editorSceneOverlaysEnabled ? overlayCamera : nullptr);
     editorPassSubmitter.SubmitUiComposite(viewportPlan, desc, selectionOutlineEnabled);
+    editorPassSubmitter.SubmitGizmoOverlay(viewportPlan, desc, desc.editorSceneOverlaysEnabled ? overlayCamera : nullptr);
 }
 
 } // namespace kb::render

@@ -44,6 +44,8 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::CommandLine();
     case HeroIconKind::Gamepad2:
         return HeroIconAssets::Gamepad2();
+    case HeroIconKind::RotationSnap:
+        return HeroIconAssets::RotationSnap();
     default:
         return {};
     }
