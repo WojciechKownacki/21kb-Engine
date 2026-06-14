@@ -59,14 +59,6 @@ class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
 
-enum class EditorHierarchyContextCommand {
-    None,
-    AddLighting,
-    AddDirectionalLight,
-    AddPointLight,
-    AddSpotLight,
-};
-
 enum class EditorDirtySceneResolution {
     Save,
     Discard,
@@ -172,10 +164,6 @@ public:
     [[nodiscard]] bool IsHierarchyRenaming(kb::scene::SceneEntity entity) const noexcept;
     [[nodiscard]] bool IsHierarchyRenameSelectingAll() const noexcept;
     [[nodiscard]] std::string_view HierarchyRenameBuffer() const noexcept;
-    [[nodiscard]] bool IsHierarchyContextMenuOpen() const noexcept;
-    [[nodiscard]] int HierarchyContextMenuX() const noexcept;
-    [[nodiscard]] int HierarchyContextMenuY() const noexcept;
-    [[nodiscard]] EditorHierarchyContextCommand HierarchyContextMenuHoveredCommand() const noexcept;
 
     void FocusHierarchySearch(bool focused) noexcept;
     void SetHierarchySearchQuery(std::string query);
@@ -193,9 +181,6 @@ public:
     void ClearHierarchyRename() noexcept;
     [[nodiscard]] bool CommitHierarchyRename();
     void CancelHierarchyRename() noexcept;
-    void OpenHierarchyContextMenu(int x, int y) noexcept;
-    void CloseHierarchyContextMenu() noexcept;
-    [[nodiscard]] bool SetHierarchyContextMenuHoveredCommand(EditorHierarchyContextCommand command) noexcept;
     [[nodiscard]] bool BeginAssetFolderCreation();
     [[nodiscard]] bool BeginAssetRename();
     [[nodiscard]] bool BeginAssetRename(kb::assets::AssetId id);
@@ -268,6 +253,8 @@ public:
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
+    [[nodiscard]] bool ApplyActiveTransformEditProperty(InspectorPropertyId property, float value);
+    [[nodiscard]] float ActiveTransformEditPropertyStart(InspectorPropertyId property) const noexcept;
     [[nodiscard]] bool CommitActiveTransformEdit();
     void CancelActiveTransformEdit() noexcept;
     [[nodiscard]] bool HasActiveTransformEdit() const noexcept;
@@ -315,10 +302,6 @@ private:
     kb::scene::SceneEntity hierarchyRenameEntity_{};
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
-    bool hierarchyContextMenuOpen_ = false;
-    int hierarchyContextMenuX_ = 0;
-    int hierarchyContextMenuY_ = 0;
-    EditorHierarchyContextCommand hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
     std::optional<std::string> pendingSceneTransactionLabel_;
     EditorSceneActiveTransformEdit activeTransformEdit_;
     std::uint64_t sceneRenderRevision_ = 1U;

@@ -5,6 +5,7 @@
 #include "app/project_settings/EditorProjectSettingsPointerController.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "scene/EditorPluginCatalog.hpp"
@@ -19,10 +20,13 @@
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <optional>
@@ -310,6 +314,103 @@ void RunScriptAttachSuite(Report& report) {
     report.Check(!context.HasEntityScript(actor), "Actor has no script after removal");
 }
 
+void RunSelectionTransformSuite(Report& report) {
+    EditorSceneContext context;
+
+    const kb::scene::SceneEntity first = context.CreateHierarchyObject();
+    const kb::scene::SceneEntity second = context.CreateHierarchyObject();
+    report.Check(first.IsValid() && second.IsValid(), "Create two hierarchy entities for multi-selection transform");
+
+    kb::scene::TransformComponent firstTransform = context.Scene().Transforms().Get(first);
+    firstTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+    context.Scene().Transforms().Set(first, firstTransform);
+
+    kb::scene::TransformComponent secondTransform = context.Scene().Transforms().Get(second);
+    secondTransform.localPosition = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F };
+    context.Scene().Transforms().Set(second, secondTransform);
+
+    const std::array<kb::scene::SceneEntity, 2> selected{ first, second };
+    context.SelectHierarchyEntities(selected);
+
+    const InspectorPanelRenderer::Hit pivotXHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 216);
+    report.Check(
+        pivotXHit.kind == InspectorHitKind::FloatField &&
+            pivotXHit.section == InspectorSectionId::Transform &&
+            pivotXHit.property == InspectorPropertyId::PositionX,
+        "Multi-selection inspector pivot X field hit-tests as transform PositionX");
+
+    report.Check(context.BeginSelectedTransformEdit("Edit Transform"), "Begin multi-selection transform edit");
+    report.Check(std::abs(context.ActiveTransformEditPropertyStart(InspectorPropertyId::PositionX) - 4.0F) < 0.001F, "Multi-selection position edit starts from pivot X");
+    report.Check(context.ApplyActiveTransformEditProperty(InspectorPropertyId::PositionX, 10.0F), "Apply multi-selection pivot X edit");
+    report.Check(context.CommitActiveTransformEdit(), "Commit multi-selection transform edit");
+
+    kb::scene::TransformComponent movedFirst = context.Scene().Transforms().Get(first);
+    kb::scene::TransformComponent movedSecond = context.Scene().Transforms().Get(second);
+    report.Check(std::abs(movedFirst.localPosition.x - 8.0F) < 0.001F, "Pivot edit moves first entity by shared delta");
+    report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Pivot edit moves second entity by shared delta");
+
+    report.Check(context.UndoSceneCommand(), "Undo multi-selection transform edit");
+    movedFirst = context.Scene().Transforms().Get(first);
+    movedSecond = context.Scene().Transforms().Get(second);
+    report.Check(std::abs(movedFirst.localPosition.x - 2.0F) < 0.001F, "Undo restores first entity transform");
+    report.Check(std::abs(movedSecond.localPosition.x - 6.0F) < 0.001F, "Undo restores second entity transform");
+
+    report.Check(context.RedoSceneCommand(), "Redo multi-selection transform edit");
+    movedFirst = context.Scene().Transforms().Get(first);
+    movedSecond = context.Scene().Transforms().Get(second);
+    report.Check(std::abs(movedFirst.localPosition.x - 8.0F) < 0.001F, "Redo reapplies first entity transform");
+    report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Redo reapplies second entity transform");
+}
+
+void RunPrefabPlacementSuite(Report& report) {
+    EditorSceneContext context;
+
+    const kb::scene::SceneEntity source = context.CreateHierarchyObject();
+    report.Check(source.IsValid(), "Create source entity for prefab placement");
+    context.Scene().Entities().SetName(source, "PlacedPrefabSource");
+    kb::scene::TransformComponent sourceTransform = context.Scene().Transforms().Get(source);
+    sourceTransform.localPosition = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F };
+    context.Scene().Transforms().Set(source, sourceTransform);
+
+    const std::filesystem::path prefabPath = EditorProjectPaths::PrefabsRoot() / "PlacedPrefab.kbprefab";
+    report.Check(context.CreatePrefabAsset(source, prefabPath), "Create prefab asset from source entity");
+    report.Check(context.InstantiatePrefabAssetAt(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", kb::scene::Vec3{ 7.0F, 0.5F, -3.0F }), "Instantiate prefab asset at scene position");
+
+    const kb::scene::SceneEntity placed = context.SelectedEntity();
+    report.Check(placed.IsValid() && context.Scene().Entities().IsAlive(placed), "Placed prefab root becomes the selected entity");
+    const kb::scene::TransformComponent placedTransform = context.Scene().Transforms().Get(placed);
+    report.Check(std::abs(placedTransform.localPosition.x - 7.0F) < 0.001F, "Placed prefab x position matches drop position");
+    report.Check(std::abs(placedTransform.localPosition.y - 0.5F) < 0.001F, "Placed prefab y position matches drop position");
+    report.Check(std::abs(placedTransform.localPosition.z + 3.0F) < 0.001F, "Placed prefab z position matches drop position");
+
+    report.Check(context.UndoSceneCommand(), "Undo prefab placement");
+    report.Check(!context.Scene().Entities().IsAlive(placed), "Undo removes placed prefab root");
+    report.Check(context.RedoSceneCommand(), "Redo prefab placement");
+    const kb::scene::SceneEntity replaced = context.SelectedEntity();
+    report.Check(replaced.IsValid() && context.Scene().Entities().IsAlive(replaced), "Redo selects recreated prefab root");
+    const kb::scene::TransformComponent replacedTransform = context.Scene().Transforms().Get(replaced);
+    report.Check(std::abs(replacedTransform.localPosition.x - 7.0F) < 0.001F, "Redo restores prefab x position");
+    report.Check(std::abs(replacedTransform.localPosition.y - 0.5F) < 0.001F, "Redo restores prefab y position");
+    report.Check(std::abs(replacedTransform.localPosition.z + 3.0F) < 0.001F, "Redo restores prefab z position");
+
+    const kb::scene::SceneEntity parent = context.CreateHierarchyObject();
+    report.Check(parent.IsValid() && context.Scene().Entities().IsAlive(parent), "Create parent for prefab instantiation");
+    context.Scene().Entities().SetName(parent, "PrefabParent");
+    report.Check(context.InstantiatePrefabAsset(prefabPath, "/Game/Prefabs/PlacedPrefab.kbprefab", parent), "Instantiate prefab asset under parent");
+
+    const kb::scene::SceneEntity child = context.SelectedEntity();
+    report.Check(child.IsValid() && context.Scene().Entities().IsAlive(child), "Parented prefab root becomes the selected entity");
+    report.Check(context.Scene().Hierarchy().Parent(child) == parent, "Parented prefab root is attached to requested parent");
+
+    report.Check(context.UndoSceneCommand(), "Undo parented prefab instantiation");
+    report.Check(!context.Scene().Entities().IsAlive(child), "Undo removes parented prefab root");
+    report.Check(context.Scene().Entities().IsAlive(parent), "Undo keeps prefab parent alive");
+    report.Check(context.RedoSceneCommand(), "Redo parented prefab instantiation");
+    const kb::scene::SceneEntity reparented = context.SelectedEntity();
+    report.Check(reparented.IsValid() && context.Scene().Entities().IsAlive(reparented), "Redo selects recreated parented prefab root");
+    report.Check(context.Scene().Hierarchy().Parent(reparented) == parent, "Redo restores parented prefab root parent");
+}
+
 // Proves Log("...") from a Lua script reaches the editor Console during play.
 void RunScriptLogSuite(Report& report) {
     EditorSceneContext context;
@@ -468,7 +569,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Selection transform + Prefab placement\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -485,6 +586,8 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
+    RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
     WriteReport(reportPath, report);

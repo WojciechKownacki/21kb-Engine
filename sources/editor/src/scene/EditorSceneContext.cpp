@@ -47,6 +47,7 @@
 #include "project/EditorProjectPaths.hpp"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
@@ -106,6 +107,88 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
     return SameVec3(lhs.localPosition, rhs.localPosition) &&
         SameQuat(lhs.localRotation, rhs.localRotation) &&
         SameVec3(lhs.localScale, rhs.localScale);
+}
+
+[[nodiscard]] bool IsTransformProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ ||
+        property == InspectorPropertyId::RotationX || property == InspectorPropertyId::RotationY || property == InspectorPropertyId::RotationZ ||
+        property == InspectorPropertyId::ScaleX || property == InspectorPropertyId::ScaleY || property == InspectorPropertyId::ScaleZ;
+}
+
+[[nodiscard]] bool IsPositionProperty(InspectorPropertyId property) noexcept {
+    return property == InspectorPropertyId::PositionX || property == InspectorPropertyId::PositionY || property == InspectorPropertyId::PositionZ;
+}
+
+[[nodiscard]] float ReadTransformProperty(const kb::scene::TransformComponent& transform, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::PositionX:
+        return transform.localPosition.x;
+    case InspectorPropertyId::PositionY:
+        return transform.localPosition.y;
+    case InspectorPropertyId::PositionZ:
+        return transform.localPosition.z;
+    case InspectorPropertyId::RotationX:
+        return transform.localRotation.x;
+    case InspectorPropertyId::RotationY:
+        return transform.localRotation.y;
+    case InspectorPropertyId::RotationZ:
+        return transform.localRotation.z;
+    case InspectorPropertyId::ScaleX:
+        return transform.localScale.x;
+    case InspectorPropertyId::ScaleY:
+        return transform.localScale.y;
+    case InspectorPropertyId::ScaleZ:
+        return transform.localScale.z;
+    default:
+        return 0.0F;
+    }
+}
+
+[[nodiscard]] float ReadVec3Axis(kb::scene::Vec3 value, InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::PositionX:
+        return value.x;
+    case InspectorPropertyId::PositionY:
+        return value.y;
+    case InspectorPropertyId::PositionZ:
+        return value.z;
+    default:
+        return 0.0F;
+    }
+}
+
+void SetTransformProperty(kb::scene::TransformComponent& transform, InspectorPropertyId property, float value) noexcept {
+    switch (property) {
+    case InspectorPropertyId::PositionX:
+        transform.localPosition.x = value;
+        break;
+    case InspectorPropertyId::PositionY:
+        transform.localPosition.y = value;
+        break;
+    case InspectorPropertyId::PositionZ:
+        transform.localPosition.z = value;
+        break;
+    case InspectorPropertyId::RotationX:
+        transform.localRotation.x = value;
+        break;
+    case InspectorPropertyId::RotationY:
+        transform.localRotation.y = value;
+        break;
+    case InspectorPropertyId::RotationZ:
+        transform.localRotation.z = value;
+        break;
+    case InspectorPropertyId::ScaleX:
+        transform.localScale.x = std::max(0.01F, value);
+        break;
+    case InspectorPropertyId::ScaleY:
+        transform.localScale.y = std::max(0.01F, value);
+        break;
+    case InspectorPropertyId::ScaleZ:
+        transform.localScale.z = std::max(0.01F, value);
+        break;
+    default:
+        break;
+    }
 }
 
 [[nodiscard]] EditorSceneObjectTransformChange* FindTransformChange(
@@ -849,22 +932,6 @@ std::string_view EditorSceneContext::HierarchyRenameBuffer() const noexcept {
     return hierarchyRenameBuffer_;
 }
 
-bool EditorSceneContext::IsHierarchyContextMenuOpen() const noexcept {
-    return hierarchyContextMenuOpen_;
-}
-
-int EditorSceneContext::HierarchyContextMenuX() const noexcept {
-    return hierarchyContextMenuX_;
-}
-
-int EditorSceneContext::HierarchyContextMenuY() const noexcept {
-    return hierarchyContextMenuY_;
-}
-
-EditorHierarchyContextCommand EditorSceneContext::HierarchyContextMenuHoveredCommand() const noexcept {
-    return hierarchyContextMenuHovered_;
-}
-
 void EditorSceneContext::FocusHierarchySearch(bool focused) noexcept {
     if (focused) {
         static_cast<void>(CommitHierarchyRename());
@@ -1024,30 +1091,6 @@ void EditorSceneContext::CancelHierarchyRename() noexcept {
     if (changed) {
         InvalidateHierarchyRows();
     }
-}
-
-void EditorSceneContext::OpenHierarchyContextMenu(int x, int y) noexcept {
-    hierarchyContextMenuOpen_ = true;
-    hierarchyContextMenuX_ = x;
-    hierarchyContextMenuY_ = y;
-    hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
-    hierarchySearch_.Focus(false);
-    assetBrowser_.CloseContextMenu();
-}
-
-void EditorSceneContext::CloseHierarchyContextMenu() noexcept {
-    hierarchyContextMenuOpen_ = false;
-    hierarchyContextMenuX_ = 0;
-    hierarchyContextMenuY_ = 0;
-    hierarchyContextMenuHovered_ = EditorHierarchyContextCommand::None;
-}
-
-bool EditorSceneContext::SetHierarchyContextMenuHoveredCommand(EditorHierarchyContextCommand command) noexcept {
-    if (hierarchyContextMenuHovered_ == command) {
-        return false;
-    }
-    hierarchyContextMenuHovered_ = command;
-    return true;
 }
 
 bool EditorSceneContext::BeginAssetFolderCreation() {
@@ -1609,19 +1652,26 @@ bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& pat
 }
 
 bool EditorSceneContext::InstantiatePrefabAsset(const std::filesystem::path& path, const std::filesystem::path& virtualPath, kb::scene::SceneEntity parent) {
-    std::optional<kb::scene::SceneEntity> root;
-    if (!ExecuteSceneCommand("Instantiate Prefab", [this, &root, path, virtualPath, parent]() {
-            root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, parent);
-            if (!root.has_value()) {
-                return false;
-            }
-            SelectEntity(*root);
-            return true;
-        })) {
-        console_.Error("Prefabs", "Prefab instantiation failed: " + path.generic_string());
+    if (pendingSceneTransactionLabel_.has_value()) {
+        console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
         return false;
     }
-    console_.Info("Prefabs", "Prefab instantiated: " + path.generic_string());
+
+    const std::filesystem::path& displayPath = virtualPath.empty() ? path : virtualPath;
+    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, parent);
+    if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
+        console_.Error("Prefabs", "Prefab instantiation failed: " + displayPath.generic_string());
+        return false;
+    }
+
+    const std::array<kb::scene::SceneEntity, 1U> created{ *root };
+    if (!AdoptCreatedHierarchyEntities("Instantiate Prefab", created)) {
+        scene_->Entities().Destroy(*root);
+        console_.Error("Prefabs", "Prefab instantiation failed: " + displayPath.generic_string());
+        return false;
+    }
+
+    console_.Info("Prefabs", "Prefab instantiated: " + displayPath.generic_string());
     return true;
 }
 
@@ -1629,21 +1679,27 @@ bool EditorSceneContext::InstantiatePrefabAssetAt(
     const std::filesystem::path& path,
     const std::filesystem::path& virtualPath,
     kb::scene::Vec3 position) {
-    std::optional<kb::scene::SceneEntity> root;
-    if (!ExecuteSceneCommand("Instantiate Prefab", [this, &root, path, virtualPath, position]() {
-            root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, {});
-            if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
-                return false;
-            }
-            kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
-            transform.localPosition = position;
-            scene_->Transforms().Set(*root, transform);
-            SelectEntity(*root);
-            return true;
-        })) {
+    if (pendingSceneTransactionLabel_.has_value()) {
+        console_.Warning("Edit", "Scene command ignored while another scene transaction is active.");
+        return false;
+    }
+
+    const std::optional<kb::scene::SceneEntity> root = EditorScenePrefabActions::InstantiateAsset(*scene_, path, virtualPath, {});
+    if (!root.has_value() || !scene_->Entities().IsAlive(*root)) {
         console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
         return false;
     }
+
+    kb::scene::TransformComponent transform = scene_->Transforms().Get(*root);
+    transform.localPosition = position;
+    scene_->Transforms().Set(*root, transform);
+    const std::array<kb::scene::SceneEntity, 1U> created{ *root };
+    if (!AdoptCreatedHierarchyEntities("Instantiate Prefab", created)) {
+        scene_->Entities().Destroy(*root);
+        console_.Error("Prefabs", "Prefab instantiation failed: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
+        return false;
+    }
+
     console_.Info("Prefabs", "Prefab instantiated: " + (virtualPath.empty() ? path.generic_string() : virtualPath.generic_string()));
     return true;
 }
@@ -1962,6 +2018,85 @@ bool EditorSceneContext::ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3
         MarkSceneEntitiesRenderDirty(touched);
     }
     return changed;
+}
+
+bool EditorSceneContext::ApplyActiveTransformEditProperty(InspectorPropertyId property, float value) {
+    if (!activeTransformEdit_.Active() || !IsTransformProperty(property)) {
+        return false;
+    }
+
+    if (IsPositionProperty(property)) {
+        kb::scene::Vec3 position = activeTransformEdit_.targetStart;
+        switch (property) {
+        case InspectorPropertyId::PositionX:
+            position.x = value;
+            break;
+        case InspectorPropertyId::PositionY:
+            position.y = value;
+            break;
+        case InspectorPropertyId::PositionZ:
+            position.z = value;
+            break;
+        default:
+            break;
+        }
+        return ApplyActiveTransformEditPrimaryPosition(position);
+    }
+
+    const EditorSceneObjectTransformChange* primaryChange = nullptr;
+    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (change.entity == activeTransformEdit_.primary) {
+            primaryChange = &change;
+            break;
+        }
+    }
+    if (primaryChange == nullptr) {
+        return false;
+    }
+
+    const float delta = value - ReadTransformProperty(primaryChange->before, property);
+    bool changed = false;
+    std::vector<kb::scene::SceneEntity> touched;
+    touched.reserve(activeTransformEdit_.changes.size());
+    for (EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (!scene_->Entities().IsAlive(change.entity)) {
+            continue;
+        }
+
+        kb::scene::TransformComponent next = change.before;
+        SetTransformProperty(next, property, ReadTransformProperty(change.before, property) + delta);
+        change.after = next;
+
+        const kb::scene::TransformComponent current = scene_->Transforms().Get(change.entity);
+        if (SameTransform(current, next)) {
+            continue;
+        }
+        scene_->Transforms().Set(change.entity, next);
+        touched.push_back(change.entity);
+        changed = true;
+    }
+
+    if (changed) {
+        MarkSceneEntitiesRenderDirty(touched);
+    }
+    return changed;
+}
+
+float EditorSceneContext::ActiveTransformEditPropertyStart(InspectorPropertyId property) const noexcept {
+    if (!activeTransformEdit_.Active() || !IsTransformProperty(property)) {
+        return 0.0F;
+    }
+
+    if (IsPositionProperty(property)) {
+        return ReadVec3Axis(activeTransformEdit_.targetStart, property);
+    }
+
+    for (const EditorSceneObjectTransformChange& change : activeTransformEdit_.changes) {
+        if (change.entity == activeTransformEdit_.primary) {
+            return ReadTransformProperty(change.before, property);
+        }
+    }
+    return 0.0F;
 }
 
 bool EditorSceneContext::CommitActiveTransformEdit() {

@@ -17,6 +17,8 @@ namespace kb::editor {
 namespace {
 
 constexpr UINT_PTR kHierarchyMenuCreateEmpty = 1001;
+constexpr UINT_PTR kHierarchyMenuDelete = 1002;
+constexpr UINT_PTR kHierarchyMenuDuplicate = 1003;
 constexpr UINT_PTR kHierarchyMenuDirectionalLight = 1101;
 constexpr UINT_PTR kHierarchyMenuPointLight = 1102;
 constexpr UINT_PTR kHierarchyMenuSpotLight = 1103;
@@ -39,8 +41,8 @@ void AppendSeparator(HMENU menu) {
     AppendMenuA(lightMenu, MF_STRING, kHierarchyMenuSpotLight, "Spot Light");
     AppendMenuA(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(lightMenu), "Lighting");
     AppendSeparator(menu);
-    AppendDisabled(menu, "Delete\tDel");
-    AppendDisabled(menu, "Duplicate\tCtrl+D");
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuDelete, "Delete\tDel");
+    AppendMenuA(menu, MF_STRING, kHierarchyMenuDuplicate, "Duplicate\tCtrl+D");
     AppendDisabled(menu, "Rename");
     AppendDisabled(menu, "Paste Special");
     AppendDisabled(menu, "Paste\tCtrl+V");
@@ -74,6 +76,10 @@ void AppendSeparator(HMENU menu) {
     switch (command) {
     case kHierarchyMenuCreateEmpty:
         return sceneContext.CreateHierarchyObject().IsValid();
+    case kHierarchyMenuDelete:
+        return sceneContext.DeleteSelectedHierarchyEntity();
+    case kHierarchyMenuDuplicate:
+        return sceneContext.DuplicateSelectedHierarchyEntities();
     case kHierarchyMenuDirectionalLight:
         return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
     case kHierarchyMenuPointLight:
@@ -134,18 +140,12 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
         if (entity.IsValid() && !sceneContext_.IsHierarchyEntitySelected(entity)) {
             sceneContext_.SelectEntity(entity);
         }
-        sceneContext_.CloseHierarchyContextMenu();
         const UINT command = ShowHierarchySystemMenu(messageWindow, x, y);
         if (ExecuteHierarchySystemMenuCommand(command, sceneContext_)) {
             sceneViewport_.RequestPresent();
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
-    }
-
-    if (sceneContext_.IsHierarchyContextMenuOpen()) {
-        sceneContext_.CloseHierarchyContextMenu();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }
 
     if (EditorAssetBrowserPointerHandler::HandleRightButtonDown(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_)) {

@@ -15,7 +15,6 @@ class HierarchyPanelRenderer {
 public:
 #if defined(_WIN32)
     void Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
-    void PaintContextMenu(HDC dc, const RECT& bounds, const EditorTheme& theme, const EditorSceneContext& sceneContext) const;
 #endif
 };
 

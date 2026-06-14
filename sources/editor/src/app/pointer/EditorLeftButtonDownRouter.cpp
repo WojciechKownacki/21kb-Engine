@@ -18,7 +18,6 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
-#include "engine/scene/LightComponent.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
@@ -30,137 +29,9 @@ namespace {
 constexpr int kHierarchyScrollbarWidth = 12;
 constexpr int kHierarchyScrollbarInset = 3;
 constexpr int kHierarchyScrollbarMinThumb = 24;
-constexpr int kHierarchyContextMenuWidth = 128;
-constexpr int kHierarchyLightingSubmenuWidth = 190;
-constexpr int kHierarchyLightingSubmenuGap = 4;
-constexpr int kHierarchyContextMenuRowHeight = 24;
-constexpr int kHierarchyContextMenuPadding = 4;
-constexpr int kHierarchyContextMenuItemCount = 1;
-constexpr int kHierarchyLightingSubmenuRows = 4;
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
-}
-
-[[nodiscard]] RECT WindowClientBounds(HWND window) noexcept {
-    RECT bounds{};
-    GetClientRect(window, &bounds);
-    return bounds;
-}
-
-[[nodiscard]] RECT HierarchyContextMenuRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    const int width = kHierarchyContextMenuWidth;
-    const int height = kHierarchyContextMenuPadding * 2 + kHierarchyContextMenuItemCount * kHierarchyContextMenuRowHeight;
-    int menuX = std::clamp(sceneContext.HierarchyContextMenuX(), static_cast<int>(content.left), std::max(static_cast<int>(content.left), static_cast<int>(content.right) - width));
-    const int menuY = std::clamp(sceneContext.HierarchyContextMenuY(), static_cast<int>(content.top), std::max(static_cast<int>(content.top), static_cast<int>(content.bottom) - height));
-    return RECT{ menuX, menuY, menuX + width, menuY + height };
-}
-
-[[nodiscard]] EditorHierarchyContextCommand HierarchyContextMenuCommandAt(const RECT& menu, int x, int y) noexcept {
-    if (!PointInRect(menu, x, y)) {
-        return EditorHierarchyContextCommand::None;
-    }
-    const int localY = y - menu.top - kHierarchyContextMenuPadding;
-    if (localY < 0) {
-        return EditorHierarchyContextCommand::None;
-    }
-    const int row = localY / kHierarchyContextMenuRowHeight;
-    if (row < 0 || row >= kHierarchyContextMenuItemCount) {
-        return EditorHierarchyContextCommand::None;
-    }
-    switch (row) {
-    case 0:
-        return EditorHierarchyContextCommand::AddLighting;
-    default:
-        return EditorHierarchyContextCommand::None;
-    }
-}
-
-[[nodiscard]] bool ShowsHierarchyLightingSubmenu(EditorHierarchyContextCommand command) noexcept {
-    return command == EditorHierarchyContextCommand::AddLighting
-        || command == EditorHierarchyContextCommand::AddDirectionalLight
-        || command == EditorHierarchyContextCommand::AddPointLight
-        || command == EditorHierarchyContextCommand::AddSpotLight;
-}
-
-[[nodiscard]] RECT HierarchyLightingSubmenuRect(const RECT& content, const RECT& menu) noexcept {
-    RECT submenu{
-        menu.right + kHierarchyLightingSubmenuGap,
-        menu.top + kHierarchyContextMenuPadding,
-        menu.right + kHierarchyLightingSubmenuGap + kHierarchyLightingSubmenuWidth,
-        menu.top + kHierarchyContextMenuPadding * 2 + kHierarchyLightingSubmenuRows * kHierarchyContextMenuRowHeight,
-    };
-    if (submenu.right > content.right) {
-        const int width = submenu.right - submenu.left;
-        const int height = submenu.bottom - submenu.top;
-        const int left = std::clamp(static_cast<int>(menu.left), static_cast<int>(content.left), std::max(static_cast<int>(content.left), static_cast<int>(content.right) - width));
-        int top = menu.bottom + kHierarchyLightingSubmenuGap;
-        if (top + height > content.bottom) {
-            top = menu.top - height - kHierarchyLightingSubmenuGap;
-        }
-        top = std::clamp(top, static_cast<int>(content.top), std::max(static_cast<int>(content.top), static_cast<int>(content.bottom) - height));
-        submenu = RECT{ left, top, left + width, top + height };
-    } else if (submenu.bottom > content.bottom) {
-        OffsetRect(&submenu, 0, content.bottom - submenu.bottom);
-    }
-    return submenu;
-}
-
-[[nodiscard]] EditorHierarchyContextCommand HierarchyLightingSubmenuCommandAt(const RECT& submenu, int x, int y) noexcept {
-    if (!PointInRect(submenu, x, y)) {
-        return EditorHierarchyContextCommand::None;
-    }
-    const int localY = y - submenu.top - kHierarchyContextMenuPadding;
-    if (localY < 0) {
-        return EditorHierarchyContextCommand::AddLighting;
-    }
-    const int row = localY / kHierarchyContextMenuRowHeight;
-    switch (row) {
-    case 1:
-        return EditorHierarchyContextCommand::AddDirectionalLight;
-    case 2:
-        return EditorHierarchyContextCommand::AddPointLight;
-    case 3:
-        return EditorHierarchyContextCommand::AddSpotLight;
-    default:
-        return EditorHierarchyContextCommand::AddLighting;
-    }
-}
-
-[[nodiscard]] bool InHierarchyLightingBridge(const RECT& menu, const RECT& submenu, int x, int y) noexcept {
-    const RECT addRow{
-        menu.left + kHierarchyContextMenuPadding,
-        menu.top + kHierarchyContextMenuPadding,
-        menu.right - kHierarchyContextMenuPadding,
-        menu.top + kHierarchyContextMenuPadding + kHierarchyContextMenuRowHeight,
-    };
-    RECT bridge{};
-    if (submenu.left >= addRow.right) {
-        bridge = RECT{ addRow.right, addRow.top, submenu.left, addRow.bottom };
-    } else if (submenu.top >= addRow.bottom) {
-        bridge = RECT{ addRow.left, addRow.bottom, addRow.right, submenu.top };
-    } else if (submenu.bottom <= addRow.top) {
-        bridge = RECT{ addRow.left, submenu.bottom, addRow.right, addRow.top };
-    } else {
-        return false;
-    }
-    return PointInRect(bridge, x, y);
-}
-
-[[nodiscard]] bool ExecuteHierarchyContextMenuCommand(EditorSceneContext& sceneContext, EditorHierarchyContextCommand command) {
-    switch (command) {
-    case EditorHierarchyContextCommand::AddLighting:
-        return true;
-    case EditorHierarchyContextCommand::AddDirectionalLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
-    case EditorHierarchyContextCommand::AddPointLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Point).IsValid();
-    case EditorHierarchyContextCommand::AddSpotLight:
-        return sceneContext.CreateLightObject(kb::scene::LightKind::Spot).IsValid();
-    case EditorHierarchyContextCommand::None:
-    default:
-        return false;
-    }
 }
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
@@ -230,40 +101,6 @@ EditorLeftButtonDownRouter::EditorLeftButtonDownRouter(
     , metrics_(metrics) {}
 
 void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
-    if (sceneContext_.IsHierarchyContextMenuOpen()) {
-        const RECT overlayBounds = WindowClientBounds(messageWindow);
-        {
-            const RECT menu = HierarchyContextMenuRect(overlayBounds, sceneContext_);
-            EditorHierarchyContextCommand command = EditorHierarchyContextCommand::None;
-            if (ShowsHierarchyLightingSubmenu(sceneContext_.HierarchyContextMenuHoveredCommand())) {
-                const RECT submenu = HierarchyLightingSubmenuRect(overlayBounds, menu);
-                command = InHierarchyLightingBridge(menu, submenu, x, y)
-                    ? EditorHierarchyContextCommand::AddLighting
-                    : HierarchyLightingSubmenuCommandAt(submenu, x, y);
-            }
-            if (command == EditorHierarchyContextCommand::None) {
-                command = HierarchyContextMenuCommandAt(menu, x, y);
-            }
-            if (command != EditorHierarchyContextCommand::None) {
-                if (command == EditorHierarchyContextCommand::AddLighting) {
-                    static_cast<void>(sceneContext_.SetHierarchyContextMenuHoveredCommand(EditorHierarchyContextCommand::AddLighting));
-                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                    return;
-                }
-                static_cast<void>(ExecuteHierarchyContextMenuCommand(sceneContext_, command));
-                sceneContext_.CloseHierarchyContextMenu();
-                sceneViewport_.RequestPresent();
-                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-                return;
-            }
-            if (PointInRect(menu, x, y)) {
-                return;
-            }
-        }
-        sceneContext_.CloseHierarchyContextMenu();
-        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
-    }
-
     const EditorProjectFilesDeleteConfirmOverlayController deleteConfirm(messageWindow, sceneContext_);
     if (deleteConfirm.HandlePointerDown(x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
