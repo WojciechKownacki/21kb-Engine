@@ -4,6 +4,8 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/HeroIconGdiplusRuntime.hpp"
+#include "rendering/ProjectFilesAssetIconResolver.hpp"
 #include "rendering/ProjectFilesAssetTileFrameRenderer.hpp"
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
@@ -12,7 +14,24 @@
 #include "rendering/gdi/ScopedPen.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
+#include <iterator>
+#include <memory>
+
+#pragma warning(push, 0)
+#include <objidl.h>
+#include <propidl.h>
+#include <gdiplus.h>
+#pragma warning(pop)
+
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -22,25 +41,290 @@ using Frame = ProjectFilesAssetTileFrameRenderer;
 using Metrics = ProjectFilesAssetTileMetrics;
 using Text = ProjectFilesTileTextRenderer;
 
-[[nodiscard]] bool IsPrefabAsset(const EditorAssetItemRow& asset) {
-    return asset.metadata.type == "ScenePrefab" || asset.metadata.virtualPath.extension() == ".kbprefab";
-}
+constexpr std::array<char, 8> kImportedAssetMagic{ '2', '1', 'K', 'B', 'A', 'S', 'T', '\0' };
 
-[[nodiscard]] COLORREF AssetIconColor(const EditorAssetItemRow& asset) {
-    if (IsPrefabAsset(asset)) {
-        return asset.selected ? RGB(106, 177, 255) : RGB(68, 145, 236);
+struct ProjectFilesTextureThumbnailImage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint32_t> bgra;
+};
+
+class ScopedComStream {
+public:
+    explicit ScopedComStream(IStream* stream) noexcept : stream_(stream) {}
+    ~ScopedComStream() {
+        if (stream_ != nullptr) {
+            stream_->Release();
+        }
     }
-    return asset.selected ? RGB(205, 211, 221) : RGB(174, 181, 193);
-}
+
+    ScopedComStream(const ScopedComStream&) = delete;
+    ScopedComStream& operator=(const ScopedComStream&) = delete;
+
+private:
+    IStream* stream_ = nullptr;
+};
 
 [[nodiscard]] RECT ThumbnailRect(const RECT& tile, const ProjectFilesAssetTileVisualLayout& visual) noexcept {
     const int width = Draw::RectWidth(tile);
-    const int availableHeight = std::max(1, static_cast<int>(visual.label.top - tile.top - 11));
-    const int maximumSize = std::max(24, std::min(width - 26, availableHeight));
-    const int size = std::min(maximumSize, 86);
+    const int availableHeight = std::max(1, static_cast<int>(visual.label.top - tile.top - 5));
+    const int maximumSize = std::max(24, std::min(width - 6, availableHeight + 6));
+    const int size = std::min(maximumSize, 128);
     const int left = tile.left + (width - size) / 2;
-    const int top = tile.top + std::max(7, (availableHeight - size) / 2 + 5);
+    const int top = tile.top + std::max(3, (availableHeight - size) / 2 + 3);
     return RECT{ left, top, left + size, top + size };
+}
+
+[[nodiscard]] RECT LargeIconRect(const RECT& tile, const ProjectFilesAssetTileVisualLayout& visual) noexcept {
+    return ThumbnailRect(tile, visual);
+}
+
+[[nodiscard]] RECT TexturePreviewRect(const RECT& tile, const ProjectFilesAssetTileVisualLayout& visual) noexcept {
+    RECT rect{ tile.left + 7, tile.top + 7, tile.right - 7, visual.label.top - 5 };
+    if (rect.bottom <= rect.top + 8) {
+        return ThumbnailRect(tile, visual);
+    }
+    return rect;
+}
+
+[[nodiscard]] std::uint16_t ReadLe16(const std::vector<std::uint8_t>& data, std::size_t offset) noexcept {
+    if (offset + 1 >= data.size()) {
+        return 0;
+    }
+    return static_cast<std::uint16_t>(data[offset] | (data[offset + 1] << 8U));
+}
+
+[[nodiscard]] std::uint32_t ReadLe32(const std::vector<std::uint8_t>& data, std::size_t offset) noexcept {
+    if (offset + 3 >= data.size()) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(data[offset])
+        | (static_cast<std::uint32_t>(data[offset + 1]) << 8U)
+        | (static_cast<std::uint32_t>(data[offset + 2]) << 16U)
+        | (static_cast<std::uint32_t>(data[offset + 3]) << 24U);
+}
+
+[[nodiscard]] bool SkipImportedAssetString(const std::vector<std::uint8_t>& data, std::size_t& offset) noexcept {
+    if (offset + 4U > data.size()) {
+        return false;
+    }
+    const std::uint32_t length = ReadLe32(data, offset);
+    offset += 4U;
+    if (length > data.size() - offset) {
+        return false;
+    }
+    offset += length;
+    return true;
+}
+
+[[nodiscard]] std::optional<std::vector<std::uint8_t>> ReadImportedTexturePayload(const std::filesystem::path& path) {
+    std::ifstream input{ path, std::ios::binary };
+    if (!input.is_open()) {
+        return std::nullopt;
+    }
+    std::vector<std::uint8_t> data(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    if (data.size() < 32U || !std::equal(kImportedAssetMagic.begin(), kImportedAssetMagic.end(), reinterpret_cast<const char*>(data.data()))) {
+        return std::nullopt;
+    }
+
+    std::size_t offset = 32U;
+    if (!SkipImportedAssetString(data, offset) || !SkipImportedAssetString(data, offset)) {
+        return std::nullopt;
+    }
+    return std::vector<std::uint8_t>(data.begin() + static_cast<std::ptrdiff_t>(offset), data.end());
+}
+
+[[nodiscard]] std::optional<ProjectFilesTextureThumbnailImage> DecodeTga(const std::vector<std::uint8_t>& data) {
+    if (data.size() < 18U) {
+        return std::nullopt;
+    }
+    const std::uint8_t idLength = data[0];
+    const std::uint8_t colorMapType = data[1];
+    const std::uint8_t imageType = data[2];
+    const bool trueColor = imageType == 2U || imageType == 10U;
+    const bool grayscale = imageType == 3U || imageType == 11U;
+    const bool rle = imageType == 10U || imageType == 11U;
+    if (colorMapType != 0U || (!trueColor && !grayscale)) {
+        return std::nullopt;
+    }
+    const int width = static_cast<int>(ReadLe16(data, 12U));
+    const int height = static_cast<int>(ReadLe16(data, 14U));
+    const int bitsPerPixel = static_cast<int>(data[16]);
+    if (width <= 0 || height <= 0 || (bitsPerPixel != 8 && bitsPerPixel != 24 && bitsPerPixel != 32)) {
+        return std::nullopt;
+    }
+    const std::size_t bytesPerPixel = static_cast<std::size_t>(bitsPerPixel / 8);
+    const std::size_t pixelOffset = 18U + idLength;
+    const std::size_t pixelCount = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    const std::size_t pixelBytes = pixelCount * bytesPerPixel;
+    if (pixelOffset > data.size() || (!rle && pixelBytes > data.size() - pixelOffset)) {
+        return std::nullopt;
+    }
+
+    auto readPixel = [&data, bytesPerPixel, bitsPerPixel](std::size_t source) -> std::optional<std::uint32_t> {
+        if (source + bytesPerPixel > data.size()) {
+            return std::nullopt;
+        }
+        std::uint8_t b = 0;
+        std::uint8_t g = 0;
+        std::uint8_t r = 0;
+        std::uint8_t a = 255;
+        if (bitsPerPixel == 8) {
+            b = g = r = data[source];
+        } else {
+            b = data[source];
+            g = data[source + 1U];
+            r = data[source + 2U];
+            if (bitsPerPixel == 32) {
+                a = data[source + 3U];
+            }
+        }
+        return static_cast<std::uint32_t>(b)
+            | (static_cast<std::uint32_t>(g) << 8U)
+            | (static_cast<std::uint32_t>(r) << 16U)
+            | (static_cast<std::uint32_t>(a) << 24U);
+    };
+
+    std::vector<std::uint32_t> sourcePixels(pixelCount);
+    if (rle) {
+        std::size_t cursor = pixelOffset;
+        std::size_t pixelIndex = 0;
+        while (pixelIndex < pixelCount && cursor < data.size()) {
+            const std::uint8_t packet = data[cursor++];
+            const std::size_t runLength = static_cast<std::size_t>((packet & 0x7FU) + 1U);
+            if (pixelIndex + runLength > pixelCount) {
+                return std::nullopt;
+            }
+            if ((packet & 0x80U) != 0U) {
+                const std::optional<std::uint32_t> pixel = readPixel(cursor);
+                if (!pixel.has_value()) {
+                    return std::nullopt;
+                }
+                cursor += bytesPerPixel;
+                std::fill_n(sourcePixels.begin() + static_cast<std::ptrdiff_t>(pixelIndex), static_cast<std::ptrdiff_t>(runLength), *pixel);
+                pixelIndex += runLength;
+            } else {
+                for (std::size_t index = 0; index < runLength; ++index) {
+                    const std::optional<std::uint32_t> pixel = readPixel(cursor);
+                    if (!pixel.has_value()) {
+                        return std::nullopt;
+                    }
+                    cursor += bytesPerPixel;
+                    sourcePixels[pixelIndex++] = *pixel;
+                }
+            }
+        }
+        if (pixelIndex != pixelCount) {
+            return std::nullopt;
+        }
+    } else {
+        for (std::size_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex) {
+            const std::optional<std::uint32_t> pixel = readPixel(pixelOffset + pixelIndex * bytesPerPixel);
+            if (!pixel.has_value()) {
+                return std::nullopt;
+            }
+            sourcePixels[pixelIndex] = *pixel;
+        }
+    }
+
+    const bool topOrigin = (data[17] & 0x20U) != 0U;
+    ProjectFilesTextureThumbnailImage image{ .width = width, .height = height };
+    image.bgra.resize(pixelCount);
+    for (int y = 0; y < height; ++y) {
+        const int sourceY = topOrigin ? y : height - 1 - y;
+        for (int x = 0; x < width; ++x) {
+            image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] =
+                sourcePixels[static_cast<std::size_t>(sourceY) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)];
+        }
+    }
+    return image;
+}
+
+[[nodiscard]] std::optional<ProjectFilesTextureThumbnailImage> DecodeWithGdiplus(const std::vector<std::uint8_t>& data) {
+    if (data.empty() || data.size() > static_cast<std::size_t>(std::numeric_limits<UINT>::max())) {
+        return std::nullopt;
+    }
+
+    HeroIconGdiplusRuntime::EnsureStarted();
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, data.size());
+    if (memory == nullptr) {
+        return std::nullopt;
+    }
+    void* target = GlobalLock(memory);
+    if (target == nullptr) {
+        GlobalFree(memory);
+        return std::nullopt;
+    }
+    std::memcpy(target, data.data(), data.size());
+    GlobalUnlock(memory);
+
+    IStream* stream = nullptr;
+    if (CreateStreamOnHGlobal(memory, TRUE, &stream) != S_OK || stream == nullptr) {
+        GlobalFree(memory);
+        return std::nullopt;
+    }
+    const ScopedComStream scopedStream(stream);
+
+    std::unique_ptr<Gdiplus::Bitmap> bitmap(Gdiplus::Bitmap::FromStream(stream));
+    if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok || bitmap->GetWidth() == 0U || bitmap->GetHeight() == 0U) {
+        return std::nullopt;
+    }
+
+    ProjectFilesTextureThumbnailImage image{ .width = static_cast<int>(bitmap->GetWidth()), .height = static_cast<int>(bitmap->GetHeight()) };
+    image.bgra.resize(static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height));
+    for (int y = 0; y < image.height; ++y) {
+        for (int x = 0; x < image.width; ++x) {
+            Gdiplus::Color pixel;
+            if (bitmap->GetPixel(x, y, &pixel) != Gdiplus::Ok) {
+                return std::nullopt;
+            }
+            image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(image.width) + static_cast<std::size_t>(x)] =
+                static_cast<std::uint32_t>(pixel.GetBlue())
+                | (static_cast<std::uint32_t>(pixel.GetGreen()) << 8U)
+                | (static_cast<std::uint32_t>(pixel.GetRed()) << 16U)
+                | (static_cast<std::uint32_t>(pixel.GetAlpha()) << 24U);
+        }
+    }
+    return image;
+}
+
+[[nodiscard]] std::optional<ProjectFilesTextureThumbnailImage> DecodeTexturePayload(const std::vector<std::uint8_t>& payload) {
+    if (std::optional<ProjectFilesTextureThumbnailImage> image = DecodeTga(payload); image.has_value()) {
+        return image;
+    }
+    return DecodeWithGdiplus(payload);
+}
+
+class ProjectFilesTextureThumbnailCache {
+public:
+    [[nodiscard]] const ProjectFilesTextureThumbnailImage* ThumbnailFor(const kb::assets::AssetMetadata& metadata) {
+        if (!ProjectFilesAssetIconResolver::IsTexture(metadata)) {
+            return nullptr;
+        }
+
+        const std::uint64_t key = metadata.id.value ^ (metadata.contentHash + 0x9e3779b97f4a7c15ULL + (metadata.id.value << 6U) + (metadata.id.value >> 2U));
+        if (const auto found = images_.find(key); found != images_.end()) {
+            return found->second.has_value() ? &*found->second : nullptr;
+        }
+
+        std::optional<ProjectFilesTextureThumbnailImage> image;
+        if (std::optional<std::vector<std::uint8_t>> payload = ReadImportedTexturePayload(metadata.physicalPath); payload.has_value()) {
+            image = DecodeTexturePayload(*payload);
+        }
+        auto [iter, inserted] = images_.emplace(key, std::move(image));
+        static_cast<void>(inserted);
+        return iter->second.has_value() ? &*iter->second : nullptr;
+    }
+
+private:
+    std::unordered_map<std::uint64_t, std::optional<ProjectFilesTextureThumbnailImage>> images_;
+};
+
+[[nodiscard]] ProjectFilesTextureThumbnailCache& TextureThumbnailCache() {
+    static ProjectFilesTextureThumbnailCache cache;
+    return cache;
 }
 
 void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailImage& image) {
@@ -79,6 +363,56 @@ void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailIm
     Rectangle(dc, target.left, target.top, target.right, target.bottom);
 }
 
+void DrawTextureThumbnailBitmap(HDC dc, const RECT& target, const ProjectFilesTextureThumbnailImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || target.right <= target.left || target.bottom <= target.top) {
+        return;
+    }
+
+    const int targetWidth = Draw::RectWidth(target);
+    const int targetHeight = Draw::RectHeight(target);
+    int sourceWidth = image.width;
+    int sourceHeight = (targetHeight * image.width) / std::max(1, targetWidth);
+    if (sourceHeight > image.height) {
+        sourceHeight = image.height;
+        sourceWidth = (targetWidth * image.height) / std::max(1, targetHeight);
+    }
+    sourceWidth = std::clamp(sourceWidth, 1, image.width);
+    sourceHeight = std::clamp(sourceHeight, 1, image.height);
+    const int sourceX = (image.width - sourceWidth) / 2;
+    const int sourceY = (image.height - sourceHeight) / 2;
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    const int oldMode = SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, nullptr);
+    static_cast<void>(StretchDIBits(
+        dc,
+        target.left,
+        target.top,
+        targetWidth,
+        targetHeight,
+        sourceX,
+        sourceY,
+        sourceWidth,
+        sourceHeight,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+    SetStretchBltMode(dc, oldMode);
+
+    ScopedPen border{ 1, RGB(52, 59, 68) };
+    const ScopedGdiObject selectedPen(dc, border.handle);
+    const ScopedGdiObject selectedBrush(dc, GetStockObject(NULL_BRUSH));
+    Rectangle(dc, target.left, target.top, target.right, target.bottom);
+}
+
 void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetFolderRow& folder, bool highlighted, const EditorAssetBrowserState& state) {
     Frame::Paint(dc, tile, theme, highlighted, highlighted && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
@@ -95,10 +429,13 @@ void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAsse
     Frame::Paint(dc, tile, theme, asset.selected, asset.selected && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
-    if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.ThumbnailFor(asset.metadata)) {
+    if (const ProjectFilesTextureThumbnailImage* texture = TextureThumbnailCache().ThumbnailFor(asset.metadata)) {
+        DrawTextureThumbnailBitmap(dc, TexturePreviewRect(tile, visual), *texture);
+    } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {
-        Draw::DrawIconWithShadow(dc, visual.icon, HeroIconKind::Cube, AssetIconColor(asset), 2);
+        const ProjectFilesAssetIcon icon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
+        Draw::DrawIconWithShadow(dc, LargeIconRect(tile, visual), icon.kind, icon.color, icon.strokeWidth);
     }
     if (state.TextEditMode() == EditorAssetTextEditMode::RenameAsset && state.TextEditTargetAsset() == asset.metadata.id) {
         Draw::DrawCenteredEditField(dc, visual.label, theme, state.TextEditValue());

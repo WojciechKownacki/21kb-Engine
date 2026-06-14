@@ -50,6 +50,7 @@ bool ScenePostProcessRenderer::Initialize() {
     combineProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_post_bloom_combine.sc");
     motionVectorsProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_post_motion_vectors.sc");
     taaResolveProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_post_taa_resolve.sc");
+    fxaaProgram_ = ShaderLoader::LoadProgram("vs_present.sc", "fs_post_fxaa.sc");
     sourceSampler_ = bgfx::createUniform("s_source", bgfx::UniformType::Sampler);
     bloomSampler_ = bgfx::createUniform("s_bloom", bgfx::UniformType::Sampler);
     depthSampler_ = bgfx::createUniform("s_depth", bgfx::UniformType::Sampler);
@@ -129,6 +130,10 @@ void ScenePostProcessRenderer::DestroyPrograms() noexcept {
         bgfx::destroy(combineProgram_);
         combineProgram_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(fxaaProgram_)) {
+        bgfx::destroy(fxaaProgram_);
+        fxaaProgram_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(taaResolveProgram_)) {
         bgfx::destroy(taaResolveProgram_);
         taaResolveProgram_ = BGFX_INVALID_HANDLE;
@@ -150,7 +155,7 @@ void ScenePostProcessRenderer::DestroyPrograms() noexcept {
 bool ScenePostProcessRenderer::IsInitialized() const noexcept {
     return bgfx::isValid(prefilterProgram_) && bgfx::isValid(blurProgram_) &&
            bgfx::isValid(combineProgram_) && bgfx::isValid(motionVectorsProgram_) &&
-           bgfx::isValid(taaResolveProgram_) && bgfx::isValid(sourceSampler_) &&
+           bgfx::isValid(taaResolveProgram_) && bgfx::isValid(fxaaProgram_) && bgfx::isValid(sourceSampler_) &&
            bgfx::isValid(bloomSampler_) && bgfx::isValid(depthSampler_) &&
            bgfx::isValid(historySampler_) && bgfx::isValid(velocitySampler_) &&
            bgfx::isValid(postParams_) && bgfx::isValid(inverseViewProjectionUniform_) &&

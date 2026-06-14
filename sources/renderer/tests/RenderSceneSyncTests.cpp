@@ -1062,6 +1062,9 @@ void RunRendererStoresDefaultPostProcessSettingsTest() {
         .bloomThreshold = -2.0F,
         .bloomSoftKnee = 2.0F,
         .bloomRadiusPixels = -3.0F,
+        .temporalAntiAliasingEnabled = false,
+        .temporalJitterEnabled = false,
+        .fxaaEnabled = true,
     });
 
     const ScenePostProcessSettings settings = renderer.DefaultPostProcessSettings();
@@ -1072,6 +1075,16 @@ void RunRendererStoresDefaultPostProcessSettingsTest() {
     Require(NearlyEqual(settings.bloomRadiusPixels, 0.0F), "Renderer did not clamp post-process bloom radius");
     Require(settings.tonemapEnabled, "Renderer should keep tonemap enabled by default");
     Require(settings.outputTransform.autoExposure.enabled, "Renderer default post-process settings should keep auto exposure enabled");
+    Require(settings.fxaaEnabled, "Renderer did not store configured FXAA toggle");
+    Require(!settings.temporalAntiAliasingEnabled, "Renderer did not store configured TAA toggle");
+
+    const auto antiAliasingPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
+        return pass.kind == PostProcessPassKind::AntiAliasing;
+    });
+    Require(antiAliasingPass != renderer.PostProcessPasses().end(), "Renderer post-process chain is missing anti-aliasing after settings update");
+    Require(antiAliasingPass->enabled, "Renderer did not enable anti-aliasing pass for FXAA");
+    Require(antiAliasingPass->postProcessSettings.fxaaEnabled, "Renderer did not synchronize FXAA to the anti-aliasing pass");
+    Require(!antiAliasingPass->postProcessSettings.temporalAntiAliasingEnabled, "Renderer did not synchronize disabled TAA to the anti-aliasing pass");
 
     const auto bloomPass = std::ranges::find_if(renderer.PostProcessPasses(), [](const PostProcessPass& pass) {
         return pass.kind == PostProcessPassKind::Bloom;

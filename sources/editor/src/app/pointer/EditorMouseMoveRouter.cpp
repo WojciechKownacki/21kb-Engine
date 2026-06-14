@@ -85,6 +85,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     splitterCursor.UpdateCursor(x, y);
     static_cast<void>(EditorWindowToolbarPointerHandler::HandleMouseMove(mainWindow_, messageWindow, x, y, dockModel_, shellInteraction_, metrics_));
     EditorInspectorPointerController inspectorPointer(sceneContext_);
+    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
 
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         if (!leftButtonDown) {
@@ -99,7 +100,7 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     const bool draggingMeshPreview = sceneContext_.Inspector().IsDraggingMeshPreview();
-    if (leftButtonDown && inspectorPointer.HandlePointerDrag(x, y)) {
+    if (leftButtonDown && inspectorPointer.HandlePointerDrag(inspectorContent, x, y)) {
         if (!draggingMeshPreview) {
             sceneViewport_.RequestPresent();
         }
@@ -131,7 +132,6 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
     }
-    const std::optional<RECT> inspectorContent = EditorPanelContentResolver::Resolve(DockPanelKind::Inspector, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (inspectorPointer.UpdateHoverOrClear(inspectorContent, x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     }

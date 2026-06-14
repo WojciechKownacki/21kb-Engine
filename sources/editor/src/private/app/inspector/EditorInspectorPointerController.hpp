@@ -18,7 +18,7 @@ public:
     explicit EditorInspectorPointerController(EditorSceneContext& sceneContext) noexcept;
 
     [[nodiscard]] bool HandlePointerDown(const RECT& content, int x, int y);
-    [[nodiscard]] bool HandlePointerDrag(int x, int y);
+    [[nodiscard]] bool HandlePointerDrag(const std::optional<RECT>& content, int x, int y);
     [[nodiscard]] bool HandlePointerUp();
     [[nodiscard]] bool HandleMouseWheel(const RECT& content, int x, int y, int wheelDelta);
     [[nodiscard]] bool HandleDoubleClick(const RECT& content, int x, int y);

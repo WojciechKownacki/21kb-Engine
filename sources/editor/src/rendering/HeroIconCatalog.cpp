@@ -42,6 +42,12 @@ HeroIconGlyph HeroIconCatalog::Glyph(HeroIconKind icon) noexcept {
         return HeroIconAssets::AdjustmentsHorizontal();
     case HeroIconKind::CommandLine:
         return HeroIconAssets::CommandLine();
+    case HeroIconKind::DocumentText:
+        return HeroIconAssets::DocumentText();
+    case HeroIconKind::Bolt:
+        return HeroIconAssets::Bolt();
+    case HeroIconKind::RectangleGroup:
+        return HeroIconAssets::RectangleGroup();
     case HeroIconKind::Gamepad2:
         return HeroIconAssets::Gamepad2();
     case HeroIconKind::RotationSnap:
