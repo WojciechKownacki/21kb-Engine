@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabTemplateOverrideService.hpp"
 
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
+#include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabOverrideApplier.hpp"
 #include "scene/prefab/ScenePrefabPropertyMutator.hpp"
 
@@ -14,6 +15,7 @@ bool ScenePrefabTemplateOverrideService::ApplyAll(Scene& scene, ScenePrefabRegis
     registry.RefreshContentHash(instance.prefab);
     registry.RefreshDerivedPrefabs(instance.prefab);
     instance.resolvedPrefab = ScenePrefabNestedResolver::Resolve(registry, record.prefab);
+    static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(scene, instance.prefab));
     return true;
 }
 
@@ -23,6 +25,8 @@ bool ScenePrefabTemplateOverrideService::ApplyChildren(Scene& scene, ScenePrefab
     }
 
     registry.RefreshContentHash(instance.prefab);
+    registry.RefreshDerivedPrefabs(instance.prefab);
+    static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(scene, instance.prefab));
     return true;
 }
 
@@ -37,6 +41,7 @@ bool ScenePrefabTemplateOverrideService::ApplyProperty(Scene& scene, ScenePrefab
     if (refreshed != nullptr) {
         instance.resolvedPrefab = ScenePrefabNestedResolver::Resolve(registry, *refreshed);
     }
+    static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(scene, instance.prefab));
     return true;
 }
 

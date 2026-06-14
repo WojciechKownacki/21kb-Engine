@@ -2,6 +2,7 @@
 
 #include "engine/scene/ScenePrefabOverrides.hpp"
 #include "scene/prefab/ScenePrefabAppliedPropertyBuilder.hpp"
+#include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
 #include "scene/prefab/ScenePrefabOverrideDetector.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
@@ -30,7 +31,11 @@ bool ScenePrefabVariantOverrideService::ApplyAll(Scene& scene, ScenePrefabRegist
             return false;
         }
     }
-    return RefreshResolvedPrefab(registry, instance);
+    if (!RefreshResolvedPrefab(registry, instance)) {
+        return false;
+    }
+    static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(scene, instance.prefab));
+    return true;
 }
 
 bool ScenePrefabVariantOverrideService::ApplyProperty(Scene& scene, ScenePrefabRegistry& registry, ScenePrefabInstanceRecord& instance, std::uint32_t nodeIndex, SceneObject object, std::string_view propertyPath) {
@@ -41,7 +46,11 @@ bool ScenePrefabVariantOverrideService::ApplyProperty(Scene& scene, ScenePrefabR
     if (!registry.UpsertVariantOverride(instance.prefab, std::move(property))) {
         return false;
     }
-    return RefreshResolvedPrefab(registry, instance);
+    if (!RefreshResolvedPrefab(registry, instance)) {
+        return false;
+    }
+    static_cast<void>(ScenePrefabInstanceSynchronizer::Refresh(scene, instance.prefab));
+    return true;
 }
 
 } // namespace kb::scene
