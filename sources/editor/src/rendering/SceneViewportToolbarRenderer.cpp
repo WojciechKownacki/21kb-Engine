@@ -21,6 +21,7 @@ constexpr int kGroupGap = 10;
 constexpr int kButtonHeight = 24;
 constexpr int kFpsCounterWidth = 66;
 constexpr int kRenderStatsWidth = 136;
+constexpr int kPipelineStatsWidth = 184;
 constexpr int kIconButtonWidth = 34;
 constexpr int kValueButtonWidth = 70;
 constexpr int kProfileButtonWidth = 104;
@@ -238,6 +239,37 @@ void DrawRenderStats(HDC dc, RECT rect, const EditorTheme& theme) {
     SetBkMode(dc, previousBkMode);
 }
 
+void DrawPipelineStats(HDC dc, RECT rect, const EditorTheme& theme) {
+    const COLORREF fill = Blend(ToolbarRowColor(theme), RGB(0, 0, 0), 1, 5);
+    const COLORREF border = Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
+    FillRound(dc, rect, fill, border, kButtonRadius);
+
+    const SceneViewportToolbarRenderStats stats = LastRenderStats();
+    char msaaText[8]{};
+    if (stats.msaaSamples > 0U) {
+        std::snprintf(msaaText, sizeof(msaaText), "%ux", static_cast<unsigned>(stats.msaaSamples));
+    } else {
+        std::snprintf(msaaText, sizeof(msaaText), "off");
+    }
+    char text[72]{};
+    std::snprintf(
+        text,
+        sizeof(text),
+        "FX %s | TAA %s | Bloom %s | MSAA %s",
+        stats.postProcessActive && stats.finalCompositeActive ? "on" : "off",
+        stats.temporalAntiAliasingActive ? "on" : "off",
+        stats.bloomActive ? "on" : "off",
+        msaaText);
+
+    ScopedFont font(11, FW_SEMIBOLD);
+    const ScopedGdiObject selectedFont(dc, font.handle);
+    const int previousBkMode = SetBkMode(dc, TRANSPARENT);
+    const COLORREF previousTextColor = SetTextColor(dc, GdiDrawing::ToColorRef(theme.textSecondary));
+    DrawTextA(dc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    SetTextColor(dc, previousTextColor);
+    SetBkMode(dc, previousBkMode);
+}
+
 } // namespace
 
 SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& content) noexcept {
@@ -253,6 +285,7 @@ SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& cont
     int cursor = rects.toolbar.left + kToolbarPaddingX;
     rects.fpsCounter = ButtonRect(rects.row, cursor, kFpsCounterWidth);
     rects.renderStats = ButtonRect(rects.row, cursor, kRenderStatsWidth);
+    rects.pipelineStats = ButtonRect(rects.row, cursor, kPipelineStatsWidth);
     AddGroupGap(cursor);
     rects.renderProfileButton = ButtonRect(rects.row, cursor, kProfileButtonWidth);
     AddGroupGap(cursor);
@@ -300,6 +333,7 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
 
     DrawFpsCounter(dc, rects.fpsCounter, theme);
     DrawRenderStats(dc, rects.renderStats, theme);
+    DrawPipelineStats(dc, rects.pipelineStats, theme);
     DrawValueButton(dc, rects.renderProfileButton, HeroIconKind::Gamepad2, EditorViewportRenderProfileLabel(state.RenderProfile()), theme);
     DrawDivider(dc, rects.toolbar, rects.renderProfileButton.right + 7, theme);
     DrawIconButton(dc, rects.gridToggleButton, HeroIconKind::Eye, theme, state.GridVisible());

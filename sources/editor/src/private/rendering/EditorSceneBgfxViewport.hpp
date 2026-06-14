@@ -253,6 +253,7 @@ private:
     HWND defaultParent_ = nullptr;
     EditorRenderBackendSettings* backendSettings_ = nullptr;
     std::uint64_t rendererBackendGeneration_ = 0;
+    std::uint8_t rendererMsaaSamples_ = 0;
     HWND contextWindow_ = nullptr;
     HWND paintParent_ = nullptr;
     bool windowClassRegistered_ = false;
