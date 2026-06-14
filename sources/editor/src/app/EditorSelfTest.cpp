@@ -411,6 +411,42 @@ void RunPrefabPlacementSuite(Report& report) {
     report.Check(context.Scene().Hierarchy().Parent(reparented) == parent, "Redo restores parented prefab root parent");
 }
 
+void RunHierarchyCommandSuite(Report& report) {
+    EditorSceneContext context;
+    const auto findHierarchyEntityNamed = [&context](std::string_view name) {
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                return row.entity;
+            }
+        }
+        return kb::scene::SceneEntity{};
+    };
+
+    const kb::scene::SceneEntity entity = context.CreateHierarchyObject();
+    report.Check(entity.IsValid() && context.Scene().Entities().IsAlive(entity), "Create entity for hierarchy rename");
+    context.SelectEntity(entity);
+    const std::string originalName = context.Scene().Entities().Name(entity);
+
+    report.Check(context.BeginHierarchyRename(), "Begin hierarchy rename");
+    report.Check(context.IsHierarchyRenaming(entity), "Hierarchy rename targets selected entity");
+    report.Check(context.IsHierarchyRenameSelectingAll(), "Hierarchy rename starts with text selected");
+    context.SetHierarchyRenameText("RenamedEntity");
+    report.Check(context.CommitHierarchyRename(), "Commit hierarchy rename");
+    report.Check(context.Scene().Entities().Name(entity) == "RenamedEntity", "Hierarchy rename updates entity name");
+
+    report.Check(context.UndoSceneCommand(), "Undo hierarchy rename");
+    report.Check(findHierarchyEntityNamed(originalName).IsValid(), "Undo restores previous hierarchy name");
+    report.Check(context.RedoSceneCommand(), "Redo hierarchy rename");
+    const kb::scene::SceneEntity redone = findHierarchyEntityNamed("RenamedEntity");
+    report.Check(redone.IsValid() && context.Scene().Entities().IsAlive(redone), "Redo reapplies hierarchy name");
+
+    context.SelectEntity(redone);
+    report.Check(context.BeginHierarchyRename(), "Begin hierarchy rename with empty value");
+    context.SetHierarchyRenameText({});
+    report.Check(context.CommitHierarchyRename(), "Commit empty hierarchy rename");
+    report.Check(context.Scene().Entities().Name(context.SelectedEntity()) == "Entity", "Empty hierarchy rename falls back to default name");
+}
+
 // Proves Log("...") from a Lua script reaches the editor Console during play.
 void RunScriptLogSuite(Report& report) {
     EditorSceneContext context;
@@ -569,7 +605,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Selection transform + Prefab placement\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -586,6 +622,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "gameplay", &RunGameplayLoopSuite);
     RunSuiteInScratch(report, "script_editor", &RunScriptEditorSuite);
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
+    RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
