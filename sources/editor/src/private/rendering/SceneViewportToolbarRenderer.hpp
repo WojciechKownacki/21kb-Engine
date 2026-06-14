@@ -21,6 +21,7 @@ struct SceneViewportToolbarRects {
     RECT row{};
     RECT fpsCounter{};
     RECT renderStats{};
+    RECT pipelineStats{};
     RECT renderProfileButton{};
     RECT gridToggleButton{};
     RECT gridStepButton{};
@@ -35,7 +36,12 @@ struct SceneViewportToolbarRenderStats {
     std::uint32_t submittedDrawCalls = 0;
     std::uint32_t submittedMeshes = 0;
     std::uint32_t gpuDispatches = 0;
+    std::uint8_t msaaSamples = 0;
     bool gpuDrivenActive = false;
+    bool postProcessActive = false;
+    bool temporalAntiAliasingActive = false;
+    bool bloomActive = false;
+    bool finalCompositeActive = false;
 };
 
 class SceneViewportToolbarRenderer {
