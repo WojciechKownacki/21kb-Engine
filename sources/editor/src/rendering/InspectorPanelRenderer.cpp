@@ -18,6 +18,7 @@
 #include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
+#include "scene/EditorSceneSelectionPivot.hpp"
 
 #include <algorithm>
 #include <array>
@@ -948,12 +949,58 @@ void PaintAudioListenerSection(
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] std::size_t AliveSelectionCount(const kb::scene::Scene& scene, std::span<const kb::scene::SceneEntity> selected) noexcept {
+    std::size_t count = 0U;
+    for (const kb::scene::SceneEntity entity : selected) {
+        if (scene.Entities().IsAlive(entity)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+[[nodiscard]] kb::scene::TransformComponent MultiSelectionTransformView(
+    const kb::scene::Scene& scene,
+    std::span<const kb::scene::SceneEntity> selected,
+    kb::scene::SceneEntity primary) {
+    kb::scene::TransformComponent transform = scene.Transforms().Get(primary);
+    if (const std::optional<kb::scene::Vec3> pivot = EditorSceneSelectionPivot::Resolve(scene, selected, primary)) {
+        transform.localPosition = *pivot;
+    }
+    return transform;
+}
+
+void PaintMultiSelection(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity primary) {
+    const kb::scene::Scene& scene = sceneContext.Scene();
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const std::vector<kb::scene::SceneEntity>& selected = sceneContext.SelectedHierarchyEntities();
+    const std::size_t aliveCount = AliveSelectionCount(scene, selected);
+    const std::string primaryName = scene.Entities().IsAlive(primary) ? scene.Entities().Name(primary) : std::string{ "(none)" };
+
+    DrawHeader(dc, content, theme, HeroIconKind::ListBullet, "Selection (" + std::to_string(aliveCount) + ")", "Primary: " + primaryName);
+    int y = content.top + kHeaderHeight + kPanelPadTop;
+
+    {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::General, HeroIconKind::AdjustmentsHorizontal, "Selection");
+        section.Field("Entities", FormatUInt64(aliveCount));
+        section.Field("Primary", primaryName);
+        section.Field("Primary Id", FormatUInt64(primary.Id()));
+        y = section.Bottom() + kSectionGap;
+    }
+
+    if (scene.Entities().IsAlive(primary)) {
+        const kb::scene::TransformComponent transform = MultiSelectionTransformView(scene, selected, primary);
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Transform, HeroIconKind::Gamepad2, "Transform");
+        section.Vec3("Pivot", transform.localPosition, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ);
+        section.Rotation("Primary Rotation", transform.localRotation);
+        section.Vec3("Primary Scale", transform.localScale, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ);
+    }
+}
+
 void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, kb::scene::SceneEntity selected) {
     const kb::scene::Scene& scene = sceneContext.Scene();
     const InspectorPanelState& inspector = sceneContext.Inspector();
-    const std::vector<kb::scene::SceneEntity>& selectedEntities = sceneContext.SelectedHierarchyEntities();
-    const bool multi = selectedEntities.size() > 1U;
-    const std::string title = multi ? ("-- (" + std::to_string(selectedEntities.size()) + ")") : scene.Entities().Name(selected);
+    const std::string title = scene.Entities().Name(selected);
     const std::string subtitle = "Entity " + FormatUInt64(selected.Id());
 
     DrawHeader(dc, content, theme, HeroIconKind::Cube, title, subtitle);
@@ -1185,6 +1232,41 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestMultiSelection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) noexcept {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::General)) {
+        for (int row = 0; row < 3; ++row) {
+            const RECT rect = RowRect(content, y);
+            if (Contains(rect, x, yPoint)) {
+                return MakeHit(InspectorHitKind::Row, InspectorSectionId::General, InspectorPropertyId::None, rect);
+            }
+            AdvanceRow(y);
+        }
+    }
+    y += kSectionGap;
+
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Transform, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::Transform)) {
+        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(content, y), InspectorSectionId::Transform, InspectorPropertyId::PositionX, InspectorPropertyId::PositionY, InspectorPropertyId::PositionZ, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitRotation(RowRect(content, y), x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+        if (InspectorPanelRenderer::Hit hit = HitVec3(RowRect(content, y), InspectorSectionId::Transform, InspectorPropertyId::ScaleX, InspectorPropertyId::ScaleY, InspectorPropertyId::ScaleZ, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
 } // namespace
 
 void InspectorPanelRenderer::Paint(
@@ -1207,6 +1289,12 @@ void InspectorPanelRenderer::Paint(
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
         DrawEmpty(dc, inner, theme);
+        RestoreDC(dc, savedDc);
+        return;
+    }
+
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        PaintMultiSelection(dc, inner, theme, sceneContext, selected);
         RestoreDC(dc, savedDc);
         return;
     }
@@ -1258,6 +1346,10 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
     const kb::scene::SceneEntity selected = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(selected)) {
         return {};
+    }
+
+    if (sceneContext.SelectedHierarchyEntities().size() > 1U) {
+        return HitTestMultiSelection(content, state, x, yPoint, y);
     }
 
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
