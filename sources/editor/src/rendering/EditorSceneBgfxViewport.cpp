@@ -385,6 +385,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     config.syncMode = render::DisplaySyncMode::Uncapped;
     config.targetFps = 180;
     config.flushAfterRender = false;
+    rendererMsaaSamples_ = config.msaaSamples;
     bgfx::RendererType::Enum supportedBackends[bgfx::RendererType::Count]{};
     const std::uint8_t supportedBackendCount = bgfx::getSupportedRenderers(static_cast<std::uint8_t>(bgfx::RendererType::Count), supportedBackends);
     const bgfx::RendererType::Enum preferredBackend = EditorBgfxBackendSelector::Resolve(supportedBackends, supportedBackendCount, backendSettings_);
