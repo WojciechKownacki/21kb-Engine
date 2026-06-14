@@ -2,6 +2,7 @@
 
 #include "kb/editor/docking/DockTypes.hpp"
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "rendering/EditorRenderBackendSettings.hpp"
 #include "rendering/EditorSceneBgfxViewport.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -21,7 +22,8 @@ public:
         HWND sceneViewportHost,
         const RECT& content,
         const DockPanel& panel,
-        const EditorSceneContext& sceneContext);
+        const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings);
 
     void Paint(
         HDC dc,
@@ -29,6 +31,7 @@ public:
         const DockPanel& panel,
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext,
+        const EditorRenderBackendSettings& renderBackendSettings,
         EditorSceneBgfxViewport* sceneViewport,
         HWND sceneViewportHost) const;
 #endif

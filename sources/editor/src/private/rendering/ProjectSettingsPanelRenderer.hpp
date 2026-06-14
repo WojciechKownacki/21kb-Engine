@@ -25,6 +25,9 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     MappingContextOption, // A row inside the open dropdown list (see Hit::index).
     EnabledCheckbox,
     RenderBackendOption,
+    AntiAliasingMode,
+    GraphicsToggle,
+    MsaaOption,
 };
 
 // Categories shown in the left sidebar. Add entries here as the panel grows;
@@ -52,6 +55,7 @@ public:
         const EditorSceneContext& sceneContext,
         const EditorRenderBackendSettings& renderBackendSettings) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
+    [[nodiscard]] static Hit TooltipHitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y);
 #endif
 };
 

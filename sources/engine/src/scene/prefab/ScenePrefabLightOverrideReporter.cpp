@@ -32,8 +32,23 @@ void ScenePrefabLightOverrideReporter::Append(SceneComponents components, SceneE
     if (actual != nullptr && expected.has_value() && Equal(*actual, *expected)) {
         return;
     }
-    if (actual == nullptr || !expected.has_value()) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light", actual == nullptr ? "null" : "present", ScenePrefabOverrideFlag::Light);
+    if (actual == nullptr) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light", "null", ScenePrefabOverrideFlag::Light);
+        return;
+    }
+    if (!expected.has_value()) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light", "present", ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.kind", std::to_string(static_cast<int>(actual->kind)), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.color", ScenePrefabOverrideValueFormatter::ToString(actual->color), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.intensity", ScenePrefabOverrideValueFormatter::ToString(actual->intensity), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.range", ScenePrefabOverrideValueFormatter::ToString(actual->range), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.innerConeDegrees", ScenePrefabOverrideValueFormatter::ToString(actual->innerConeDegrees), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.outerConeDegrees", ScenePrefabOverrideValueFormatter::ToString(actual->outerConeDegrees), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.areaWidth", ScenePrefabOverrideValueFormatter::ToString(actual->areaWidth), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.areaHeight", ScenePrefabOverrideValueFormatter::ToString(actual->areaHeight), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.contactShadowLength", ScenePrefabOverrideValueFormatter::ToString(actual->contactShadowLength), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.volumetricScattering", ScenePrefabOverrideValueFormatter::ToString(actual->volumetricScattering), ScenePrefabOverrideFlag::Light);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "light.castsShadow", ScenePrefabOverrideValueFormatter::ToString(actual->castsShadow), ScenePrefabOverrideFlag::Light);
         return;
     }
     if (actual->kind != expected->kind) {

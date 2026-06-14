@@ -12,6 +12,7 @@
 #include "engine/scene/SceneLightComponents.hpp"
 #include "engine/scene/SceneMeshRendererComponents.hpp"
 #include "engine/scene/SceneRigidbodyComponents.hpp"
+#include "engine/scene/SceneTagsComponents.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 namespace kb::scene {
@@ -46,6 +47,7 @@ void ScenePrefabNodeStateWriter::Write(Scene& scene, SceneObject object, SceneOb
     WriteOptionalComponent(components.Inputs(), entity, node.components.input);
     WriteOptionalComponent(components.Rigidbodies(), entity, node.components.rigidbody);
     WriteOptionalComponent(components.Colliders(), entity, node.components.collider);
+    WriteOptionalComponent(components.Tags(), entity, node.components.tags);
     WriteOptionalComponent(components.Behaviours(), entity, node.components.behaviour);
     WriteOptionalComponent(components.AudioSources(), entity, node.components.audioSource);
     WriteOptionalComponent(components.AudioListeners(), entity, node.components.audioListener);

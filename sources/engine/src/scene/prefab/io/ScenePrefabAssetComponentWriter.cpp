@@ -60,9 +60,64 @@ void ScenePrefabAssetComponentWriter::Write(std::ostream& output, const ScenePre
         output << "input.enabled=" << (components.input->enabled ? 1 : 0) << '\n';
     }
 
+    output << "rigidbody=" << (components.rigidbody.has_value() ? 1 : 0) << '\n';
+    if (components.rigidbody.has_value()) {
+        output << "rigidbody.bodyType=" << static_cast<int>(components.rigidbody->bodyType) << '\n';
+        output << "rigidbody.mass=" << components.rigidbody->mass << '\n';
+        WriteVec3(output, "rigidbody.linearVelocity", components.rigidbody->linearVelocity);
+        WriteVec3(output, "rigidbody.angularVelocity", components.rigidbody->angularVelocity);
+        output << "rigidbody.gravityScale=" << components.rigidbody->gravityScale << '\n';
+        output << "rigidbody.useGravity=" << (components.rigidbody->useGravity ? 1 : 0) << '\n';
+        output << "rigidbody.lockRotation=" << (components.rigidbody->lockRotation ? 1 : 0) << '\n';
+    }
+
+    output << "collider=" << (components.collider.has_value() ? 1 : 0) << '\n';
+    if (components.collider.has_value()) {
+        output << "collider.shape=" << static_cast<int>(components.collider->shape) << '\n';
+        WriteVec3(output, "collider.center", components.collider->center);
+        WriteVec3(output, "collider.boxSize", components.collider->boxSize);
+        output << "collider.radius=" << components.collider->radius << '\n';
+        output << "collider.height=" << components.collider->height << '\n';
+        output << "collider.trigger=" << (components.collider->trigger ? 1 : 0) << '\n';
+    }
+
     output << "tags=" << (components.tags.has_value() ? 1 : 0) << '\n';
     if (components.tags.has_value()) {
         output << "tags.value=" << TagsText(*components.tags) << '\n';
+    }
+
+    output << "behaviour=" << (components.behaviour.has_value() ? 1 : 0) << '\n';
+    if (components.behaviour.has_value()) {
+        output << "behaviour.behaviourAssetId=" << components.behaviour->behaviourAssetId << '\n';
+        output << "behaviour.backend=" << static_cast<int>(components.behaviour->backend) << '\n';
+        output << "behaviour.enabled=" << (components.behaviour->enabled ? 1 : 0) << '\n';
+        output << "behaviour.tickGroup=" << static_cast<int>(components.behaviour->tickGroup) << '\n';
+        output << "behaviour.executionOrder=" << components.behaviour->executionOrder << '\n';
+    }
+
+    output << "audioSource=" << (components.audioSource.has_value() ? 1 : 0) << '\n';
+    if (components.audioSource.has_value()) {
+        output << "audioSource.clipAssetId=" << components.audioSource->clipAssetId << '\n';
+        output << "audioSource.volume=" << components.audioSource->volume << '\n';
+        output << "audioSource.pitch=" << components.audioSource->pitch << '\n';
+        output << "audioSource.loop=" << (components.audioSource->loop ? 1 : 0) << '\n';
+        output << "audioSource.spatial=" << (components.audioSource->spatial ? 1 : 0) << '\n';
+        output << "audioSource.autoplay=" << (components.audioSource->autoplay ? 1 : 0) << '\n';
+        output << "audioSource.enabled=" << (components.audioSource->enabled ? 1 : 0) << '\n';
+        output << "audioSource.mute=" << (components.audioSource->mute ? 1 : 0) << '\n';
+        output << "audioSource.pan=" << components.audioSource->pan << '\n';
+        output << "audioSource.spatialBlend=" << components.audioSource->spatialBlend << '\n';
+        output << "audioSource.attenuationModel=" << static_cast<int>(components.audioSource->attenuationModel) << '\n';
+        output << "audioSource.minDistance=" << components.audioSource->minDistance << '\n';
+        output << "audioSource.maxDistance=" << components.audioSource->maxDistance << '\n';
+        output << "audioSource.rolloff=" << components.audioSource->rolloff << '\n';
+        output << "audioSource.dopplerFactor=" << components.audioSource->dopplerFactor << '\n';
+    }
+
+    output << "audioListener=" << (components.audioListener.has_value() ? 1 : 0) << '\n';
+    if (components.audioListener.has_value()) {
+        output << "audioListener.primary=" << (components.audioListener->primary ? 1 : 0) << '\n';
+        output << "audioListener.enabled=" << (components.audioListener->enabled ? 1 : 0) << '\n';
     }
 }
 

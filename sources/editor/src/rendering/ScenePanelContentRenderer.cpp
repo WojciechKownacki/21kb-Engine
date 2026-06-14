@@ -196,10 +196,12 @@ struct SceneViewportRenderProfileDesc {
     std::uint32_t panelId,
     DockPanelKind panelKind,
     const EditorViewportPreviewState& viewportState,
+    const EditorRenderBackendSettings& renderBackendSettings,
     const SceneViewportToolbarRects& sceneRects) {
     static_cast<void>(panelKind);
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
+    const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
@@ -235,11 +237,11 @@ struct SceneViewportRenderProfileDesc {
         .editorGizmo = gizmo,
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
-        .shadowPassEnabled = renderProfile.shadowPassEnabled,
-        .postProcessEnabled = renderProfile.postProcessEnabled,
-        .selectionMaskEnabled = renderProfile.selectionMaskEnabled,
-        .selectionOutlineEnabled = renderProfile.selectionOutlineEnabled,
-        .gpuDrivenRuntimeDispatchEnabled = renderProfile.gpuDrivenRuntimeDispatchEnabled,
+        .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
+        .postProcessEnabled = postProcessEnabled,
+        .selectionMaskEnabled = postProcessEnabled && renderProfile.selectionMaskEnabled,
+        .selectionOutlineEnabled = postProcessEnabled && renderProfile.selectionOutlineEnabled && renderBackendSettings.SelectionOutlineEnabled(),
+        .gpuDrivenRuntimeDispatchEnabled = renderProfile.gpuDrivenRuntimeDispatchEnabled && renderBackendSettings.GpuDrivenEnabled(),
         .drawSafeArea = profile.devicePreview,
         .sceneRevision = sceneContext.SceneRenderRevision(),
         .sceneDirtyBaseRevision = sceneContext.SceneRenderDirtyBaseRevision(),
@@ -255,14 +257,15 @@ void ScenePanelContentRenderer::PresentViewport(
     HWND sceneViewportHost,
     const RECT& content,
     const DockPanel& panel,
-    const EditorSceneContext& sceneContext) {
+    const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings) {
     if (sceneViewportHost == nullptr) {
         return;
     }
 
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
     const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
-    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
 
     sceneViewport.BeginPaintLayout(sceneViewportHost);
     sceneViewport.Present(sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), settings);
@@ -276,6 +279,7 @@ void ScenePanelContentRenderer::Paint(
     const DockPanel& panel,
     const EditorTheme& theme,
     const EditorSceneContext& sceneContext,
+    const EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
@@ -286,7 +290,7 @@ void ScenePanelContentRenderer::Paint(
     }
 
     const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
-    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, sceneRects);
+    const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
     if (sceneViewportHost != nullptr) {
         sceneViewport->Present(dc, sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), theme, settings);
     } else {

@@ -27,6 +27,93 @@ namespace {
     }
 }
 
+void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noexcept {
+    switch (index) {
+    case 0:
+        settings.TogglePostProcessEnabled();
+        return;
+    case 1:
+        settings.ToggleBloomEnabled();
+        return;
+    case 2:
+        settings.ToggleShadowsEnabled();
+        return;
+    case 3:
+        settings.ToggleSelectionOutlineEnabled();
+        return;
+    case 4:
+        settings.ToggleGpuDrivenEnabled();
+        return;
+    default:
+        return;
+    }
+}
+
+[[nodiscard]] EditorAntiAliasingMode AntiAliasingModeForOption(int index) noexcept {
+    switch (index) {
+    case 1:
+        return EditorAntiAliasingMode::Fxaa;
+    case 2:
+        return EditorAntiAliasingMode::Taa;
+    case 3:
+        return EditorAntiAliasingMode::Msaa;
+    case 0:
+    default:
+        return EditorAntiAliasingMode::None;
+    }
+}
+
+[[nodiscard]] std::uint8_t MsaaSamplesForOption(int index) noexcept {
+    switch (index) {
+    case 1:
+        return 2U;
+    case 2:
+        return 4U;
+    case 0:
+    default:
+        return 0U;
+    }
+}
+
+[[nodiscard]] ProjectSettingsTooltipKind GraphicsToggleTooltipKind(int index) noexcept {
+    switch (index) {
+    case 0:
+        return ProjectSettingsTooltipKind::PostProcess;
+    case 1:
+        return ProjectSettingsTooltipKind::Bloom;
+    case 2:
+        return ProjectSettingsTooltipKind::Shadows;
+    case 3:
+        return ProjectSettingsTooltipKind::SelectionOutline;
+    case 4:
+        return ProjectSettingsTooltipKind::GpuDriven;
+    default:
+        return ProjectSettingsTooltipKind::None;
+    }
+}
+
+[[nodiscard]] ProjectSettingsTooltipKind TooltipKindForHit(ProjectSettingsPanelRenderer::Hit hit) noexcept {
+    switch (hit.kind) {
+    case ProjectSettingsHitKind::MappingContextField:
+        return ProjectSettingsTooltipKind::MappingContext;
+    case ProjectSettingsHitKind::EnabledCheckbox:
+        return ProjectSettingsTooltipKind::InputEnabled;
+    case ProjectSettingsHitKind::RenderBackendOption:
+        return ProjectSettingsTooltipKind::RenderBackend;
+    case ProjectSettingsHitKind::AntiAliasingMode:
+        return ProjectSettingsTooltipKind::AntiAliasing;
+    case ProjectSettingsHitKind::MsaaOption:
+        return ProjectSettingsTooltipKind::MsaaSamples;
+    case ProjectSettingsHitKind::GraphicsToggle:
+        return GraphicsToggleTooltipKind(hit.index);
+    case ProjectSettingsHitKind::None:
+    case ProjectSettingsHitKind::CategoryItem:
+    case ProjectSettingsHitKind::MappingContextOption:
+    default:
+        return ProjectSettingsTooltipKind::None;
+    }
+}
+
 [[nodiscard]] bool HandleProjectSettingsPointerDown(
     EditorSceneContext& sceneContext,
     EditorRenderBackendSettings* renderBackendSettings,
@@ -68,6 +155,46 @@ namespace {
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
         return true;
     }
+    case ProjectSettingsHitKind::GraphicsToggle: {
+        if (renderBackendSettings == nullptr) {
+            return sceneContext.CloseProjectSettingsDropdowns();
+        }
+        const std::uint64_t previousGeneration = renderBackendSettings->Generation();
+        ToggleGraphicsOption(*renderBackendSettings, hit.index);
+        if (renderBackendSettings->Generation() != previousGeneration) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::AntiAliasingMode: {
+        if (renderBackendSettings == nullptr) {
+            return sceneContext.CloseProjectSettingsDropdowns();
+        }
+        const std::uint64_t previousGeneration = renderBackendSettings->Generation();
+        renderBackendSettings->SetAntiAliasingMode(AntiAliasingModeForOption(hit.index));
+        if (renderBackendSettings->Generation() != previousGeneration) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::MsaaOption: {
+        if (renderBackendSettings == nullptr) {
+            return sceneContext.CloseProjectSettingsDropdowns();
+        }
+        if (renderBackendSettings->AntiAliasingMode() != EditorAntiAliasingMode::Msaa) {
+            static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+            return false;
+        }
+        const std::uint64_t previousGeneration = renderBackendSettings->Generation();
+        renderBackendSettings->SetMsaaSamples(MsaaSamplesForOption(hit.index));
+        if (renderBackendSettings->Generation() != previousGeneration) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
     case ProjectSettingsHitKind::None:
     default:
         // A click anywhere else in the panel dismisses an open dropdown.
@@ -86,19 +213,22 @@ bool EditorProjectSettingsPointerController::HandlePointerDown(const RECT& conte
 }
 
 bool EditorProjectSettingsPointerController::UpdateHover(const RECT& content, int x, int y) {
+    bool changed = false;
+    const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::TooltipHitTest(content, sceneContext_, x, y);
+    changed = sceneContext_.ProjectSettings().SetTooltip(TooltipKindForHit(hit), x, y) || changed;
     if (!sceneContext_.ProjectSettings().IsMappingContextDropdownOpen()) {
-        return sceneContext_.ProjectSettings().SetHoveredOption(-1);
+        return sceneContext_.ProjectSettings().SetHoveredOption(-1) || changed;
     }
-    const ProjectSettingsPanelRenderer::Hit hit = ProjectSettingsPanelRenderer::HitTest(content, sceneContext_, x, y);
     const int hovered = hit.kind == ProjectSettingsHitKind::MappingContextOption ? hit.index : -1;
-    return sceneContext_.ProjectSettings().SetHoveredOption(hovered);
+    return sceneContext_.ProjectSettings().SetHoveredOption(hovered) || changed;
 }
 
 bool EditorProjectSettingsPointerController::UpdateHoverOrClear(const std::optional<RECT>& content, int x, int y) {
     if (content.has_value() && x >= content->left && x < content->right && y >= content->top && y < content->bottom) {
         return UpdateHover(*content, x, y);
     }
-    return sceneContext_.ProjectSettings().SetHoveredOption(-1);
+    const bool clearedOption = sceneContext_.ProjectSettings().SetHoveredOption(-1);
+    return sceneContext_.ProjectSettings().ClearTooltip() || clearedOption;
 }
 
 bool EditorProjectSettingsPointerController::Contains(const std::optional<RECT>& content, int x, int y) const noexcept {

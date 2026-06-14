@@ -41,6 +41,66 @@ namespace {
         && lhs.castsShadow == rhs.castsShadow;
 }
 
+[[nodiscard]] bool Equal(const InputComponent& lhs, const InputComponent& rhs) noexcept {
+    return lhs.mappingContextAssetId == rhs.mappingContextAssetId
+        && lhs.priority == rhs.priority
+        && lhs.enabled == rhs.enabled;
+}
+
+[[nodiscard]] bool Equal(const RigidbodyComponent& lhs, const RigidbodyComponent& rhs) noexcept {
+    return lhs.bodyType == rhs.bodyType
+        && lhs.mass == rhs.mass
+        && Equal(lhs.linearVelocity, rhs.linearVelocity)
+        && Equal(lhs.angularVelocity, rhs.angularVelocity)
+        && lhs.gravityScale == rhs.gravityScale
+        && lhs.useGravity == rhs.useGravity
+        && lhs.lockRotation == rhs.lockRotation;
+}
+
+[[nodiscard]] bool Equal(const ColliderComponent& lhs, const ColliderComponent& rhs) noexcept {
+    return lhs.shape == rhs.shape
+        && Equal(lhs.center, rhs.center)
+        && Equal(lhs.boxSize, rhs.boxSize)
+        && lhs.radius == rhs.radius
+        && lhs.height == rhs.height
+        && lhs.trigger == rhs.trigger;
+}
+
+[[nodiscard]] bool Equal(const TagsComponent& lhs, const TagsComponent& rhs) noexcept {
+    return TagsText(lhs) == TagsText(rhs);
+}
+
+[[nodiscard]] bool Equal(const BehaviourComponent& lhs, const BehaviourComponent& rhs) noexcept {
+    return lhs.behaviourAssetId == rhs.behaviourAssetId
+        && lhs.backend == rhs.backend
+        && lhs.enabled == rhs.enabled
+        && lhs.tickGroup == rhs.tickGroup
+        && lhs.executionOrder == rhs.executionOrder;
+}
+
+[[nodiscard]] bool Equal(const AudioSourceComponent& lhs, const AudioSourceComponent& rhs) noexcept {
+    return lhs.clipAssetId == rhs.clipAssetId
+        && lhs.volume == rhs.volume
+        && lhs.pitch == rhs.pitch
+        && lhs.loop == rhs.loop
+        && lhs.spatial == rhs.spatial
+        && lhs.autoplay == rhs.autoplay
+        && lhs.enabled == rhs.enabled
+        && lhs.mute == rhs.mute
+        && lhs.pan == rhs.pan
+        && lhs.spatialBlend == rhs.spatialBlend
+        && lhs.attenuationModel == rhs.attenuationModel
+        && lhs.minDistance == rhs.minDistance
+        && lhs.maxDistance == rhs.maxDistance
+        && lhs.rolloff == rhs.rolloff
+        && lhs.dopplerFactor == rhs.dopplerFactor;
+}
+
+[[nodiscard]] bool Equal(const AudioListenerComponent& lhs, const AudioListenerComponent& rhs) noexcept {
+    return lhs.primary == rhs.primary
+        && lhs.enabled == rhs.enabled;
+}
+
 template <typename T>
 [[nodiscard]] bool EqualOptionalComponent(const T* actual, const std::optional<T>& expected) noexcept {
     if (actual == nullptr) {
@@ -61,6 +121,27 @@ ScenePrefabOverrideFlag ScenePrefabComponentComparator::Compare(SceneComponents 
     }
     if (!EqualOptionalComponent(components.Lights().TryGet(entity), expected.light)) {
         flags |= ScenePrefabOverrideFlag::Light;
+    }
+    if (!EqualOptionalComponent(components.Inputs().TryGet(entity), expected.input)) {
+        flags |= ScenePrefabOverrideFlag::Input;
+    }
+    if (!EqualOptionalComponent(components.Rigidbodies().TryGet(entity), expected.rigidbody)) {
+        flags |= ScenePrefabOverrideFlag::Rigidbody;
+    }
+    if (!EqualOptionalComponent(components.Colliders().TryGet(entity), expected.collider)) {
+        flags |= ScenePrefabOverrideFlag::Collider;
+    }
+    if (!EqualOptionalComponent(components.Tags().TryGet(entity), expected.tags)) {
+        flags |= ScenePrefabOverrideFlag::Tags;
+    }
+    if (!EqualOptionalComponent(components.Behaviours().TryGet(entity), expected.behaviour)) {
+        flags |= ScenePrefabOverrideFlag::Behaviour;
+    }
+    if (!EqualOptionalComponent(components.AudioSources().TryGet(entity), expected.audioSource)) {
+        flags |= ScenePrefabOverrideFlag::AudioSource;
+    }
+    if (!EqualOptionalComponent(components.AudioListeners().TryGet(entity), expected.audioListener)) {
+        flags |= ScenePrefabOverrideFlag::AudioListener;
     }
     return flags;
 }

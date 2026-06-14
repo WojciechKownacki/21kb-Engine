@@ -18,6 +18,7 @@ enum class InspectorSectionId : std::uint8_t {
     AudioSource,
     AudioListener,
     Asset,
+    Details,
     Folder,
     InputAction,
     InputMappings,
@@ -35,6 +36,8 @@ enum class InspectorHitKind : std::uint8_t {
     MeshPreview,
     MeshPreviewToolbarButton,
     ComponentMenuButton,
+    ScrollbarTrack,
+    ScrollbarThumb,
 };
 
 enum class InspectorPropertyId : std::uint8_t {
@@ -143,11 +146,18 @@ struct InspectorPanelState {
     void FitMeshPreview() noexcept;
     void CycleMeshPreviewRenderMode() noexcept;
     void CycleMeshPreviewLightPreset() noexcept;
+    [[nodiscard]] int ScrollOffset() const noexcept { return scrollOffset_; }
+    [[nodiscard]] bool SetScrollOffset(int offset, int maxOffset) noexcept;
+    [[nodiscard]] bool IsScrollbarDragging() const noexcept { return scrollbarDragging_; }
+    void BeginScrollbarDrag(int y) noexcept;
+    void DragScrollbar(int y, int trackPixels, int maxOffset) noexcept;
+    void EndScrollbarDrag() noexcept;
 
 private:
     bool generalCollapsed_ = false;
     bool transformCollapsed_ = false;
     bool assetCollapsed_ = false;
+    bool detailsCollapsed_ = false;
     bool audioSourceCollapsed_ = false;
     bool audioListenerCollapsed_ = false;
     bool folderCollapsed_ = false;
@@ -180,6 +190,10 @@ private:
     EditorMeshPreviewLightPreset meshPreviewLightPreset_ = EditorMeshPreviewLightPreset::Studio;
     float meshPreviewDragStartYaw_ = -35.0F;
     float meshPreviewDragStartPitch_ = 24.0F;
+    int scrollOffset_ = 0;
+    bool scrollbarDragging_ = false;
+    int scrollbarDragStartY_ = 0;
+    int scrollbarDragStartOffset_ = 0;
 };
 
 } // namespace kb::editor

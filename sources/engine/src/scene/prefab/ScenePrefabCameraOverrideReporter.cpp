@@ -27,8 +27,18 @@ void ScenePrefabCameraOverrideReporter::Append(SceneComponents components, Scene
     if (actual != nullptr && expected.has_value() && Equal(*actual, *expected)) {
         return;
     }
-    if (actual == nullptr || !expected.has_value()) {
-        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera", actual == nullptr ? "null" : "present", ScenePrefabOverrideFlag::Camera);
+    if (actual == nullptr) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera", "null", ScenePrefabOverrideFlag::Camera);
+        return;
+    }
+    if (!expected.has_value()) {
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera", "present", ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.projection", std::to_string(static_cast<int>(actual->projection)), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.verticalFovDegrees", ScenePrefabOverrideValueFormatter::ToString(actual->verticalFovDegrees), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.orthographicHeight", ScenePrefabOverrideValueFormatter::ToString(actual->orthographicHeight), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.nearClip", ScenePrefabOverrideValueFormatter::ToString(actual->nearClip), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.farClip", ScenePrefabOverrideValueFormatter::ToString(actual->farClip), ScenePrefabOverrideFlag::Camera);
+        ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "camera.primary", ScenePrefabOverrideValueFormatter::ToString(actual->primary), ScenePrefabOverrideFlag::Camera);
         return;
     }
     if (actual->projection != expected->projection) {

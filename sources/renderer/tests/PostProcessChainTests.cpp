@@ -35,11 +35,12 @@ void EmptyPostProcessChainIsValidPassthrough() {
 void DefaultPostProcessChainManifestIsComplete() {
     PostProcessChain chain;
     Require(chain.Configure(PostProcessChain::DefaultSceneChainDesc()), "PostProcessChain rejected the default scene manifest");
-    Require(chain.Passes().size() == 4U, "Default post-process manifest has the wrong pass count");
+    Require(chain.Passes().size() == 5U, "Default post-process manifest has the wrong pass count");
     Require(chain.Passes()[0].kind == PostProcessPassKind::IdentityCopy, "Default post-process manifest should start with identity copy");
-    Require(chain.Passes()[1].kind == PostProcessPassKind::Bloom, "Default post-process manifest should run bloom before overlays and tonemap");
-    Require(chain.Passes()[2].kind == PostProcessPassKind::SelectionOutline, "Default post-process manifest should keep selection outline before tonemap");
-    Require(chain.Passes()[3].kind == PostProcessPassKind::Tonemap, "Default post-process manifest should expose tonemap as the final controllable pass");
+    Require(chain.Passes()[1].kind == PostProcessPassKind::AntiAliasing, "Default post-process manifest should resolve AA before bloom");
+    Require(chain.Passes()[2].kind == PostProcessPassKind::Bloom, "Default post-process manifest should run bloom before overlays and tonemap");
+    Require(chain.Passes()[3].kind == PostProcessPassKind::SelectionOutline, "Default post-process manifest should keep selection outline before tonemap");
+    Require(chain.Passes()[4].kind == PostProcessPassKind::Tonemap, "Default post-process manifest should expose tonemap as the final controllable pass");
 }
 
 void PostProcessChainRejectsDuplicatePassKinds() {
@@ -140,12 +141,36 @@ void EnabledPlaceholderPassesAreValidHdrPassthrough() {
     Require(output.passthrough, "Enabled post-process placeholders did not report passthrough output");
     Require(output.sceneHdrPreserved, "Enabled post-process placeholders did not preserve scene HDR");
     Require(output.colorSpace == PostProcessColorSpace::SceneHdr, "Enabled post-process placeholders reported the wrong color space");
-    Require(output.enabledPassCount == 4U, "PostProcessChain did not count enabled placeholder passes");
+    Require(output.enabledPassCount == 5U, "PostProcessChain did not count enabled placeholder passes");
     Require(output.producer == PostProcessPassKind::Tonemap, "PostProcessChain did not track the last enabled producer");
     Require(output.tonemapEnabled, "PostProcessChain did not publish enabled tonemap state");
     Require(output.outputTransform.autoExposure.enabled, "Default tonemap pass did not enable auto exposure");
     Require(output.postProcessSettings.autoExposureMetering == ScenePostProcessSettings::AutoExposureMeteringMode::HdrColor, "Default tonemap pass did not publish HDR color auto exposure metering");
     Require(output.selectionOutlineEnabled, "PostProcessChain did not publish enabled selection outline state");
+}
+
+void AntiAliasingPassPublishesSettings() {
+    PostProcessChain chain;
+    Require(chain.AddPass(PostProcessPass{
+        .kind = PostProcessPassKind::AntiAliasing,
+        .enabled = true,
+        .postProcessSettings = ScenePostProcessSettings{
+            .temporalAntiAliasingEnabled = false,
+            .temporalJitterEnabled = false,
+            .fxaaEnabled = true,
+        },
+    }), "PostProcessChain rejected configured anti-aliasing pass");
+    const PostProcessOutput output = chain.Evaluate(PostProcessInput{
+        .sceneColor = TextureHandleForTest(31U),
+        .outputFrameBuffer = bgfx::FrameBufferHandle{32U},
+        .outputColor = TextureHandleForTest(33U),
+        .extent = RenderExtent{640U, 480U},
+        .viewId = 6U,
+    });
+
+    Require(output.IsValid(), "Configured anti-aliasing pass did not produce a valid output");
+    Require(output.fxaaEnabled, "PostProcessChain did not publish enabled FXAA state");
+    Require(!output.temporalAntiAliasingEnabled, "PostProcessChain published TAA while FXAA is selected");
 }
 
 void SelectionOutlineRequiresSelectionMaskInput() {
@@ -198,6 +223,7 @@ void PostProcessChainRequiresOutputTarget() {
 
 void PostProcessPassKindNamesAreStable() {
     Require(PostProcessPassKindName(PostProcessPassKind::IdentityCopy)[0] != '\0', "IdentityCopy pass name is empty");
+    Require(PostProcessPassKindName(PostProcessPassKind::AntiAliasing)[0] != '\0', "AntiAliasing pass name is empty");
     Require(PostProcessPassKindName(PostProcessPassKind::Tonemap)[0] != '\0', "Tonemap pass name is empty");
     Require(PostProcessPassKindName(PostProcessPassKind::Bloom)[0] != '\0', "Bloom pass name is empty");
     Require(PostProcessPassKindName(PostProcessPassKind::SelectionOutline)[0] != '\0', "SelectionOutline pass name is empty");
@@ -214,6 +240,7 @@ void RunPostProcessChainTests() {
     DisabledPassesDoNotAffectOutput();
     BloomPassPublishesSettings();
     EnabledPlaceholderPassesAreValidHdrPassthrough();
+    AntiAliasingPassPublishesSettings();
     SelectionOutlineRequiresSelectionMaskInput();
     DisabledSelectionOutlineDoesNotRequireSelectionMaskInput();
     PostProcessChainCanRemovePasses();

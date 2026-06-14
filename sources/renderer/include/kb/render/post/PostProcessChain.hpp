@@ -15,6 +15,7 @@ namespace kb::render {
 
 enum class PostProcessPassKind : std::uint8_t {
     IdentityCopy,
+    AntiAliasing,
     Tonemap,
     Bloom,
     SelectionOutline,
@@ -29,6 +30,8 @@ enum class PostProcessColorSpace : std::uint8_t {
     switch (kind) {
     case PostProcessPassKind::IdentityCopy:
         return "IdentityCopy";
+    case PostProcessPassKind::AntiAliasing:
+        return "AntiAliasing";
     case PostProcessPassKind::Tonemap:
         return "Tonemap";
     case PostProcessPassKind::Bloom:
@@ -74,6 +77,8 @@ struct PostProcessOutput {
     bool gpuSubmitted = false;
     bool sceneHdrPreserved = true;
     bool bloomEnabled = false;
+    bool fxaaEnabled = false;
+    bool temporalAntiAliasingEnabled = false;
     bool selectionOutlineEnabled = false;
     bool tonemapEnabled = false;
 

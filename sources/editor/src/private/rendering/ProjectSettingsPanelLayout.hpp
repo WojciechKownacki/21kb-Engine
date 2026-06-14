@@ -28,6 +28,25 @@ struct ProjectSettingsPanelLayoutRects {
     RECT backendAutoButton{};
     RECT backendDx12Button{};
     RECT backendVulkanButton{};
+    RECT postProcessLabel{};
+    RECT postProcessCheckbox{};
+    RECT antiAliasingLabel{};
+    RECT antiAliasingNoneButton{};
+    RECT antiAliasingFxaaButton{};
+    RECT antiAliasingTaaButton{};
+    RECT antiAliasingMsaaButton{};
+    RECT bloomLabel{};
+    RECT bloomCheckbox{};
+    RECT shadowsLabel{};
+    RECT shadowsCheckbox{};
+    RECT selectionOutlineLabel{};
+    RECT selectionOutlineCheckbox{};
+    RECT gpuDrivenLabel{};
+    RECT gpuDrivenCheckbox{};
+    RECT msaaLabel{};
+    RECT msaaOffButton{};
+    RECT msaa2xButton{};
+    RECT msaa4xButton{};
 };
 
 class ProjectSettingsPanelLayout {
@@ -49,6 +68,10 @@ public:
     [[nodiscard]] static RECT OptionListBounds(const RECT& fieldBox, int count) noexcept;
 
     [[nodiscard]] static RECT BackendOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT GraphicsToggleCheckbox(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT GraphicsToggleLabel(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT AntiAliasingModeButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT MsaaOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
 };
 
 #endif

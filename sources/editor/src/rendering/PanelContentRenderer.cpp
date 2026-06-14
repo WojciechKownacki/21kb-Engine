@@ -317,7 +317,7 @@ void PanelContentRenderer::Paint(
         ConsoleDetailTextOverlay::Sync(sceneViewportHost, content, sceneContext.Console());
         break;
     case DockPanelKind::Scene:
-        ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, sceneViewport, sceneViewportHost);
+        ScenePanelContentRenderer{}.Paint(dc, content, panel, theme, sceneContext, renderBackendSettings, sceneViewport, sceneViewportHost);
         break;
     case DockPanelKind::ProjectSettings:
         ProjectSettingsPanelRenderer{}.Paint(dc, content, theme, sceneContext, renderBackendSettings);

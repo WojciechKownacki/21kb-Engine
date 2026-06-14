@@ -29,6 +29,10 @@ public:
         const EditorTheme& theme,
         const EditorSceneContext& sceneContext) const;
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
+    [[nodiscard]] static int ContentHeight(const RECT& content, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static int MaxScrollOffset(const RECT& content, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static RECT ScrollbarTrackRect(const RECT& content) noexcept;
+    [[nodiscard]] static RECT ScrollbarThumbRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
 #endif
 };
 
