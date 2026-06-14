@@ -36,7 +36,6 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
 
     SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
     SceneViewportToolbarInfoRenderer::PaintRenderStats(dc, rects.renderStats, theme);
-    SceneViewportToolbarInfoRenderer::PaintPipelineStats(dc, rects.pipelineStats, theme);
 
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,

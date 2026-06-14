@@ -27,6 +27,7 @@ PostProcessChainDesc PostProcessChain::DefaultSceneChainDesc() {
     return PostProcessChainDesc{
         .passes = {
             kDefaultIdentityPass,
+            PostProcessPass{.kind = PostProcessPassKind::AntiAliasing, .enabled = true},
             PostProcessPass{.kind = PostProcessPassKind::Bloom, .enabled = true},
             PostProcessPass{.kind = PostProcessPassKind::SelectionOutline, .enabled = true},
             PostProcessPass{
@@ -160,6 +161,14 @@ PostProcessOutput PostProcessChain::Evaluate(const PostProcessInput& input) cons
         output.producer = pass.kind;
         switch (pass.kind) {
         case PostProcessPassKind::IdentityCopy:
+            output.colorSpace = PostProcessColorSpace::SceneHdr;
+            output.sceneHdrPreserved = true;
+            output.passthrough = true;
+            break;
+        case PostProcessPassKind::AntiAliasing:
+            output.postProcessSettings = pass.postProcessSettings;
+            output.fxaaEnabled = pass.postProcessSettings.fxaaEnabled;
+            output.temporalAntiAliasingEnabled = pass.postProcessSettings.temporalAntiAliasingEnabled;
             output.colorSpace = PostProcessColorSpace::SceneHdr;
             output.sceneHdrPreserved = true;
             output.passthrough = true;

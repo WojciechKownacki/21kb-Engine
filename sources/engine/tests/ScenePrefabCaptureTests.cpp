@@ -125,8 +125,31 @@ void RunPrefabAssetRoundTripTest() {
                 .castsShadow = false,
                 .receivesShadow = true,
             },
+            .input = kb::scene::InputComponent{
+                .mappingContextAssetId = 303,
+                .priority = -4,
+                .enabled = false,
+            },
+            .rigidbody = kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Kinematic,
+                .mass = 8.0F,
+                .linearVelocity = kb::scene::Vec3{ 1.0F, 2.0F, 3.0F },
+                .angularVelocity = kb::scene::Vec3{ 4.0F, 5.0F, 6.0F },
+                .gravityScale = 0.25F,
+                .useGravity = false,
+                .lockRotation = true,
+            },
+            .collider = kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Capsule,
+                .center = kb::scene::Vec3{ 0.1F, 0.2F, 0.3F },
+                .boxSize = kb::scene::Vec3{ 2.0F, 3.0F, 4.0F },
+                .radius = 1.25F,
+                .height = 5.0F,
+                .trigger = true,
+            },
         },
     });
+    kb::scene::SetTagsText(prefab.TryGetMutableNode(rootNode)->components.tags.emplace(), "Player, Runtime");
     const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
         .name = "Asset Child\\Escaped",
         .parentNode = rootNode,
@@ -146,6 +169,34 @@ void RunPrefabAssetRoundTripTest() {
                 .contactShadowLength = 0.3F,
                 .volumetricScattering = 0.2F,
                 .castsShadow = false,
+            },
+            .behaviour = kb::scene::BehaviourComponent{
+                .behaviourAssetId = 404,
+                .backend = kb::scene::BehaviourBackend::Lua,
+                .enabled = false,
+                .tickGroup = kb::scene::BehaviourTickGroup::Physics,
+                .executionOrder = -12,
+            },
+            .audioSource = kb::scene::AudioSourceComponent{
+                .clipAssetId = 505,
+                .volume = 0.35F,
+                .pitch = 1.25F,
+                .loop = true,
+                .spatial = false,
+                .autoplay = true,
+                .enabled = false,
+                .mute = true,
+                .pan = -0.25F,
+                .spatialBlend = 0.5F,
+                .attenuationModel = kb::audio::AudioAttenuationModel::Linear,
+                .minDistance = 2.0F,
+                .maxDistance = 80.0F,
+                .rolloff = 0.75F,
+                .dopplerFactor = 0.4F,
+            },
+            .audioListener = kb::scene::AudioListenerComponent{
+                .primary = false,
+                .enabled = false,
             },
         },
     });
@@ -172,12 +223,26 @@ void RunPrefabAssetRoundTripTest() {
     kb::tests::Require(!target.Components().Visibility().Get(instance.ObjectAt(childNode).Entity()).visible, "Loaded prefab visibility was not preserved");
 
     const kb::scene::MeshRendererComponent* meshRenderer = target.Components().MeshRenderers().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::InputComponent* input = target.Components().Inputs().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::RigidbodyComponent* rigidbody = target.Components().Rigidbodies().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::ColliderComponent* collider = target.Components().Colliders().TryGet(instance.ObjectAt(rootNode).Entity());
+    const kb::scene::TagsComponent* tags = target.Components().Tags().TryGet(instance.ObjectAt(rootNode).Entity());
     const kb::scene::LightComponent* light = target.Components().Lights().TryGet(instance.ObjectAt(childNode).Entity());
+    const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(instance.ObjectAt(childNode).Entity());
+    const kb::scene::AudioSourceComponent* audioSource = target.Components().AudioSources().TryGet(instance.ObjectAt(childNode).Entity());
+    const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(instance.ObjectAt(childNode).Entity());
     kb::tests::Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 101 && !meshRenderer->castsShadow, "Loaded prefab mesh renderer was not preserved");
+    kb::tests::Require(input != nullptr && input->mappingContextAssetId == 303 && input->priority == -4 && !input->enabled, "Loaded prefab input component was not preserved");
+    kb::tests::Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Kinematic && kb::tests::NearlyEqual(rigidbody->mass, 8.0F) && kb::tests::NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && !rigidbody->useGravity && rigidbody->lockRotation, "Loaded prefab rigidbody was not preserved");
+    kb::tests::Require(collider != nullptr && collider->shape == kb::scene::ColliderShape::Capsule && kb::tests::NearlyEqual(collider->center.y, 0.2F) && kb::tests::NearlyEqual(collider->boxSize.z, 4.0F) && kb::tests::NearlyEqual(collider->radius, 1.25F) && collider->trigger, "Loaded prefab collider was not preserved");
+    kb::tests::Require(tags != nullptr && kb::scene::TagsText(*tags) == "Player, Runtime", "Loaded prefab tags were not preserved");
     kb::tests::Require(light != nullptr && light->kind == kb::scene::LightKind::Spot && kb::tests::NearlyEqual(light->intensity, 6.0F), "Loaded prefab light was not preserved");
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->areaWidth, 2.0F) && kb::tests::NearlyEqual(light->areaHeight, 0.5F), "Loaded prefab light area size was not preserved");
     kb::tests::Require(light != nullptr && kb::tests::NearlyEqual(light->contactShadowLength, 0.3F) && kb::tests::NearlyEqual(light->volumetricScattering, 0.2F), "Loaded prefab light production controls were not preserved");
     kb::tests::Require(light != nullptr && !light->castsShadow, "Loaded prefab light shadow flag was not preserved");
+    kb::tests::Require(behaviour != nullptr && behaviour->behaviourAssetId == 404 && behaviour->backend == kb::scene::BehaviourBackend::Lua && !behaviour->enabled && behaviour->tickGroup == kb::scene::BehaviourTickGroup::Physics && behaviour->executionOrder == -12, "Loaded prefab behaviour was not preserved");
+    kb::tests::Require(audioSource != nullptr && audioSource->clipAssetId == 505 && kb::tests::NearlyEqual(audioSource->volume, 0.35F) && kb::tests::NearlyEqual(audioSource->pitch, 1.25F) && audioSource->loop && !audioSource->spatial && audioSource->autoplay && !audioSource->enabled && audioSource->mute && audioSource->attenuationModel == kb::audio::AudioAttenuationModel::Linear && kb::tests::NearlyEqual(audioSource->maxDistance, 80.0F), "Loaded prefab audio source was not preserved");
+    kb::tests::Require(audioListener != nullptr && !audioListener->primary && !audioListener->enabled, "Loaded prefab audio listener was not preserved");
 
     [[maybe_unused]] const bool progressed = target.Runtime().Update(0.016F);
     const kb::scene::TransformComponent childTransform = target.Transforms().Get(instance.ObjectAt(childNode));

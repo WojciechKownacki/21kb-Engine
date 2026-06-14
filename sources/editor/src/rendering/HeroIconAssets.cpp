@@ -70,6 +70,17 @@ static constexpr std::array<HeroIconPath, 1> kAdjustmentsHorizontal{
 static constexpr std::array<HeroIconPath, 1> kCommandLine{
     HeroIconPath{ "M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4Zm2.22 1.97a.75.75 0 0 0 0 1.06l.97.97-.97.97a.75.75 0 1 0 1.06 1.06l1.5-1.5a.75.75 0 0 0 0-1.06l-1.5-1.5a.75.75 0 0 0-1.06 0ZM8.75 8.5a.75.75 0 0 0 0 1.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z", true },
 };
+static constexpr std::array<HeroIconPath, 1> kDocumentText{
+    HeroIconPath{ "M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z", false },
+};
+static constexpr std::array<HeroIconPath, 1> kBolt{
+    HeroIconPath{ "m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z", false },
+};
+static constexpr std::array<HeroIconPath, 3> kRectangleGroup{
+    HeroIconPath{ "M2.25 7.125C2.25 6.504 2.754 6 3.375 6h6c.621 0 1.125.504 1.125 1.125v3.75c0 .621-.504 1.125-1.125 1.125h-6a1.125 1.125 0 0 1-1.125-1.125v-3.75Z", false },
+    HeroIconPath{ "M14.25 8.625c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v8.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-8.25Z", false },
+    HeroIconPath{ "M3.75 16.125c0-.621.504-1.125 1.125-1.125h5.25c.621 0 1.125.504 1.125 1.125v2.25c0 .621-.504 1.125-1.125 1.125h-5.25a1.125 1.125 0 0 1-1.125-1.125v-2.25Z", false },
+};
 // Source: LuizEngine `icons::lucide::kGamepad2` / lucide.dev gamepad-2, ISC.
 static constexpr std::array<HeroIconPath, 5> kGamepad2{
     HeroIconPath{ "M6 11h4", false },
@@ -157,6 +168,18 @@ HeroIconGlyph HeroIconAssets::AdjustmentsHorizontal() noexcept {
 
 HeroIconGlyph HeroIconAssets::CommandLine() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kCommandLine }, .viewBoxSize = 16.0F, .strokeWidth = 0.0F };
+}
+
+HeroIconGlyph HeroIconAssets::DocumentText() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kDocumentText } };
+}
+
+HeroIconGlyph HeroIconAssets::Bolt() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kBolt } };
+}
+
+HeroIconGlyph HeroIconAssets::RectangleGroup() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRectangleGroup } };
 }
 
 HeroIconGlyph HeroIconAssets::Gamepad2() noexcept {
