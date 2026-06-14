@@ -11,13 +11,16 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorHierarchyExpansionState.hpp"
 #include "scene/EditorHierarchyRowBuilder.hpp"
 #include "scene/EditorHierarchySearchMatcher.hpp"
 #include "scene/EditorHierarchySelectionState.hpp"
+#include "scene/EditorHierarchySelectionNormalizer.hpp"
 #include "scene/EditorHierarchySearchState.hpp"
+#include "scene/EditorSceneSelectionPivot.hpp"
 
 #include <array>
 #include <string>
@@ -195,6 +198,64 @@ void RunHierarchySelectionModelTest() {
     kb::editor::tests::Require(selection.IsSelected(batch.back()), "Batch selection missed the last entity");
 }
 
+void RunHierarchySelectionNormalizerKeepsAliveMultiSelectionTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second" });
+    const kb::scene::SceneEntity stale{ 0xFFFFU };
+
+    kb::editor::EditorHierarchySelectionState selection;
+    const std::array<kb::scene::SceneEntity, 3> selected{ first.Entity(), stale, second.Entity() };
+    selection.SelectEntities(selected);
+
+    const std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    kb::editor::EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene, selection, rows);
+
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 2U, "Selection normalizer should discard stale entities");
+    kb::editor::tests::Require(selection.IsSelected(first.Entity()), "Selection normalizer lost the first alive entity");
+    kb::editor::tests::Require(selection.IsSelected(second.Entity()), "Selection normalizer lost the second alive entity");
+    kb::editor::tests::Require(selection.Primary() == second.Entity(), "Selection normalizer should preserve the alive primary entity");
+}
+
+void RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First" });
+
+    kb::editor::EditorHierarchySelectionState selection;
+    selection.SelectEntity(kb::scene::SceneEntity{ 0xFFFFU });
+
+    const std::vector<kb::editor::EditorHierarchyRow> rows = kb::editor::EditorHierarchyRowBuilder::Build(scene, {}, "");
+    kb::editor::EditorHierarchySelectionNormalizer::NormalizeAfterSceneRestore(scene, selection, rows);
+
+    kb::editor::tests::Require(selection.SelectedEntities().size() == 1U, "Selection normalizer should recover a visible selection when all selected entities are dead");
+    kb::editor::tests::Require(selection.Primary() == first.Entity(), "Selection normalizer should select the first visible row as fallback");
+}
+
+void RunSceneSelectionPivotUsesTopLevelSelectionCenterTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Child", .parent = parent });
+    const kb::scene::SceneObject sibling = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Sibling" });
+
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parent);
+    parentTransform.localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parent, parentTransform);
+
+    kb::scene::TransformComponent childTransform = scene.Transforms().Get(child);
+    childTransform.localPosition = kb::scene::Vec3{ 100.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(child, childTransform);
+
+    kb::scene::TransformComponent siblingTransform = scene.Transforms().Get(sibling);
+    siblingTransform.localPosition = kb::scene::Vec3{ 6.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(sibling, siblingTransform);
+
+    const std::array<kb::scene::SceneEntity, 3> selected{ parent.Entity(), child.Entity(), sibling.Entity() };
+    const std::optional<kb::scene::Vec3> pivot = kb::editor::EditorSceneSelectionPivot::Resolve(scene, selected, {});
+
+    kb::editor::tests::Require(pivot.has_value(), "Selection pivot should resolve for alive selected entities");
+    kb::editor::tests::Require(pivot->x == 4.0F && pivot->y == 0.0F && pivot->z == 0.0F, "Selection pivot should average top-level selected transforms only");
+}
+
 void RunRowBuilderMarksOnlyPrefabRootsTest() {
     kb::scene::Scene scene;
     kb::scene::ScenePrefab prefab;
@@ -276,6 +337,9 @@ void RunEditorHierarchyTests() {
     RunRowBuilderFilteredTreeTest();
     RunRowBuilderCreationOrderTest();
     RunHierarchySelectionModelTest();
+    RunHierarchySelectionNormalizerKeepsAliveMultiSelectionTest();
+    RunHierarchySelectionNormalizerSelectsFirstVisibleWhenSelectionIsDeadTest();
+    RunSceneSelectionPivotUsesTopLevelSelectionCenterTest();
     RunRowBuilderMarksOnlyPrefabRootsTest();
     RunDroppedPrefabAssetBuildsPrefabHierarchyRowsTest();
     RunMeshAssetActionCreatesRenderableSceneEntityTest();

@@ -5,7 +5,7 @@
 #include "app/scene_viewport/EditorSceneViewportGizmoHitTester.hpp"
 #include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
 #include "engine/scene/SceneEntities.hpp"
-#include "engine/scene/SceneTransforms.hpp"
+#include "scene/EditorSceneSelectionPivot.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -19,11 +19,10 @@ namespace {
         return std::nullopt;
     }
 
-    const kb::scene::TransformComponent* transform = sceneContext.Scene().Transforms().TryGet(selected);
-    if (transform == nullptr) {
-        return std::nullopt;
-    }
-    return transform->localPosition;
+    return EditorSceneSelectionPivot::Resolve(
+        sceneContext.Scene(),
+        sceneContext.SelectedHierarchyEntities(),
+        selected);
 }
 
 void StartCenterDrag(
