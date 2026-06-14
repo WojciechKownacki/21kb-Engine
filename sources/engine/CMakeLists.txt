@@ -411,6 +411,7 @@ add_library(kb_engine STATIC
     src/scene/modules/SceneEntityNames.cpp
     src/scene/modules/SceneEntityQueries.cpp
     src/scene/modules/SceneHierarchyAccess.cpp
+    src/scene/modules/ScenePrefabConnectionModule.cpp
     src/scene/modules/ScenePrefabInstantiationModule.cpp
     src/scene/modules/ScenePrefabOverrideModule.cpp
     src/scene/modules/ScenePrefabs.cpp
@@ -446,6 +447,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabHashBuilder.cpp
     src/scene/prefab/ScenePrefabHasher.cpp
     src/scene/prefab/ScenePrefabInstanceRegistry.cpp
+    src/scene/prefab/ScenePrefabInstanceSynchronizer.cpp
     src/scene/prefab/ScenePrefabInstanceTopology.cpp
     src/scene/prefab/ScenePrefabInstanceFacade.cpp
     src/scene/prefab/ScenePrefabLightOverrideReporter.cpp
@@ -671,6 +673,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabHashBuilder.hpp
     src/private/scene/prefab/ScenePrefabHasher.hpp
     src/private/scene/prefab/ScenePrefabInstanceRegistry.hpp
+    src/private/scene/prefab/ScenePrefabInstanceSynchronizer.hpp
     src/private/scene/prefab/ScenePrefabInstanceTopology.hpp
     src/private/scene/prefab/ScenePrefabInstanceFacade.hpp
     src/private/scene/prefab/ScenePrefabLightOverrideReporter.hpp

@@ -437,6 +437,109 @@ void RunPrefabVariantInstantiationTest() {
     kb::tests::Require(!scene.Components().Visibility().Get(refreshedVariantInstance.ObjectAt(rootNode).Entity()).visible, "Prefab variant did not inherit refreshed base data");
 }
 
+void RunPrefabConnectionMetadataAndUnpackTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Connection Root" });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("ConnectionBase", std::move(prefab));
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "ConnectionVariant",
+        baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = rootNode,
+                .propertyPath = "name",
+                .value = "Connection Variant Root",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+
+    kb::tests::Require(scene.Prefabs().AssetType(baseHandle) == kb::scene::ScenePrefabAssetType::Template, "Base prefab should report template asset type");
+    kb::tests::Require(scene.Prefabs().AssetType(variantHandle) == kb::scene::ScenePrefabAssetType::Variant, "Variant prefab should report variant asset type");
+    kb::tests::Require(scene.Prefabs().AssetType(kb::scene::ScenePrefabHandle{}) == kb::scene::ScenePrefabAssetType::None, "Invalid prefab handle should report no asset type");
+
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Prefabs().InstanceStatus(instance.Handle()) == kb::scene::ScenePrefabInstanceStatus::Connected, "Fresh prefab instance should report connected status");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(instance.Handle()) == variantHandle, "Prefab instance source handle was not reported");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(instance.ObjectAt(rootNode)) == variantHandle, "Prefab object source handle was not reported");
+    kb::tests::Require(scene.Prefabs().OriginalSourcePrefab(variantHandle) == baseHandle, "Variant original source should resolve to its base");
+    kb::tests::Require(scene.Prefabs().OriginalSourcePrefab(instance.Handle()) == baseHandle, "Variant instance original source should resolve to its base");
+
+    kb::tests::Require(scene.Prefabs().Unpack(instance.Handle()), "Prefab unpack failed");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(instance.Handle()) == kb::scene::ScenePrefabInstanceStatus::NotInstance, "Unpacked prefab should no longer report instance status");
+    kb::tests::Require(!scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)).IsValid(), "Unpacked prefab root should not keep a root instance link");
+    kb::tests::Require(scene.Entities().IsAlive(instance.ObjectAt(rootNode)), "Unpack should keep the scene object alive");
+}
+
+void RunPrefabApplyRefreshesExistingInstancesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Refresh Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Refresh Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F } },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("RefreshPrefab", std::move(prefab));
+
+    const kb::scene::ScenePrefabInstance sourceInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance localOverrideInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance inheritedInstance = scene.Prefabs().Instantiate(prefabHandle);
+
+    kb::scene::TransformComponent localTransform = scene.Transforms().Get(localOverrideInstance.ObjectAt(childNode));
+    localTransform.localPosition = kb::scene::Vec3{ 0.0F, 99.0F, 0.0F };
+    scene.Transforms().Set(localOverrideInstance.ObjectAt(childNode), localTransform);
+
+    kb::scene::TransformComponent sourceTransform = scene.Transforms().Get(sourceInstance.ObjectAt(childNode));
+    sourceTransform.localPosition = kb::scene::Vec3{ 0.0F, 8.0F, 0.0F };
+    scene.Transforms().Set(sourceInstance.ObjectAt(childNode), sourceTransform);
+    scene.Entities().SetName(sourceInstance.ObjectAt(childNode), "Refresh Child Applied");
+
+    kb::tests::Require(scene.Prefabs().ApplyOverride(sourceInstance.Handle(), childNode, "name"), "Prefab name apply for refresh failed");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(sourceInstance.Handle(), childNode, "transform.localPosition"), "Prefab transform apply for refresh failed");
+
+    kb::tests::Require(scene.Entities().Name(inheritedInstance.ObjectAt(childNode)) == "Refresh Child Applied", "Existing instance did not receive applied prefab name");
+    const kb::scene::TransformComponent inheritedTransform = scene.Transforms().Get(inheritedInstance.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(inheritedTransform.localPosition.y, 8.0F), "Existing instance did not receive applied prefab transform");
+
+    kb::tests::Require(scene.Entities().Name(localOverrideInstance.ObjectAt(childNode)) == "Refresh Child Applied", "Existing overridden instance did not receive non-overridden prefab name");
+    const kb::scene::TransformComponent preservedTransform = scene.Transforms().Get(localOverrideInstance.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(preservedTransform.localPosition.y, 99.0F), "Existing instance local transform override was not preserved");
+}
+
+void RunPrefabApplyAddedChildRefreshesExistingInstancesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Child Refresh Root" });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("ChildRefreshPrefab", std::move(prefab));
+
+    const kb::scene::ScenePrefabInstance sourceInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance inheritedInstance = scene.Prefabs().Instantiate(prefabHandle);
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Applied Child Refresh",
+        .parent = sourceInstance.ObjectAt(rootNode),
+    }));
+
+    kb::tests::Require(scene.Prefabs().ApplyOverrides(sourceInstance.Handle()), "Prefab added child apply for refresh failed");
+    kb::tests::Require(inheritedInstance.ObjectCount() == 1, "ScenePrefabInstance value should remain an immutable spawn result");
+
+    std::uint32_t addedNodeIndex = 99;
+    const kb::scene::ScenePrefabInstanceHandle refreshedHandle = scene.Prefabs().ContainingInstance(inheritedInstance.ObjectAt(rootNode), addedNodeIndex);
+    kb::tests::Require(refreshedHandle == inheritedInstance.Handle() && addedNodeIndex == rootNode, "Refreshed prefab root should keep its tracked mapping");
+
+    bool foundAppliedChild = false;
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(inheritedInstance.ObjectAt(rootNode).Entity())) {
+        if (scene.Entities().Name(child) == "Applied Child Refresh") {
+            std::uint32_t childNodeIndex = 99;
+            foundAppliedChild = scene.Prefabs().ContainingInstance(child, childNodeIndex) == inheritedInstance.Handle() && childNodeIndex == 1;
+        }
+    }
+    kb::tests::Require(foundAppliedChild, "Existing instance did not receive the applied tracked child node");
+}
+
 void RunPrefabApplyOverrideToAssetTest() {
     const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_apply_override.kbprefab";
     std::error_code removeError;
@@ -540,6 +643,9 @@ void RunScenePrefabInstantiationTests() {
     RunRegisteredPrefabFullComponentOverrideLifecycleTest();
     RunPrefabApplyRejectsDetachedTrackedChildTest();
     RunPrefabVariantInstantiationTest();
+    RunPrefabConnectionMetadataAndUnpackTest();
+    RunPrefabApplyRefreshesExistingInstancesTest();
+    RunPrefabApplyAddedChildRefreshesExistingInstancesTest();
     RunPrefabApplyOverrideToAssetTest();
     RunNestedPrefabCompositionTest();
     RunNestedPrefabCaptureAndRefreshTest();

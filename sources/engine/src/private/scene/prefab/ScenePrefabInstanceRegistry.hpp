@@ -27,7 +27,10 @@ public:
     [[nodiscard]] ScenePrefabInstanceRecord* FindMutable(ScenePrefabInstanceHandle handle) noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle FindRootInstance(SceneObject object) const noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle FindContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept;
+    [[nodiscard]] std::vector<ScenePrefabInstanceHandle> Handles() const;
+    [[nodiscard]] std::vector<ScenePrefabInstanceHandle> HandlesForPrefab(ScenePrefabHandle prefab) const;
     [[nodiscard]] std::size_t Count() const noexcept;
+    [[nodiscard]] bool Remove(ScenePrefabInstanceHandle handle) noexcept;
     void Clear() noexcept;
 
 private:

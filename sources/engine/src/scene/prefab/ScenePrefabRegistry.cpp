@@ -52,6 +52,10 @@ ScenePrefabHandle ScenePrefabRegistry::FindByGuid(std::string_view guid) const n
     return records_.FindByGuid(guid);
 }
 
+std::vector<ScenePrefabHandle> ScenePrefabRegistry::VariantChildrenOf(ScenePrefabHandle baseHandle) const {
+    return records_.VariantChildrenOf(baseHandle);
+}
+
 bool ScenePrefabRegistry::UpsertVariantOverride(ScenePrefabHandle handle, ScenePrefabPropertyOverride property) {
     return ScenePrefabVariantOverrideMutationService::Upsert(records_, handle, std::move(property));
 }
