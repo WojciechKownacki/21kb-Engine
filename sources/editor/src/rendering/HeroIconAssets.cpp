@@ -78,6 +78,12 @@ static constexpr std::array<HeroIconPath, 5> kGamepad2{
     HeroIconPath{ "M18 10h.01", false },
     HeroIconPath{ "M17.32 5H6.68a4 4 0 0 0-3.98 3.59c-.01.05-.01.1-.02.15C2.6 9.42 2 14.46 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.41-1.41A2 2 0 0 1 9.83 16h4.34a2 2 0 0 1 1.42.59L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.54-.6-6.58-.68-7.26-.01-.05-.01-.1-.02-.15A4 4 0 0 0 17.32 5z", false },
 };
+// Custom editor icon: rotation snap / angle step.
+static constexpr std::array<HeroIconPath, 3> kRotationSnap{
+    HeroIconPath{ "M4.5 19.5H20M4.5 19.5V4", false },
+    HeroIconPath{ "M7.5 19.5A12 12 0 0 1 19.5 7.5M10.5 19.5A9 9 0 0 1 19.5 10.5", false },
+    HeroIconPath{ "M8.25 16.75l1.4-1.4M12.5 14.5v-2M16.25 12.25h-2M18.25 8.5l-1.55 1.55", false },
+};
 
 } // namespace
 
@@ -155,6 +161,10 @@ HeroIconGlyph HeroIconAssets::CommandLine() noexcept {
 
 HeroIconGlyph HeroIconAssets::Gamepad2() noexcept {
     return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kGamepad2 }, .strokeWidth = 2.0F };
+}
+
+HeroIconGlyph HeroIconAssets::RotationSnap() noexcept {
+    return HeroIconGlyph{ .paths = std::span<const HeroIconPath>{ kRotationSnap }, .strokeWidth = 1.8F };
 }
 
 } // namespace kb::editor

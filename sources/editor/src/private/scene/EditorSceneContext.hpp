@@ -17,6 +17,7 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
@@ -253,6 +254,9 @@ public:
     [[nodiscard]] bool SetAudioSourceClipAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
     [[nodiscard]] bool BeginSelectedTransformEdit(std::string label);
     [[nodiscard]] bool ApplyActiveTransformEditPrimaryPosition(kb::scene::Vec3 position);
+    [[nodiscard]] bool ApplyActiveTransformEditPrimaryRotation(kb::scene::Vec3 rotation);
+    [[nodiscard]] bool ApplyActiveTransformEditRotationDelta(kb::scene::Quat delta);
+    [[nodiscard]] bool ApplyActiveTransformEditPrimaryScale(kb::scene::Vec3 scale);
     [[nodiscard]] bool ApplyActiveTransformEditProperty(InspectorPropertyId property, float value);
     [[nodiscard]] float ActiveTransformEditPropertyStart(InspectorPropertyId property) const noexcept;
     [[nodiscard]] bool CommitActiveTransformEdit();
@@ -303,7 +307,7 @@ private:
     std::string hierarchyRenameBuffer_;
     bool hierarchyRenameSelectingAll_ = false;
     std::optional<std::string> pendingSceneTransactionLabel_;
-    EditorSceneActiveTransformEdit activeTransformEdit_;
+    EditorSceneTransformEditSession activeTransformEdit_;
     std::uint64_t sceneRenderRevision_ = 1U;
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;

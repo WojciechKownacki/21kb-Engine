@@ -85,6 +85,14 @@ void EditorSceneBgfxViewport::ViewportSessionStore::ShutdownFramebuffers() noexc
     }
 }
 
+void EditorSceneBgfxViewport::ViewportSessionStore::ResetSubmittedSceneRevisions() noexcept {
+    for (const std::unique_ptr<ViewportSession>& session : sessions_) {
+        if (session != nullptr) {
+            session->submittedSceneRevision = 0U;
+        }
+    }
+}
+
 } // namespace kb::editor
 
 #endif

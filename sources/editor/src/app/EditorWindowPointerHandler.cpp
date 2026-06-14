@@ -22,6 +22,7 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
     EditorDockController& dockController,
     EditorHierarchySelectionController& hierarchySelection,
     EditorSceneContext& sceneContext,
+    EditorRenderBackendSettings& renderBackendSettings,
     EditorSceneBgfxViewport& sceneViewport,
     EditorPlayModeState& playMode,
     EditorShellInteractionState& shellInteraction,
@@ -33,6 +34,7 @@ EditorWindowPointerHandler::EditorWindowPointerHandler(
     , dockController_(dockController)
     , hierarchySelection_(hierarchySelection)
     , sceneContext_(sceneContext)
+    , renderBackendSettings_(renderBackendSettings)
     , sceneViewport_(sceneViewport)
     , playMode_(playMode)
     , shellInteraction_(shellInteraction)
@@ -49,6 +51,7 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonDown(HWND messageWindow, LPA
         dockController_,
         hierarchySelection_,
         sceneContext_,
+        renderBackendSettings_,
         sceneViewport_,
         playMode_,
         shellInteraction_,
