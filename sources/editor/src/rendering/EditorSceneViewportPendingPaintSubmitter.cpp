@@ -104,12 +104,24 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
         }
     }
     const render::SceneRenderSubmitStats stats = viewport_.renderer_.LastSceneSubmitStats();
+    const render::ScenePostProcessSettings postProcessSettings = viewport_.renderer_.DefaultPostProcessSettings();
+    bool postProcessActive = false;
+    bool finalCompositeActive = false;
+    for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
+        postProcessActive = postProcessActive || (submission.desc.postProcessEnabled && submission.desc.postProcess.enabled);
+        finalCompositeActive = finalCompositeActive || submission.desc.finalComposite.enabled;
+    }
     SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
         .submittedDrawCalls = stats.submittedDrawCallCount,
         .submittedMeshes = stats.submittedMeshCount,
         .gpuDispatches = stats.gpuCullingDispatchCount,
+        .msaaSamples = viewport_.rendererMsaaSamples_,
         .gpuDrivenActive = stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::Disabled &&
             stats.gpuDrivenFeatureState != render::SceneGpuDrivenFeatureState::CpuValidationOnly,
+        .postProcessActive = postProcessActive,
+        .temporalAntiAliasingActive = postProcessActive && postProcessSettings.temporalAntiAliasingEnabled,
+        .bloomActive = postProcessActive && postProcessSettings.bloomEnabled && postProcessSettings.bloomStrength > 0.0F,
+        .finalCompositeActive = finalCompositeActive,
     });
     SceneViewportToolbarRenderer::RecordPresentedFrame();
     return true;
