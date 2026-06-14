@@ -73,8 +73,39 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(Sc
     return {};
 }
 
+std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::Handles() const {
+    std::vector<ScenePrefabInstanceHandle> handles;
+    handles.reserve(records_.size());
+    for (const auto& [id, record] : records_) {
+        static_cast<void>(record);
+        handles.push_back(ScenePrefabInstanceHandle{ id });
+    }
+    return handles;
+}
+
+std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::HandlesForPrefab(ScenePrefabHandle prefab) const {
+    std::vector<ScenePrefabInstanceHandle> handles;
+    if (!prefab.IsValid()) {
+        return handles;
+    }
+
+    for (const auto& [id, record] : records_) {
+        if (record.prefab == prefab) {
+            handles.push_back(ScenePrefabInstanceHandle{ id });
+        }
+    }
+    return handles;
+}
+
 std::size_t ScenePrefabInstanceRegistry::Count() const noexcept {
     return records_.size();
+}
+
+bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexcept {
+    if (!handle.IsValid()) {
+        return false;
+    }
+    return records_.erase(handle.id_) > 0U;
 }
 
 void ScenePrefabInstanceRegistry::Clear() noexcept {
