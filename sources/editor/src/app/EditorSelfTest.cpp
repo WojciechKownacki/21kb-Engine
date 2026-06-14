@@ -421,6 +421,15 @@ void RunHierarchyCommandSuite(Report& report) {
         }
         return kb::scene::SceneEntity{};
     };
+    const auto countHierarchyEntitiesNamed = [&context](std::string_view name) {
+        std::size_t count = 0U;
+        for (const EditorHierarchyRow& row : context.HierarchyRows()) {
+            if (row.name == name) {
+                ++count;
+            }
+        }
+        return count;
+    };
 
     const kb::scene::SceneEntity entity = context.CreateHierarchyObject();
     report.Check(entity.IsValid() && context.Scene().Entities().IsAlive(entity), "Create entity for hierarchy rename");
@@ -445,6 +454,23 @@ void RunHierarchyCommandSuite(Report& report) {
     context.SetHierarchyRenameText({});
     report.Check(context.CommitHierarchyRename(), "Commit empty hierarchy rename");
     report.Check(context.Scene().Entities().Name(context.SelectedEntity()) == "Entity", "Empty hierarchy rename falls back to default name");
+
+    const kb::scene::SceneEntity renamed = findHierarchyEntityNamed("Entity");
+    context.SelectEntity(renamed);
+    const std::size_t beforeDuplicateCount = countHierarchyEntitiesNamed("Entity");
+    report.Check(context.DuplicateSelectedHierarchyEntities(), "Duplicate selected hierarchy entity");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount + 1U, "Duplicate adds a hierarchy entity copy");
+    report.Check(context.UndoSceneCommand(), "Undo hierarchy duplicate");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount, "Undo removes hierarchy duplicate");
+    report.Check(context.RedoSceneCommand(), "Redo hierarchy duplicate");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount + 1U, "Redo restores hierarchy duplicate");
+
+    report.Check(context.DeleteSelectedHierarchyEntity(), "Delete selected hierarchy entity");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount, "Delete removes selected hierarchy entity");
+    report.Check(context.UndoSceneCommand(), "Undo hierarchy delete");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount + 1U, "Undo restores deleted hierarchy entity");
+    report.Check(context.RedoSceneCommand(), "Redo hierarchy delete");
+    report.Check(countHierarchyEntitiesNamed("Entity") == beforeDuplicateCount, "Redo removes deleted hierarchy entity again");
 }
 
 // Proves Log("...") from a Lua script reaches the editor Console during play.
