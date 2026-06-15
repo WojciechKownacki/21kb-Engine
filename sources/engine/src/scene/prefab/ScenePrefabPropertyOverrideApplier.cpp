@@ -133,7 +133,7 @@ bool ScenePrefabPropertyOverrideApplier::Apply(ScenePrefabNodeDesc& node, const 
     }
     if (property.propertyPath.rfind("meshRenderer.materialSlotAssetId.", 0) == 0) {
         std::uint32_t slotIndex = 0;
-        const std::string_view indexText = property.propertyPath.substr(std::string_view{ "meshRenderer.materialSlotAssetId." }.size());
+        const std::string indexText = property.propertyPath.substr(std::string_view{ "meshRenderer.materialSlotAssetId." }.size());
         if (!ParseNumber(indexText, slotIndex) || slotIndex >= kMaxMeshRendererMaterialSlotOverrides) {
             return false;
         }
