@@ -42,31 +42,6 @@ void DispatchReadOnlyRecordBatch(
         context);
 }
 
-void DispatchMutableRecordBatch(
-    const MutableQueryTableDispatchRecord& record,
-    std::span<const std::size_t> componentSizes,
-    std::size_t offset,
-    std::size_t count,
-    std::size_t prefetchDistance,
-    QueryRawMutableBatchVisitor visitor,
-    void* context) {
-    MutableQueryComponentPointerBlock batchComponents{};
-    for (std::size_t field = 0; field < componentSizes.size(); ++field) {
-        auto* bytes = static_cast<std::uint8_t*>(record.fieldComponents[field]);
-        batchComponents[field] = bytes + offset * componentSizes[field];
-    }
-
-    QueryTableBatchDispatcher::DispatchMutable(
-        record.entityIds + offset,
-        count,
-        componentSizes,
-        batchComponents,
-        count,
-        prefetchDistance,
-        visitor,
-        context);
-}
-
 } // namespace
 
 QueryState::QueryState(NativeArchetypeStorage* nativeStorage, std::shared_ptr<QueryPlan> plan, std::size_t defaultExecutionGrainSize)

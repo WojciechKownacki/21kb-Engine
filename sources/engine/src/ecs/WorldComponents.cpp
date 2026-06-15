@@ -25,10 +25,6 @@ namespace {
     return ids;
 }
 
-[[nodiscard]] bool ContainsId(const std::vector<ecs_id_t>& ids, ecs_id_t id) {
-    return std::binary_search(ids.begin(), ids.end(), id);
-}
-
 } // namespace
 
 ComponentId World::RegisterComponent(std::type_index type, std::string_view name, std::size_t size, std::size_t alignment) {
