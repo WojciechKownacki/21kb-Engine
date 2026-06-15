@@ -15,7 +15,9 @@ TagId World::FindTag(std::type_index type) const noexcept {
 }
 
 void World::AddTag(Entity entity, TagId tag) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     TagStorage::Add(world_, entity, tag);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 bool World::HasTag(Entity entity, TagId tag) const noexcept {
@@ -23,7 +25,9 @@ bool World::HasTag(Entity entity, TagId tag) const noexcept {
 }
 
 void World::RemoveTag(Entity entity, TagId tag) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     TagStorage::Remove(world_, entity, tag);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 } // namespace kb::ecs
