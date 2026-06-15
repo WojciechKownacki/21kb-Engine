@@ -19,6 +19,12 @@ public:
         static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query system components must be trivially copyable");
     }
 
+    [[nodiscard]] SystemAccess DeclareAccess(World& world) const override {
+        SystemAccess access;
+        (access.Read<Components>(world), ...);
+        return access;
+    }
+
     void OnCreate(World& world) override {
         query_ = world.CreateQuery<Components...>();
         OnQueryCreated(world);

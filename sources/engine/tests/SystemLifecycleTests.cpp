@@ -21,6 +21,11 @@ public:
     explicit CountingSystem(SystemCounters& counters) noexcept
         : counters_(counters) {}
 
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        static_cast<void>(world);
+        return {};
+    }
+
     void OnCreate(kb::ecs::World& world) override {
         static_cast<void>(world);
         ++counters_.created;

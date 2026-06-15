@@ -62,6 +62,11 @@ public:
     explicit ProbeSystem(ModuleProbe& probe) noexcept
         : probe_(probe) {}
 
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        static_cast<void>(world);
+        return {};
+    }
+
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
         static_cast<void>(world);
         static_cast<void>(deltaSeconds);

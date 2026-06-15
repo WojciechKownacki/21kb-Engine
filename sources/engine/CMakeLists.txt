@@ -44,8 +44,12 @@ add_library(kb_engine STATIC
     include/engine/ecs/QueryLifecycle.inl
     include/engine/ecs/QuerySystem.hpp
     include/engine/ecs/System.hpp
+    include/engine/ecs/SystemAccess.hpp
+    include/engine/ecs/SystemAccess.inl
     include/engine/ecs/SystemScheduler.hpp
+    include/engine/ecs/SystemSchedulerTrace.hpp
     include/engine/ecs/TypeIds.hpp
+    include/engine/ecs/WorkerPool.hpp
     include/engine/ecs/World.hpp
     include/engine/ecs/WorldComponentAccess.inl
     include/engine/ecs/WorldComponentIteration.inl
@@ -272,7 +276,9 @@ add_library(kb_engine STATIC
     src/ecs/RelationTypeRegistry.cpp
     src/ecs/SnapshotEntityIndex.cpp
     src/ecs/System.cpp
+    src/ecs/SystemAccess.cpp
     src/ecs/SystemScheduler.cpp
+    src/ecs/WorkerPool.cpp
     src/ecs/TagStorage.cpp
     src/ecs/TagTypeRegistry.cpp
     src/ecs/TypeEntityCache.cpp
@@ -956,8 +962,10 @@ if(BUILD_TESTING)
         tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
         tests/EcsSnapshotTests.cpp
+        tests/EcsSystemSchedulerTests.cpp
         tests/EcsTestSuites.hpp
         tests/EcsTestTypes.hpp
+        tests/EcsWorkerPoolTests.cpp
         tests/ProjectSceneTests.cpp
         tests/PhysicsSceneSystemTests.cpp
         tests/AudioSceneSystemTests.cpp
