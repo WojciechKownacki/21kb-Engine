@@ -394,7 +394,7 @@ void RunTypedEcsQueryIterationOrderPolicyTest() {
     kb::tests::Require(chunk.size() == expected.size(), "Chunk-order ECS query policy did not visit all entities");
 }
 
-void RunTypedEcsQueryPlanCacheReuseTest() {
+void RunTypedEcsQueryRepeatedPlanConsistencyTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 32,
     });
@@ -414,10 +414,10 @@ void RunTypedEcsQueryPlanCacheReuseTest() {
     EcsBatchCounters secondCounters;
     secondQuery.ForEachBatch(&CountMovingBatches, &secondCounters);
 
-    kb::tests::Require(firstCounters.visited == 75, "Cached ECS query plan did not visit all entities through first query");
-    kb::tests::Require(secondCounters.visited == 75, "Cached ECS query plan did not visit all entities through second query");
-    kb::tests::Require(kb::tests::NearlyEqual(firstCounters.sumX, secondCounters.sumX), "Cached ECS query plan produced inconsistent repeated query results");
-    kb::tests::Require(kb::tests::NearlyEqual(firstCounters.sumX, 3000.0F), "Cached ECS query plan saw invalid component data after structural changes");
+    kb::tests::Require(firstCounters.visited == 75, "Native ECS query plan did not visit all entities through first query");
+    kb::tests::Require(secondCounters.visited == 75, "Native ECS query plan did not visit all entities through second query");
+    kb::tests::Require(kb::tests::NearlyEqual(firstCounters.sumX, secondCounters.sumX), "Native ECS query plan produced inconsistent repeated query results");
+    kb::tests::Require(kb::tests::NearlyEqual(firstCounters.sumX, 3000.0F), "Native ECS query plan saw invalid component data after structural changes");
 }
 
 void RunTypedEcsQueryStructuralChangeConsistencyTest() {
@@ -466,7 +466,7 @@ void RunTypedEcsQueryStructuralChangeConsistencyTest() {
         CollectMovingSnapshot(freshQuery),
         { stable, gainedVelocity, createdAfterQuery },
         55.0F,
-        "Fresh ECS query did not match existing query after structural changes invalidated cached plans");
+        "Fresh ECS query did not match existing query after structural changes");
 }
 
 void RunTypedEcsQueryComponentFilterTest() {
@@ -613,7 +613,7 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryBatchKernelTest();
     RunTypedEcsQueryPrefetchHintTest();
     RunTypedEcsQueryIterationOrderPolicyTest();
-    RunTypedEcsQueryPlanCacheReuseTest();
+    RunTypedEcsQueryRepeatedPlanConsistencyTest();
     RunTypedEcsQueryStructuralChangeConsistencyTest();
     RunTypedEcsQueryComponentFilterTest();
     RunTypedEcsQueryChangeFilterTest();

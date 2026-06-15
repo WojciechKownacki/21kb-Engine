@@ -7,13 +7,19 @@
 #include "engine/ecs/World.hpp"
 
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <atomic>
+#include <chrono>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace {
+
+std::mutex g_recordingSystemMutex;
 
 class RecordingSystem final : public kb::ecs::System {
 public:
@@ -37,6 +43,7 @@ public:
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
         static_cast<void>(world);
         static_cast<void>(deltaSeconds);
+        const std::scoped_lock lock{ g_recordingSystemMutex };
         executionOrder_.push_back(name_);
     }
 
@@ -44,6 +51,40 @@ private:
     std::string name_;
     kb::ecs::SystemAccess access_;
     std::vector<std::string>& executionOrder_;
+};
+
+class ConcurrentProbeSystem final : public kb::ecs::System {
+public:
+    ConcurrentProbeSystem(std::string name, kb::ecs::SystemAccess access, std::atomic<int>& running, std::atomic<int>& maxRunning)
+        : name_(std::move(name))
+        , access_(std::move(access))
+        , running_(running)
+        , maxRunning_(maxRunning) {}
+
+    [[nodiscard]] std::string_view Name() const noexcept override {
+        return name_;
+    }
+
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        static_cast<void>(world);
+        return access_;
+    }
+
+    void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
+        static_cast<void>(world);
+        static_cast<void>(deltaSeconds);
+        const int active = running_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        int observed = maxRunning_.load(std::memory_order_acquire);
+        while (active > observed && !maxRunning_.compare_exchange_weak(observed, active, std::memory_order_acq_rel)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 25 });
+        running_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+private:
+    std::string name_;
+    kb::ecs::SystemAccess access_;
+    std::atomic<int>& running_;
+    std::atomic<int>& maxRunning_;
 };
 
 [[nodiscard]] kb::ecs::SystemAccess ReadPosition(kb::ecs::World& world) {
@@ -181,6 +222,20 @@ void RunSyncPointRequiresRuntimeBoundaryReasonTest() {
     kb::tests::Require(rejected, "ECS system access accepted a sync point without a runtime boundary reason");
 }
 
+void RunSchedulerRejectsNullSystemTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler;
+
+    bool rejected = false;
+    try {
+        scheduler.Add(nullptr, world);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+
+    kb::tests::Require(rejected, "ECS scheduler accepted a null system registration");
+}
+
 void RunReadOnlySystemsShareExecutionStageTest() {
     kb::ecs::World world;
     std::vector<std::string> executionOrder;
@@ -197,6 +252,30 @@ void RunReadOnlySystemsShareExecutionStageTest() {
     kb::tests::Require(trace.events[1].stageIndex == 0U, "ECS scheduler serialized compatible read-only systems");
     kb::tests::Require(trace.events[0].blockedDependencies.empty(), "ECS scheduler added a dependency to a read-only system");
     kb::tests::Require(trace.events[1].blockedDependencies.empty(), "ECS scheduler added a dependency between compatible read-only systems");
+
+    scheduler.Shutdown(world);
+}
+
+void RunReadOnlySystemsExecuteInParallelTest() {
+    kb::ecs::World world;
+    std::atomic<int> running{ 0 };
+    std::atomic<int> maxRunning{ 0 };
+
+    kb::ecs::WorkerPoolConfig workerConfig;
+    workerConfig.workerCount = 2;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
+        .mode = kb::ecs::SystemSchedulingMode::Automatic,
+        .debugTraceEnabled = true,
+        .parallelExecutionEnabled = true,
+        .workerPool = workerConfig,
+    } };
+    scheduler.Add(std::make_unique<ConcurrentProbeSystem>("ReadA", ReadPosition(world), running, maxRunning), world);
+    scheduler.Add(std::make_unique<ConcurrentProbeSystem>("ReadB", ReadPosition(world), running, maxRunning), world);
+
+    scheduler.Update(world, 0.0F);
+
+    kb::tests::Require(maxRunning.load(std::memory_order_acquire) > 1, "ECS scheduler did not execute compatible read-only systems in parallel");
+    kb::tests::Require(scheduler.LastDebugTrace().workers.size() >= 2U, "ECS scheduler trace did not report parallel worker occupancy");
 
     scheduler.Shutdown(world);
 }
@@ -288,7 +367,9 @@ void RunEcsSystemSchedulerTests() {
     RunDeterministicModeOrdersConflictingSystemsByNameTest();
     RunSyncPointCreatesRegistrationOrderBarrierTest();
     RunSyncPointRequiresRuntimeBoundaryReasonTest();
+    RunSchedulerRejectsNullSystemTest();
     RunReadOnlySystemsShareExecutionStageTest();
+    RunReadOnlySystemsExecuteInParallelTest();
     RunReadWriteConflictCreatesStageBoundaryTest();
     RunWriteWriteConflictCreatesStageBoundaryTest();
     RunDebugTraceCapturesSystemExecutionTest();

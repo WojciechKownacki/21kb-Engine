@@ -24,6 +24,7 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
+    include/engine/ecs/CommandBuffer.hpp
     include/engine/ecs/ComponentEvent.hpp
     include/engine/ecs/ComponentFieldAccess.hpp
     include/engine/ecs/ComponentId.hpp
@@ -32,10 +33,12 @@ add_library(kb_engine STATIC
     include/engine/ecs/ComponentSerialization.hpp
     include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
+    include/engine/ecs/Kernel.hpp
     include/engine/ecs/NativeArchetypeStorage.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
     include/engine/ecs/QueryExecutionSettings.hpp
+    include/engine/ecs/QueryExecutionScratch.hpp
     include/engine/ecs/QueryFilter.hpp
     include/engine/ecs/Query.hpp
     include/engine/ecs/QueryPrefetch.hpp
@@ -235,6 +238,7 @@ add_library(kb_engine STATIC
     src/project/ProjectDescriptorWriter.cpp
     src/project/ProjectManager.cpp
     src/ecs/ComponentRegistry.cpp
+    src/ecs/CommandBuffer.cpp
     src/ecs/ComponentEventMapper.cpp
     src/ecs/ComponentFieldAccess.cpp
     src/ecs/ComponentFieldBounds.cpp
@@ -261,16 +265,10 @@ add_library(kb_engine STATIC
     src/ecs/HierarchyRelationService.cpp
     src/ecs/HierarchyChildrenCollector.cpp
     src/ecs/NativeArchetypeStorage.cpp
-    src/ecs/query/FlecsQueryHandle.cpp
     src/ecs/QueryFilter.cpp
     src/ecs/QueryState.cpp
     src/ecs/QueryStateFactory.cpp
-    src/ecs/query/QueryBatchDispatcher.cpp
-    src/ecs/query/QueryDescriptorBuilder.cpp
-    src/ecs/query/QueryFieldReader.cpp
     src/ecs/query/QueryPlan.cpp
-    src/ecs/query/QueryPlanCache.cpp
-    src/ecs/query/QueryRowDispatcher.cpp
     src/ecs/query/QueryTableBatchDispatcher.cpp
     src/ecs/RelationStorage.cpp
     src/ecs/RelationTypeRegistry.cpp
@@ -447,6 +445,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
     src/scene/prefab/ScenePrefabAssetFacade.cpp
     src/scene/prefab/ScenePrefabCameraOverrideReporter.cpp
+    src/scene/prefab/ScenePrefabBulkInstantiationService.cpp
     src/scene/prefab/ScenePrefabCaptureFacade.cpp
     src/scene/prefab/ScenePrefabCaptureNodeBuilder.cpp
     src/scene/prefab/ScenePrefabCaptureService.cpp
@@ -719,6 +718,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/io/ScenePrefabAssetVariantWriter.hpp
     src/private/scene/prefab/io/ScenePrefabAssetWriter.hpp
     src/private/scene/prefab/ScenePrefabComponentApplier.hpp
+    src/private/scene/prefab/ScenePrefabBulkInstantiationService.hpp
     src/private/scene/prefab/ScenePrefabComponentComparator.hpp
     src/private/scene/prefab/ScenePrefabComponentOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabInstantiationService.hpp
@@ -841,14 +841,8 @@ add_library(kb_engine STATIC
     src/private/ecs/inspection/EntityNameReader.hpp
     src/private/ecs/QueryStateFactory.hpp
     src/private/ecs/QueryState.hpp
-    src/private/ecs/query/FlecsQueryHandle.hpp
-    src/private/ecs/query/QueryBatchDispatcher.hpp
-    src/private/ecs/query/QueryDescriptorBuilder.hpp
-    src/private/ecs/query/QueryFieldReader.hpp
     src/private/ecs/query/QueryLimits.hpp
     src/private/ecs/query/QueryPlan.hpp
-    src/private/ecs/query/QueryPlanCache.hpp
-    src/private/ecs/query/QueryRowDispatcher.hpp
     src/private/ecs/query/QueryTableBatchDispatcher.hpp
     src/private/ecs/reflection/ComponentFieldBounds.hpp
     src/private/ecs/reflection/ComponentReflectionFactory.hpp
@@ -951,10 +945,12 @@ if(BUILD_TESTING)
 
     add_executable(kb_engine_tests
         tests/EcsComponentApiTests.cpp
+        tests/EcsCommandBufferTests.cpp
         tests/AssetRuntimeTests.cpp
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp
+        tests/EcsKernelTests.cpp
         tests/EcsNativeArchetypeStorageTests.cpp
         tests/EcsQueryTests.cpp
         tests/EcsQuerySystemTests.cpp

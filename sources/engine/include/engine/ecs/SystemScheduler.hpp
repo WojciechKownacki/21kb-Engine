@@ -2,6 +2,7 @@
 
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/SystemSchedulerTrace.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <cstddef>
@@ -21,6 +22,8 @@ enum class SystemSchedulingMode {
 struct SystemSchedulerConfig {
     SystemSchedulingMode mode = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled = false;
+    bool parallelExecutionEnabled = true;
+    WorkerPoolConfig workerPool{};
 };
 
 class SystemScheduler {
@@ -65,10 +68,13 @@ private:
     void TraceSystemExecution(
         std::size_t systemIndex,
         std::size_t stageIndex,
+        std::size_t workerIndex,
         std::uint64_t startTimeNanoseconds,
         std::uint64_t endTimeNanoseconds,
         std::span<const std::uint64_t> systemEndTimes,
         const std::vector<std::vector<std::size_t>>& reverseGraph);
+    [[nodiscard]] bool ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept;
+    [[nodiscard]] WorkerPool& RuntimeWorkerPool();
 
     [[nodiscard]] bool IsBeforeInSchedulingOrder(std::size_t left, std::size_t right) const noexcept;
     [[nodiscard]] bool IsSeparatedBySyncPoint(std::size_t left, std::size_t right) const noexcept;
@@ -82,6 +88,9 @@ private:
     std::vector<ExecutionStage> executionStages_;
     SystemSchedulingMode schedulingMode_ = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled_ = false;
+    bool parallelExecutionEnabled_ = true;
+    WorkerPoolConfig workerPoolConfig_{};
+    std::unique_ptr<WorkerPool> workerPool_;
     bool graphDirty_ = false;
     std::uint64_t traceFrameIndex_ = 0;
     SystemSchedulerTrace lastTrace_;

@@ -158,6 +158,121 @@ void RunRegisteredPrefabInstantiationTest() {
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 3.0F), "Registered prefab child world Y was not rebuilt");
 }
 
+void RunBulkPrefabInstantiationTest() {
+    kb::scene::Scene scene;
+    kb::scene::SceneObject externalParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Bulk Parent",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F },
+        },
+    });
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Bulk Root",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+        },
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 42,
+                .materialAssetId = 84,
+            },
+            .tags = [] {
+                kb::scene::TagsComponent tags;
+                kb::scene::SetTagsText(tags, "bulk");
+                return tags;
+            }(),
+        },
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Bulk Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 2.0F, 0.0F },
+        },
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{
+                .primary = true,
+            },
+            .light = kb::scene::LightComponent{
+                .kind = kb::scene::LightKind::Point,
+                .intensity = 5.0F,
+            },
+        },
+    });
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(
+        prefab,
+        3,
+        kb::scene::ScenePrefabInstantiationSettings{
+            .parent = externalParent,
+            .namePrefix = "Bulk/",
+        });
+
+    kb::tests::Require(instances.size() == 3, "Bulk prefab instantiation did not return every requested instance");
+    kb::tests::Require(scene.Entities().Count() == 7, "Bulk prefab instantiation created an unexpected entity count");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        kb::tests::Require(instance.ObjectCount() == 2, "Bulk prefab instance did not contain every node");
+        kb::tests::Require(!instance.Handle().IsValid(), "Loose bulk prefab instance should not be tracked");
+        kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Bulk/Bulk Root", "Bulk prefab root name was not assigned");
+        kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(rootNode).Entity()) == externalParent.Entity(), "Bulk prefab root parent was not assigned");
+        kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Bulk prefab child parent was not assigned");
+        kb::tests::Require(scene.Components().MeshRenderers().Has(instance.ObjectAt(rootNode).Entity()), "Bulk prefab mesh component was not assigned");
+        kb::tests::Require(scene.Components().Tags().Has(instance.ObjectAt(rootNode).Entity()), "Bulk prefab tags component was not assigned");
+        kb::tests::Require(scene.Components().Cameras().Has(instance.ObjectAt(childNode).Entity()), "Bulk prefab camera component was not assigned");
+        kb::tests::Require(scene.Components().Lights().Has(instance.ObjectAt(childNode).Entity()), "Bulk prefab light component was not assigned");
+    }
+
+    [[maybe_unused]] const bool progressed = scene.Runtime().Update(0.016F);
+    const kb::scene::TransformComponent childTransform = scene.Transforms().Get(instances.front().ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 11.0F), "Bulk prefab world transform did not include external parent X");
+    kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 2.0F), "Bulk prefab world transform did not include prefab parent Y");
+}
+
+void RunRegisteredBulkPrefabInstantiationTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Registered Bulk Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Registered Bulk Child",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .rigidbody = kb::scene::RigidbodyComponent{
+                .bodyType = kb::scene::RigidbodyBodyType::Dynamic,
+                .mass = 3.0F,
+            },
+            .collider = kb::scene::ColliderComponent{
+                .shape = kb::scene::ColliderShape::Sphere,
+                .radius = 2.0F,
+            },
+            .audioSource = kb::scene::AudioSourceComponent{
+                .clipAssetId = 9,
+                .volume = 0.5F,
+            },
+            .audioListener = kb::scene::AudioListenerComponent{
+                .primary = false,
+            },
+        },
+    });
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("RegisteredBulkPrefab", std::move(prefab));
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(handle, 4);
+    kb::tests::Require(instances.size() == 4, "Registered bulk prefab instantiation did not return every requested instance");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        kb::tests::Require(instance.Handle().IsValid(), "Registered bulk prefab instance was not tracked");
+        kb::tests::Require(scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)) == instance.Handle(), "Registered bulk prefab root was not tracked");
+        std::uint32_t childContainingNode = 99;
+        kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(childNode), childContainingNode) == instance.Handle(), "Registered bulk prefab child was not tracked");
+        kb::tests::Require(childContainingNode == childNode, "Registered bulk prefab child mapped to the wrong node");
+        kb::tests::Require(scene.Components().Rigidbodies().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab rigidbody component was not assigned");
+        kb::tests::Require(scene.Components().Colliders().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab collider component was not assigned");
+        kb::tests::Require(scene.Components().AudioSources().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio source component was not assigned");
+        kb::tests::Require(scene.Components().AudioListeners().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio listener component was not assigned");
+    }
+}
+
 void RunRegisteredPrefabOverrideLifecycleTest() {
     kb::scene::Scene scene;
 
@@ -638,6 +753,8 @@ void RunScenePrefabInstantiationTests() {
     RunPrefabInstantiationTest();
     RunInvalidPrefabInstantiationTest();
     RunRegisteredPrefabInstantiationTest();
+    RunBulkPrefabInstantiationTest();
+    RunRegisteredBulkPrefabInstantiationTest();
     RunRegisteredPrefabOverrideLifecycleTest();
     RunMissingPrefabInstanceObjectOverrideTest();
     RunRegisteredPrefabFullComponentOverrideLifecycleTest();

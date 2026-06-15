@@ -1,7 +1,7 @@
 #include "ecs/QueryStateFactory.hpp"
 
 #include "ecs/QueryState.hpp"
-#include "ecs/query/QueryPlanCache.hpp"
+#include "ecs/query/QueryPlan.hpp"
 
 #include <memory>
 #include <utility>
@@ -9,8 +9,7 @@
 namespace kb::ecs {
 
 QueryState* QueryStateFactory::Create(
-    ecs_world_t* world,
-    QueryPlanCache& queryPlanCache,
+    NativeArchetypeStorage* nativeStorage,
     std::span<const ComponentId> componentIds,
     std::span<const std::size_t> componentSizes,
     std::span<const ComponentId> requiredComponentIds,
@@ -18,28 +17,22 @@ QueryState* QueryStateFactory::Create(
     std::span<const ComponentId> excludedComponentIds,
     std::span<const ComponentId> changedComponentIds,
     const WorldConfig& config) {
-    if (world == nullptr || componentIds.empty() || componentIds.size() != componentSizes.size()) {
+    if (nativeStorage == nullptr || componentIds.empty() || componentIds.size() != componentSizes.size()) {
         return nullptr;
     }
 
-    std::shared_ptr<QueryPlan> plan;
-    if (changedComponentIds.empty()) {
-        plan = queryPlanCache.GetOrCreate(world, componentIds, componentSizes, requiredComponentIds, optionalComponentIds, excludedComponentIds);
-    } else {
-        plan = std::make_shared<QueryPlan>(
-            world,
-            componentIds,
-            componentSizes,
-            requiredComponentIds,
-            optionalComponentIds,
-            excludedComponentIds,
-            changedComponentIds);
-    }
-    if (!plan) {
+    auto plan = std::make_shared<QueryPlan>(
+        componentIds,
+        componentSizes,
+        requiredComponentIds,
+        optionalComponentIds,
+        excludedComponentIds,
+        changedComponentIds);
+    if (!plan->IsValid()) {
         return nullptr;
     }
 
-    return new QueryState{ world, std::move(plan), config.executionGrainSize };
+    return new QueryState{ nativeStorage, std::move(plan), config.executionGrainSize };
 }
 
 } // namespace kb::ecs

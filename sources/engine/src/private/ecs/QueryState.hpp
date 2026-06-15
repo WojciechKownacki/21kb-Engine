@@ -3,20 +3,23 @@
 #include "engine/ecs/ComponentId.hpp"
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/QueryExecutionScratch.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
-
-struct ecs_world_t;
+#include <unordered_map>
 
 namespace kb::ecs {
 
+class NativeArchetypeStorage;
 class QueryPlan;
+class QueryBatchExecutionScratch;
 
 class QueryState {
 public:
-    QueryState(ecs_world_t* world, std::shared_ptr<QueryPlan> plan, std::size_t defaultExecutionGrainSize);
+    QueryState(NativeArchetypeStorage* nativeStorage, std::shared_ptr<QueryPlan> plan, std::size_t defaultExecutionGrainSize);
     ~QueryState() = default;
 
     QueryState(const QueryState&) = delete;
@@ -27,14 +30,38 @@ public:
     [[nodiscard]] bool IsValid() const noexcept;
     [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
     [[nodiscard]] std::span<const std::size_t> ComponentSizes() const noexcept;
+    void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(QueryRawVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) const;
+    void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch) const;
     void ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context) const;
+    void ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch) const;
 
 private:
-    ecs_world_t* world_ = nullptr;
+    struct ChangeVersionKey {
+        std::size_t archetypeIndex = 0;
+        ComponentId componentId = 0;
+
+        [[nodiscard]] bool operator==(const ChangeVersionKey& other) const noexcept {
+            return archetypeIndex == other.archetypeIndex && componentId == other.componentId;
+        }
+    };
+
+    struct ChangeVersionKeyHash {
+        [[nodiscard]] std::size_t operator()(const ChangeVersionKey& key) const noexcept {
+            return std::hash<std::size_t>{}(key.archetypeIndex) ^ (std::hash<ComponentId>{}(key.componentId) + 0x9E3779B97F4A7C15ULL);
+        }
+    };
+
+    [[nodiscard]] bool RecordChanged(const QueryTableDispatchRecord& record) const;
+    [[nodiscard]] bool RecordChanged(const MutableQueryTableDispatchRecord& record) const;
+    void CommitRecordVersions(const QueryTableDispatchRecord& record) const;
+    void CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const;
+
+    NativeArchetypeStorage* nativeStorage_ = nullptr;
     std::shared_ptr<QueryPlan> plan_;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
+    mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
 };
 
 } // namespace kb::ecs

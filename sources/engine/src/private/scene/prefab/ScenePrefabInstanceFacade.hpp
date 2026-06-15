@@ -5,6 +5,9 @@
 #include "engine/scene/ScenePrefabInstance.hpp"
 #include "engine/scene/ScenePrefabInstantiationSettings.hpp"
 
+#include <cstddef>
+#include <vector>
+
 namespace kb::scene {
 
 class Scene;
@@ -15,6 +18,8 @@ public:
 
     [[nodiscard]] static ScenePrefabInstance Instantiate(Scene& scene, const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] static ScenePrefabInstance Instantiate(Scene& scene, ScenePrefabHandle handle, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] static std::vector<ScenePrefabInstance> InstantiateMany(Scene& scene, const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] static std::vector<ScenePrefabInstance> InstantiateMany(Scene& scene, ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
 };
 
 } // namespace kb::scene

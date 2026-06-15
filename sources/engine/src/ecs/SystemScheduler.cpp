@@ -17,17 +17,26 @@ namespace {
     return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count());
 }
 
+struct SystemExecutionSample {
+    std::size_t systemIndex = 0;
+    std::size_t workerIndex = 0;
+    std::uint64_t startTimeNanoseconds = 0;
+    std::uint64_t endTimeNanoseconds = 0;
+};
+
 } // namespace
 
 SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
     : schedulingMode_(config.mode)
-    , debugTraceEnabled_(config.debugTraceEnabled) {}
+    , debugTraceEnabled_(config.debugTraceEnabled)
+    , parallelExecutionEnabled_(config.parallelExecutionEnabled)
+    , workerPoolConfig_(config.workerPool) {}
 
 SystemScheduler::~SystemScheduler() = default;
 
 void SystemScheduler::Add(std::unique_ptr<System> system, World& world) {
     if (system == nullptr) {
-        return;
+        throw std::invalid_argument("ECS system scheduler cannot add a null system");
     }
 
     SystemAccess access = system->DeclareAccess(world);
@@ -54,20 +63,71 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
         frameStart = std::chrono::steady_clock::now();
     }
 
+    std::vector<SystemExecutionSample> executionSamples;
     for (std::size_t stageIndex = 0; stageIndex < executionStages_.size(); ++stageIndex) {
         const ExecutionStage& stage = executionStages_[stageIndex];
-        for (std::size_t systemIndex : stage.systems) {
-            std::chrono::steady_clock::time_point systemStart;
-            if (debugTraceEnabled_) {
-                systemStart = std::chrono::steady_clock::now();
+        if (ShouldRunStageInParallel(stage)) {
+            executionSamples.assign(stage.systems.size(), {});
+            std::vector<WorkerPoolBatch> batches;
+            batches.reserve(stage.systems.size());
+            for (std::size_t slot = 0; slot < stage.systems.size(); ++slot) {
+                batches.push_back(WorkerPoolBatch{
+                    .index = slot,
+                    .begin = slot,
+                    .count = 1,
+                    .preferredWorkerIndex = kAnyWorkerPoolWorker,
+                });
             }
-            systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
+
+            auto stageJob = [this, &world, deltaSeconds, &stage, stageIndex, frameStart, &systemEndTimes, &executionSamples](WorkerContext context, const WorkerPoolBatch& batch) {
+                const std::size_t slot = batch.index;
+                const std::size_t systemIndex = stage.systems[slot];
+                std::chrono::steady_clock::time_point systemStart;
+                if (debugTraceEnabled_) {
+                    systemStart = std::chrono::steady_clock::now();
+                }
+                systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
+                if (debugTraceEnabled_) {
+                    const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
+                    const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
+                    const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
+                    systemEndTimes[systemIndex] = endTimeNanoseconds;
+                    executionSamples[slot] = SystemExecutionSample{
+                        .systemIndex = systemIndex,
+                        .workerIndex = context.workerIndex,
+                        .startTimeNanoseconds = startTimeNanoseconds,
+                        .endTimeNanoseconds = endTimeNanoseconds,
+                    };
+                }
+            };
+            RuntimeWorkerPool().RunBatches(batches, stageJob);
+
             if (debugTraceEnabled_) {
-                const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
-                const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
-                const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
-                systemEndTimes[systemIndex] = endTimeNanoseconds;
-                TraceSystemExecution(systemIndex, stageIndex, startTimeNanoseconds, endTimeNanoseconds, systemEndTimes, reverseGraph);
+                for (const SystemExecutionSample& sample : executionSamples) {
+                    TraceSystemExecution(
+                        sample.systemIndex,
+                        stageIndex,
+                        sample.workerIndex,
+                        sample.startTimeNanoseconds,
+                        sample.endTimeNanoseconds,
+                        systemEndTimes,
+                        reverseGraph);
+                }
+            }
+        } else {
+            for (std::size_t systemIndex : stage.systems) {
+                std::chrono::steady_clock::time_point systemStart;
+                if (debugTraceEnabled_) {
+                    systemStart = std::chrono::steady_clock::now();
+                }
+                systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
+                if (debugTraceEnabled_) {
+                    const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
+                    const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
+                    const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
+                    systemEndTimes[systemIndex] = endTimeNanoseconds;
+                    TraceSystemExecution(systemIndex, stageIndex, 0, startTimeNanoseconds, endTimeNanoseconds, systemEndTimes, reverseGraph);
+                }
             }
         }
     }
@@ -84,6 +144,7 @@ void SystemScheduler::Shutdown(World& world) {
     systems_.clear();
     executionOrder_.clear();
     executionStages_.clear();
+    workerPool_.reset();
     graphDirty_ = false;
     lastTrace_ = {};
 }
@@ -286,8 +347,7 @@ void SystemScheduler::BeginDebugTrace() {
 
 void SystemScheduler::EndDebugTrace(std::uint64_t frameDurationNanoseconds) {
     lastTrace_.frameDurationNanoseconds = frameDurationNanoseconds;
-    if (!lastTrace_.workers.empty()) {
-        SystemSchedulerWorkerTrace& worker = lastTrace_.workers.front();
+    for (SystemSchedulerWorkerTrace& worker : lastTrace_.workers) {
         const std::uint64_t busyTime = worker.busyTimeNanoseconds;
         worker.idleTimeNanoseconds = frameDurationNanoseconds > busyTime ? frameDurationNanoseconds - busyTime : 0;
     }
@@ -297,6 +357,7 @@ void SystemScheduler::EndDebugTrace(std::uint64_t frameDurationNanoseconds) {
 void SystemScheduler::TraceSystemExecution(
     std::size_t systemIndex,
     std::size_t stageIndex,
+    std::size_t workerIndex,
     std::uint64_t startTimeNanoseconds,
     std::uint64_t endTimeNanoseconds,
     std::span<const std::uint64_t> systemEndTimes,
@@ -316,21 +377,38 @@ void SystemScheduler::TraceSystemExecution(
     }
 
     const std::uint64_t duration = endTimeNanoseconds >= startTimeNanoseconds ? endTimeNanoseconds - startTimeNanoseconds : 0;
-    if (!lastTrace_.workers.empty()) {
-        lastTrace_.workers.front().busyTimeNanoseconds += duration;
+    while (workerIndex >= lastTrace_.workers.size()) {
+        lastTrace_.workers.push_back(SystemSchedulerWorkerTrace{
+            .workerIndex = lastTrace_.workers.size(),
+        });
     }
+    lastTrace_.workers[workerIndex].busyTimeNanoseconds += duration;
 
     lastTrace_.events.push_back(SystemSchedulerTraceEvent{
         .systemName = std::string{ systems_[systemIndex].system->Name() },
         .systemIndex = systemIndex,
         .stageIndex = stageIndex,
-        .workerIndex = 0,
+        .workerIndex = workerIndex,
         .startTimeNanoseconds = startTimeNanoseconds,
         .endTimeNanoseconds = endTimeNanoseconds,
         .durationNanoseconds = duration,
         .waitTimeNanoseconds = hasBlockedDependencies && startTimeNanoseconds > dependencyReadyTime ? startTimeNanoseconds - dependencyReadyTime : 0,
         .blockedDependencies = std::move(blockedDependencies),
     });
+}
+
+bool SystemScheduler::ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept {
+    return parallelExecutionEnabled_ &&
+        schedulingMode_ != SystemSchedulingMode::Deterministic &&
+        !workerPoolConfig_.singleThreaded &&
+        stage.systems.size() > 1U;
+}
+
+WorkerPool& SystemScheduler::RuntimeWorkerPool() {
+    if (workerPool_ == nullptr) {
+        workerPool_ = std::make_unique<WorkerPool>(workerPoolConfig_);
+    }
+    return *workerPool_;
 }
 
 bool SystemScheduler::IsBeforeInSchedulingOrder(std::size_t left, std::size_t right) const noexcept {

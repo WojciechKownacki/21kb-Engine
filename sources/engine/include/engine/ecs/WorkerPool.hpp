@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <span>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace kb::ecs {
@@ -20,7 +21,12 @@ struct WorkerContext {
     std::size_t workerCount = 0;
 };
 
-using WorkerPoolJob = std::function<void(WorkerContext)>;
+using WorkerPoolJobCallback = void (*)(WorkerContext, void*);
+
+struct WorkerPoolJob {
+    WorkerPoolJobCallback callback = nullptr;
+    void* context = nullptr;
+};
 
 inline constexpr std::size_t kAnyWorkerPoolWorker = static_cast<std::size_t>(-1);
 
@@ -31,7 +37,7 @@ struct WorkerPoolBatch {
     std::size_t preferredWorkerIndex = kAnyWorkerPoolWorker;
 };
 
-using WorkerPoolBatchJob = std::function<void(WorkerContext, const WorkerPoolBatch&)>;
+using WorkerPoolBatchCallback = void (*)(WorkerContext, const WorkerPoolBatch&, void*);
 
 struct WorkerPoolChunk {
     std::size_t index = 0;
@@ -40,7 +46,7 @@ struct WorkerPoolChunk {
     std::size_t preferredWorkerIndex = kAnyWorkerPoolWorker;
 };
 
-using WorkerPoolChunkJob = std::function<void(WorkerContext, const WorkerPoolChunk&)>;
+using WorkerPoolChunkCallback = void (*)(WorkerContext, const WorkerPoolChunk&, void*);
 
 class JobHandle {
 public:
@@ -94,13 +100,19 @@ public:
     void Start(WorkerPoolConfig config);
     void Stop();
     void Run(std::span<const WorkerPoolJob> jobs);
-    void RunBatches(std::span<const WorkerPoolBatch> batches, const WorkerPoolBatchJob& job);
-    void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, const WorkerPoolChunkJob& job);
-    void ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, const WorkerPoolChunkJob& job);
+    void RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context);
+    void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context);
+    void ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkCallback callback, void* context);
+    template <typename BatchJob>
+    void RunBatches(std::span<const WorkerPoolBatch> batches, BatchJob&& job);
+    template <typename ChunkJob>
+    void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, ChunkJob&& job);
+    template <typename ChunkJob>
+    void ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, ChunkJob&& job);
     [[nodiscard]] JobHandle Submit(std::vector<WorkerPoolJob> jobs);
-    [[nodiscard]] JobHandle SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchJob job);
-    [[nodiscard]] JobHandle SubmitParallelForChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkJob job);
-    [[nodiscard]] JobHandle SubmitParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkJob job);
+    [[nodiscard]] JobHandle SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context);
+    [[nodiscard]] JobHandle SubmitParallelForChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context);
+    [[nodiscard]] JobHandle SubmitParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkCallback callback, void* context);
 
     [[nodiscard]] bool Running() const noexcept;
     [[nodiscard]] std::size_t WorkerCount() const noexcept;
@@ -115,5 +127,42 @@ private:
 
     std::unique_ptr<WorkerPoolState> state_;
 };
+
+template <typename BatchJob>
+void WorkerPool::RunBatches(std::span<const WorkerPoolBatch> batches, BatchJob&& job) {
+    using JobType = std::remove_reference_t<BatchJob>;
+    JobType* jobPtr = std::addressof(job);
+    RunBatches(
+        batches,
+        [](WorkerContext context, const WorkerPoolBatch& batch, void* callbackContext) {
+            (*static_cast<JobType*>(callbackContext))(context, batch);
+        },
+        jobPtr);
+}
+
+template <typename ChunkJob>
+void WorkerPool::ParallelForChunks(std::span<const WorkerPoolChunk> chunks, ChunkJob&& job) {
+    using JobType = std::remove_reference_t<ChunkJob>;
+    JobType* jobPtr = std::addressof(job);
+    ParallelForChunks(
+        chunks,
+        [](WorkerContext context, const WorkerPoolChunk& chunk, void* callbackContext) {
+            (*static_cast<JobType*>(callbackContext))(context, chunk);
+        },
+        jobPtr);
+}
+
+template <typename ChunkJob>
+void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, ChunkJob&& job) {
+    using JobType = std::remove_reference_t<ChunkJob>;
+    JobType* jobPtr = std::addressof(job);
+    ParallelForChunks(
+        itemCount,
+        chunkSize,
+        [](WorkerContext context, const WorkerPoolChunk& chunk, void* callbackContext) {
+            (*static_cast<JobType*>(callbackContext))(context, chunk);
+        },
+        jobPtr);
+}
 
 } // namespace kb::ecs
