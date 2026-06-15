@@ -1,5 +1,6 @@
 #include "engine/ecs/QueryBatch.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldConfigPresets.hpp"
 #include "engine/scene/Scene.hpp"
@@ -28,7 +29,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -142,7 +142,9 @@ struct BenchmarkOptions {
     std::filesystem::path compareAfterPath;
     std::filesystem::path comparisonOutputPath = "ecs_benchmark_comparison.json";
     double regressionThresholdPercent = 0.0;
+    std::size_t workerThreadCount = 0;
     bool failOnRegression = false;
+    bool pinWorkerAffinity = false;
     BenchmarkValidationSelection validationSelection = BenchmarkValidationSelection::Off;
     bool debugValidationEnabled = false;
 };
@@ -773,6 +775,16 @@ private:
     return parsed;
 }
 
+[[nodiscard]] bool ParseSwitch(std::string_view value, std::string_view optionName) {
+    if (value == "on" || value == "true" || value == "enabled" || value == "yes" || value == "1") {
+        return true;
+    }
+    if (value == "off" || value == "false" || value == "disabled" || value == "no" || value == "0") {
+        return false;
+    }
+    throw std::invalid_argument(std::string{ optionName } + " expects on or off");
+}
+
 [[nodiscard]] BenchmarkValidationSelection ParseValidationSelection(std::string_view value, std::string_view optionName) {
     if (value == "off" || value == "none" || value == "disabled") {
         return BenchmarkValidationSelection::Off;
@@ -814,6 +826,10 @@ private:
             options.warmupFrames = ParseSize(readValue(argument), argument);
         } else if (argument == "--grain") {
             options.executionGrainSize = ParseSize(readValue(argument), argument);
+        } else if (argument == "--threads") {
+            options.workerThreadCount = ParseSize(readValue(argument), argument);
+        } else if (argument == "--worker-affinity") {
+            options.pinWorkerAffinity = ParseSwitch(readValue(argument), argument);
         } else if (argument == "--output") {
             options.outputPath = std::filesystem::path{ readValue(argument) };
         } else if (argument == "--save-baseline") {
@@ -845,7 +861,7 @@ private:
             options.warmupFrames = 1;
             options.outputPath = "ecs_benchmark_smoke.json";
         } else if (argument == "--help") {
-            std::cout << "Usage: kb_ecs_benchmarks [--entities N] [--hierarchy-entities N] [--structural-changes N] [--frames N] [--warmup N] [--grain N] [--output path] [--save-baseline path] [--compare-baseline path] [--compare-before path --compare-after path] [--compare-output path] [--fail-on-regression percent] [--validation off|debug|both] [--smoke]\n";
+            std::cout << "Usage: kb_ecs_benchmarks [--entities N] [--hierarchy-entities N] [--structural-changes N] [--frames N] [--warmup N] [--grain N] [--threads N] [--worker-affinity on|off] [--output path] [--save-baseline path] [--compare-baseline path] [--compare-before path --compare-after path] [--compare-output path] [--fail-on-regression percent] [--validation off|debug|both] [--smoke]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("Unknown argument: " + std::string{ argument });
@@ -1694,6 +1710,12 @@ public:
         , access_(access)
         , weight_(weight) {}
 
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        kb::ecs::SystemAccess systemAccess;
+        systemAccess.Write<BenchSystemChainState>(world);
+        return systemAccess;
+    }
+
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
         BenchSystemChainState* state = world.TryGetMutable<BenchSystemChainState>(stateEntity_);
         if (state == nullptr) {
@@ -2122,13 +2144,24 @@ template <typename FrameFunction>
     return results;
 }
 
-[[nodiscard]] BenchmarkRunData MakeBenchmarkRunData(std::vector<BenchmarkResult> results) {
+void ValidateWorkerPoolOptions(const BenchmarkOptions& options) {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{
+        .workerCount = options.workerThreadCount,
+        .pinWorkersToCores = options.pinWorkerAffinity,
+    } };
+
+    std::vector<kb::ecs::WorkerPoolJob> jobs;
+    jobs.emplace_back([](kb::ecs::WorkerContext) {});
+    pool.Run(jobs);
+}
+
+[[nodiscard]] BenchmarkRunData MakeBenchmarkRunData(std::vector<BenchmarkResult> results, const BenchmarkOptions& options) {
     return BenchmarkRunData{
         .commit = KB_ECS_BENCHMARK_GIT_COMMIT,
         .branch = KB_ECS_BENCHMARK_GIT_BRANCH,
         .buildConfig = KB_ECS_BENCHMARK_BUILD_CONFIG,
         .cpu = CpuBrandString(),
-        .threadCount = std::max(1U, std::thread::hardware_concurrency()),
+        .threadCount = static_cast<unsigned int>(kb::ecs::WorkerPool::ResolveWorkerCount(options.workerThreadCount)),
         .results = std::move(results),
     };
 }
@@ -2465,7 +2498,8 @@ int main(int argc, char** argv) {
             return comparison.regressions.empty() ? 0 : 2;
         }
 
-        BenchmarkRunData run = MakeBenchmarkRunData(RunSelectedBenchmarks(options));
+        ValidateWorkerPoolOptions(options);
+        BenchmarkRunData run = MakeBenchmarkRunData(RunSelectedBenchmarks(options), options);
         WriteRunJson(options.outputPath, run);
         PrintResults(options.outputPath, run.results);
 
