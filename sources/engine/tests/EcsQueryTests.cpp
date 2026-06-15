@@ -2,9 +2,11 @@
 #include "EcsTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <initializer_list>
 #include <stdexcept>
 #include <vector>
@@ -70,6 +72,36 @@ struct MovingQuerySnapshot {
     std::vector<kb::ecs::Entity::IdType> entityIds;
     float sumX = 0.0F;
 };
+
+struct ParallelQueryCounters {
+    std::atomic<std::size_t> visited = 0;
+    std::atomic<std::size_t> batches = 0;
+    std::atomic<std::size_t> maxBatch = 0;
+    std::atomic<int> sumX = 0;
+};
+
+void TrackMaxBatch(std::atomic<std::size_t>& target, std::size_t value) noexcept {
+    std::size_t current = target.load(std::memory_order_acquire);
+    while (current < value && !target.compare_exchange_weak(current, value, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    }
+}
+
+void CountMovingBatchesParallel(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+    auto* counters = static_cast<ParallelQueryCounters*>(context);
+    counters->batches.fetch_add(1U, std::memory_order_acq_rel);
+    TrackMaxBatch(counters->maxBatch, batch.Count());
+
+    const EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    int sum = 0;
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        kb::tests::Require(batch.EntityAt(index).IsValid(), "Parallel ECS batch query returned invalid entity");
+        sum += static_cast<int>(positions[index].x + velocities[index].x);
+    }
+
+    counters->visited.fetch_add(batch.Count(), std::memory_order_acq_rel);
+    counters->sumX.fetch_add(sum, std::memory_order_acq_rel);
+}
 
 MovingQuerySnapshot CollectMovingSnapshot(kb::ecs::Query<EcsPosition, EcsVelocity>& query) {
     MovingQuerySnapshot snapshot;
@@ -141,6 +173,35 @@ void RunTypedEcsQueryBatchTest() {
     kb::tests::Require(counters.batches >= 5, "Typed ECS batch query did not split work into execution grains");
     kb::tests::Require(counters.maxBatch <= 128, "Typed ECS batch query exceeded configured execution grain size");
     kb::tests::Require(kb::tests::NearlyEqual(counters.sumX, 1800.0F), "Typed ECS batch query saw invalid component data");
+}
+
+void RunTypedEcsQueryBatchWorkStealingTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 32,
+    });
+    for (int index = 0; index < 512; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+
+    ParallelQueryCounters counters;
+    query.ForEachBatch(
+        kb::ecs::QueryExecutionSettings{
+            .maxBatchSize = 32,
+            .iterationOrder = kb::ecs::QueryIterationOrder::ChunkOrder,
+            .workerPool = &pool,
+        },
+        &CountMovingBatchesParallel,
+        &counters);
+
+    kb::tests::Require(counters.visited.load(std::memory_order_acquire) == 512U, "Parallel ECS batch query did not visit all entities");
+    kb::tests::Require(counters.batches.load(std::memory_order_acquire) >= 16U, "Parallel ECS batch query did not split work into batches");
+    kb::tests::Require(counters.maxBatch.load(std::memory_order_acquire) <= 32U, "Parallel ECS batch query exceeded configured batch size");
+    kb::tests::Require(counters.sumX.load(std::memory_order_acquire) == 1536, "Parallel ECS batch query read invalid component data");
 }
 
 void RunTypedEcsMutableQueryBatchTest() {
@@ -547,6 +608,7 @@ namespace kb::tests {
 void RunEcsQueryTests() {
     RunTypedEcsQueryRowBatchAdapterTest();
     RunTypedEcsQueryBatchTest();
+    RunTypedEcsQueryBatchWorkStealingTest();
     RunTypedEcsMutableQueryBatchTest();
     RunTypedEcsQueryBatchKernelTest();
     RunTypedEcsQueryPrefetchHintTest();

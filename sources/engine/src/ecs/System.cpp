@@ -1,6 +1,12 @@
 #include "engine/ecs/System.hpp"
 
+#include <typeinfo>
+
 namespace kb::ecs {
+
+std::string_view System::Name() const noexcept {
+    return typeid(*this).name();
+}
 
 void System::OnCreate(World& world) {
     static_cast<void>(world);

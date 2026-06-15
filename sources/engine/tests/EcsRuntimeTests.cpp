@@ -14,6 +14,8 @@ void RunEcsRuntimeTests() {
     RunEcsReflectionTests();
     RunEcsRelationTests();
     RunEcsSnapshotTests();
+    RunEcsSystemSchedulerTests();
+    RunEcsWorkerPoolTests();
 }
 
 } // namespace kb::tests
