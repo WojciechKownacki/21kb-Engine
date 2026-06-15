@@ -44,17 +44,6 @@ namespace {
 #define KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS 0
 #endif
 
-[[nodiscard]] std::filesystem::path ModuleTestRoot() {
-    return std::filesystem::temp_directory_path() / "21kb_engine_module_tests";
-}
-
-void ResetModuleTestRoot() {
-    std::error_code error;
-    std::filesystem::remove_all(ModuleTestRoot(), error);
-    std::filesystem::create_directories(ModuleTestRoot(), error);
-    kb::tests::Require(!error, "engine module test root could not be created");
-}
-
 // Shared sink the probe module and its scene system write into so a test can observe
 // exactly what the host did: which modules loaded, in what order, and whether the
 // module's scene system actually reached the scene runtime and ticked.
@@ -284,7 +273,18 @@ void RunEngineModuleLoaderShadowCopyTest() {
 #if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
     return;
 #else
-    ResetModuleTestRoot();
+    const auto moduleTestRoot = [] {
+        return std::filesystem::temp_directory_path() / "21kb_engine_module_tests";
+    };
+
+    const auto resetModuleTestRoot = [&moduleTestRoot] {
+        std::error_code error;
+        std::filesystem::remove_all(moduleTestRoot(), error);
+        std::filesystem::create_directories(moduleTestRoot(), error);
+        kb::tests::Require(!error, "engine module test root could not be created");
+    };
+
+    resetModuleTestRoot();
     const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "module loader test DLL is missing");
 
@@ -293,7 +293,7 @@ void RunEngineModuleLoaderShadowCopyTest() {
         .key = "module-loader-test",
         .modulePath = pluginPath,
         .shadowCopy = true,
-        .shadowCopyDirectory = ModuleTestRoot() / "EngineModuleLoaderShadow",
+        .shadowCopyDirectory = moduleTestRoot() / "EngineModuleLoaderShadow",
         .diagnosticLabel = "module loader test",
     });
     kb::tests::Require(first.Succeeded(), "EngineModuleLoader did not load a shadow-copied DLL");
@@ -311,7 +311,7 @@ void RunEngineModuleLoaderShadowCopyTest() {
         .key = "module-loader-test",
         .modulePath = pluginPath,
         .shadowCopy = true,
-        .shadowCopyDirectory = ModuleTestRoot() / "EngineModuleLoaderShadow",
+        .shadowCopyDirectory = moduleTestRoot() / "EngineModuleLoaderShadow",
         .diagnosticLabel = "module loader test",
     });
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
