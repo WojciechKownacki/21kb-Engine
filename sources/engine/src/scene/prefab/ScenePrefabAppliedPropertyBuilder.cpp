@@ -172,9 +172,9 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
             return true;
         }
         if (StartsWith(propertyPath, "meshRenderer.materialSlotAssetId.")) {
-            const std::string_view indexText = propertyPath.substr(std::string_view{ "meshRenderer.materialSlotAssetId." }.size());
+            const std::string indexText{ propertyPath.substr(std::string_view{ "meshRenderer.materialSlotAssetId." }.size()) };
             std::uint32_t slotIndex = 0;
-            std::istringstream stream{ std::string{ indexText } };
+            std::istringstream stream{ indexText };
             if (!(stream >> slotIndex) || slotIndex >= kMaxMeshRendererMaterialSlotOverrides) {
                 return false;
             }
