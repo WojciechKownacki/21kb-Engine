@@ -10,6 +10,7 @@
 namespace kb::ecs {
 
 class QueryState;
+class QueryBatchExecutionScratch;
 
 using QueryRawVisitor = void (*)(Entity entity, const void* const* components, void* context);
 using QueryRawBatchVisitor = void (*)(const Entity::IdType* entityIds, std::size_t count, const void* const* components, void* context);
@@ -18,8 +19,11 @@ using QueryRawMutableBatchVisitor = void (*)(const Entity::IdType* entityIds, st
 void DestroyQueryState(QueryState* state) noexcept;
 [[nodiscard]] bool IsQueryStateValid(const QueryState* state) noexcept;
 void ForEachQueryState(const QueryState* state, QueryRawVisitor visitor, void* context);
+void PrepareQueryStateBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context);
+void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch);
 void ForEachQueryStateMutableBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context);
+void ForEachQueryStateMutableBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch);
 
 template <typename... Components>
 class Query {
@@ -33,6 +37,7 @@ public:
     Query() noexcept = default;
 
     [[nodiscard]] bool IsValid() const noexcept;
+    void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(Visitor visitor, void* context) const;
     void ForEachBatch(BatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, BatchVisitor visitor, void* context) const;
@@ -46,6 +51,8 @@ public:
     void ForEachMutableBatchKernel(Kernel&& kernel) const;
     template <typename Kernel>
     void ForEachMutableBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const;
+    template <typename Kernel>
+    void ForEachMutableBatchKernel(QueryExecutionSettings settings, Kernel&& kernel, QueryBatchExecutionScratch& scratch) const;
 
 private:
     friend class World;

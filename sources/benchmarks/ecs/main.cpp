@@ -1384,8 +1384,11 @@ void RegisterStructuralComponents(kb::ecs::World& world) {
     kb::scene::Scene& scene = *data.scene;
     const std::size_t initialEntityCount = scene.Entities().Count();
     double checksum = 0.0;
-    for (std::size_t instanceIndex = 0; instanceIndex < data.instanceCount; ++instanceIndex) {
-        const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(data.prefab);
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(data.prefab, data.instanceCount);
+    if (instances.size() != data.instanceCount) {
+        throw std::runtime_error("Prefab spawn benchmark bulk instantiation returned an unexpected instance count");
+    }
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
         if (instance.ObjectCount() != data.nodeCount || !instance.Handle().IsValid() || !instance.RootObject().IsValid()) {
             throw std::runtime_error("Prefab spawn benchmark failed to instantiate a complete registered prefab");
         }
@@ -2151,7 +2154,7 @@ void ValidateWorkerPoolOptions(const BenchmarkOptions& options) {
     } };
 
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([](kb::ecs::WorkerContext) {});
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {} });
     pool.Run(jobs);
 }
 

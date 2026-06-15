@@ -1,7 +1,6 @@
 #include "engine/ecs/World.hpp"
 
 #include "ecs/QueryStateFactory.hpp"
-#include "ecs/query/QueryPlanCache.hpp"
 
 #include <flecs.h>
 
@@ -14,16 +13,15 @@ QueryState* World::CreateQueryState(
     const std::size_t* componentSizes,
     std::size_t componentCount,
     std::span<const ComponentId> requiredComponentIds,
-    std::span<const ComponentId> optionalComponentIds,
-    std::span<const ComponentId> excludedComponentIds,
-    std::span<const ComponentId> changedComponentIds) const {
-    if (world_ == nullptr || queryPlanCache_ == nullptr || componentIds == nullptr || componentSizes == nullptr || componentCount == 0) {
+        std::span<const ComponentId> optionalComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::span<const ComponentId> changedComponentIds) const {
+    if (world_ == nullptr || nativeStorage_ == nullptr || componentIds == nullptr || componentSizes == nullptr || componentCount == 0) {
         return nullptr;
     }
 
     return QueryStateFactory::Create(
-        world_,
-        *queryPlanCache_,
+        nativeStorage_.get(),
         std::span<const ComponentId>{ componentIds, componentCount },
         std::span<const std::size_t>{ componentSizes, componentCount },
         requiredComponentIds,
@@ -41,9 +39,8 @@ ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
 }
 
 void World::InvalidateQueryPlansForArchetypeChange(ecs_table_t* previousArchetype, ecs_table_t* currentArchetype) noexcept {
-    if (queryPlanCache_ != nullptr && previousArchetype != currentArchetype) {
-        queryPlanCache_->InvalidateTouchedArchetypes(previousArchetype, currentArchetype);
-    }
+    static_cast<void>(previousArchetype);
+    static_cast<void>(currentArchetype);
 }
 
 } // namespace kb::ecs

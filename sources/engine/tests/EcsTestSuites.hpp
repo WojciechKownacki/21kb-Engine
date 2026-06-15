@@ -3,11 +3,13 @@
 namespace kb::tests {
 
 void RunEcsComponentApiTests();
+void RunEcsCommandBufferTests();
 void RunEcsQueryTests();
 void RunEcsQuerySystemTests();
 void RunEcsConfigTests();
 void RunEcsEventTests();
 void RunEcsInspectionTests();
+void RunEcsKernelTests();
 void RunEcsNativeArchetypeStorageTests();
 void RunEcsReflectionTests();
 void RunEcsRelationTests();

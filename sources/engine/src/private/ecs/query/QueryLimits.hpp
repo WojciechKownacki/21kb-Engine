@@ -1,13 +1,11 @@
 #pragma once
 
-#include <flecs.h>
-
 #include <array>
 #include <cstddef>
 
 namespace kb::ecs {
 
-inline constexpr std::size_t kMaxQueryTerms = FLECS_TERM_COUNT_MAX;
+inline constexpr std::size_t kMaxQueryTerms = 32;
 using QueryComponentPointerBlock = std::array<const void*, kMaxQueryTerms>;
 using MutableQueryComponentPointerBlock = std::array<void*, kMaxQueryTerms>;
 

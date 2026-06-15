@@ -2,6 +2,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/NativeArchetypeStorage.hpp"
+#include "engine/ecs/World.hpp"
 
 #include <array>
 #include <cstddef>
@@ -202,6 +203,42 @@ void RunArchetypeSignatureMatchingTest() {
     kb::tests::Require(!storage.EntityArchetypeMatches(positionOnly, positionMassQuery), "native ECS signature was not updated after remove-component migration");
 }
 
+void RunWorldNativeStorageMirrorTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::World world{ config };
+
+    const kb::ecs::ComponentId positionId = world.RegisterComponent<Position>("Position");
+    const kb::ecs::ComponentId velocityId = world.RegisterComponent<Velocity>("Velocity");
+
+    const kb::ecs::Entity entity = world.CreateEntity();
+    kb::tests::Require(world.NativeChunkPayloadBytes() == kb::ecs::ChunkPayloadBytes(kb::ecs::ChunkSizeProfile::Chunk16KB), "World native storage did not use configured chunk payload bytes");
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 1, "World native storage did not mirror entity creation");
+    kb::tests::Require(world.NativeStorage().IsAlive(entity), "World native storage did not adopt the runtime entity handle");
+
+    const Position position{ .x = 11.0F, .y = 12.0F };
+    world.Set(entity, position);
+    kb::tests::Require(world.NativeStorage().HasComponent(entity, positionId), "World native storage did not mirror component set as add");
+    kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, 11.0F), "World native storage mirrored invalid component data");
+
+    const Position updatedPosition{ .x = 21.0F, .y = 22.0F };
+    world.Set(entity, updatedPosition);
+    kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, 21.0F), "World native storage did not mirror component overwrite");
+
+    const Velocity velocity{ .x = 1.0F, .y = 2.0F };
+    world.Set(entity, velocity);
+    const std::array movingQuery{ positionId, velocityId };
+    kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, movingQuery), "World native storage did not mirror add-component archetype migration");
+
+    world.Remove<Velocity>(entity);
+    kb::tests::Require(!world.NativeStorage().HasComponent(entity, velocityId), "World native storage did not mirror component removal");
+    kb::tests::Require(world.NativeStorage().HasComponent(entity, positionId), "World native storage lost retained component during removal");
+
+    world.DestroyEntity(entity);
+    kb::tests::Require(!world.NativeStorage().IsAlive(entity), "World native storage did not mirror entity destruction");
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 0, "World native storage stats did not mirror entity destruction");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -211,6 +248,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunMultiComponentMigrationTest();
     RunSwapDeleteAndGenerationTest();
     RunArchetypeSignatureMatchingTest();
+    RunWorldNativeStorageMirrorTest();
 }
 
 } // namespace kb::tests

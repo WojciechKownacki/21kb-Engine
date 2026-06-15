@@ -16,6 +16,9 @@ namespace {
 constexpr std::size_t kChunkAlignment = 64;
 constexpr std::uint32_t kInvalidEntityIndex = std::numeric_limits<std::uint32_t>::max();
 
+static_assert(sizeof(Entity) == sizeof(Entity::IdType), "Native ECS query batches require Entity to store exactly one id");
+static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batches require Entity id-compatible alignment");
+
 [[nodiscard]] std::size_t AlignUp(std::size_t value, std::size_t alignment) {
     return (value + alignment - 1U) & ~(alignment - 1U);
 }
@@ -213,6 +216,8 @@ struct EntityLocation {
 struct EntityRecord {
     std::uint32_t generation = 1;
     bool alive = false;
+    bool ownsGeneratedId = true;
+    Entity entity{};
     EntityLocation location{};
 };
 
@@ -361,6 +366,15 @@ public:
         return componentVersions_[index];
     }
 
+    [[nodiscard]] std::uint64_t ComponentVersionOrZero(ComponentId componentId) const noexcept {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            return 0;
+        }
+        const std::size_t index = static_cast<std::size_t>(column - layout_.columns.data());
+        return index < componentVersions_.size() ? componentVersions_[index] : 0;
+    }
+
     [[nodiscard]] const std::unordered_map<EdgeKey, std::size_t, EdgeKeyHash>& Edges() const noexcept {
         return edges_;
     }
@@ -434,12 +448,48 @@ public:
         TouchComponent(componentId);
     }
 
+    void MarkComponentsModified(std::span<const ComponentId> componentIds) {
+        for (ComponentId componentId : componentIds) {
+            TouchComponent(componentId);
+        }
+    }
+
     [[nodiscard]] void* ComponentData(EntityLocation location, ComponentId componentId) {
         const ComponentLayout* column = FindColumn(componentId);
         if (column == nullptr) {
             throw std::out_of_range("Native ECS component is not in archetype");
         }
         return ComponentData(location, *column);
+    }
+
+    [[nodiscard]] const Entity::IdType* ChunkEntityIds(std::size_t chunkIndex) const {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        return reinterpret_cast<const Entity::IdType*>(chunks_[chunkIndex].entities.data());
+    }
+
+    [[nodiscard]] std::size_t ChunkRowCount(std::size_t chunkIndex) const {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        return chunks_[chunkIndex].rowCount;
+    }
+
+    [[nodiscard]] const void* ComponentColumnData(std::size_t chunkIndex, ComponentId componentId) const {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr || chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Native ECS component column is not available");
+        }
+        return chunks_[chunkIndex].payload.Data() + column->offset;
+    }
+
+    [[nodiscard]] void* MutableComponentColumnData(std::size_t chunkIndex, ComponentId componentId) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr || chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Native ECS component column is not available");
+        }
+        return chunks_[chunkIndex].payload.Data() + column->offset;
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, ComponentId componentId) const {
@@ -568,7 +618,7 @@ public:
         const Entity entity = AllocateEntity();
         EntityLocation location = table.Add(entity);
         location.table = tableIndex;
-        records_[EntityIndex(entity)].location = location;
+        records_[RecordIndex(entity)].location = location;
 
         for (const NativeComponentValue& component : components) {
             if (component.data != nullptr) {
@@ -578,22 +628,63 @@ public:
         return entity;
     }
 
+    void AdoptEntity(Entity entity, std::span<const NativeComponentValue> components) {
+        if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex) {
+            throw std::invalid_argument("Native ECS cannot adopt an invalid entity");
+        }
+
+        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        if (entitySlots_.find(entity.Id()) != entitySlots_.end()) {
+            throw std::invalid_argument("Native ECS cannot adopt an already live entity");
+        }
+
+        const std::uint32_t index = AllocateExternalRecord(entity);
+        EntityRecord& record = records_[index];
+        const std::uint32_t generation = EntityGeneration(entity);
+        record.generation = generation;
+        record.alive = true;
+        record.ownsGeneratedId = false;
+        record.entity = entity;
+        entitySlots_[entity.Id()] = index;
+        ++liveEntities_;
+
+        const std::size_t tableIndex = FindOrCreateTable(types);
+        ArchetypeTable& table = tables_[tableIndex];
+        EntityLocation location = table.Add(entity);
+        location.table = tableIndex;
+        record.location = location;
+
+        for (const NativeComponentValue& component : components) {
+            if (component.data != nullptr) {
+                table.WriteComponent(location, component.type.id, component.data, component.type.size);
+            }
+        }
+    }
+
     void DestroyEntity(Entity entity) {
+        const std::uint32_t recordIndex = RecordIndex(entity);
         EntityRecord& record = LiveRecord(entity);
         ArchetypeTable& table = tables_[record.location.table];
         const Entity movedEntity = table.RemoveAt(record.location);
         if (movedEntity.IsValid()) {
-            records_[EntityIndex(movedEntity)].location = record.location;
+            records_[RecordIndex(movedEntity)].location = record.location;
         }
         record.alive = false;
-        ++record.generation;
-        freeEntityIndices_.push_back(EntityIndex(entity));
+        entitySlots_.erase(entity.Id());
+        if (record.ownsGeneratedId) {
+            ++record.generation;
+            freeEntityIndices_.push_back(recordIndex);
+        }
         --liveEntities_;
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
-        const std::uint32_t index = EntityIndex(entity);
-        return index < records_.size() && records_[index].alive && records_[index].generation == EntityGeneration(entity);
+        const auto found = entitySlots_.find(entity.Id());
+        if (found == entitySlots_.end() || found->second >= records_.size()) {
+            return false;
+        }
+        const EntityRecord& record = records_[found->second];
+        return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
     }
 
     void AddComponents(Entity entity, std::span<const NativeComponentValue> components) {
@@ -641,6 +732,18 @@ public:
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
         EntityRecord& record = LiveRecord(entity);
         tables_[record.location.table].WriteComponent(record.location, componentId, data, size);
+    }
+
+    void MarkComponentModified(Entity entity, ComponentId componentId) {
+        EntityRecord& record = LiveRecord(entity);
+        tables_[record.location.table].MarkComponentsModified(std::span<const ComponentId>{ &componentId, 1U });
+    }
+
+    void MarkArchetypeComponentsModified(std::size_t archetypeIndex, std::span<const ComponentId> componentIds) {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        tables_[archetypeIndex].MarkComponentsModified(componentIds);
     }
 
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId) {
@@ -692,6 +795,110 @@ public:
         return matches;
     }
 
+    void CollectQueryRecords(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<QueryTableDispatchRecord>& records) const {
+        records.clear();
+        if (componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
+            return;
+        }
+
+        const std::vector<ComponentId> queryIds = NormalizeComponentIds(componentIds);
+        std::vector<ComponentId> requiredIds = NormalizeComponentIds(requiredComponentIds);
+        requiredIds.insert(requiredIds.end(), queryIds.begin(), queryIds.end());
+        std::sort(requiredIds.begin(), requiredIds.end());
+        requiredIds.erase(std::unique(requiredIds.begin(), requiredIds.end()), requiredIds.end());
+
+        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds);
+        if (!requiredSignature.has_value()) {
+            return;
+        }
+        const std::vector<ComponentId> excludedIds = NormalizeComponentIds(excludedComponentIds);
+
+        std::size_t sequence = 0;
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            const ArchetypeTable& table = tables_[tableIndex];
+            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds)) {
+                continue;
+            }
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0) {
+                    continue;
+                }
+
+                QueryTableDispatchRecord record{
+                    .table = nullptr,
+                    .entityIds = table.ChunkEntityIds(chunkIndex),
+                    .entityCount = rowCount,
+                    .nativeArchetypeIndex = tableIndex,
+                    .nativeChunkIndex = chunkIndex,
+                    .firstEntityId = table.ChunkEntityIds(chunkIndex)[0],
+                    .sequence = sequence++,
+                };
+                for (std::size_t field = 0; field < componentIds.size(); ++field) {
+                    record.fieldComponents[field] = table.ComponentColumnData(chunkIndex, componentIds[field]);
+                    record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                }
+                records.push_back(record);
+            }
+        }
+    }
+
+    void CollectMutableQueryRecords(
+        std::span<const ComponentId> componentIds,
+        std::span<const ComponentId> requiredComponentIds,
+        std::span<const ComponentId> excludedComponentIds,
+        std::vector<MutableQueryTableDispatchRecord>& records) {
+        records.clear();
+        if (componentIds.empty() || componentIds.size() > kQueryExecutionScratchMaxTerms) {
+            return;
+        }
+
+        const std::vector<ComponentId> queryIds = NormalizeComponentIds(componentIds);
+        std::vector<ComponentId> requiredIds = NormalizeComponentIds(requiredComponentIds);
+        requiredIds.insert(requiredIds.end(), queryIds.begin(), queryIds.end());
+        std::sort(requiredIds.begin(), requiredIds.end());
+        requiredIds.erase(std::unique(requiredIds.begin(), requiredIds.end()), requiredIds.end());
+
+        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds);
+        if (!requiredSignature.has_value()) {
+            return;
+        }
+        const std::vector<ComponentId> excludedIds = NormalizeComponentIds(excludedComponentIds);
+
+        std::size_t sequence = 0;
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            ArchetypeTable& table = tables_[tableIndex];
+            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds)) {
+                continue;
+            }
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0) {
+                    continue;
+                }
+
+                MutableQueryTableDispatchRecord record{
+                    .table = nullptr,
+                    .entityIds = table.ChunkEntityIds(chunkIndex),
+                    .entityCount = rowCount,
+                    .nativeArchetypeIndex = tableIndex,
+                    .nativeChunkIndex = chunkIndex,
+                    .firstEntityId = table.ChunkEntityIds(chunkIndex)[0],
+                    .sequence = sequence++,
+                };
+                for (std::size_t field = 0; field < componentIds.size(); ++field) {
+                    record.fieldComponents[field] = table.MutableComponentColumnData(chunkIndex, componentIds[field]);
+                    record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                }
+                records.push_back(record);
+            }
+        }
+    }
+
     [[nodiscard]] std::uint64_t ArchetypeVersion(Entity entity) const {
         const EntityRecord& record = LiveRecord(entity);
         return tables_[record.location.table].Version();
@@ -700,6 +907,13 @@ public:
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const {
         const EntityRecord& record = LiveRecord(entity);
         return tables_[record.location.table].ComponentVersion(componentId);
+    }
+
+    [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        return tables_[archetypeIndex].ComponentVersion(componentId);
     }
 
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept {
@@ -728,37 +942,79 @@ private:
         return ids;
     }
 
+    [[nodiscard]] static bool HasExcludedComponent(const ArchetypeTable& table, std::span<const ComponentId> excludedIds) noexcept {
+        for (ComponentId componentId : excludedIds) {
+            if (table.HasComponent(componentId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] Entity AllocateEntity() {
         ++liveEntities_;
         if (!freeEntityIndices_.empty()) {
             const std::uint32_t index = freeEntityIndices_.back();
             freeEntityIndices_.pop_back();
-            records_[index].alive = true;
-            return PackEntity(index, records_[index].generation);
+            EntityRecord& record = records_[index];
+            record.alive = true;
+            record.ownsGeneratedId = true;
+            record.entity = PackEntity(index, record.generation);
+            entitySlots_[record.entity.Id()] = index;
+            return record.entity;
         }
 
         if (records_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             throw std::runtime_error("Native ECS entity capacity exceeded");
         }
         const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
-        records_.push_back(EntityRecord{ .alive = true });
-        return PackEntity(index, records_.back().generation);
+        Entity entity = PackEntity(index, 1U);
+        records_.push_back(EntityRecord{
+            .generation = 1U,
+            .alive = true,
+            .ownsGeneratedId = true,
+            .entity = entity,
+        });
+        entitySlots_[entity.Id()] = index;
+        return entity;
+    }
+
+    [[nodiscard]] std::uint32_t AllocateExternalRecord(Entity entity) {
+        if (records_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+            throw std::runtime_error("Native ECS entity capacity exceeded");
+        }
+        const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
+        records_.push_back(EntityRecord{
+            .generation = EntityGeneration(entity),
+            .alive = false,
+            .ownsGeneratedId = false,
+            .entity = entity,
+        });
+        return index;
+    }
+
+    [[nodiscard]] std::uint32_t RecordIndexUnchecked(Entity entity) const {
+        const auto found = entitySlots_.find(entity.Id());
+        if (found == entitySlots_.end()) {
+            throw std::out_of_range("Invalid native ECS entity");
+        }
+        return found->second;
+    }
+
+    [[nodiscard]] std::uint32_t RecordIndex(Entity entity) const {
+        const std::uint32_t index = RecordIndexUnchecked(entity);
+        if (index >= records_.size() || !records_[index].alive || records_[index].entity != entity || records_[index].generation != EntityGeneration(entity)) {
+            throw std::out_of_range("Invalid or stale native ECS entity");
+        }
+        return index;
     }
 
     [[nodiscard]] EntityRecord& LiveRecord(Entity entity) {
-        const std::uint32_t index = EntityIndex(entity);
-        if (index >= records_.size() || !records_[index].alive || records_[index].generation != EntityGeneration(entity)) {
-            throw std::out_of_range("Invalid or stale native ECS entity");
-        }
-        return records_[index];
+        return records_[RecordIndex(entity)];
     }
 
     [[nodiscard]] const EntityRecord& LiveRecord(Entity entity) const {
-        const std::uint32_t index = EntityIndex(entity);
-        if (index >= records_.size() || !records_[index].alive || records_[index].generation != EntityGeneration(entity)) {
-            throw std::out_of_range("Invalid or stale native ECS entity");
-        }
-        return records_[index];
+        return records_[RecordIndex(entity)];
     }
 
     [[nodiscard]] std::size_t FindOrCreateTable(std::span<const NativeComponentType> types) {
@@ -811,7 +1067,7 @@ private:
 
         const Entity movedEntity = source.RemoveAt(sourceLocation);
         if (movedEntity.IsValid()) {
-            records_[EntityIndex(movedEntity)].location = sourceLocation;
+            records_[RecordIndex(movedEntity)].location = sourceLocation;
         }
         record.location = targetLocation;
     }
@@ -820,6 +1076,7 @@ private:
     NativeChunkPool pool_;
     std::vector<EntityRecord> records_;
     std::vector<std::uint32_t> freeEntityIndices_;
+    std::unordered_map<Entity::IdType, std::uint32_t> entitySlots_;
     ComponentSignatureRegistry signatureRegistry_;
     std::vector<ArchetypeTable> tables_;
     std::size_t liveEntities_ = 0;
@@ -847,6 +1104,10 @@ Entity NativeArchetypeStorage::CreateEntity(std::span<const NativeComponentValue
     return impl_->CreateEntity(components);
 }
 
+void NativeArchetypeStorage::AdoptEntity(Entity entity, std::span<const NativeComponentValue> components) {
+    impl_->AdoptEntity(entity, components);
+}
+
 void NativeArchetypeStorage::DestroyEntity(Entity entity) {
     impl_->DestroyEntity(entity);
 }
@@ -865,6 +1126,14 @@ void NativeArchetypeStorage::RemoveComponents(Entity entity, std::span<const Com
 
 void NativeArchetypeStorage::SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
     impl_->SetComponent(entity, componentId, data, size);
+}
+
+void NativeArchetypeStorage::MarkComponentModified(Entity entity, ComponentId componentId) {
+    impl_->MarkComponentModified(entity, componentId);
+}
+
+void NativeArchetypeStorage::MarkArchetypeComponentsModified(std::size_t archetypeIndex, std::span<const ComponentId> componentIds) {
+    impl_->MarkArchetypeComponentsModified(archetypeIndex, componentIds);
 }
 
 void* NativeArchetypeStorage::MutableComponentData(Entity entity, ComponentId componentId) {
@@ -887,12 +1156,32 @@ std::vector<NativeArchetypeMatch> NativeArchetypeStorage::MatchingArchetypes(std
     return impl_->MatchingArchetypes(requiredComponentIds);
 }
 
+void NativeArchetypeStorage::CollectQueryRecords(
+    std::span<const ComponentId> componentIds,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::vector<QueryTableDispatchRecord>& records) const {
+    impl_->CollectQueryRecords(componentIds, requiredComponentIds, excludedComponentIds, records);
+}
+
+void NativeArchetypeStorage::CollectMutableQueryRecords(
+    std::span<const ComponentId> componentIds,
+    std::span<const ComponentId> requiredComponentIds,
+    std::span<const ComponentId> excludedComponentIds,
+    std::vector<MutableQueryTableDispatchRecord>& records) {
+    impl_->CollectMutableQueryRecords(componentIds, requiredComponentIds, excludedComponentIds, records);
+}
+
 std::uint64_t NativeArchetypeStorage::ArchetypeVersion(Entity entity) const {
     return impl_->ArchetypeVersion(entity);
 }
 
 std::uint64_t NativeArchetypeStorage::ComponentVersion(Entity entity, ComponentId componentId) const {
     return impl_->ComponentVersion(entity, componentId);
+}
+
+std::uint64_t NativeArchetypeStorage::ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const {
+    return impl_->ArchetypeComponentVersion(archetypeIndex, componentId);
 }
 
 std::size_t NativeArchetypeStorage::ChunkPayloadBytes() const noexcept {

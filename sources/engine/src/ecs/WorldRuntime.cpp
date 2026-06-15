@@ -26,4 +26,16 @@ const ecs_world_t* World::NativeHandle() const noexcept {
     return world_;
 }
 
+const NativeArchetypeStorage& World::NativeStorage() const noexcept {
+    return *nativeStorage_;
+}
+
+NativeEcsStorageStats World::NativeStorageStats() const noexcept {
+    return nativeStorage_ != nullptr ? nativeStorage_->Stats() : NativeEcsStorageStats{};
+}
+
+std::size_t World::NativeChunkPayloadBytes() const noexcept {
+    return nativeStorage_ != nullptr ? nativeStorage_->ChunkPayloadBytes() : 0;
+}
+
 } // namespace kb::ecs
