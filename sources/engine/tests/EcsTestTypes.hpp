@@ -12,6 +12,14 @@ struct EcsVelocity {
     float y = 0.0F;
 };
 
+struct EcsQueryMarker {
+    int value = 0;
+};
+
+struct EcsDisabled {
+    int value = 0;
+};
+
 struct EcsIterationCounters {
     int visited = 0;
     float sumX = 0.0F;

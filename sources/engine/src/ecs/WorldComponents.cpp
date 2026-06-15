@@ -16,7 +16,9 @@ ComponentId World::FindComponent(std::type_index type) const noexcept {
 }
 
 void World::SetComponent(Entity entity, ComponentId componentId, std::size_t size, const void* component) {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     WorldComponentMutator::Set(world_, entity, componentId, size, component);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 bool World::HasComponent(Entity entity, ComponentId componentId) const noexcept {
@@ -32,7 +34,9 @@ void* World::TryGetMutableComponent(Entity entity, ComponentId componentId) noex
 }
 
 void World::RemoveComponent(Entity entity, ComponentId componentId) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     WorldComponentMutator::Remove(world_, entity, componentId);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 void World::MarkComponentModified(Entity entity, ComponentId componentId) noexcept {
