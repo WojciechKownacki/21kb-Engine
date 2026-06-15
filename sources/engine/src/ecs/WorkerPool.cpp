@@ -51,6 +51,10 @@ void PinCurrentThreadToCore(std::size_t coreIndex) {
         throw std::runtime_error("ECS worker affinity could not set thread affinity mask");
     }
 #elif defined(__linux__)
+    if (coreIndex >= CPU_SETSIZE) {
+        throw std::invalid_argument("ECS worker affinity core index is outside the supported CPU set");
+    }
+
     cpu_set_t set;
     CPU_ZERO(&set);
     CPU_SET(coreIndex, &set);
@@ -240,6 +244,7 @@ public:
 
     void Stop() {
         std::shared_ptr<JobHandle::State> cancelledCompletion;
+        std::exception_ptr cancelledCompletionException;
         {
             std::lock_guard lock{ mutex_ };
             if (!running_) {
@@ -254,17 +259,29 @@ public:
         {
             std::lock_guard lock{ mutex_ };
             if (batchActive_) {
-                cancelledCompletion = activeCompletion_;
+                const std::exception_ptr cancellation = firstJobException_ != nullptr
+                    ? firstJobException_
+                    : std::make_exception_ptr(std::runtime_error("ECS worker pool stopped before submitted work completed"));
+                if (activeCompletion_ != nullptr) {
+                    cancelledCompletion = activeCompletion_;
+                    cancelledCompletionException = cancellation;
+                } else {
+                    cancelledRunException_ = cancellation;
+                }
             }
             workers_.clear();
             jobs_ = nullptr;
             jobCount_ = 0;
             nextJob_ = 0;
             batches_ = nullptr;
-            batchJob_ = nullptr;
+            chunks_ = nullptr;
+            batchCallback_ = nullptr;
+            batchCallbackContext_ = nullptr;
+            chunkCallback_ = nullptr;
+            chunkCallbackContext_ = nullptr;
             ownedJobs_.clear();
             ownedBatches_.clear();
-            ownedBatchJob_ = nullptr;
+            ownedChunks_.clear();
             workerBatchQueues_.clear();
             remainingWork_ = 0;
             workMode_ = WorkMode::None;
@@ -277,7 +294,7 @@ public:
             firstJobException_ = nullptr;
         }
         if (cancelledCompletion != nullptr) {
-            cancelledCompletion->Complete(std::make_exception_ptr(std::runtime_error("ECS worker pool stopped before submitted work completed")));
+            cancelledCompletion->Complete(cancelledCompletionException);
         }
         batchFinished_.notify_all();
     }
@@ -286,6 +303,7 @@ public:
         if (jobs.empty()) {
             return;
         }
+        ValidateJobs(jobs);
 
         if (config_.singleThreaded) {
             if (!Running()) {
@@ -308,6 +326,7 @@ public:
             nextJob_ = 0;
             remainingWork_ = jobs.size();
             firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
             workMode_ = WorkMode::Jobs;
             batchActive_ = true;
         }
@@ -324,13 +343,18 @@ public:
             firstJobException_ = nullptr;
             std::rethrow_exception(exception);
         }
+        if (cancelledRunException_ != nullptr) {
+            std::exception_ptr exception = cancelledRunException_;
+            cancelledRunException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
     }
 
-    void RunBatches(std::span<const WorkerPoolBatch> batches, const WorkerPoolBatchJob& job) {
+    void RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
         if (batches.empty()) {
             return;
         }
-        if (!job) {
+        if (callback == nullptr) {
             throw std::invalid_argument("ECS worker pool batch job must be callable");
         }
 
@@ -338,7 +362,7 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before running batches");
             }
-            RunBatchesInline(batches, job);
+            RunBatchesInline(batches, callback, context);
             return;
         }
 
@@ -352,7 +376,8 @@ public:
             });
 
             batches_ = batches.data();
-            batchJob_ = &job;
+            batchCallback_ = callback;
+            batchCallbackContext_ = context;
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
                 const WorkerPoolBatch& batch = batches[batchIndex];
@@ -362,6 +387,7 @@ public:
 
             remainingWork_ = batches.size();
             firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
             workMode_ = WorkMode::Batches;
             batchActive_ = true;
         }
@@ -378,12 +404,79 @@ public:
             firstJobException_ = nullptr;
             std::rethrow_exception(exception);
         }
+        if (cancelledRunException_ != nullptr) {
+            std::exception_ptr exception = cancelledRunException_;
+            cancelledRunException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
+    }
+
+    void ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
+        if (chunks.empty()) {
+            return;
+        }
+        if (callback == nullptr) {
+            throw std::invalid_argument("ECS worker pool chunk job must be callable");
+        }
+
+        if (config_.singleThreaded) {
+            if (!Running()) {
+                throw std::logic_error("ECS worker pool must be started before running chunks");
+            }
+            RunChunksInline(chunks, callback, context);
+            return;
+        }
+
+        {
+            std::unique_lock lock{ mutex_ };
+            if (!running_) {
+                throw std::logic_error("ECS worker pool must be started before running chunks");
+            }
+            batchFinished_.wait(lock, [this] {
+                return !batchActive_;
+            });
+
+            chunks_ = chunks.data();
+            chunkCallback_ = callback;
+            chunkCallbackContext_ = context;
+            workerBatchQueues_.assign(config_.workerCount, {});
+            for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
+                const WorkerPoolChunk& chunk = chunks[chunkIndex];
+                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % config_.workerCount : chunk.preferredWorkerIndex % config_.workerCount;
+                workerBatchQueues_[owner].push_back(chunkIndex);
+            }
+
+            remainingWork_ = chunks.size();
+            firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
+            workMode_ = WorkMode::Chunks;
+            batchActive_ = true;
+        }
+
+        batchAvailable_.notify_all();
+
+        std::unique_lock lock{ mutex_ };
+        batchFinished_.wait(lock, [this] {
+            return !batchActive_;
+        });
+
+        if (firstJobException_ != nullptr) {
+            std::exception_ptr exception = firstJobException_;
+            firstJobException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
+        if (cancelledRunException_ != nullptr) {
+            std::exception_ptr exception = cancelledRunException_;
+            cancelledRunException_ = nullptr;
+            std::rethrow_exception(exception);
+        }
     }
 
     [[nodiscard]] JobHandle Submit(std::vector<WorkerPoolJob> jobs) {
         if (jobs.empty()) {
             return {};
         }
+        ValidateJobs(jobs);
 
         if (config_.singleThreaded) {
             if (!Running()) {
@@ -408,6 +501,7 @@ public:
             nextJob_ = 0;
             remainingWork_ = ownedJobs_.size();
             firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
             activeCompletion_ = completion;
             workMode_ = WorkMode::Jobs;
             batchActive_ = true;
@@ -417,11 +511,11 @@ public:
         return JobHandle{ std::move(completion) };
     }
 
-    [[nodiscard]] JobHandle SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchJob job) {
+    [[nodiscard]] JobHandle SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
         if (batches.empty()) {
             return {};
         }
-        if (!job) {
+        if (callback == nullptr) {
             throw std::invalid_argument("ECS worker pool batch job must be callable");
         }
 
@@ -429,7 +523,7 @@ public:
             if (!Running()) {
                 throw std::logic_error("ECS worker pool must be started before submitting batches");
             }
-            return SubmitBatchesInline(batches, job);
+            return SubmitBatchesInline(batches, callback, context);
         }
 
         auto completion = std::make_shared<JobHandle::State>();
@@ -443,9 +537,9 @@ public:
             });
 
             ownedBatches_ = std::move(batches);
-            ownedBatchJob_ = std::move(job);
             batches_ = ownedBatches_.data();
-            batchJob_ = &ownedBatchJob_;
+            batchCallback_ = callback;
+            batchCallbackContext_ = context;
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t batchIndex = 0; batchIndex < ownedBatches_.size(); ++batchIndex) {
                 const WorkerPoolBatch& batch = ownedBatches_[batchIndex];
@@ -455,8 +549,57 @@ public:
 
             remainingWork_ = ownedBatches_.size();
             firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
             activeCompletion_ = completion;
             workMode_ = WorkMode::Batches;
+            batchActive_ = true;
+        }
+
+        batchAvailable_.notify_all();
+        return JobHandle{ std::move(completion) };
+    }
+
+    [[nodiscard]] JobHandle SubmitChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
+        if (chunks.empty()) {
+            return {};
+        }
+        if (callback == nullptr) {
+            throw std::invalid_argument("ECS worker pool chunk job must be callable");
+        }
+
+        if (config_.singleThreaded) {
+            if (!Running()) {
+                throw std::logic_error("ECS worker pool must be started before submitting chunks");
+            }
+            return SubmitChunksInline(chunks, callback, context);
+        }
+
+        auto completion = std::make_shared<JobHandle::State>();
+        {
+            std::unique_lock lock{ mutex_ };
+            if (!running_) {
+                throw std::logic_error("ECS worker pool must be started before submitting chunks");
+            }
+            batchFinished_.wait(lock, [this] {
+                return !batchActive_;
+            });
+
+            ownedChunks_ = std::move(chunks);
+            chunks_ = ownedChunks_.data();
+            chunkCallback_ = callback;
+            chunkCallbackContext_ = context;
+            workerBatchQueues_.assign(config_.workerCount, {});
+            for (std::size_t chunkIndex = 0; chunkIndex < ownedChunks_.size(); ++chunkIndex) {
+                const WorkerPoolChunk& chunk = ownedChunks_[chunkIndex];
+                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % config_.workerCount : chunk.preferredWorkerIndex % config_.workerCount;
+                workerBatchQueues_[owner].push_back(chunkIndex);
+            }
+
+            remainingWork_ = ownedChunks_.size();
+            firstJobException_ = nullptr;
+            cancelledRunException_ = nullptr;
+            activeCompletion_ = completion;
+            workMode_ = WorkMode::Chunks;
             batchActive_ = true;
         }
 
@@ -478,11 +621,20 @@ private:
         None,
         Jobs,
         Batches,
+        Chunks,
     };
 
     static void ThrowIfFailed(std::exception_ptr exception) {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
+        }
+    }
+
+    static void ValidateJobs(std::span<const WorkerPoolJob> jobs) {
+        for (const WorkerPoolJob& job : jobs) {
+            if (job.callback == nullptr) {
+                throw std::invalid_argument("ECS worker pool job must be callable");
+            }
         }
     }
 
@@ -495,7 +647,7 @@ private:
 
         for (const WorkerPoolJob& job : jobs) {
             try {
-                job(context);
+                job.callback(context, job.context);
             } catch (...) {
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
@@ -506,7 +658,7 @@ private:
         ThrowIfFailed(firstException);
     }
 
-    static void RunBatchesInline(std::span<const WorkerPoolBatch> batches, const WorkerPoolBatchJob& job) {
+    static void RunBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext) {
         std::exception_ptr firstException;
         const WorkerContext context{
             .workerIndex = 0,
@@ -515,7 +667,27 @@ private:
 
         for (const WorkerPoolBatch& batch : batches) {
             try {
-                job(context, batch);
+                callback(context, batch, callbackContext);
+            } catch (...) {
+                if (firstException == nullptr) {
+                    firstException = std::current_exception();
+                }
+            }
+        }
+
+        ThrowIfFailed(firstException);
+    }
+
+    static void RunChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext) {
+        std::exception_ptr firstException;
+        const WorkerContext context{
+            .workerIndex = 0,
+            .workerCount = 1,
+        };
+
+        for (const WorkerPoolChunk& chunk : chunks) {
+            try {
+                callback(context, chunk, callbackContext);
             } catch (...) {
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
@@ -536,7 +708,7 @@ private:
 
         for (const WorkerPoolJob& job : jobs) {
             try {
-                job(context);
+                job.callback(context, job.context);
             } catch (...) {
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
@@ -548,7 +720,7 @@ private:
         return JobHandle{ std::move(completion) };
     }
 
-    static JobHandle SubmitBatchesInline(std::span<const WorkerPoolBatch> batches, const WorkerPoolBatchJob& job) {
+    static JobHandle SubmitBatchesInline(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* callbackContext) {
         auto completion = std::make_shared<JobHandle::State>();
         std::exception_ptr firstException;
         const WorkerContext context{
@@ -558,7 +730,29 @@ private:
 
         for (const WorkerPoolBatch& batch : batches) {
             try {
-                job(context, batch);
+                callback(context, batch, callbackContext);
+            } catch (...) {
+                if (firstException == nullptr) {
+                    firstException = std::current_exception();
+                }
+            }
+        }
+
+        completion->Complete(firstException);
+        return JobHandle{ std::move(completion) };
+    }
+
+    static JobHandle SubmitChunksInline(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* callbackContext) {
+        auto completion = std::make_shared<JobHandle::State>();
+        std::exception_ptr firstException;
+        const WorkerContext context{
+            .workerIndex = 0,
+            .workerCount = 1,
+        };
+
+        for (const WorkerPoolChunk& chunk : chunks) {
+            try {
+                callback(context, chunk, callbackContext);
             } catch (...) {
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
@@ -595,8 +789,12 @@ private:
 
         while (true) {
             const WorkerPoolJob* job = nullptr;
-            const WorkerPoolBatchJob* batchJob = nullptr;
+            WorkerPoolBatchCallback batchCallback = nullptr;
+            void* batchCallbackContext = nullptr;
+            WorkerPoolChunkCallback chunkCallback = nullptr;
+            void* chunkCallbackContext = nullptr;
             WorkerPoolBatch batch;
+            WorkerPoolChunk chunk;
             WorkMode mode = WorkMode::None;
             {
                 std::unique_lock lock{ mutex_ };
@@ -615,15 +813,23 @@ private:
                 } else if (mode == WorkMode::Batches) {
                     const std::size_t batchIndex = TakeBatchLocked(workerIndex);
                     batch = batches_[batchIndex];
-                    batchJob = batchJob_;
+                    batchCallback = batchCallback_;
+                    batchCallbackContext = batchCallbackContext_;
+                } else if (mode == WorkMode::Chunks) {
+                    const std::size_t chunkIndex = TakeBatchLocked(workerIndex);
+                    chunk = chunks_[chunkIndex];
+                    chunkCallback = chunkCallback_;
+                    chunkCallbackContext = chunkCallbackContext_;
                 }
             }
 
             try {
                 if (mode == WorkMode::Jobs) {
-                    (*job)(context);
+                    job->callback(context, job->context);
                 } else if (mode == WorkMode::Batches) {
-                    (*batchJob)(context, batch);
+                    batchCallback(context, batch, batchCallbackContext);
+                } else if (mode == WorkMode::Chunks) {
+                    chunkCallback(context, chunk, chunkCallbackContext);
                 }
             } catch (...) {
                 std::lock_guard lock{ mutex_ };
@@ -653,7 +859,7 @@ private:
         if (workMode_ == WorkMode::Jobs) {
             return nextJob_ < jobCount_;
         }
-        if (workMode_ != WorkMode::Batches) {
+        if (workMode_ != WorkMode::Batches && workMode_ != WorkMode::Chunks) {
             return false;
         }
         if (workerIndex < workerBatchQueues_.size() && !workerBatchQueues_[workerIndex].empty()) {
@@ -674,7 +880,7 @@ private:
         if (workMode_ == WorkMode::Jobs) {
             return nextJob_ < jobCount_;
         }
-        if (workMode_ != WorkMode::Batches) {
+        if (workMode_ != WorkMode::Batches && workMode_ != WorkMode::Chunks) {
             return false;
         }
         for (const auto& queue : workerBatchQueues_) {
@@ -711,10 +917,14 @@ private:
         jobCount_ = 0;
         nextJob_ = 0;
         batches_ = nullptr;
-        batchJob_ = nullptr;
+        chunks_ = nullptr;
+        batchCallback_ = nullptr;
+        batchCallbackContext_ = nullptr;
+        chunkCallback_ = nullptr;
+        chunkCallbackContext_ = nullptr;
         ownedJobs_.clear();
         ownedBatches_.clear();
-        ownedBatchJob_ = nullptr;
+        ownedChunks_.clear();
         workerBatchQueues_.clear();
         remainingWork_ = 0;
         workMode_ = WorkMode::None;
@@ -746,15 +956,20 @@ private:
     std::size_t jobCount_ = 0;
     std::size_t nextJob_ = 0;
     const WorkerPoolBatch* batches_ = nullptr;
-    const WorkerPoolBatchJob* batchJob_ = nullptr;
+    const WorkerPoolChunk* chunks_ = nullptr;
+    WorkerPoolBatchCallback batchCallback_ = nullptr;
+    void* batchCallbackContext_ = nullptr;
+    WorkerPoolChunkCallback chunkCallback_ = nullptr;
+    void* chunkCallbackContext_ = nullptr;
     std::vector<WorkerPoolJob> ownedJobs_;
     std::vector<WorkerPoolBatch> ownedBatches_;
-    WorkerPoolBatchJob ownedBatchJob_;
+    std::vector<WorkerPoolChunk> ownedChunks_;
     std::vector<std::deque<std::size_t>> workerBatchQueues_;
     std::size_t remainingWork_ = 0;
     std::size_t startupRemaining_ = 0;
     std::exception_ptr startupException_;
     std::exception_ptr firstJobException_;
+    std::exception_ptr cancelledRunException_;
     std::shared_ptr<JobHandle::State> activeCompletion_;
     WorkMode workMode_ = WorkMode::None;
     bool running_ = false;
@@ -799,11 +1014,11 @@ void WorkerPool::Run(std::span<const WorkerPoolJob> jobs) {
     state_->Run(jobs);
 }
 
-void WorkerPool::RunBatches(std::span<const WorkerPoolBatch> batches, const WorkerPoolBatchJob& job) {
+void WorkerPool::RunBatches(std::span<const WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before running batches");
     }
-    state_->RunBatches(batches, job);
+    state_->RunBatches(batches, callback, context);
 }
 
 JobHandle WorkerPool::Submit(std::vector<WorkerPoolJob> jobs) {
@@ -813,67 +1028,34 @@ JobHandle WorkerPool::Submit(std::vector<WorkerPoolJob> jobs) {
     return state_->Submit(std::move(jobs));
 }
 
-JobHandle WorkerPool::SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchJob job) {
+JobHandle WorkerPool::SubmitBatches(std::vector<WorkerPoolBatch> batches, WorkerPoolBatchCallback callback, void* context) {
     if (state_ == nullptr) {
         throw std::logic_error("ECS worker pool must be started before submitting batches");
     }
-    return state_->SubmitBatches(std::move(batches), std::move(job));
+    return state_->SubmitBatches(std::move(batches), callback, context);
 }
 
-void WorkerPool::ParallelForChunks(std::span<const WorkerPoolChunk> chunks, const WorkerPoolChunkJob& job) {
-    if (chunks.empty()) {
-        return;
+void WorkerPool::ParallelForChunks(std::span<const WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
+    if (state_ == nullptr) {
+        throw std::logic_error("ECS worker pool must be started before running chunks");
     }
-    if (!job) {
-        throw std::invalid_argument("ECS worker pool chunk job must be callable");
-    }
-
-    std::vector<WorkerPoolBatch> batches;
-    batches.reserve(chunks.size());
-    for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
-        const WorkerPoolChunk& chunk = chunks[chunkIndex];
-        batches.push_back(WorkerPoolBatch{
-            .index = chunkIndex,
-            .begin = chunk.begin,
-            .count = chunk.count,
-            .preferredWorkerIndex = chunk.preferredWorkerIndex,
-        });
-    }
-
-    const WorkerPoolBatchJob batchJob = [&chunks, &job](WorkerContext context, const WorkerPoolBatch& batch) {
-        const WorkerPoolChunk& chunk = chunks[batch.index];
-        job(context, chunk);
-    };
-    RunBatches(batches, batchJob);
+    state_->ParallelForChunks(chunks, callback, context);
 }
 
-JobHandle WorkerPool::SubmitParallelForChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkJob job) {
+JobHandle WorkerPool::SubmitParallelForChunks(std::vector<WorkerPoolChunk> chunks, WorkerPoolChunkCallback callback, void* context) {
     if (chunks.empty()) {
         return {};
     }
-    if (!job) {
+    if (callback == nullptr) {
         throw std::invalid_argument("ECS worker pool chunk job must be callable");
     }
-
-    std::vector<WorkerPoolBatch> batches;
-    batches.reserve(chunks.size());
-    for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
-        const WorkerPoolChunk& chunk = chunks[chunkIndex];
-        batches.push_back(WorkerPoolBatch{
-            .index = chunkIndex,
-            .begin = chunk.begin,
-            .count = chunk.count,
-            .preferredWorkerIndex = chunk.preferredWorkerIndex,
-        });
+    if (state_ == nullptr) {
+        throw std::logic_error("ECS worker pool must be started before submitting chunks");
     }
-
-    return SubmitBatches(std::move(batches), [chunks = std::move(chunks), job = std::move(job)](WorkerContext context, const WorkerPoolBatch& batch) {
-        const WorkerPoolChunk& chunk = chunks[batch.index];
-        job(context, chunk);
-    });
+    return state_->SubmitChunks(std::move(chunks), callback, context);
 }
 
-void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, const WorkerPoolChunkJob& job) {
+void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkCallback callback, void* context) {
     if (itemCount == 0) {
         return;
     }
@@ -893,10 +1075,10 @@ void WorkerPool::ParallelForChunks(std::size_t itemCount, std::size_t chunkSize,
         });
     }
 
-    ParallelForChunks(chunks, job);
+    ParallelForChunks(chunks, callback, context);
 }
 
-JobHandle WorkerPool::SubmitParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkJob job) {
+JobHandle WorkerPool::SubmitParallelForChunks(std::size_t itemCount, std::size_t chunkSize, WorkerPoolChunkCallback callback, void* context) {
     if (itemCount == 0) {
         return {};
     }
@@ -916,7 +1098,7 @@ JobHandle WorkerPool::SubmitParallelForChunks(std::size_t itemCount, std::size_t
         });
     }
 
-    return SubmitParallelForChunks(std::move(chunks), std::move(job));
+    return SubmitParallelForChunks(std::move(chunks), callback, context);
 }
 
 bool WorkerPool::Running() const noexcept {

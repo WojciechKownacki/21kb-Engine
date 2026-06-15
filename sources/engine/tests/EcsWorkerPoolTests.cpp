@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -17,29 +18,36 @@ void RunWorkerPoolExecutesConcurrentJobsTest() {
     std::atomic<std::size_t> entered = 0;
     std::atomic<bool> released = false;
     std::atomic<std::size_t> completions = 0;
+    struct ConcurrentJobContext {
+        std::atomic<std::size_t>* entered = nullptr;
+        std::atomic<bool>* released = nullptr;
+        std::atomic<std::size_t>* completions = nullptr;
+        bool releaseBatch = false;
+    };
+    ConcurrentJobContext firstJobContext{ &entered, &released, &completions, true };
+    ConcurrentJobContext secondJobContext{ &entered, &released, &completions, false };
 
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([&entered, &released, &completions](kb::ecs::WorkerContext context) {
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext context, void* userContext) {
+        auto& jobContext = *static_cast<ConcurrentJobContext*>(userContext);
         kb::tests::Require(context.workerCount == 2U, "ECS worker pool reported an invalid worker count");
-        entered.fetch_add(1U, std::memory_order_acq_rel);
+        jobContext.entered->fetch_add(1U, std::memory_order_acq_rel);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 2 };
-        while (entered.load(std::memory_order_acquire) < 2U && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::yield();
+        if (jobContext.releaseBatch) {
+            while (jobContext.entered->load(std::memory_order_acquire) < 2U && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            kb::tests::Require(jobContext.entered->load(std::memory_order_acquire) == 2U, "ECS worker pool did not execute jobs concurrently");
+            jobContext.released->store(true, std::memory_order_release);
+        } else {
+            while (!jobContext.released->load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            kb::tests::Require(jobContext.released->load(std::memory_order_acquire), "ECS worker pool did not release the concurrent job batch");
         }
-        kb::tests::Require(entered.load(std::memory_order_acquire) == 2U, "ECS worker pool did not execute jobs concurrently");
-        released.store(true, std::memory_order_release);
-        completions.fetch_add(1U, std::memory_order_acq_rel);
-    });
-    jobs.emplace_back([&entered, &released, &completions](kb::ecs::WorkerContext context) {
-        kb::tests::Require(context.workerCount == 2U, "ECS worker pool reported an invalid worker count");
-        entered.fetch_add(1U, std::memory_order_acq_rel);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 2 };
-        while (!released.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::yield();
-        }
-        kb::tests::Require(released.load(std::memory_order_acquire), "ECS worker pool did not release the concurrent job batch");
-        completions.fetch_add(1U, std::memory_order_acq_rel);
-    });
+        jobContext.completions->fetch_add(1U, std::memory_order_acq_rel);
+    }, .context = &firstJobContext });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = jobs.front().callback, .context = &secondJobContext });
 
     pool.Run(jobs);
 
@@ -50,9 +58,9 @@ void RunWorkerPoolExecutesConcurrentJobsTest() {
 void RunWorkerPoolPropagatesJobExceptionTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([](kb::ecs::WorkerContext) {
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {
         throw std::invalid_argument("worker failure");
-    });
+    } });
 
     bool propagated = false;
     try {
@@ -143,14 +151,43 @@ void RunWorkerPoolParallelForChunksPreservesChunkMetadataTest() {
     kb::tests::Require(visited.load(std::memory_order_acquire) == 7U, "ECS parallel-for did not process caller chunk counts");
 }
 
+void RunWorkerPoolSynchronousHotPathAcceptsMoveOnlyJobsTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+
+    std::vector<kb::ecs::WorkerPoolBatch> batches{
+        kb::ecs::WorkerPoolBatch{ .index = 0, .begin = 0, .count = 3, .preferredWorkerIndex = 0 },
+        kb::ecs::WorkerPoolBatch{ .index = 1, .begin = 3, .count = 5, .preferredWorkerIndex = 1 },
+    };
+
+    std::atomic<std::size_t> batchRows = 0;
+    pool.RunBatches(
+        batches,
+        [token = std::make_unique<int>(1), &batchRows](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolBatch& batch) mutable {
+            kb::tests::Require(token != nullptr, "ECS worker pool lost move-only batch job state");
+            batchRows.fetch_add(batch.count, std::memory_order_acq_rel);
+        });
+
+    std::atomic<std::size_t> chunkRows = 0;
+    pool.ParallelForChunks(
+        11,
+        4,
+        [token = std::make_unique<int>(2), &chunkRows](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) mutable {
+            kb::tests::Require(token != nullptr, "ECS worker pool lost move-only chunk job state");
+            chunkRows.fetch_add(chunk.count, std::memory_order_acq_rel);
+        });
+
+    kb::tests::Require(batchRows.load(std::memory_order_acquire) == 8U, "ECS worker pool move-only batch job did not process every row");
+    kb::tests::Require(chunkRows.load(std::memory_order_acquire) == 11U, "ECS worker pool move-only chunk job did not process every row");
+}
+
 void RunWorkerPoolJobHandleWaitsForSubmittedJobsTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
     std::atomic<std::size_t> completed = 0;
 
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([&completed](kb::ecs::WorkerContext) {
-        completed.fetch_add(1U, std::memory_order_acq_rel);
-    });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void* userContext) {
+        static_cast<std::atomic<std::size_t>*>(userContext)->fetch_add(1U, std::memory_order_acq_rel);
+    }, .context = &completed });
 
     kb::ecs::JobHandle handle = pool.Submit(std::move(jobs));
 
@@ -164,9 +201,9 @@ void RunWorkerPoolJobHandlePropagatesSubmittedExceptionTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
 
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([](kb::ecs::WorkerContext) {
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {
         throw std::invalid_argument("submitted failure");
-    });
+    } });
 
     kb::ecs::JobHandle handle = pool.Submit(std::move(jobs));
 
@@ -186,9 +223,9 @@ void RunWorkerPoolJobFenceWaitsForChunkJobsTest() {
     std::atomic<std::size_t> visited = 0;
 
     kb::ecs::JobFence fence;
-    fence.Add(pool.SubmitParallelForChunks(19, 4, [&visited](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
-        visited.fetch_add(chunk.count, std::memory_order_acq_rel);
-    }));
+    fence.Add(pool.SubmitParallelForChunks(19, 4, +[](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk, void* userContext) {
+        static_cast<std::atomic<std::size_t>*>(userContext)->fetch_add(chunk.count, std::memory_order_acq_rel);
+    }, &visited));
 
     kb::tests::Require(!fence.Empty(), "ECS job fence did not retain submitted work");
     kb::tests::Require(fence.Count() == 1U, "ECS job fence reported an invalid handle count");
@@ -202,18 +239,22 @@ void RunWorkerPoolSingleThreadModeRunsJobsInlineTest() {
 
     const std::thread::id callerThread = std::this_thread::get_id();
     std::vector<std::size_t> order;
+    struct SingleThreadJobContext {
+        const std::thread::id* callerThread = nullptr;
+        std::vector<std::size_t>* order = nullptr;
+        std::size_t value = 0;
+    };
+    SingleThreadJobContext firstJobContext{ &callerThread, &order, 1 };
+    SingleThreadJobContext secondJobContext{ &callerThread, &order, 2 };
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([&callerThread, &order](kb::ecs::WorkerContext context) {
-        kb::tests::Require(std::this_thread::get_id() == callerThread, "ECS single-thread worker pool did not run on the caller thread");
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext context, void* userContext) {
+        auto& jobContext = *static_cast<SingleThreadJobContext*>(userContext);
+        kb::tests::Require(std::this_thread::get_id() == *jobContext.callerThread, "ECS single-thread worker pool did not run on the caller thread");
         kb::tests::Require(context.workerIndex == 0U, "ECS single-thread worker pool reported an invalid worker index");
         kb::tests::Require(context.workerCount == 1U, "ECS single-thread worker pool reported an invalid worker count");
-        order.push_back(1U);
-    });
-    jobs.emplace_back([&callerThread, &order](kb::ecs::WorkerContext context) {
-        kb::tests::Require(std::this_thread::get_id() == callerThread, "ECS single-thread worker pool did not keep execution inline");
-        kb::tests::Require(context.workerIndex == 0U && context.workerCount == 1U, "ECS single-thread worker pool changed worker context between jobs");
-        order.push_back(2U);
-    });
+        jobContext.order->push_back(jobContext.value);
+    }, .context = &firstJobContext });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = jobs.front().callback, .context = &secondJobContext });
 
     pool.Run(jobs);
 
@@ -227,10 +268,10 @@ void RunWorkerPoolSingleThreadSubmitCompletesHandleTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .singleThreaded = true } };
 
     std::vector<kb::ecs::WorkerPoolJob> jobs;
-    jobs.emplace_back([](kb::ecs::WorkerContext context) {
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext context, void*) {
         kb::tests::Require(context.workerIndex == 0U && context.workerCount == 1U, "ECS single-thread submitted job received an invalid worker context");
         throw std::invalid_argument("single-thread submitted failure");
-    });
+    } });
 
     kb::ecs::JobHandle handle = pool.Submit(std::move(jobs));
 
@@ -247,6 +288,61 @@ void RunWorkerPoolSingleThreadSubmitCompletesHandleTest() {
     kb::tests::Require(propagated, "ECS single-thread job handle did not propagate submitted job exceptions");
 }
 
+void RunWorkerPoolStopCancelsSubmittedHandleTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+
+    std::atomic<bool> firstJobEntered = false;
+    std::atomic<bool> stopStarted = false;
+    std::atomic<bool> secondJobRan = false;
+    struct CancellationJobContext {
+        std::atomic<bool>* firstJobEntered = nullptr;
+        std::atomic<bool>* stopStarted = nullptr;
+        std::atomic<bool>* secondJobRan = nullptr;
+        bool waitForStop = false;
+    };
+    CancellationJobContext firstJobContext{ &firstJobEntered, &stopStarted, nullptr, true };
+    CancellationJobContext secondJobContext{ nullptr, nullptr, &secondJobRan, false };
+
+    std::vector<kb::ecs::WorkerPoolJob> jobs;
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void* userContext) {
+        auto& jobContext = *static_cast<CancellationJobContext*>(userContext);
+        if (jobContext.waitForStop) {
+            jobContext.firstJobEntered->store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 2 };
+            while (!jobContext.stopStarted->load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            kb::tests::Require(jobContext.stopStarted->load(std::memory_order_acquire), "ECS worker pool stop cancellation test timed out before Stop");
+            std::this_thread::sleep_for(std::chrono::milliseconds{ 250 });
+            return;
+        }
+        jobContext.secondJobRan->store(true, std::memory_order_release);
+    }, .context = &firstJobContext });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = jobs.front().callback, .context = &secondJobContext });
+
+    kb::ecs::JobHandle handle = pool.Submit(std::move(jobs));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{ 2 };
+    while (!firstJobEntered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    kb::tests::Require(firstJobEntered.load(std::memory_order_acquire), "ECS worker pool did not start the submitted cancellation test job");
+
+    stopStarted.store(true, std::memory_order_release);
+    pool.Stop();
+
+    bool cancelled = false;
+    try {
+        handle.Wait();
+    } catch (const std::runtime_error&) {
+        cancelled = true;
+    }
+
+    kb::tests::Require(cancelled, "ECS worker pool submitted handle returned success after Stop cancelled pending work");
+    kb::tests::Require(!secondJobRan.load(std::memory_order_acquire), "ECS worker pool executed pending work after Stop requested cancellation");
+    kb::tests::Require(!pool.Running(), "ECS worker pool still reported running after Stop");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -257,11 +353,13 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolStealsPreferredBatchesTest();
     RunWorkerPoolParallelForChunksPartitionsRangeTest();
     RunWorkerPoolParallelForChunksPreservesChunkMetadataTest();
+    RunWorkerPoolSynchronousHotPathAcceptsMoveOnlyJobsTest();
     RunWorkerPoolJobHandleWaitsForSubmittedJobsTest();
     RunWorkerPoolJobHandlePropagatesSubmittedExceptionTest();
     RunWorkerPoolJobFenceWaitsForChunkJobsTest();
     RunWorkerPoolSingleThreadModeRunsJobsInlineTest();
     RunWorkerPoolSingleThreadSubmitCompletesHandleTest();
+    RunWorkerPoolStopCancelsSubmittedHandleTest();
 }
 
 } // namespace kb::tests
