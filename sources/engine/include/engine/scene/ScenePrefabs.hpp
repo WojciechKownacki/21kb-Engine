@@ -43,6 +43,8 @@ public:
     [[nodiscard]] ScenePrefab Capture(SceneObject root, const ScenePrefabCaptureSettings& settings) const;
     [[nodiscard]] ScenePrefabInstance Instantiate(const ScenePrefab& prefab);
     [[nodiscard]] ScenePrefabInstance Instantiate(const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(const ScenePrefab& prefab, std::size_t count);
+    [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] ScenePrefabHandle Register(std::string name, ScenePrefab prefab);
     [[nodiscard]] ScenePrefabHandle RegisterVariant(std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides);
     [[nodiscard]] ScenePrefabHandle CaptureRegistered(SceneObject root, std::string name);
@@ -56,6 +58,8 @@ public:
     [[nodiscard]] ScenePrefab Get(ScenePrefabHandle handle) const;
     [[nodiscard]] ScenePrefabInstance Instantiate(ScenePrefabHandle handle);
     [[nodiscard]] ScenePrefabInstance Instantiate(ScenePrefabHandle handle, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(ScenePrefabHandle handle, std::size_t count);
+    [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] bool Save(ScenePrefabHandle handle, const std::filesystem::path& path) const;
     [[nodiscard]] ScenePrefabHandle Load(const std::filesystem::path& path);
     [[nodiscard]] bool IsInstance(ScenePrefabInstanceHandle handle) const noexcept;

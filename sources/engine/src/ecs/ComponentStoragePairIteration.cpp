@@ -1,10 +1,7 @@
 #include "ecs/component/ComponentStoragePairIteration.hpp"
 
-#include "ecs/query/QueryDescriptorBuilder.hpp"
-
 #include <flecs.h>
 
-#include <array>
 #include <cstdint>
 
 namespace kb::ecs {
@@ -21,28 +18,24 @@ void ComponentStoragePairIteration::ForEachPair(
         return;
     }
 
-    const std::array<ComponentId, 2> componentIds{ firstComponentId, secondComponentId };
-    const std::array<std::size_t, 2> componentSizes{ firstComponentSize, secondComponentSize };
-    FlecsQueryHandle query = QueryDescriptorBuilder::Build(world, componentIds, componentSizes);
-    if (!query) {
-        return;
-    }
-
-    ecs_iter_t it = ecs_query_iter(world, query.Get());
-    while (ecs_query_next(&it)) {
+    ecs_iter_t it = ecs_each_id(world, firstComponentId);
+    while (ecs_each_next(&it)) {
         const void* firstComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(firstComponentSize), 0);
-        const void* secondComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(secondComponentSize), 1);
-        if (firstComponents == nullptr || secondComponents == nullptr) {
+        if (firstComponents == nullptr) {
             continue;
         }
 
         const auto* firstBytes = static_cast<const std::uint8_t*>(firstComponents);
-        const auto* secondBytes = static_cast<const std::uint8_t*>(secondComponents);
         for (int32_t i = 0; i < it.count; ++i) {
+            const void* secondComponent = ecs_get_id(world, it.entities[i], secondComponentId);
+            if (secondComponent == nullptr) {
+                continue;
+            }
+
             visitor(
                 Entity{ it.entities[i] },
                 firstBytes + static_cast<std::size_t>(i) * firstComponentSize,
-                secondBytes + static_cast<std::size_t>(i) * secondComponentSize,
+                secondComponent,
                 context);
         }
     }
