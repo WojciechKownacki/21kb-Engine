@@ -3,10 +3,12 @@
 #include "ecs/query/QueryFieldReader.hpp"
 #include "ecs/query/QueryLimits.hpp"
 #include "ecs/query/QueryTableBatchDispatcher.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 
 #include <flecs.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 
 namespace kb::ecs {
@@ -35,6 +37,12 @@ struct MutableQueryTableDispatchRecord {
     std::vector<ecs_id_t> tableTypeIds;
     Entity::IdType firstEntityId = 0;
     std::size_t sequence = 0;
+};
+
+struct QueryBatchWorkItem {
+    std::size_t recordIndex = 0;
+    std::size_t offset = 0;
+    std::size_t count = 0;
 };
 
 struct MutableDispatchContext {
@@ -76,6 +84,39 @@ struct MutableDispatchContext {
     return left.sequence < right.sequence;
 }
 
+[[nodiscard]] std::vector<QueryTableDispatchRecord> CollectReadOnlyRecords(
+    ecs_world_t* world,
+    ecs_query_t* query,
+    std::span<const std::size_t> componentSizes,
+    bool filterChangedResults) {
+    std::vector<QueryTableDispatchRecord> records;
+    QueryComponentPointerBlock fieldComponents{};
+    std::size_t sequence = 0;
+
+    ecs_iter_t iterator = ecs_query_iter(world, query);
+    while (ecs_query_next(&iterator)) {
+        if (filterChangedResults && !ecs_iter_changed(&iterator)) {
+            continue;
+        }
+        if (!QueryFieldReader::Read(iterator, componentSizes, fieldComponents) || iterator.count <= 0 || iterator.entities == nullptr) {
+            continue;
+        }
+
+        const auto* entityIds = reinterpret_cast<const Entity::IdType*>(iterator.entities);
+        records.push_back(QueryTableDispatchRecord{
+            .table = iterator.table,
+            .entityIds = entityIds,
+            .entityCount = static_cast<std::size_t>(iterator.count),
+            .fieldComponents = fieldComponents,
+            .tableTypeIds = ReadTableTypeIds(iterator.table),
+            .firstEntityId = entityIds[0],
+            .sequence = sequence++,
+        });
+    }
+
+    return records;
+}
+
 void MarkMutableBatchChanged(ecs_world_t* world, std::span<const ComponentId> componentIds, const Entity::IdType* entityIds, std::size_t count) {
     for (ComponentId componentId : componentIds) {
         for (std::size_t index = 0; index < count; ++index) {
@@ -88,6 +129,31 @@ void DispatchMutableBatch(const Entity::IdType* entityIds, std::size_t count, vo
     auto* dispatchContext = static_cast<MutableDispatchContext*>(context);
     dispatchContext->visitor(entityIds, count, components, dispatchContext->context);
     MarkMutableBatchChanged(dispatchContext->world, dispatchContext->componentIds, entityIds, count);
+}
+
+void DispatchRecordBatch(
+    const QueryTableDispatchRecord& record,
+    std::span<const std::size_t> componentSizes,
+    std::size_t offset,
+    std::size_t count,
+    std::size_t prefetchDistance,
+    QueryRawBatchVisitor visitor,
+    void* context) {
+    QueryComponentPointerBlock batchComponents{};
+    for (std::size_t field = 0; field < componentSizes.size(); ++field) {
+        const auto* bytes = static_cast<const std::uint8_t*>(record.fieldComponents[field]);
+        batchComponents[field] = bytes + offset * componentSizes[field];
+    }
+
+    QueryTableBatchDispatcher::Dispatch(
+        record.entityIds + offset,
+        count,
+        componentSizes,
+        batchComponents,
+        count,
+        prefetchDistance,
+        visitor,
+        context);
 }
 
 void DispatchRecord(
@@ -106,6 +172,43 @@ void DispatchRecord(
         prefetchDistance,
         visitor,
         context);
+}
+
+void DispatchRecordsWithWorkStealing(
+    std::span<const QueryTableDispatchRecord> records,
+    std::span<const std::size_t> componentSizes,
+    std::size_t maxBatchSize,
+    std::size_t prefetchDistance,
+    WorkerPool& workerPool,
+    QueryRawBatchVisitor visitor,
+    void* context) {
+    std::vector<QueryBatchWorkItem> workItems;
+    std::vector<WorkerPoolChunk> chunks;
+
+    for (std::size_t recordIndex = 0; recordIndex < records.size(); ++recordIndex) {
+        const QueryTableDispatchRecord& record = records[recordIndex];
+        for (std::size_t offset = 0; offset < record.entityCount; offset += maxBatchSize) {
+            const std::size_t count = std::min(maxBatchSize, record.entityCount - offset);
+            const std::size_t workIndex = workItems.size();
+            workItems.push_back(QueryBatchWorkItem{
+                .recordIndex = recordIndex,
+                .offset = offset,
+                .count = count,
+            });
+            chunks.push_back(WorkerPoolChunk{
+                .index = workIndex,
+                .begin = offset,
+                .count = count,
+                .preferredWorkerIndex = recordIndex,
+            });
+        }
+    }
+
+    const WorkerPoolChunkJob chunkJob = [&records, &componentSizes, &workItems, prefetchDistance, visitor, context](WorkerContext, const WorkerPoolChunk& chunk) {
+        const QueryBatchWorkItem& item = workItems[chunk.index];
+        DispatchRecordBatch(records[item.recordIndex], componentSizes, item.offset, item.count, prefetchDistance, visitor, context);
+    };
+    workerPool.ParallelForChunks(chunks, chunkJob);
 }
 
 void DispatchMutableRecord(
@@ -132,8 +235,15 @@ void ExecuteStorageOrder(
     bool filterChangedResults,
     std::size_t maxBatchSize,
     std::size_t prefetchDistance,
+    WorkerPool* workerPool,
     QueryRawBatchVisitor visitor,
     void* context) {
+    if (workerPool != nullptr) {
+        std::vector<QueryTableDispatchRecord> records = CollectReadOnlyRecords(world, query, componentSizes, filterChangedResults);
+        DispatchRecordsWithWorkStealing(records, componentSizes, maxBatchSize, prefetchDistance, *workerPool, visitor, context);
+        return;
+    }
+
     QueryComponentPointerBlock fieldComponents{};
     ecs_iter_t iterator = ecs_query_iter(world, query);
     while (ecs_query_next(&iterator)) {
@@ -184,31 +294,7 @@ void ExecuteDeterministicOrder(
     std::size_t prefetchDistance,
     QueryRawBatchVisitor visitor,
     void* context) {
-    std::vector<QueryTableDispatchRecord> records;
-    QueryComponentPointerBlock fieldComponents{};
-    std::size_t sequence = 0;
-
-    ecs_iter_t iterator = ecs_query_iter(world, query);
-    while (ecs_query_next(&iterator)) {
-        if (filterChangedResults && !ecs_iter_changed(&iterator)) {
-            continue;
-        }
-        if (!QueryFieldReader::Read(iterator, componentSizes, fieldComponents) || iterator.count <= 0 || iterator.entities == nullptr) {
-            continue;
-        }
-
-        const auto* entityIds = reinterpret_cast<const Entity::IdType*>(iterator.entities);
-        records.push_back(QueryTableDispatchRecord{
-            .table = iterator.table,
-            .entityIds = entityIds,
-            .entityCount = static_cast<std::size_t>(iterator.count),
-            .fieldComponents = fieldComponents,
-            .tableTypeIds = ReadTableTypeIds(iterator.table),
-            .firstEntityId = entityIds[0],
-            .sequence = sequence++,
-        });
-    }
-
+    std::vector<QueryTableDispatchRecord> records = CollectReadOnlyRecords(world, query, componentSizes, filterChangedResults);
     std::sort(records.begin(), records.end(), &CompareTableRecords);
     for (const QueryTableDispatchRecord& record : records) {
         DispatchRecord(record, componentSizes, maxBatchSize, prefetchDistance, visitor, context);
@@ -285,7 +371,7 @@ void QueryBatchDispatcher::Execute(
         return;
     case QueryIterationOrder::StorageOrder:
     case QueryIterationOrder::ChunkOrder:
-        ExecuteStorageOrder(world, query, componentSizes, filterChangedResults, maxBatchSize, settings.prefetchDistance, visitor, context);
+        ExecuteStorageOrder(world, query, componentSizes, filterChangedResults, maxBatchSize, settings.prefetchDistance, settings.workerPool, visitor, context);
         return;
     }
 }

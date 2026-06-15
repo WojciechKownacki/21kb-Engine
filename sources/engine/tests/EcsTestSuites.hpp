@@ -12,5 +12,7 @@ void RunEcsNativeArchetypeStorageTests();
 void RunEcsReflectionTests();
 void RunEcsRelationTests();
 void RunEcsSnapshotTests();
+void RunEcsSystemSchedulerTests();
+void RunEcsWorkerPoolTests();
 
 } // namespace kb::tests
