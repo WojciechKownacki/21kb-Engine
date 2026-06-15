@@ -79,7 +79,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 });
             }
 
-            auto stageJob = [this, &world, deltaSeconds, &stage, stageIndex, frameStart, &systemEndTimes, &executionSamples](WorkerContext context, const WorkerPoolBatch& batch) {
+            auto stageJob = [this, &world, deltaSeconds, &stage, frameStart, &systemEndTimes, &executionSamples](WorkerContext context, const WorkerPoolBatch& batch) {
                 const std::size_t slot = batch.index;
                 const std::size_t systemIndex = stage.systems[slot];
                 std::chrono::steady_clock::time_point systemStart;
