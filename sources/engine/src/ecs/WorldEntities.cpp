@@ -27,9 +27,11 @@ Entity World::CreateEntity(std::string_view name) {
 }
 
 void World::DestroyEntity(Entity entity) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     if (world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, entity.Id())) {
         ecs_delete(world_, entity.Id());
     }
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
     if (registries_ != nullptr) {
         registries_->Entities().Remove(entity);
     }

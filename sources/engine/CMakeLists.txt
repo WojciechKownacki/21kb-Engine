@@ -32,10 +32,13 @@ add_library(kb_engine STATIC
     include/engine/ecs/ComponentSerialization.hpp
     include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
+    include/engine/ecs/NativeArchetypeStorage.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
     include/engine/ecs/QueryExecutionSettings.hpp
+    include/engine/ecs/QueryFilter.hpp
     include/engine/ecs/Query.hpp
+    include/engine/ecs/QueryPrefetch.hpp
     include/engine/ecs/Query.inl
     include/engine/ecs/QueryIteration.inl
     include/engine/ecs/QueryLifecycle.inl
@@ -253,12 +256,16 @@ add_library(kb_engine STATIC
     src/ecs/EntityNameReader.cpp
     src/ecs/HierarchyRelationService.cpp
     src/ecs/HierarchyChildrenCollector.cpp
+    src/ecs/NativeArchetypeStorage.cpp
     src/ecs/query/FlecsQueryHandle.cpp
+    src/ecs/QueryFilter.cpp
     src/ecs/QueryState.cpp
     src/ecs/QueryStateFactory.cpp
     src/ecs/query/QueryBatchDispatcher.cpp
     src/ecs/query/QueryDescriptorBuilder.cpp
     src/ecs/query/QueryFieldReader.cpp
+    src/ecs/query/QueryPlan.cpp
+    src/ecs/query/QueryPlanCache.cpp
     src/ecs/query/QueryRowDispatcher.cpp
     src/ecs/query/QueryTableBatchDispatcher.cpp
     src/ecs/RelationStorage.cpp
@@ -833,6 +840,8 @@ add_library(kb_engine STATIC
     src/private/ecs/query/QueryDescriptorBuilder.hpp
     src/private/ecs/query/QueryFieldReader.hpp
     src/private/ecs/query/QueryLimits.hpp
+    src/private/ecs/query/QueryPlan.hpp
+    src/private/ecs/query/QueryPlanCache.hpp
     src/private/ecs/query/QueryRowDispatcher.hpp
     src/private/ecs/query/QueryTableBatchDispatcher.hpp
     src/private/ecs/reflection/ComponentFieldBounds.hpp
@@ -940,6 +949,7 @@ if(BUILD_TESTING)
         tests/EcsConfigTests.cpp
         tests/EcsEventTests.cpp
         tests/EcsInspectionTests.cpp
+        tests/EcsNativeArchetypeStorageTests.cpp
         tests/EcsQueryTests.cpp
         tests/EcsQuerySystemTests.cpp
         tests/EcsReflectionTests.cpp
