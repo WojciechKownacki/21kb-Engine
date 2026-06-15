@@ -6,18 +6,15 @@
 #include <cstddef>
 #include <span>
 
-struct ecs_world_t;
-
 namespace kb::ecs {
 
-class QueryPlanCache;
 class QueryState;
+class NativeArchetypeStorage;
 
 class QueryStateFactory {
 public:
     [[nodiscard]] static QueryState* Create(
-        ecs_world_t* world,
-        QueryPlanCache& queryPlanCache,
+        NativeArchetypeStorage* nativeStorage,
         std::span<const ComponentId> componentIds,
         std::span<const std::size_t> componentSizes,
         std::span<const ComponentId> requiredComponentIds,

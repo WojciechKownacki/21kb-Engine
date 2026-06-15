@@ -13,4 +13,12 @@ ScenePrefabInstance ScenePrefabInstanceFacade::Instantiate(Scene& scene, ScenePr
     return ScenePrefabRegisteredInstantiationService::Instantiate(scene, handle, settings);
 }
 
+std::vector<ScenePrefabInstance> ScenePrefabInstanceFacade::InstantiateMany(Scene& scene, const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings) {
+    return ScenePrefabInstantiationService::InstantiateMany(scene, prefab, count, settings);
+}
+
+std::vector<ScenePrefabInstance> ScenePrefabInstanceFacade::InstantiateMany(Scene& scene, ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings) {
+    return ScenePrefabRegisteredInstantiationService::InstantiateMany(scene, handle, count, settings);
+}
+
 } // namespace kb::scene
