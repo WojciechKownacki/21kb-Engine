@@ -20,8 +20,8 @@ void ValidateComponentId(ComponentId componentId) {
 
 QueryFilter& QueryFilter::Require(ComponentId componentId) {
     ValidateComponentId(componentId);
-    if (Contains(excluded_, componentId)) {
-        throw std::invalid_argument("ECS query filter cannot require and exclude the same component");
+    if (Contains(optional_, componentId) || Contains(excluded_, componentId)) {
+        throw std::invalid_argument("ECS query filter cannot require an optional or excluded component");
     }
     if (!Contains(required_, componentId)) {
         required_.push_back(componentId);
