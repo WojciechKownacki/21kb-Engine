@@ -16,7 +16,9 @@ RelationId World::FindRelation(std::type_index type) const noexcept {
 }
 
 void World::AddRelation(Entity entity, RelationId relation, Entity target) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     RelationStorage::Add(world_, entity, relation, target);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 bool World::HasRelation(Entity entity, RelationId relation, Entity target) const noexcept {
@@ -24,7 +26,9 @@ bool World::HasRelation(Entity entity, RelationId relation, Entity target) const
 }
 
 void World::RemoveRelation(Entity entity, RelationId relation, Entity target) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(entity);
     RelationStorage::Remove(world_, entity, relation, target);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
 }
 
 Entity World::RelationTarget(Entity entity, RelationId relation, int index) const noexcept {
@@ -32,11 +36,15 @@ Entity World::RelationTarget(Entity entity, RelationId relation, int index) cons
 }
 
 void World::SetParent(Entity child, Entity parent) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(child);
     HierarchyRelationService::SetParent(world_, child, parent);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(child));
 }
 
 void World::ClearParent(Entity child) noexcept {
+    ecs_table_t* previousArchetype = EntityArchetype(child);
     HierarchyRelationService::ClearParent(world_, child);
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(child));
 }
 
 Entity World::Parent(Entity child) const noexcept {

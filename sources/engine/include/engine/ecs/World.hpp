@@ -4,6 +4,7 @@
 #include "engine/ecs/ComponentEvent.hpp"
 #include "engine/ecs/ComponentReflection.hpp"
 #include "engine/ecs/Entity.hpp"
+#include "engine/ecs/QueryFilter.hpp"
 #include "engine/ecs/TypeIds.hpp"
 #include "engine/ecs/WorldConfig.hpp"
 #include "engine/ecs/WorldEditorInspection.hpp"
@@ -14,16 +15,19 @@
 #include <cstddef>
 #include <initializer_list>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <typeindex>
 #include <vector>
 
 struct ecs_world_t;
+struct ecs_table_t;
 
 namespace kb::ecs {
 
 class QueryState;
+class QueryPlanCache;
 class WorldInternalAccess;
 class WorldRegistrySet;
 template <typename... Components>
@@ -60,6 +64,7 @@ private:
     ecs_world_t* world_ = nullptr;
     WorldConfig config_{};
     std::unique_ptr<WorldRegistrySet> registries_;
+    std::unique_ptr<QueryPlanCache> queryPlanCache_;
 };
 
 } // namespace kb::ecs

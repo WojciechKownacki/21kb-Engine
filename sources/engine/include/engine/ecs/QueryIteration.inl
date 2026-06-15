@@ -1,6 +1,8 @@
 #pragma once
 
+#include <memory>
 #include <type_traits>
+#include <utility>
 
 namespace kb::ecs {
 
@@ -39,6 +41,67 @@ void Query<Components...>::ForEachBatch(QueryExecutionSettings settings, BatchVi
         .context = context,
     };
     ForEachQueryStateBatch(state_.get(), settings, &VisitBatch, &adapter);
+}
+
+template <typename... Components>
+void Query<Components...>::ForEachMutableBatch(MutableBatchVisitor visitor, void* context) const {
+    ForEachMutableBatch(QueryExecutionSettings{}, visitor, context);
+}
+
+template <typename... Components>
+void Query<Components...>::ForEachMutableBatch(QueryExecutionSettings settings, MutableBatchVisitor visitor, void* context) const {
+    static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+
+    if (!IsValid() || visitor == nullptr) {
+        return;
+    }
+
+    AdapterContext adapter{
+        .mutableBatchVisitor = visitor,
+        .context = context,
+    };
+    ForEachQueryStateMutableBatch(state_.get(), settings, &VisitMutableBatch, &adapter);
+}
+
+template <typename... Components>
+template <typename Kernel>
+void Query<Components...>::ForEachBatchKernel(Kernel&& kernel) const {
+    ForEachBatchKernel(QueryExecutionSettings{}, std::forward<Kernel>(kernel));
+}
+
+template <typename... Components>
+template <typename Kernel>
+void Query<Components...>::ForEachBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const {
+    static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+
+    if (!IsValid()) {
+        return;
+    }
+
+    using KernelType = std::remove_reference_t<Kernel>;
+    ForEachQueryStateBatch(state_.get(), settings, &VisitBatchKernel<KernelType>, std::addressof(kernel));
+}
+
+template <typename... Components>
+template <typename Kernel>
+void Query<Components...>::ForEachMutableBatchKernel(Kernel&& kernel) const {
+    ForEachMutableBatchKernel(QueryExecutionSettings{}, std::forward<Kernel>(kernel));
+}
+
+template <typename... Components>
+template <typename Kernel>
+void Query<Components...>::ForEachMutableBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const {
+    static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+
+    if (!IsValid()) {
+        return;
+    }
+
+    using KernelType = std::remove_reference_t<Kernel>;
+    ForEachQueryStateMutableBatch(state_.get(), settings, &VisitMutableBatchKernel<KernelType>, std::addressof(kernel));
 }
 
 } // namespace kb::ecs
