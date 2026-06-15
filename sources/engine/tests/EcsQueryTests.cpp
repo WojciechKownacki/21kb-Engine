@@ -511,6 +511,15 @@ void RunTypedEcsQueryFilterValidationTest() {
     }
     kb::tests::Require(conflictRejected, "ECS query filter accepted conflicting component terms");
 
+    bool requireOptionalRejected = false;
+    try {
+        kb::ecs::QueryFilter filter;
+        filter.Optional(velocityId).Require(velocityId);
+    } catch (const std::invalid_argument&) {
+        requireOptionalRejected = true;
+    }
+    kb::tests::Require(requireOptionalRejected, "ECS query filter allowed a required component to remain optional");
+
     bool optionalSelectedRejected = false;
     try {
         kb::ecs::QueryFilter filter;
