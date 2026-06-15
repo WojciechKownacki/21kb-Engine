@@ -290,6 +290,8 @@ void RunEngineModuleLoaderShadowCopyTest() {
     std::vector<std::string> symbolErrors;
     kb::tests::Require(first.library.FindSymbol("kb_register_native_scripts", symbolErrors, "module loader test") != nullptr, "EngineModuleLoader did not resolve an exported symbol");
     kb::tests::Require(symbolErrors.empty(), "EngineModuleLoader reported errors for a valid symbol");
+    const std::filesystem::path firstLoadedPath = first.loadedPath;
+    first.library.Reset();
 
     kb::modules::EngineModuleLoadResult second = loader.Load(kb::modules::EngineModuleLoadDesc{
         .key = "module-loader-test",
@@ -300,7 +302,7 @@ void RunEngineModuleLoaderShadowCopyTest() {
     });
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
     kb::tests::Require(second.reloadSerial == 2U, "EngineModuleLoader did not advance the reload serial");
-    kb::tests::Require(second.loadedPath != first.loadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
+    kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
 }
 
 // End-to-end through the production Scene(ProjectDescriptor) path: the built-in
