@@ -33,6 +33,17 @@ namespace {
 #define KB_BASIC_LIGHTING_PLUGIN_PATH ""
 #endif
 
+#ifndef __has_feature
+#define __has_feature(feature) 0
+#endif
+
+// Apple ASan reports ODR violations when test dylibs statically link engine code that is also present in kb_engine_tests.
+#if defined(__APPLE__) && (__has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__))
+#define KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS 1
+#else
+#define KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS 0
+#endif
+
 [[nodiscard]] std::filesystem::path ModuleTestRoot() {
     return std::filesystem::temp_directory_path() / "21kb_engine_module_tests";
 }
@@ -270,6 +281,9 @@ void RunPhaseOrderTest() {
 }
 
 void RunEngineModuleLoaderShadowCopyTest() {
+#if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
+    return;
+#else
     ResetModuleTestRoot();
     const std::filesystem::path pluginPath = KB_NATIVE_SCRIPT_TEST_PLUGIN_PATH;
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "module loader test DLL is missing");
@@ -303,6 +317,7 @@ void RunEngineModuleLoaderShadowCopyTest() {
     kb::tests::Require(second.Succeeded(), "EngineModuleLoader did not load the second shadow-copied DLL");
     kb::tests::Require(second.reloadSerial == 2U, "EngineModuleLoader did not advance the reload serial");
     kb::tests::Require(second.loadedPath != firstLoadedPath, "EngineModuleLoader reused a shadow-copy path across reloads");
+#endif
 }
 
 // End-to-end through the production Scene(ProjectDescriptor) path: the built-in
@@ -355,6 +370,9 @@ void RunSceneInputToggleTest() {
 }
 
 void RunBasicLightingPluginTogglesSceneLightingTest() {
+#if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
+    return;
+#else
     const std::filesystem::path pluginPath = KB_BASIC_LIGHTING_PLUGIN_PATH;
     kb::tests::Require(!pluginPath.empty() && std::filesystem::is_regular_file(pluginPath), "Basic Lighting plugin DLL is missing");
 
@@ -379,6 +397,7 @@ void RunBasicLightingPluginTogglesSceneLightingTest() {
     kb::tests::Require(
         !kb::scene::SceneLightingAccess::BasicLightingEnabled(scene),
         "Basic Lighting plugin did not disable scene lighting on detach");
+#endif
 }
 
 } // namespace
