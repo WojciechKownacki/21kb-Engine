@@ -3,15 +3,19 @@
 #include "engine/ecs/CommandBuffer.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -33,9 +37,17 @@ template <typename T>
 void RepeatComponents(std::vector<T>& output, std::span<const T> source, std::size_t instanceCount) {
     const std::size_t totalCount = TotalNodeCount(instanceCount, source.size());
     output.clear();
-    output.reserve(totalCount);
-    for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-        output.insert(output.end(), source.begin(), source.end());
+    output.resize(totalCount);
+    if (source.empty()) {
+        return;
+    }
+
+    std::copy(source.begin(), source.end(), output.begin());
+    std::size_t filled = source.size();
+    while (filled < totalCount) {
+        const std::size_t copyCount = std::min(filled, totalCount - filled);
+        std::copy_n(output.begin(), copyCount, output.begin() + static_cast<std::ptrdiff_t>(filled));
+        filled += copyCount;
     }
 }
 
@@ -118,29 +130,40 @@ void QueueHierarchy(
     std::span<const ScenePrefabNodeDesc> nodes,
     std::size_t instanceCount,
     SceneObject rootParent) {
+    std::vector<kb::ecs::CommandEntity> children;
+    std::vector<kb::ecs::CommandEntity> parents;
+    children.reserve(TotalNodeCount(instanceCount, nodes.size()));
+    parents.reserve(TotalNodeCount(instanceCount, nodes.size()));
+
     for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
         for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
             const ScenePrefabNodeDesc& node = nodes[nodeIndex];
             const std::size_t childIndex = EntityIndex(instanceIndex, nodeIndex, nodes.size());
             if (node.parentNode == ScenePrefabNodeDesc::NoParent) {
                 if (rootParent.EntityHandle().IsValid()) {
-                    worker.SetParent(entities[childIndex], kb::ecs::CommandEntity::Existing(rootParent.Entity()));
+                    children.push_back(entities[childIndex]);
+                    parents.push_back(kb::ecs::CommandEntity::Existing(rootParent.Entity()));
                 }
                 continue;
             }
-            worker.SetParent(entities[childIndex], entities[EntityIndex(instanceIndex, node.parentNode, nodes.size())]);
+            children.push_back(entities[childIndex]);
+            parents.push_back(entities[EntityIndex(instanceIndex, node.parentNode, nodes.size())]);
         }
     }
+
+    worker.SetParents(std::span<const kb::ecs::CommandEntity>{ children }, std::span<const kb::ecs::CommandEntity>{ parents });
 }
 
 [[nodiscard]] std::vector<kb::ecs::CommandEntity> CreateBakedEntities(
-    kb::ecs::CommandBuffer::WorkerBuffer& worker,
+    kb::ecs::CommandBuffer& commandBuffer,
     const ScenePrefabBakedData& baked,
     std::size_t instanceCount) {
     std::vector<kb::ecs::CommandEntity> entities(TotalNodeCount(instanceCount, baked.NodeCount()));
     ScenePrefabArchetypeSpawnPayload payload;
 
+    std::size_t archetypeIndex = 0U;
     for (const ScenePrefabBakedArchetype& archetype : baked.Archetypes()) {
+        kb::ecs::CommandBuffer::WorkerBuffer worker = commandBuffer.Worker(archetypeIndex);
         const std::size_t archetypeNodeCount = archetype.nodeIndices.size();
         const std::size_t archetypeEntityCount = TotalNodeCount(instanceCount, archetypeNodeCount);
         payload.Build(archetype, instanceCount);
@@ -153,6 +176,7 @@ void QueueHierarchy(
                 entities[prefabIndex] = created[createdIndex];
             }
         }
+        ++archetypeIndex;
     }
 
     return entities;
@@ -168,6 +192,12 @@ void QueueHierarchy(
     SceneState& state = SceneAccess::State(scene);
     std::vector<ScenePrefabInstance> instances;
     instances.reserve(instanceCount);
+    std::vector<SceneEntity> hierarchyEntities;
+    std::vector<SceneEntity> hierarchyParents;
+    std::vector<std::string> hierarchyNames;
+    hierarchyEntities.reserve(TotalNodeCount(instanceCount, nodes.size()));
+    hierarchyParents.reserve(TotalNodeCount(instanceCount, nodes.size()));
+    hierarchyNames.reserve(TotalNodeCount(instanceCount, nodes.size()));
 
     for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
         std::vector<SceneObject> objects;
@@ -175,21 +205,21 @@ void QueueHierarchy(
 
         for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
             const kb::ecs::Entity entity = playback.Resolve(commandEntities[EntityIndex(instanceIndex, nodeIndex, nodes.size())]);
-            state.hierarchyOrder[entity.Id()] = state.nextHierarchyOrder++;
             const SceneEntity parent = nodes[nodeIndex].parentNode == ScenePrefabNodeDesc::NoParent
                 ? settings.parent.Entity()
                 : playback.Resolve(commandEntities[EntityIndex(instanceIndex, nodes[nodeIndex].parentNode, nodes.size())]);
-            SceneHierarchyCache::Add(state, entity, parent);
-            const std::string name = ScenePrefabNameResolver::Resolve(nodes[nodeIndex], settings);
-            if (!name.empty()) {
-                state.world.SetName(entity, name);
-            }
+            hierarchyEntities.push_back(entity);
+            hierarchyParents.push_back(parent);
+            hierarchyNames.push_back(ScenePrefabNameResolver::Resolve(nodes[nodeIndex], settings));
             objects.push_back(SceneAccess::MakeObject(scene, entity));
         }
 
         instances.emplace_back(std::move(objects));
     }
 
+    SceneHierarchyCache::AssignOrderRange(state, std::span<const SceneEntity>{ hierarchyEntities });
+    SceneHierarchyCache::AddMany(state, std::span<const SceneEntity>{ hierarchyEntities }, std::span<const SceneEntity>{ hierarchyParents });
+    SceneEntityNaming::SetNames(state.world, std::span<const SceneEntity>{ hierarchyEntities }, std::span<const std::string>{ hierarchyNames });
     return instances;
 }
 
@@ -211,10 +241,11 @@ std::vector<ScenePrefabInstance> ScenePrefabBulkInstantiationService::Instantiat
         return {};
     }
 
-    kb::ecs::CommandBuffer commandBuffer{ 1 };
-    kb::ecs::CommandBuffer::WorkerBuffer worker = commandBuffer.Worker(0);
-    std::vector<kb::ecs::CommandEntity> entities = CreateBakedEntities(worker, baked, count);
-    QueueHierarchy(worker, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, nodes, count, settings.parent);
+    const std::size_t hierarchyLane = baked.Archetypes().size();
+    kb::ecs::CommandBuffer commandBuffer{ hierarchyLane + 1U };
+    std::vector<kb::ecs::CommandEntity> entities = CreateBakedEntities(commandBuffer, baked, count);
+    kb::ecs::CommandBuffer::WorkerBuffer hierarchyWorker = commandBuffer.Worker(hierarchyLane);
+    QueueHierarchy(hierarchyWorker, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, nodes, count, settings.parent);
 
     kb::ecs::CommandBufferPlaybackResult playback = commandBuffer.Playback(SceneAccess::State(scene).world);
     return BuildInstances(scene, nodes, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, playback, settings, count);

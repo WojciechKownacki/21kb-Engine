@@ -22,7 +22,7 @@ void SerializedEntityComponentApplier::CopyExistingComponent(
 
 bool SerializedEntityComponentApplier::Apply(World& world, Entity entity, const SerializedComponent& component) {
     const ComponentReflection* reflection = SerializedComponentReflectionResolver::Find(world, component);
-    if (reflection == nullptr || !world.IsAlive(entity)) {
+    if (reflection == nullptr) {
         return false;
     }
 

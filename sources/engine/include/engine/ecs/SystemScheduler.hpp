@@ -20,11 +20,17 @@ enum class SystemSchedulingMode {
     Deterministic,
 };
 
+enum class SystemSchedulerParallelismMode {
+    SystemStages,
+    QueryChunks,
+};
+
 struct SystemSchedulerConfig {
     SystemSchedulingMode mode = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled = false;
     bool profilerEnabled = false;
     bool parallelExecutionEnabled = true;
+    SystemSchedulerParallelismMode parallelismMode = SystemSchedulerParallelismMode::SystemStages;
     bool runtimeAccessValidationEnabled = true;
     WorkerPoolConfig workerPool{};
 };
@@ -84,6 +90,7 @@ private:
         std::span<const std::uint64_t> systemEndTimes,
         const std::vector<std::vector<std::size_t>>& reverseGraph);
     void AddSystemCounters(const SystemSchedulerTraceEvent& event);
+    void AddStageCounters(const SystemSchedulerTraceEvent& event);
     [[nodiscard]] bool ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept;
     [[nodiscard]] bool InstrumentationEnabled() const noexcept;
     [[nodiscard]] WorkerPool& RuntimeWorkerPool();
@@ -102,6 +109,7 @@ private:
     bool debugTraceEnabled_ = false;
     bool profilerEnabled_ = false;
     bool parallelExecutionEnabled_ = true;
+    SystemSchedulerParallelismMode parallelismMode_ = SystemSchedulerParallelismMode::SystemStages;
     bool runtimeAccessValidationEnabled_ = true;
     WorkerPoolConfig workerPoolConfig_{};
     std::unique_ptr<WorkerPool> workerPool_;

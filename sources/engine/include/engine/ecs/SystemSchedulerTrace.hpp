@@ -9,10 +9,12 @@ namespace kb::ecs {
 
 struct SystemSchedulerTraceEvent {
     std::string systemName;
+    std::string executionPath;
     std::size_t systemIndex = 0;
     std::size_t stageIndex = 0;
     std::size_t workerIndex = 0;
     std::uint64_t jobsCount = 0;
+    std::uint64_t chunkJobsCount = 0;
     std::uint64_t startTimeNanoseconds = 0;
     std::uint64_t endTimeNanoseconds = 0;
     std::uint64_t durationNanoseconds = 0;
@@ -32,11 +34,23 @@ struct SystemSchedulerWorkerTrace {
 
 struct SystemSchedulerSystemCounters {
     std::string systemName;
+    std::string executionPath;
     std::size_t systemIndex = 0;
     std::uint64_t cpuTimeNanoseconds = 0;
     std::uint64_t jobsCount = 0;
+    std::uint64_t chunkJobsCount = 0;
     std::uint64_t entitiesProcessed = 0;
     std::uint64_t bytesTouched = 0;
+};
+
+struct SystemSchedulerStageCounters {
+    std::size_t stageIndex = 0;
+    std::size_t systemCount = 0;
+    std::uint64_t cpuTimeNanoseconds = 0;
+    std::uint64_t jobsCount = 0;
+    std::uint64_t chunkJobsCount = 0;
+    std::uint64_t waitTimeNanoseconds = 0;
+    std::uint64_t workerBusyTimeNanoseconds = 0;
 };
 
 struct SystemSchedulerFrameCounters {
@@ -44,6 +58,7 @@ struct SystemSchedulerFrameCounters {
     std::uint64_t frameDurationNanoseconds = 0;
     std::uint64_t cpuTimeNanoseconds = 0;
     std::uint64_t jobsCount = 0;
+    std::uint64_t chunkJobsCount = 0;
     std::uint64_t entitiesProcessed = 0;
     std::uint64_t bytesTouched = 0;
     std::size_t systemCount = 0;
@@ -56,6 +71,7 @@ struct SystemSchedulerTrace {
     std::uint64_t frameIndex = 0;
     std::uint64_t frameDurationNanoseconds = 0;
     SystemSchedulerFrameCounters frameCounters;
+    std::vector<SystemSchedulerStageCounters> stageCounters;
     std::vector<SystemSchedulerSystemCounters> systemCounters;
     std::vector<SystemSchedulerTraceEvent> events;
     std::vector<SystemSchedulerWorkerTrace> workers;

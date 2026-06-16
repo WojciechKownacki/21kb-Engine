@@ -25,6 +25,12 @@ struct NativeComponentValue {
     const void* data = nullptr;
 };
 
+struct NativeBulkComponentColumn {
+    NativeComponentType type{};
+    const void* data = nullptr;
+    std::size_t stride = 0;
+};
+
 struct NativeEcsChunkMemoryCounters {
     std::size_t archetypeIndex = 0;
     std::size_t chunkIndex = 0;
@@ -74,8 +80,11 @@ public:
     NativeArchetypeStorage& operator=(NativeArchetypeStorage&&) noexcept;
 
     [[nodiscard]] Entity CreateEntity(std::span<const NativeComponentValue> components = {});
+    [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const NativeBulkComponentColumn> components = {});
     void AdoptEntity(Entity entity, std::span<const NativeComponentValue> components = {});
+    void AdoptEntities(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components = {});
     void DestroyEntity(Entity entity);
+    void DestroyEntities(std::span<const Entity> entities);
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept;
 
     void AddComponents(Entity entity, std::span<const NativeComponentValue> components);

@@ -82,10 +82,12 @@ namespace {
 } // namespace
 
 bool World::SerializeComponent(Entity entity, ComponentId componentId, SerializedComponent& output) const {
+    ValidateEntityHandle(entity, "SerializeComponent");
     return SerializedEntityComponentReader::Read(*this, entity, componentId, output);
 }
 
 bool World::ApplySerializedComponent(Entity entity, const SerializedComponent& component) {
+    ValidateEntityHandle(entity, "ApplySerializedComponent");
     return SerializedEntityComponentApplier::Apply(*this, entity, component);
 }
 

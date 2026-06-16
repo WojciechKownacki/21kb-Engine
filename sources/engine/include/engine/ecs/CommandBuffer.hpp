@@ -115,8 +115,12 @@ public:
 
         void SetParent(CommandEntity child, CommandEntity parent);
         void SetParent(Entity child, Entity parent);
+        void SetParents(std::span<const CommandEntity> children, std::span<const CommandEntity> parents);
+        void SetParents(std::span<const Entity> children, std::span<const Entity> parents);
         void ClearParent(CommandEntity child);
         void ClearParent(Entity child);
+        void ClearParents(std::span<const CommandEntity> children);
+        void ClearParents(std::span<const Entity> children);
 
     private:
         WorkerBuffer(CommandBuffer& owner, std::size_t workerIndex) noexcept;
@@ -150,7 +154,9 @@ private:
         SetComponents,
         RemoveComponents,
         SetParent,
+        SetParents,
         ClearParent,
+        ClearParents,
     };
 
     using SetComponentFn = void (*)(World&, CommandEntity, std::span<const std::byte>, const CommandBufferPlaybackResult&);
@@ -180,6 +186,7 @@ private:
         CommandEntity first;
         CommandEntity second;
         std::vector<CommandEntity> entities;
+        std::vector<CommandEntity> parents;
         std::string name;
         std::size_t count = 0;
         ComponentCommand component;

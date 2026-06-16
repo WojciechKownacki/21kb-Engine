@@ -1,11 +1,12 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
 #include <algorithm>
+#include <string>
 #include <utility>
 
 namespace kb::scene {
 
-ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandle prefab, SceneObject rootParent, std::vector<SceneObject> objects, ScenePrefab resolvedPrefab) {
+ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandle prefab, std::string prefabGuid, SceneObject rootParent, std::vector<SceneObject> objects, ScenePrefab resolvedPrefab) {
     if (!prefab.IsValid() || objects.empty()) {
         return {};
     }
@@ -15,6 +16,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
         id,
         ScenePrefabInstanceRecord{
             .prefab = prefab,
+            .prefabGuid = std::move(prefabGuid),
             .rootParent = rootParent,
             .objects = std::move(objects),
             .resolvedPrefab = std::move(resolvedPrefab),
@@ -24,6 +26,55 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
         IndexRecord(handle, iterator->second);
     }
     return handle;
+}
+
+std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany(
+    ScenePrefabHandle prefab,
+    std::string_view prefabGuid,
+    SceneObject rootParent,
+    std::span<const std::vector<SceneObject>> objectSets,
+    const ScenePrefab& resolvedPrefab) {
+    if (!prefab.IsValid() || objectSets.empty()) {
+        return {};
+    }
+
+    std::size_t objectCount = 0;
+    for (const std::vector<SceneObject>& objects : objectSets) {
+        if (objects.empty()) {
+            return {};
+        }
+        objectCount += objects.size();
+    }
+
+    std::vector<ScenePrefabInstanceHandle> handles;
+    handles.reserve(objectSets.size());
+    records_.reserve(records_.size() + objectSets.size());
+    rootIndex_.reserve(rootIndex_.size() + objectSets.size());
+    objectIndex_.reserve(objectIndex_.size() + objectCount);
+    std::vector<ScenePrefabInstanceHandle>& prefabHandles = prefabIndex_[prefab];
+    prefabHandles.reserve(prefabHandles.size() + objectSets.size());
+
+    for (const std::vector<SceneObject>& objects : objectSets) {
+        const std::uint64_t id = nextId_++;
+        auto [iterator, inserted] = records_.emplace(
+            id,
+            ScenePrefabInstanceRecord{
+                .prefab = prefab,
+                .prefabGuid = std::string{ prefabGuid },
+                .rootParent = rootParent,
+                .objects = objects,
+                .resolvedPrefab = resolvedPrefab,
+            });
+        if (!inserted) {
+            continue;
+        }
+
+        const ScenePrefabInstanceHandle handle{ id };
+        prefabHandles.push_back(handle);
+        IndexObjects(handle, iterator->second);
+        handles.push_back(handle);
+    }
+    return handles;
 }
 
 bool ScenePrefabInstanceRegistry::Contains(ScenePrefabInstanceHandle handle) const noexcept {
@@ -58,7 +109,13 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindRootInstance(SceneObj
 }
 
 ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept {
+    std::uint64_t nodeId = ScenePrefabNodeDesc::InvalidStableId;
+    return FindContainingInstance(object, nodeIndex, nodeId);
+}
+
+ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(SceneObject object, std::uint32_t& nodeIndex, std::uint64_t& nodeId) const noexcept {
     nodeIndex = 0;
+    nodeId = ScenePrefabNodeDesc::InvalidStableId;
     if (!object.IsValid()) {
         return {};
     }
@@ -68,6 +125,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(Sc
         return {};
     }
     nodeIndex = iterator->second.nodeIndex;
+    nodeId = iterator->second.nodeId;
     return iterator->second.instance;
 }
 
@@ -101,7 +159,26 @@ void ScenePrefabInstanceRegistry::ReindexObjects(ScenePrefabInstanceHandle handl
     }
 
     UnindexObjects(handle, oldObjects);
-    IndexObjects(handle, record->objects);
+    IndexObjects(handle, *record);
+}
+
+bool ScenePrefabInstanceRegistry::UpdateSource(ScenePrefabInstanceHandle handle, ScenePrefabHandle prefab, std::string prefabGuid) {
+    if (!handle.IsValid() || !prefab.IsValid()) {
+        return false;
+    }
+
+    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    if (record == nullptr) {
+        return false;
+    }
+
+    if (record->prefab != prefab) {
+        RemoveFromPrefabIndex(record->prefab, handle);
+        prefabIndex_[prefab].push_back(handle);
+    }
+    record->prefab = prefab;
+    record->prefabGuid = std::move(prefabGuid);
+    return true;
 }
 
 bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexcept {
@@ -124,19 +201,20 @@ void ScenePrefabInstanceRegistry::Clear() noexcept {
     prefabIndex_.clear();
     rootIndex_.clear();
     objectIndex_.clear();
-    nextId_ = 1;
 }
 
 void ScenePrefabInstanceRegistry::IndexRecord(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord& record) {
     prefabIndex_[record.prefab].push_back(handle);
-    IndexObjects(handle, record.objects);
+    IndexObjects(handle, record);
 }
 
-void ScenePrefabInstanceRegistry::IndexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) {
+void ScenePrefabInstanceRegistry::IndexObjects(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord& record) {
     if (!handle.IsValid()) {
         return;
     }
 
+    const std::span<const SceneObject> objects = record.objects;
+    const std::span<const ScenePrefabNodeDesc> nodes = record.resolvedPrefab.Nodes();
     if (!objects.empty() && objects.front().IsValid()) {
         rootIndex_[objects.front().Entity().Id()] = handle;
     }
@@ -147,6 +225,7 @@ void ScenePrefabInstanceRegistry::IndexObjects(ScenePrefabInstanceHandle handle,
             objectIndex_[object.Entity().Id()] = ObjectIndexEntry{
                 .instance = handle,
                 .nodeIndex = nodeIndex,
+                .nodeId = nodeIndex < nodes.size() ? nodes[nodeIndex].stableId : ScenePrefabNodeDesc::InvalidStableId,
             };
         }
     }
