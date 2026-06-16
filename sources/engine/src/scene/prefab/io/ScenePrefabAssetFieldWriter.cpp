@@ -22,6 +22,9 @@ void WriteQuat(std::ostream& output, std::string_view key, Quat value) {
 void WriteNestedOverride(std::ostream& output, std::size_t index, const ScenePrefabPropertyOverride& property) {
     const std::string prefix = std::string{ ScenePrefabAssetFormat::NestedOverridePrefix } + std::to_string(index) + ".";
     output << prefix << ScenePrefabAssetFormat::OverrideNodeKey << '=' << property.nodeIndex << '\n';
+    if (property.nodeId != ScenePrefabNodeDesc::InvalidStableId) {
+        output << prefix << ScenePrefabAssetFormat::OverrideNodeIdKey << '=' << property.nodeId << '\n';
+    }
     output << prefix << ScenePrefabAssetFormat::OverridePropertyPathKey << '=' << ScenePrefabAssetEscaper::Escape(property.propertyPath) << '\n';
     output << prefix << ScenePrefabAssetFormat::OverrideValueKey << '=' << ScenePrefabAssetEscaper::Escape(property.value) << '\n';
     output << prefix << ScenePrefabAssetFormat::OverrideFlagKey << '=' << static_cast<std::uint32_t>(property.flag) << '\n';
@@ -31,6 +34,7 @@ void WriteNestedOverride(std::ostream& output, std::size_t index, const ScenePre
 
 void ScenePrefabAssetFieldWriter::WriteNode(std::ostream& output, const ScenePrefabNodeDesc& node) {
     output << ScenePrefabAssetFormat::NodeMarker << '\n';
+    output << ScenePrefabAssetFormat::NodeStableIdKey << '=' << node.stableId << '\n';
     output << ScenePrefabAssetFormat::NameKey << '=' << ScenePrefabAssetEscaper::Escape(node.name) << '\n';
     output << ScenePrefabAssetFormat::NestedPrefabGuidKey << '=' << ScenePrefabAssetEscaper::Escape(node.nestedPrefabGuid) << '\n';
     output << ScenePrefabAssetFormat::NestedOverrideCountKey << '=' << node.nestedPrefabOverrides.size() << '\n';
