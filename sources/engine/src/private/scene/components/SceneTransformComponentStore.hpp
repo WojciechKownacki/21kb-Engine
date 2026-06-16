@@ -17,6 +17,7 @@ public:
     [[nodiscard]] TransformComponent* TryGet(SceneEntity entity) noexcept;
     void Set(SceneEntity entity, const TransformComponent& transform);
     void MarkModified(SceneEntity entity) noexcept;
+    void MarkParentModified(SceneEntity entity) noexcept;
 
 private:
     ecs_world_t* world_ = nullptr;

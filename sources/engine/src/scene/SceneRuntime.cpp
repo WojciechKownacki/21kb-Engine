@@ -143,10 +143,16 @@ std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(con
     return std::nullopt;
 }
 
+std::span<const SceneEntity> SceneRuntimeService::TransformRenderProxyUpdateEntities(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).transformRenderProxyUpdateEntities;
+}
+
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
+    state.transformRenderProxyUpdateEntities.clear();
+    state.transformRenderProxyUpdateEntities.reserve(state.hierarchyOrder.size());
 
     SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);
