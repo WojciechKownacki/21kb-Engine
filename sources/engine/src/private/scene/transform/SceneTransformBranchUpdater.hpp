@@ -14,6 +14,7 @@ struct SceneTransformBatchEntry {
     TransformComponent* transform = nullptr;
     TransformComponent parentTransform{};
     bool parentDirty = false;
+    std::uint64_t parentWorldVersion = 0;
     bool updated = false;
 };
 

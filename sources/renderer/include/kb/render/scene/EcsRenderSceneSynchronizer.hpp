@@ -22,6 +22,7 @@ struct EcsRenderSceneSynchronizerReserveDesc {
     std::uint32_t lightProxies = 0;
     std::uint32_t transformCacheEntries = 0;
     std::uint32_t transformResolvingEntries = 0;
+    std::uint32_t transformUpdateEntities = 0;
 };
 
 struct EcsRenderSceneSynchronizerStats {
@@ -33,8 +34,10 @@ struct EcsRenderSceneSynchronizerStats {
     std::uint32_t lightSeenCapacity = 0;
     std::uint32_t transformCacheCount = 0;
     std::uint32_t transformResolvingCount = 0;
+    std::uint32_t transformUpdateEntityCount = 0;
     std::uint32_t transformCacheCapacity = 0;
     std::uint32_t transformResolvingCapacity = 0;
+    std::uint32_t transformUpdateEntityCapacity = 0;
 };
 
 class EcsRenderSceneSynchronizer {
@@ -42,12 +45,14 @@ public:
     void Reserve(const EcsRenderSceneSynchronizerReserveDesc& desc);
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
+    void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     [[nodiscard]] EcsRenderSceneSynchronizerStats Stats() const noexcept;
 
 private:
     mutable std::vector<std::uint64_t> seenMeshes_;
     mutable std::vector<std::uint64_t> seenCameras_;
     mutable std::vector<std::uint64_t> seenLights_;
+    mutable std::vector<std::uint64_t> transformUpdateEntities_;
     mutable std::unordered_map<std::uint64_t, kb::scene::TransformComponent> transformCache_;
     mutable std::unordered_set<std::uint64_t> transformResolving_;
 };
