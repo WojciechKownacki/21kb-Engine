@@ -1,6 +1,7 @@
 #include "EcsTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/CommandBuffer.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/World.hpp"
 
@@ -52,6 +53,43 @@ template <typename T>
 
 [[nodiscard]] bool IsAligned(const void* pointer, std::size_t alignment) noexcept {
     return pointer != nullptr && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
+}
+
+void RequireStorageStatsConsistent(const kb::ecs::NativeEcsStorageStats& stats, std::size_t expectedLiveEntities, const char* message) {
+    std::size_t countedChunks = 0;
+    std::size_t countedLiveEntities = 0;
+    std::size_t countedUsedBytes = 0;
+    std::size_t countedWastedBytes = 0;
+
+    for (const kb::ecs::NativeEcsArchetypeMemoryCounters& archetype : stats.archetypeCounters) {
+        std::size_t archetypeRows = 0;
+        std::size_t archetypeUsedBytes = 0;
+        std::size_t archetypeWastedBytes = 0;
+        std::size_t archetypePayloadBytes = 0;
+        for (const kb::ecs::NativeEcsChunkMemoryCounters& chunk : archetype.chunkCounters) {
+            archetypeRows += chunk.liveEntities;
+            archetypeUsedBytes += chunk.usedBytes;
+            archetypeWastedBytes += chunk.wastedBytes;
+            archetypePayloadBytes += chunk.payloadBytes;
+            kb::tests::Require(chunk.usedBytes + chunk.wastedBytes == chunk.payloadBytes, message);
+        }
+        kb::tests::Require(archetypeRows == archetype.liveEntities, message);
+        kb::tests::Require(archetypeUsedBytes == archetype.usedBytes, message);
+        kb::tests::Require(archetypeWastedBytes == archetype.wastedBytes, message);
+        kb::tests::Require(archetypePayloadBytes == archetype.payloadBytes, message);
+
+        countedChunks += archetype.chunks;
+        countedLiveEntities += archetype.liveEntities;
+        countedUsedBytes += archetype.usedBytes;
+        countedWastedBytes += archetype.wastedBytes;
+    }
+
+    kb::tests::Require(stats.archetypeCounters.size() == stats.archetypeCount, message);
+    kb::tests::Require(stats.liveEntities == expectedLiveEntities, message);
+    kb::tests::Require(countedLiveEntities == expectedLiveEntities, message);
+    kb::tests::Require(stats.chunks == countedChunks, message);
+    kb::tests::Require(stats.usedBytes == countedUsedBytes, message);
+    kb::tests::Require(stats.wastedBytes == countedWastedBytes, message);
 }
 
 void RunChunkProfileAndStatsTest() {
@@ -289,6 +327,89 @@ void RunArchetypeSignatureMatchingTest() {
     kb::tests::Require(!storage.EntityArchetypeMatches(positionOnly, positionMassQuery), "native ECS signature was not updated after remove-component migration");
 }
 
+void RunNativeBulkCreateAdoptColumnAppendTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+
+    constexpr std::size_t kEntityCount = 1300U;
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(kEntityCount);
+    velocities.reserve(kEntityCount);
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index + 1U), .y = static_cast<float>(index + 2U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index + 3U), .y = static_cast<float>(index + 4U) });
+    }
+
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Velocity>(kVelocityId),
+            .data = velocities.data(),
+            .stride = sizeof(Velocity),
+        },
+    };
+
+    const std::vector<kb::ecs::Entity> entities = storage.CreateEntities(kEntityCount, columns);
+    kb::tests::Require(entities.size() == kEntityCount, "native ECS bulk create did not return the requested entity count");
+    kb::tests::Require(storage.Stats().chunks > 1U, "native ECS bulk create did not append across multiple chunks");
+
+    const std::array movingQuery{ kPositionId, kVelocityId };
+    const std::array<std::size_t, 5U> createdSamples{ 0U, 17U, 512U, 1025U, kEntityCount - 1U };
+    for (std::size_t index : createdSamples) {
+        const kb::ecs::Entity entity = entities[index];
+        kb::tests::Require(storage.IsAlive(entity), "native ECS bulk create produced a non-live entity");
+        kb::tests::Require(storage.EntityArchetypeMatches(entity, movingQuery), "native ECS bulk create assigned an invalid archetype");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entity, kPositionId).x, positions[index].x), "native ECS bulk create copied the wrong position row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(storage, entity, kVelocityId).y, velocities[index].y), "native ECS bulk create copied the wrong velocity row");
+    }
+
+    std::vector<kb::ecs::Entity> adopted;
+    adopted.reserve(kEntityCount);
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        adopted.push_back(kb::ecs::Entity{ 20'000'000ULL + static_cast<kb::ecs::Entity::IdType>(index) });
+    }
+
+    storage.AdoptEntities(adopted, columns);
+    kb::tests::Require(storage.Stats().liveEntities == kEntityCount * 2U, "native ECS bulk adopt did not add all external entities");
+    const std::array<std::size_t, 4U> adoptedSamples{ 3U, 48U, 777U, kEntityCount - 1U };
+    for (std::size_t index : adoptedSamples) {
+        const kb::ecs::Entity entity = adopted[index];
+        kb::tests::Require(storage.IsAlive(entity), "native ECS bulk adopt produced a non-live external entity");
+        kb::tests::Require(storage.EntityArchetypeMatches(entity, movingQuery), "native ECS bulk adopt assigned an invalid archetype");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entity, kPositionId).y, positions[index].y), "native ECS bulk adopt copied the wrong position row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(storage, entity, kVelocityId).x, velocities[index].x), "native ECS bulk adopt copied the wrong velocity row");
+    }
+
+    const std::array destroyedEntities{
+        entities[0],
+        entities[17],
+        entities[1025],
+        entities[kEntityCount - 1U],
+        adopted[3],
+        adopted[777],
+        adopted[kEntityCount - 1U],
+    };
+    storage.DestroyEntities(destroyedEntities);
+    kb::tests::Require(storage.Stats().liveEntities == (kEntityCount * 2U) - destroyedEntities.size(), "native ECS bulk destroy did not remove the expected entity count");
+    for (kb::ecs::Entity entity : destroyedEntities) {
+        kb::tests::Require(!storage.IsAlive(entity), "native ECS bulk destroy kept a destroyed entity alive");
+    }
+
+    const std::array<std::size_t, 4U> survivorSamples{ 1U, 48U, 512U, 1024U };
+    for (std::size_t index : survivorSamples) {
+        kb::tests::Require(storage.IsAlive(entities[index]), "native ECS bulk destroy invalidated a created survivor");
+        kb::tests::Require(storage.IsAlive(adopted[index]), "native ECS bulk destroy invalidated an adopted survivor");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entities[index], kPositionId).x, positions[index].x), "native ECS bulk destroy corrupted a created survivor row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(storage, adopted[index], kVelocityId).y, velocities[index].y), "native ECS bulk destroy corrupted an adopted survivor row");
+    }
+}
+
 void RunWorldNativeStorageMirrorTest() {
     kb::ecs::WorldConfig config;
     config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
@@ -323,6 +444,242 @@ void RunWorldNativeStorageMirrorTest() {
     world.DestroyEntity(entity);
     kb::tests::Require(!world.NativeStorage().IsAlive(entity), "World native storage did not mirror entity destruction");
     kb::tests::Require(world.NativeStorageStats().liveEntities == 0, "World native storage stats did not mirror entity destruction");
+}
+
+void RunWorldBulkStorageStatsConsistencyTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::World world{ config };
+
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(64U);
+    velocities.reserve(64U);
+    for (std::size_t index = 0; index < 64U; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index + 1U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index * 2U), .y = static_cast<float>(index * 3U) });
+    }
+
+    kb::ecs::CommandBuffer createBuffer{ 1 };
+    const std::vector<kb::ecs::CommandEntity> commandEntities = createBuffer.Worker(0).CreateEntities(std::span<const Position>{ positions }, std::span<const Velocity>{ velocities });
+    const kb::ecs::CommandBufferPlaybackResult createResult = createBuffer.Playback(world);
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(commandEntities.size());
+    for (kb::ecs::CommandEntity commandEntity : commandEntities) {
+        entities.push_back(createResult.Resolve(commandEntity));
+    }
+    kb::tests::Require(entities.size() == positions.size(), "World bulk storage stats setup did not create all entities");
+    RequireStorageStatsConsistent(world.NativeStorageStats(), entities.size(), "World bulk create storage stats are inconsistent");
+
+    std::vector<kb::ecs::Entity> evenEntities;
+    std::vector<Mass> masses;
+    evenEntities.reserve(entities.size() / 2U);
+    masses.reserve(entities.size() / 2U);
+    for (std::size_t index = 0; index < entities.size(); index += 2U) {
+        evenEntities.push_back(entities[index]);
+        masses.push_back(Mass{ .value = 10.0F });
+    }
+    kb::ecs::CommandBuffer addBuffer{ 1 };
+    addBuffer.Worker(0).Set(std::span<const kb::ecs::Entity>{ evenEntities }, std::span<const Mass>{ masses });
+    static_cast<void>(addBuffer.Playback(world));
+    RequireStorageStatsConsistent(world.NativeStorageStats(), entities.size(), "World bulk add/migration storage stats are inconsistent");
+
+    std::vector<kb::ecs::Entity> oddEntities;
+    oddEntities.reserve(entities.size() / 2U);
+    for (std::size_t index = 1U; index < entities.size(); index += 2U) {
+        oddEntities.push_back(entities[index]);
+    }
+    kb::ecs::CommandBuffer removeBuffer{ 1 };
+    removeBuffer.Worker(0).Remove<Velocity>(std::span<const kb::ecs::Entity>{ oddEntities });
+    static_cast<void>(removeBuffer.Playback(world));
+    RequireStorageStatsConsistent(world.NativeStorageStats(), entities.size(), "World bulk remove/migration storage stats are inconsistent");
+
+    kb::ecs::CommandBuffer destroyBuffer{ 1 };
+    for (std::size_t index = 0; index < entities.size(); index += 3U) {
+        destroyBuffer.Worker(0).DestroyEntity(entities[index]);
+    }
+    static_cast<void>(destroyBuffer.Playback(world));
+    const std::size_t destroyedCount = (entities.size() + 2U) / 3U;
+    RequireStorageStatsConsistent(world.NativeStorageStats(), entities.size() - destroyedCount, "World bulk destroy storage stats are inconsistent");
+}
+
+void RunWorldBulkMappingIntegrityTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::World world{ config };
+
+    const kb::ecs::ComponentId positionId = world.RegisterComponent<Position>("Position");
+    const kb::ecs::ComponentId velocityId = world.RegisterComponent<Velocity>("Velocity");
+    const kb::ecs::ComponentId massId = world.RegisterComponent<Mass>("Mass");
+
+    constexpr std::size_t kEntityCount = 96U;
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(kEntityCount);
+    velocities.reserve(kEntityCount);
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index + 100U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index + 200U), .y = static_cast<float>(index + 300U) });
+    }
+
+    kb::ecs::CommandBuffer createBuffer{ 1 };
+    const std::vector<kb::ecs::CommandEntity> commandEntities = createBuffer.Worker(0).CreateEntities(std::span<const Position>{ positions }, std::span<const Velocity>{ velocities });
+    const kb::ecs::CommandBufferPlaybackResult createResult = createBuffer.Playback(world);
+
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(commandEntities.size());
+    for (const kb::ecs::CommandEntity commandEntity : commandEntities) {
+        entities.push_back(createResult.Resolve(commandEntity));
+    }
+    kb::tests::Require(entities.size() == kEntityCount, "World bulk mapping setup did not create all entities");
+
+    const std::array movingQuery{ positionId, velocityId };
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const kb::ecs::Entity entity = entities[index];
+        kb::tests::Require(world.NativeStorage().IsAlive(entity), "World bulk create mapping did not adopt a live native entity");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, movingQuery), "World bulk create mapping assigned an invalid archetype");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, positions[index].x), "World bulk create mapping read the wrong position row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(world.NativeStorage(), entity, velocityId).y, velocities[index].y), "World bulk create mapping read the wrong velocity row");
+    }
+
+    std::vector<bool> destroyed(entities.size(), false);
+    kb::ecs::CommandBuffer destroyBuffer{ 1 };
+    for (std::size_t index = 0; index < entities.size(); index += 5U) {
+        destroyed[index] = true;
+        destroyBuffer.Worker(0).DestroyEntity(entities[index]);
+    }
+    static_cast<void>(destroyBuffer.Playback(world));
+
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const kb::ecs::Entity entity = entities[index];
+        if (destroyed[index]) {
+            kb::tests::Require(!world.NativeStorage().IsAlive(entity), "World bulk destroy mapping kept a destroyed native entity alive");
+            continue;
+        }
+
+        kb::tests::Require(world.NativeStorage().IsAlive(entity), "World bulk destroy mapping invalidated an unrelated entity");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, positions[index].x), "World bulk destroy mapping corrupted a moved position row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(world.NativeStorage(), entity, velocityId).x, velocities[index].x), "World bulk destroy mapping corrupted a moved velocity row");
+    }
+
+    std::vector<kb::ecs::Entity> addMassEntities;
+    std::vector<Mass> masses;
+    addMassEntities.reserve(entities.size());
+    masses.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        if (!destroyed[index] && index % 2U == 0U) {
+            addMassEntities.push_back(entities[index]);
+            masses.push_back(Mass{ .value = static_cast<float>(index + 400U) });
+        }
+    }
+
+    kb::ecs::CommandBuffer addBuffer{ 1 };
+    addBuffer.Worker(0).Set(std::span<const kb::ecs::Entity>{ addMassEntities }, std::span<const Mass>{ masses });
+    static_cast<void>(addBuffer.Playback(world));
+
+    const std::array weightedMovingQuery{ positionId, velocityId, massId };
+    for (std::size_t index = 0; index < addMassEntities.size(); ++index) {
+        const kb::ecs::Entity entity = addMassEntities[index];
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, weightedMovingQuery), "World bulk add mapping assigned an invalid target archetype");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Mass>(world.NativeStorage(), entity, massId).value, masses[index].value), "World bulk add mapping read the wrong mass row");
+    }
+
+    std::vector<kb::ecs::Entity> removeVelocityEntities;
+    removeVelocityEntities.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        if (!destroyed[index] && index % 3U == 1U) {
+            removeVelocityEntities.push_back(entities[index]);
+        }
+    }
+
+    kb::ecs::CommandBuffer removeBuffer{ 1 };
+    removeBuffer.Worker(0).Remove<Velocity>(std::span<const kb::ecs::Entity>{ removeVelocityEntities });
+    static_cast<void>(removeBuffer.Playback(world));
+
+    const std::array positionOnlyQuery{ positionId };
+    for (const kb::ecs::Entity entity : removeVelocityEntities) {
+        kb::tests::Require(world.NativeStorage().IsAlive(entity), "World bulk remove mapping invalidated a migrated entity");
+        kb::tests::Require(!world.NativeStorage().HasComponent(entity, velocityId), "World bulk remove mapping retained removed velocity");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, positionOnlyQuery), "World bulk remove mapping lost retained position archetype membership");
+    }
+}
+
+void RunWorldBulkVersioningTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::World world{ config };
+
+    const kb::ecs::ComponentId positionId = world.RegisterComponent<Position>("Position");
+    const kb::ecs::ComponentId velocityId = world.RegisterComponent<Velocity>("Velocity");
+    const kb::ecs::ComponentId massId = world.RegisterComponent<Mass>("Mass");
+
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(32U);
+    velocities.reserve(32U);
+    for (std::size_t index = 0; index < 32U; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index + 1U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index + 2U), .y = static_cast<float>(index + 3U) });
+    }
+
+    kb::ecs::CommandBuffer createBuffer{ 1 };
+    const std::vector<kb::ecs::CommandEntity> commandEntities = createBuffer.Worker(0).CreateEntities(std::span<const Position>{ positions }, std::span<const Velocity>{ velocities });
+    const kb::ecs::CommandBufferPlaybackResult createResult = createBuffer.Playback(world);
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(commandEntities.size());
+    for (kb::ecs::CommandEntity commandEntity : commandEntities) {
+        entities.push_back(createResult.Resolve(commandEntity));
+    }
+    kb::tests::Require(entities.size() == positions.size(), "World bulk versioning setup did not create all entities");
+
+    const kb::ecs::Entity sample = entities.front();
+    const std::uint64_t positionVersionBeforeWrite = world.NativeStorage().ComponentVersion(sample, positionId);
+    const std::uint64_t velocityVersionBeforeWrite = world.NativeStorage().ComponentVersion(sample, velocityId);
+
+    std::vector<Position> updatedPositions;
+    updatedPositions.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        updatedPositions.push_back(Position{ .x = static_cast<float>(index + 100U), .y = static_cast<float>(index + 200U) });
+    }
+    kb::ecs::CommandBuffer writeBuffer{ 1 };
+    writeBuffer.Worker(0).Set(std::span<const kb::ecs::Entity>{ entities }, std::span<const Position>{ updatedPositions });
+    static_cast<void>(writeBuffer.Playback(world));
+
+    kb::tests::Require(
+        world.NativeStorage().ComponentVersion(sample, positionId) > positionVersionBeforeWrite,
+        "World bulk component write did not advance the written component version");
+    kb::tests::Require(
+        world.NativeStorage().ComponentVersion(sample, velocityId) == velocityVersionBeforeWrite,
+        "World bulk component write advanced an unchanged component version");
+
+    std::vector<kb::ecs::Entity> migratedEntities;
+    std::vector<Mass> masses;
+    migratedEntities.reserve(entities.size() / 2U);
+    masses.reserve(entities.size() / 2U);
+    for (std::size_t index = 0; index < entities.size(); index += 2U) {
+        migratedEntities.push_back(entities[index]);
+        masses.push_back(Mass{ .value = static_cast<float>(index + 1U) });
+    }
+
+    kb::ecs::CommandBuffer addBuffer{ 1 };
+    addBuffer.Worker(0).Set(std::span<const kb::ecs::Entity>{ migratedEntities }, std::span<const Mass>{ masses });
+    static_cast<void>(addBuffer.Playback(world));
+
+    const kb::ecs::Entity migratedSample = migratedEntities.front();
+    kb::tests::Require(world.NativeStorage().HasComponent(migratedSample, massId), "World bulk add migration did not add the new component");
+    kb::tests::Require(world.NativeStorage().ComponentVersion(migratedSample, positionId) > 0U, "World bulk add migration lost retained component versioning");
+    kb::tests::Require(world.NativeStorage().ComponentVersion(migratedSample, velocityId) > 0U, "World bulk add migration lost second retained component versioning");
+    kb::tests::Require(world.NativeStorage().ComponentVersion(migratedSample, massId) > 0U, "World bulk add migration did not initialize added component versioning");
+
+    kb::ecs::CommandBuffer removeBuffer{ 1 };
+    removeBuffer.Worker(0).Remove<Velocity>(std::span<const kb::ecs::Entity>{ migratedEntities });
+    static_cast<void>(removeBuffer.Playback(world));
+
+    kb::tests::Require(!world.NativeStorage().HasComponent(migratedSample, velocityId), "World bulk remove migration retained removed component");
+    kb::tests::Require(world.NativeStorage().HasComponent(migratedSample, positionId), "World bulk remove migration lost retained position component");
+    kb::tests::Require(world.NativeStorage().HasComponent(migratedSample, massId), "World bulk remove migration lost retained mass component");
+    kb::tests::Require(world.NativeStorage().ComponentVersion(migratedSample, positionId) > 0U, "World bulk remove migration lost retained component versioning");
+    kb::tests::Require(world.NativeStorage().ComponentVersion(migratedSample, massId) > 0U, "World bulk remove migration lost retained mass versioning");
 }
 
 void RunNativeComponentAlignmentTest() {
@@ -385,7 +742,11 @@ void RunEcsNativeArchetypeStorageTests() {
     RunMultiComponentMigrationTest();
     RunSwapDeleteAndGenerationTest();
     RunArchetypeSignatureMatchingTest();
+    RunNativeBulkCreateAdoptColumnAppendTest();
     RunWorldNativeStorageMirrorTest();
+    RunWorldBulkStorageStatsConsistencyTest();
+    RunWorldBulkMappingIntegrityTest();
+    RunWorldBulkVersioningTest();
     RunNativeComponentAlignmentTest();
     RunNativeComponentAlignmentValidationTest();
 }

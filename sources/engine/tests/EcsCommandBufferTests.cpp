@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <span>
 #include <vector>
@@ -56,6 +57,90 @@ void RunCommandBufferDeterministicPlaybackTest() {
     const EcsPosition* position = world.TryGet<EcsPosition>(two);
     kb::tests::Require(position != nullptr && kb::tests::NearlyEqual(position->x, 100.0F), "ECS command buffer did not set deferred component data");
     kb::tests::Require(buffer.Empty(), "ECS command buffer did not clear commands after playback");
+}
+
+struct CommandBufferDeterministicSnapshot {
+    std::vector<kb::ecs::Entity::IdType> entityIds;
+    std::vector<kb::ecs::Entity::IdType> parentIds;
+    std::vector<float> positionX;
+};
+
+[[nodiscard]] std::uint32_t NextDeterministicValue(std::uint32_t& state) noexcept {
+    state = state * 1'664'525U + 1'013'904'223U;
+    return state;
+}
+
+[[nodiscard]] CommandBufferDeterministicSnapshot BuildDeterministicStructuralPlayback(std::uint32_t seed) {
+    kb::ecs::World world;
+    kb::ecs::CommandBuffer buffer{ 4 };
+    std::vector<kb::ecs::CommandEntity> commands(32);
+    std::uint32_t state = seed;
+
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const std::size_t workerIndex = NextDeterministicValue(state) % 4U;
+        kb::ecs::CommandBuffer::WorkerBuffer worker = buffer.Worker(workerIndex);
+        commands[index] = worker.CreateEntity();
+        worker.Set(commands[index], EcsPosition{ .x = static_cast<float>(NextDeterministicValue(state) % 10'000U), .y = static_cast<float>(workerIndex) });
+        if (index > 0U) {
+            worker.SetParent(commands[index], commands[index - 1U]);
+        }
+    }
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.Playback(world);
+    CommandBufferDeterministicSnapshot snapshot;
+    snapshot.entityIds.reserve(commands.size());
+    snapshot.parentIds.reserve(commands.size());
+    snapshot.positionX.reserve(commands.size());
+    for (kb::ecs::CommandEntity command : commands) {
+        const kb::ecs::Entity entity = result.Resolve(command);
+        const EcsPosition* position = world.TryGet<EcsPosition>(entity);
+        snapshot.entityIds.push_back(entity.Id());
+        snapshot.parentIds.push_back(world.Parent(entity).Id());
+        snapshot.positionX.push_back(position == nullptr ? -1.0F : position->x);
+    }
+    return snapshot;
+}
+
+void RunCommandBufferMultiWorkerDeterministicStructuralChangesTest() {
+    const CommandBufferDeterministicSnapshot first = BuildDeterministicStructuralPlayback(0xC0FFEEU);
+    const CommandBufferDeterministicSnapshot second = BuildDeterministicStructuralPlayback(0xC0FFEEU);
+
+    kb::tests::Require(first.entityIds == second.entityIds, "ECS command buffer multi-worker structural playback produced nondeterministic entity ids");
+    kb::tests::Require(first.parentIds == second.parentIds, "ECS command buffer multi-worker structural playback produced nondeterministic parent relations");
+    kb::tests::Require(first.positionX == second.positionX, "ECS command buffer multi-worker structural playback produced nondeterministic component values");
+}
+
+void RunCommandBufferBulkParentChangesTest() {
+    kb::ecs::World world;
+    const kb::ecs::Entity existingParent = world.CreateEntity("BulkParentRoot");
+
+    kb::ecs::CommandBuffer buffer{ 2 };
+    std::vector<kb::ecs::CommandEntity> created = buffer.Worker(0).CreateEntities(3);
+    std::vector<kb::ecs::CommandEntity> parents{
+        kb::ecs::CommandEntity::Existing(existingParent),
+        created[0],
+        created[1],
+    };
+    buffer.Worker(1).SetParents(std::span<const kb::ecs::CommandEntity>{ created }, std::span<const kb::ecs::CommandEntity>{ parents });
+    kb::tests::Require(buffer.CommandCount() == 2U, "ECS command buffer bulk parent setup recorded unexpected command count");
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.Playback(world);
+    const kb::ecs::Entity first = result.Resolve(created[0]);
+    const kb::ecs::Entity second = result.Resolve(created[1]);
+    const kb::ecs::Entity third = result.Resolve(created[2]);
+
+    kb::tests::Require(world.Parent(first) == existingParent, "ECS command buffer bulk parent setup did not use existing parent");
+    kb::tests::Require(world.Parent(second) == first, "ECS command buffer bulk parent setup did not resolve first deferred parent");
+    kb::tests::Require(world.Parent(third) == second, "ECS command buffer bulk parent setup did not resolve second deferred parent");
+
+    kb::ecs::CommandBuffer clearBuffer{ 1 };
+    std::vector<kb::ecs::Entity> children{ first, second, third };
+    clearBuffer.Worker(0).ClearParents(std::span<const kb::ecs::Entity>{ children });
+    static_cast<void>(clearBuffer.Playback(world));
+
+    kb::tests::Require(!world.Parent(first).IsValid(), "ECS command buffer bulk clear parent did not clear first parent");
+    kb::tests::Require(!world.Parent(second).IsValid(), "ECS command buffer bulk clear parent did not clear second parent");
+    kb::tests::Require(!world.Parent(third).IsValid(), "ECS command buffer bulk clear parent did not clear third parent");
 }
 
 void RunCommandBufferStructuralChangesTest() {
@@ -389,12 +474,54 @@ void RunCommandBufferRollbackOnPlaybackErrorTest() {
     kb::tests::Require(!buffer.Empty(), "ECS command buffer cleared commands after a failed playback");
 }
 
+void RunCommandBufferRollbackBulkCreateRestoresWorldTest() {
+    kb::ecs::World world;
+    const kb::ecs::Entity originalParent = world.CreateEntity("BulkRollbackParent");
+    const kb::ecs::Entity existing = world.CreateEntity("BulkRollbackExisting");
+    world.Set(existing, EcsPosition{ .x = 1.0F, .y = 2.0F });
+    world.SetParent(existing, originalParent);
+
+    std::vector<EcsPosition> positions{
+        EcsPosition{ .x = 10.0F, .y = 0.0F },
+        EcsPosition{ .x = 20.0F, .y = 0.0F },
+        EcsPosition{ .x = 30.0F, .y = 0.0F },
+        EcsPosition{ .x = 40.0F, .y = 0.0F },
+    };
+
+    kb::ecs::CommandBuffer buffer{ 2 };
+    std::vector<kb::ecs::CommandEntity> created = buffer.Worker(0).CreateEntities(std::span<const EcsPosition>{ positions });
+    buffer.Worker(0).SetParent(kb::ecs::CommandEntity::Existing(existing), created.front());
+    buffer.Worker(0).Set(existing, EcsPosition{ .x = 99.0F, .y = 100.0F });
+    buffer.Worker(1).Set(kb::ecs::CommandEntity::Deferred(4, 0), EcsVelocity{ .x = 1.0F, .y = 1.0F });
+
+    bool threw = false;
+    try {
+        static_cast<void>(buffer.Playback(world));
+    } catch (const std::exception&) {
+        threw = true;
+    }
+
+    kb::tests::Require(threw, "ECS command buffer bulk rollback test did not propagate playback error");
+    kb::tests::Require(world.IsAlive(originalParent) && world.IsAlive(existing), "ECS command buffer bulk rollback destroyed existing entities");
+    kb::tests::Require(world.Parent(existing) == originalParent, "ECS command buffer bulk rollback did not restore existing parent");
+    const EcsPosition* restoredPosition = world.TryGet<EcsPosition>(existing);
+    kb::tests::Require(restoredPosition != nullptr && kb::tests::NearlyEqual(restoredPosition->x, 1.0F), "ECS command buffer bulk rollback did not restore existing component");
+    kb::tests::Require(world.NativeStorageStats().liveEntities == 2U, "ECS command buffer bulk rollback left created native entities alive");
+
+    EcsIterationCounters counters;
+    world.ForEach<EcsPosition>(&CountPositions, &counters);
+    kb::tests::Require(counters.visited == 1, "ECS command buffer bulk rollback left bulk-created component data visible");
+    kb::tests::Require(!buffer.Empty(), "ECS command buffer cleared commands after failed bulk rollback playback");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsCommandBufferTests() {
     RunCommandBufferDeterministicPlaybackTest();
+    RunCommandBufferMultiWorkerDeterministicStructuralChangesTest();
+    RunCommandBufferBulkParentChangesTest();
     RunCommandBufferStructuralChangesTest();
     RunCommandBufferBulkCreateSameArchetypeTest();
     RunCommandBufferRuntimeBulkCreateArchetypeTest();
@@ -402,6 +529,7 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferDeferredDestroySyncPointTest();
     RunCommandBufferNestedCreateDestroyFromJobsTest();
     RunCommandBufferRollbackOnPlaybackErrorTest();
+    RunCommandBufferRollbackBulkCreateRestoresWorldTest();
 }
 
 } // namespace kb::tests

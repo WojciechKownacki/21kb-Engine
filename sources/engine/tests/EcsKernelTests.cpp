@@ -4,6 +4,7 @@
 
 #include "engine/ecs/Kernel.hpp"
 #include "engine/ecs/KernelVectorMath.hpp"
+#include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <array>
@@ -12,6 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <vector>
 
 namespace {
 
@@ -23,6 +26,23 @@ struct EcsMovementConstants {
     float deltaSeconds = 0.0F;
     float drag = 0.0F;
 };
+
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
+
+struct alignas(32) EcsKernelAlignedInput {
+    float x = 0.0F;
+};
+
+struct alignas(32) EcsKernelAlignedOutput {
+    float x = 0.0F;
+};
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 using EcsMovementKernelContract = kb::ecs::KernelContract<
     kb::ecs::KernelInputComponents<EcsVelocity>,
@@ -48,6 +68,10 @@ struct EcsMovementKernel {
 using EcsSimdKernelContract = kb::ecs::KernelContract<
     kb::ecs::KernelInputComponents<EcsVelocity>,
     kb::ecs::KernelOutputComponents<EcsPosition>>;
+
+using EcsAlignedKernelContract = kb::ecs::KernelContract<
+    kb::ecs::KernelInputComponents<EcsKernelAlignedInput>,
+    kb::ecs::KernelOutputComponents<EcsKernelAlignedOutput>>;
 
 void AddProbeMovement(kb::ecs::KernelBatch<EcsSimdKernelContract>& batch, float scale) {
     const EcsVelocity* velocities = batch.Inputs<0>();
@@ -91,6 +115,16 @@ struct EcsSimdProbeKernel {
     void operator()(kb::ecs::KernelBatch<EcsSimdKernelContract>& batch, kb::ecs::KernelAvx512Tag) const {
         ++(*avx512Batches);
         AddProbeMovement(batch, 8.0F);
+    }
+};
+
+struct EcsAlignedKernel {
+    void operator()(kb::ecs::KernelBatch<EcsAlignedKernelContract>& batch) const {
+        const EcsKernelAlignedInput* inputs = batch.Inputs<0>();
+        EcsKernelAlignedOutput* outputs = batch.Outputs<0>();
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            outputs[index].x = inputs[index].x * 2.0F;
+        }
     }
 };
 
@@ -891,6 +925,130 @@ void RunEcsCompiledKernelQueryExecutionTest() {
     kb::tests::Require(kb::tests::NearlyEqual(sumY, 80.0F), "Compiled ECS kernel query did not persist output component writes to Y");
 }
 
+void RunEcsKernelAlignedComponentContractTest() {
+    static_assert(alignof(EcsKernelAlignedInput) == 32U);
+    static_assert(alignof(EcsKernelAlignedOutput) == 32U);
+
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 4,
+    });
+
+    for (int index = 0; index < 9; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsKernelAlignedInput{ .x = static_cast<float>(index) });
+        world.Set(entity, EcsKernelAlignedOutput{});
+    }
+
+    auto compiled = kb::ecs::CompileKernelQuery<EcsAlignedKernelContract>(
+        world,
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 },
+        kb::ecs::KernelBackendPreference::Avx2,
+        EcsAlignedKernel{},
+        kb::ecs::BindKernelAssets(),
+        kb::ecs::KernelNoConstants{});
+    compiled.Execute();
+
+    kb::ecs::KernelQuery<EcsAlignedKernelContract> query = world.CreateQuery<EcsKernelAlignedInput, EcsKernelAlignedOutput>();
+    int visited = 0;
+    float sum = 0.0F;
+    query.ForEachBatchKernel([&visited, &sum](const kb::ecs::QueryBatch<EcsKernelAlignedInput, EcsKernelAlignedOutput>& batch) {
+        const EcsKernelAlignedOutput* outputs = batch.Components<1>();
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            ++visited;
+            sum += outputs[index].x;
+        }
+    });
+
+    kb::tests::Require(visited == 9, "ECS aligned kernel contract did not visit all entities");
+    kb::tests::Require(kb::tests::NearlyEqual(sum, 72.0F), "ECS aligned kernel contract did not write expected output");
+}
+
+void RunEcsCompiledKernelMatchesQueryPathTest() {
+    constexpr int kCount = 17;
+    kb::ecs::World kernelWorld(kb::ecs::WorldConfig{ .executionGrainSize = 5 });
+    kb::ecs::World queryWorld(kb::ecs::WorldConfig{ .executionGrainSize = 5 });
+
+    std::vector<kb::ecs::Entity> kernelEntities;
+    std::vector<kb::ecs::Entity> queryEntities;
+    kernelEntities.reserve(kCount);
+    queryEntities.reserve(kCount);
+    for (int index = 0; index < kCount; ++index) {
+        const EcsPosition position{
+            .x = static_cast<float>(index) * 0.25F - 2.0F,
+            .y = static_cast<float>(index) * -0.125F + 3.0F,
+        };
+        const EcsVelocity velocity{
+            .x = static_cast<float>(index) * 0.5F + 1.0F,
+            .y = static_cast<float>(index) * -0.25F + 0.75F,
+        };
+
+        const kb::ecs::Entity kernelEntity = kernelWorld.CreateEntity();
+        kernelWorld.Set(kernelEntity, position);
+        kernelWorld.Set(kernelEntity, velocity);
+        kernelEntities.push_back(kernelEntity);
+
+        const kb::ecs::Entity queryEntity = queryWorld.CreateEntity();
+        queryWorld.Set(queryEntity, position);
+        queryWorld.Set(queryEntity, velocity);
+        queryEntities.push_back(queryEntity);
+    }
+
+    const EcsMovementScaleAsset asset{ .multiplier = 3.0F };
+    const EcsMovementConstants constants{
+        .deltaSeconds = 0.125F,
+        .drag = 0.5F,
+    };
+    auto compiled = kb::ecs::CompileKernelQuery<EcsMovementKernelContract>(
+        kernelWorld,
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 5 },
+        kb::ecs::KernelBackendPreference::Scalar,
+        EcsMovementKernel{},
+        kb::ecs::BindKernelAssets(asset),
+        constants);
+    compiled.Execute();
+
+    kb::ecs::KernelQuery<EcsMovementKernelContract> query = queryWorld.CreateQuery<EcsVelocity, EcsPosition>();
+    query.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 5 }, [&asset, &constants](kb::ecs::MutableQueryBatch<EcsVelocity, EcsPosition>& batch) {
+        const EcsVelocity* velocities = batch.Components<0>();
+        EcsPosition* positions = batch.Components<1>();
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            positions[index].x += velocities[index].x * constants.deltaSeconds * asset.multiplier;
+            positions[index].y += velocities[index].y * constants.deltaSeconds * (asset.multiplier - constants.drag);
+        }
+    });
+
+    for (std::size_t index = 0; index < kernelEntities.size(); ++index) {
+        const EcsPosition* kernelPosition = kernelWorld.TryGet<EcsPosition>(kernelEntities[index]);
+        const EcsPosition* queryPosition = queryWorld.TryGet<EcsPosition>(queryEntities[index]);
+        kb::tests::Require(kernelPosition != nullptr && queryPosition != nullptr, "ECS compiled/query path comparison lost a position component");
+        kb::tests::Require(FloatBits(kernelPosition->x) == FloatBits(queryPosition->x), "ECS compiled kernel path did not match query path X bit pattern");
+        kb::tests::Require(FloatBits(kernelPosition->y) == FloatBits(queryPosition->y), "ECS compiled kernel path did not match query path Y bit pattern");
+    }
+}
+
+void RunEcsCompiledKernelSystemRegistrationTest() {
+    kb::ecs::World world;
+    PopulateSimdProbeWorld(world, 12);
+
+    int scalarBatches = 0;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .profilerEnabled = true } };
+    scheduler.Add(
+        std::make_unique<kb::ecs::CompiledKernelSystem<EcsSimdKernelContract, EcsScalarOnlyProbeKernel>>(
+            kb::ecs::QueryExecutionSettings{ .maxBatchSize = 5 },
+            EcsScalarOnlyProbeKernel{ .scalarBatches = &scalarBatches }),
+        world);
+
+    scheduler.Update(world, 0.0F);
+
+    kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
+    kb::tests::Require(scalarBatches > 0, "Compiled ECS kernel system did not execute any kernel batches");
+    kb::tests::Require(kb::tests::NearlyEqual(SumPositions(query), 36.0F), "Compiled ECS kernel system did not update component data");
+    kb::tests::Require(scheduler.LastProfilerTrace().events.size() == 1U, "Compiled ECS kernel system trace omitted execution event");
+    kb::tests::Require(scheduler.LastProfilerTrace().events[0].executionPath == "compiled_kernel", "Compiled ECS kernel system trace did not report compiled kernel execution path");
+
+    scheduler.Shutdown(world);
+}
+
 void RunEcsEditorHotReloadKernelPathTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 3,
@@ -1027,6 +1185,9 @@ void RunEcsKernelTests() {
     RunEcsKernelAvx512DispatchTest();
     RunEcsCompiledKernelBackendPreferenceUpdateTest();
     RunEcsCompiledKernelQueryExecutionTest();
+    RunEcsKernelAlignedComponentContractTest();
+    RunEcsCompiledKernelMatchesQueryPathTest();
+    RunEcsCompiledKernelSystemRegistrationTest();
     RunEcsEditorHotReloadKernelPathTest();
     RunEcsEditorKernelClearedDuringExecutionTest();
     RunEcsKernelVectorMathBitDeterminismTest();

@@ -240,6 +240,27 @@ void RunSyncPointCreatesRegistrationOrderBarrierTest() {
     scheduler.Shutdown(world);
 }
 
+void RunAssetBoundarySyncPointCreatesRegistrationOrderBarrierTest() {
+    kb::ecs::World world;
+    std::vector<std::string> executionOrder;
+
+    kb::ecs::SystemAccess assetBoundaryAccess;
+    assetBoundaryAccess.RequireSyncPoint(kb::ecs::SystemSyncPoint::AssetBoundary);
+
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .mode = kb::ecs::SystemSchedulingMode::Deterministic } };
+    scheduler.Add(std::make_unique<RecordingSystem>("BeforeAssetZ", ReadPosition(world), executionOrder), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("AssetBoundaryM", std::move(assetBoundaryAccess), executionOrder), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("AfterAssetA", ReadPosition(world), executionOrder), world);
+
+    const std::vector<std::string> snapshot = scheduler.ExecutionOrderSnapshot();
+    kb::tests::Require(snapshot == std::vector<std::string>{ "BeforeAssetZ", "AssetBoundaryM", "AfterAssetA" }, "ECS asset sync point did not preserve registration boundary order");
+
+    scheduler.Update(world, 0.0F);
+    kb::tests::Require(executionOrder == snapshot, "ECS asset sync point runtime order differed from its snapshot");
+
+    scheduler.Shutdown(world);
+}
+
 void RunSyncPointRequiresRuntimeBoundaryReasonTest() {
     kb::ecs::SystemAccess access;
 
@@ -446,16 +467,26 @@ void RunProfilerCountersCaptureFrameAndSystemWorkTest() {
     kb::tests::Require(trace.frameCounters.systemCount == 1U, "ECS profiler counters recorded invalid system count");
     kb::tests::Require(trace.frameCounters.stageCount == 1U, "ECS profiler counters recorded invalid stage count");
     kb::tests::Require(trace.frameCounters.jobsCount == 1U, "ECS profiler counters recorded invalid job count");
+    kb::tests::Require(trace.frameCounters.chunkJobsCount == 0U, "ECS profiler counters recorded chunk jobs for a plain virtual system");
     kb::tests::Require(trace.frameCounters.entitiesProcessed == 42U, "ECS profiler counters omitted processed entities");
     kb::tests::Require(trace.frameCounters.bytesTouched == 336U, "ECS profiler counters omitted touched bytes");
     kb::tests::Require(trace.frameCounters.workerCount == 1U, "ECS profiler counters recorded invalid worker count");
+    kb::tests::Require(trace.stageCounters.size() == 1U, "ECS profiler counters omitted per-stage counters");
+    kb::tests::Require(trace.stageCounters[0].systemCount == 1U, "ECS profiler stage counters recorded invalid system count");
+    kb::tests::Require(trace.stageCounters[0].jobsCount == 1U, "ECS profiler stage counters recorded invalid job count");
+    kb::tests::Require(trace.stageCounters[0].chunkJobsCount == 0U, "ECS profiler stage counters recorded invalid chunk job count");
+    kb::tests::Require(trace.stageCounters[0].workerBusyTimeNanoseconds > 0U, "ECS profiler stage counters omitted worker busy time");
     kb::tests::Require(trace.systemCounters.size() == 1U, "ECS profiler counters omitted per-system counters");
     kb::tests::Require(trace.systemCounters[0].systemName == "ProfilingProbe", "ECS profiler counters recorded invalid system name");
+    kb::tests::Require(trace.systemCounters[0].executionPath == "virtual_callback", "ECS profiler counters did not report the virtual callback execution path");
     kb::tests::Require(trace.systemCounters[0].jobsCount == 1U, "ECS profiler counters recorded invalid per-system job count");
+    kb::tests::Require(trace.systemCounters[0].chunkJobsCount == 0U, "ECS profiler counters recorded invalid per-system chunk job count");
     kb::tests::Require(trace.systemCounters[0].entitiesProcessed == 42U, "ECS profiler counters recorded invalid per-system entity count");
     kb::tests::Require(trace.systemCounters[0].bytesTouched == 336U, "ECS profiler counters recorded invalid per-system byte count");
     kb::tests::Require(trace.events.size() == 1U, "ECS profiler trace omitted system event");
+    kb::tests::Require(trace.events[0].executionPath == "virtual_callback", "ECS profiler trace event did not report the virtual callback execution path");
     kb::tests::Require(trace.events[0].jobsCount == 1U, "ECS profiler trace recorded invalid event job count");
+    kb::tests::Require(trace.events[0].chunkJobsCount == 0U, "ECS profiler trace recorded invalid event chunk job count");
     kb::tests::Require(trace.events[0].entitiesProcessed == 42U, "ECS profiler trace recorded invalid event entity count");
     kb::tests::Require(trace.events[0].bytesTouched == 336U, "ECS profiler trace recorded invalid event byte count");
     kb::tests::Require(trace.workers[0].utilizationPermille <= 1000U, "ECS profiler counters recorded invalid worker utilization");
@@ -477,6 +508,9 @@ void RunProfilerTraceExportWritesExternalJsonFileTest() {
     const std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
     kb::tests::Require(content.find("\"schema\": \"kb.ecs.scheduler_trace.v1\"") != std::string::npos, "ECS profiler trace export omitted schema");
     kb::tests::Require(content.find("\"system_name\": \"ProfilingProbe\"") != std::string::npos, "ECS profiler trace export omitted system counters");
+    kb::tests::Require(content.find("\"execution_path\": \"virtual_callback\"") != std::string::npos, "ECS profiler trace export omitted execution path");
+    kb::tests::Require(content.find("\"stage_counters\"") != std::string::npos, "ECS profiler trace export omitted stage counters");
+    kb::tests::Require(content.find("\"chunk_jobs_count\"") != std::string::npos, "ECS profiler trace export omitted chunk job counters");
     kb::tests::Require(content.find("\"chrome_trace_events\"") != std::string::npos, "ECS profiler trace export omitted external trace events");
     kb::tests::Require(content.find("\"ph\": \"X\"") != std::string::npos, "ECS profiler trace export omitted duration events");
     kb::tests::Require(content.find("\"entities_processed\": 7") != std::string::npos, "ECS profiler trace export omitted profiler payload");
@@ -534,6 +568,7 @@ void RunEcsSystemSchedulerTests() {
     RunDeterministicModeOrdersIndependentSystemsByNameTest();
     RunDeterministicModeOrdersConflictingSystemsByNameTest();
     RunSyncPointCreatesRegistrationOrderBarrierTest();
+    RunAssetBoundarySyncPointCreatesRegistrationOrderBarrierTest();
     RunSyncPointRequiresRuntimeBoundaryReasonTest();
     RunSchedulerRejectsNullSystemTest();
     RunReadOnlySystemsShareExecutionStageTest();

@@ -2,6 +2,7 @@
 #include "EcsTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/ComponentReflectionMacros.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <cstdint>
@@ -9,6 +10,9 @@
 #include <vector>
 
 namespace {
+
+struct EcsLifetimeValidationTag {};
+struct EcsLifetimeValidationRelation {};
 
 void CountPositions(kb::ecs::Entity entity, const EcsPosition& position, void* context) {
     static_cast<void>(entity);
@@ -31,6 +35,16 @@ void CountMovingPositions(kb::ecs::Entity entity, const EcsPosition& position, c
     auto* counters = static_cast<EcsIterationCounters*>(context);
     ++counters->visited;
     counters->sumX += position.x + velocity.x;
+}
+
+template <typename Fn>
+[[nodiscard]] bool ThrowsStaleEntity(Fn&& fn) {
+    try {
+        fn();
+    } catch (const std::out_of_range&) {
+        return true;
+    }
+    return false;
 }
 
 void RunTypedEcsComponentApiTest() {
@@ -85,9 +99,23 @@ void RunTypedEcsComponentApiTest() {
 
 void RunTypedEcsEntityAndComponentLifetimeValidationTest() {
     kb::ecs::World world;
+    kb::tests::Require(world.RegisterTag<EcsLifetimeValidationTag>("test.LifetimeValidationTag") != 0, "ECS lifetime validation tag registration failed");
+    kb::tests::Require(world.RegisterRelation<EcsLifetimeValidationRelation>("test.LifetimeValidationRelation") != 0, "ECS lifetime validation relation registration failed");
+    kb::tests::Require(
+        world.RegisterComponentReflection<EcsPosition>(
+            "test.EcsPosition",
+            {
+                KB_ECS_FIELD(EcsPosition, x, kb::ecs::ComponentFieldType::Float32),
+                KB_ECS_FIELD(EcsPosition, y, kb::ecs::ComponentFieldType::Float32),
+            }) != nullptr,
+        "ECS lifetime validation component reflection registration failed");
     const kb::ecs::Entity entity = world.CreateEntity("Lifetime");
+    const kb::ecs::Entity target = world.CreateEntity("LifetimeTarget");
     world.Set(entity, EcsPosition{ .x = 1.0F, .y = 2.0F });
     world.Set(entity, EcsVelocity{ .x = 3.0F, .y = 4.0F });
+    world.AddTag<EcsLifetimeValidationTag>(entity);
+    world.AddRelation<EcsLifetimeValidationRelation>(entity, target);
+    world.SetParent(entity, target);
 
     world.Remove<EcsVelocity>(entity);
     kb::tests::Require(!world.Has<EcsVelocity>(entity), "ECS component lifetime validation kept a removed component alive");
@@ -112,6 +140,38 @@ void RunTypedEcsEntityAndComponentLifetimeValidationTest() {
         staleWriteRejected = true;
     }
     kb::tests::Require(staleWriteRejected, "ECS entity generation validation accepted a stale write handle");
+
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.TryGet<EcsPosition>(entity)); }), "ECS stale validation accepted TryGet");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.TryGetMutable<EcsPosition>(entity)); }), "ECS stale validation accepted TryGetMutable");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.Remove<EcsPosition>(entity); }), "ECS stale validation accepted component remove");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.MarkModified<EcsPosition>(entity); }), "ECS stale validation accepted component mark modified");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.Name(entity)); }), "ECS stale validation accepted entity name read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.SetName(entity, "Stale"); }), "ECS stale validation accepted entity rename");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.AddTag<EcsLifetimeValidationTag>(entity); }), "ECS stale validation accepted tag add");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.HasTag<EcsLifetimeValidationTag>(entity)); }), "ECS stale validation accepted tag read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.RemoveTag<EcsLifetimeValidationTag>(entity); }), "ECS stale validation accepted tag remove");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity, target] { world.AddRelation<EcsLifetimeValidationRelation>(entity, target); }), "ECS stale validation accepted relation add source");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity, target] { world.AddRelation<EcsLifetimeValidationRelation>(target, entity); }), "ECS stale validation accepted relation add target");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity, target] { static_cast<void>(world.HasRelation<EcsLifetimeValidationRelation>(entity, target)); }), "ECS stale validation accepted relation read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity, target] { world.RemoveRelation<EcsLifetimeValidationRelation>(entity, target); }), "ECS stale validation accepted relation remove");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.RelationTarget<EcsLifetimeValidationRelation>(entity)); }), "ECS stale validation accepted relation target read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity, target] { world.SetParent(entity, target); }), "ECS stale validation accepted parent assignment");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { world.ClearParent(entity); }), "ECS stale validation accepted parent clear");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.Parent(entity)); }), "ECS stale validation accepted parent read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.Children(entity)); }), "ECS stale validation accepted children read");
+    kb::tests::Require(ThrowsStaleEntity([&world, entity] { static_cast<void>(world.InspectEntity(entity)); }), "ECS stale validation accepted inspection");
+    kb::tests::Require(
+        ThrowsStaleEntity([&world, entity] {
+            kb::ecs::SerializedComponent serialized;
+            static_cast<void>(world.SerializeComponent(entity, world.Component<EcsPosition>(), serialized));
+        }),
+        "ECS stale validation accepted serialized component read");
+    kb::tests::Require(
+        ThrowsStaleEntity([&world, entity] {
+            kb::ecs::SerializedComponent serialized;
+            static_cast<void>(world.ApplySerializedComponent(entity, serialized));
+        }),
+        "ECS stale validation accepted serialized component apply");
 
     bool invalidDestroyRejected = false;
     try {

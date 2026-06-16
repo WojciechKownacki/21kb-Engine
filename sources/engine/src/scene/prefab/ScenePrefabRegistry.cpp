@@ -79,6 +79,10 @@ std::size_t ScenePrefabRegistry::Count() const noexcept {
     return records_.Count();
 }
 
+bool ScenePrefabRegistry::Remove(ScenePrefabHandle handle) noexcept {
+    return records_.Remove(handle);
+}
+
 void ScenePrefabRegistry::Clear() noexcept {
     records_.Clear();
 }

@@ -1,5 +1,7 @@
 #include "engine/scene/ScenePrefabs.hpp"
 
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabAssetFacade.hpp"
 
 #include <utility>
@@ -20,6 +22,10 @@ bool ScenePrefabs::Save(ScenePrefabHandle handle, const std::filesystem::path& p
 
 ScenePrefabHandle ScenePrefabs::Load(const std::filesystem::path& path) {
     return ScenePrefabAssetFacade::Load(scene_, path);
+}
+
+bool ScenePrefabs::Unload(ScenePrefabHandle handle) noexcept {
+    return SceneAccess::State(scene_).prefabs.Remove(handle);
 }
 
 } // namespace kb::scene

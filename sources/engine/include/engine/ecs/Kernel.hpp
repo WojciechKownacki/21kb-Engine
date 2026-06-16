@@ -2,10 +2,12 @@
 
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/QueryExecutionScratch.hpp"
+#include "engine/ecs/System.hpp"
 #include "engine/ecs/SystemAccess.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -302,6 +304,12 @@ void InvokeKernelWithBackend(Kernel& kernel, Batch& batch, KernelBackend backend
     InvokeKernelScalar(kernel, batch);
 }
 
+template <typename T>
+void AssertKernelComponentColumnAligned(const T* components, std::size_t count) noexcept {
+    assert((count == 0U || components != nullptr) && "ECS kernel component column is null for a non-empty batch");
+    assert((count == 0U || (reinterpret_cast<std::uintptr_t>(components) % alignof(T)) == 0U) && "ECS kernel component column is not aligned for its component type");
+}
+
 } // namespace detail
 
 [[nodiscard]] inline bool IsKernelBackendSupported(KernelBackend backend) noexcept {
@@ -355,7 +363,9 @@ public:
     KernelBatch(MutableBatchType& batch, const AssetBindings& assets, const ConstantsType& constants) noexcept
         : batch_(batch)
         , assets_(assets)
-        , constants_(std::addressof(constants)) {}
+        , constants_(std::addressof(constants)) {
+        ValidateComponentAlignment(std::index_sequence_for<InputTypes...>{}, std::index_sequence_for<OutputTypes...>{});
+    }
 
     [[nodiscard]] std::size_t Count() const noexcept { return batch_.Count(); }
     [[nodiscard]] bool Empty() const noexcept { return batch_.Empty(); }
@@ -384,6 +394,22 @@ public:
     void Prefetch(std::size_t index) const noexcept { batch_.Prefetch(index); }
 
 private:
+    template <std::size_t... Indices>
+    void ValidateInputAlignment(std::index_sequence<Indices...>) const noexcept {
+        (detail::AssertKernelComponentColumnAligned<InputTypes>(batch_.template Components<Indices>(), batch_.Count()), ...);
+    }
+
+    template <std::size_t... Indices>
+    void ValidateOutputAlignment(std::index_sequence<Indices...>) const noexcept {
+        (detail::AssertKernelComponentColumnAligned<OutputTypes>(batch_.template Components<sizeof...(InputTypes) + Indices>(), batch_.Count()), ...);
+    }
+
+    template <std::size_t... InputIndices, std::size_t... OutputIndices>
+    void ValidateComponentAlignment(std::index_sequence<InputIndices...> inputIndices, std::index_sequence<OutputIndices...> outputIndices) const noexcept {
+        ValidateInputAlignment(inputIndices);
+        ValidateOutputAlignment(outputIndices);
+    }
+
     MutableBatchType& batch_;
     const AssetBindings& assets_;
     const ConstantsType* constants_ = nullptr;
@@ -745,6 +771,84 @@ template <typename Contract, typename Kernel>
     const KernelConstants<Contract>& constants) {
     return CompileKernelQuery<Contract>(world, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants);
 }
+
+template <typename Contract, typename Kernel>
+class CompiledKernelSystem : public System {
+public:
+    using KernelType = std::decay_t<Kernel>;
+    using AssetBindings = KernelAssetBindings<Contract>;
+    using Constants = KernelConstants<Contract>;
+    using CompiledQuery = CompiledKernelQuery<Contract, KernelType>;
+
+    explicit CompiledKernelSystem(
+        QueryExecutionSettings settings,
+        KernelType kernel,
+        AssetBindings assets = AssetBindings{},
+        Constants constants = Constants{},
+        KernelBackendPreference backendPreference = KernelBackendPreference::Auto)
+        : settings_(settings)
+        , kernel_(std::move(kernel))
+        , assets_(assets)
+        , constants_(constants)
+        , backendPreference_(backendPreference) {}
+
+    [[nodiscard]] SystemAccess DeclareAccess(World& world) const override {
+        return DeclareKernelAccess<Contract>(world);
+    }
+
+    [[nodiscard]] std::string_view ExecutionPathName() const noexcept override {
+        return "compiled_kernel";
+    }
+
+    void OnCreate(World& world) override {
+        compiled_ = std::make_unique<CompiledQuery>(
+            CompileKernelQuery<Contract>(
+                world,
+                RuntimeSettings(),
+                backendPreference_,
+                kernel_,
+                assets_,
+                constants_));
+    }
+
+    void SetExecutionWorkerPool(WorkerPool* workerPool) noexcept override {
+        executionWorkerPool_ = workerPool;
+    }
+
+    void OnUpdate(World& world, float deltaSeconds) override {
+        static_cast<void>(world);
+        static_cast<void>(deltaSeconds);
+        if (compiled_ == nullptr || !compiled_->IsValid()) {
+            executionWorkerPool_ = nullptr;
+            return;
+        }
+
+        compiled_->SetSettings(RuntimeSettings());
+        compiled_->Execute();
+        executionWorkerPool_ = nullptr;
+    }
+
+    [[nodiscard]] const CompiledQuery* Compiled() const noexcept {
+        return compiled_.get();
+    }
+
+private:
+    [[nodiscard]] QueryExecutionSettings RuntimeSettings() const noexcept {
+        QueryExecutionSettings settings = settings_;
+        if (settings.workerPool == nullptr) {
+            settings.workerPool = executionWorkerPool_;
+        }
+        return settings;
+    }
+
+    QueryExecutionSettings settings_{};
+    KernelType kernel_;
+    AssetBindings assets_;
+    Constants constants_;
+    KernelBackendPreference backendPreference_ = KernelBackendPreference::Auto;
+    WorkerPool* executionWorkerPool_ = nullptr;
+    std::unique_ptr<CompiledQuery> compiled_;
+};
 
 template <typename Contract>
 [[nodiscard]] EditorCompiledKernelQuery<Contract> CompileEditorKernelQuery(

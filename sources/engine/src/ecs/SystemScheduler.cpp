@@ -33,6 +33,7 @@ SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
     , debugTraceEnabled_(config.debugTraceEnabled)
     , profilerEnabled_(config.profilerEnabled)
     , parallelExecutionEnabled_(config.parallelExecutionEnabled)
+    , parallelismMode_(config.parallelismMode)
     , runtimeAccessValidationEnabled_(config.runtimeAccessValidationEnabled)
     , workerPoolConfig_(config.workerPool) {}
 
@@ -99,6 +100,7 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
                     ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, context.workerIndex)
                     : RuntimeAccessValidator::Guard{};
+                systems_[systemIndex].system->SetExecutionWorkerPool(nullptr);
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
                 if (instrumentationEnabled) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
@@ -141,6 +143,10 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
                     ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, 0)
                     : RuntimeAccessValidator::Guard{};
+                WorkerPool* queryWorkerPool = parallelExecutionEnabled_ && parallelismMode_ == SystemSchedulerParallelismMode::QueryChunks && !workerPoolConfig_.singleThreaded
+                    ? &RuntimeWorkerPool()
+                    : nullptr;
+                systems_[systemIndex].system->SetExecutionWorkerPool(queryWorkerPool);
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
                 if (instrumentationEnabled) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
@@ -387,6 +393,13 @@ void SystemScheduler::BeginProfilerTrace() {
         },
     };
     lastTrace_.events.reserve(systems_.size());
+    lastTrace_.stageCounters.reserve(executionStages_.size());
+    for (std::size_t stageIndex = 0; stageIndex < executionStages_.size(); ++stageIndex) {
+        lastTrace_.stageCounters.push_back(SystemSchedulerStageCounters{
+            .stageIndex = stageIndex,
+            .systemCount = executionStages_[stageIndex].systems.size(),
+        });
+    }
     lastTrace_.systemCounters.reserve(systems_.size());
     lastTrace_.workers.push_back(SystemSchedulerWorkerTrace{
         .workerIndex = 0,
@@ -441,10 +454,12 @@ void SystemScheduler::TraceSystemExecution(
 
     SystemSchedulerTraceEvent event{
         .systemName = std::string{ systems_[systemIndex].system->Name() },
+        .executionPath = std::string{ systems_[systemIndex].system->ExecutionPathName() },
         .systemIndex = systemIndex,
         .stageIndex = stageIndex,
         .workerIndex = workerIndex,
         .jobsCount = jobsCount,
+        .chunkJobsCount = profilerCounters.chunkJobsCount,
         .startTimeNanoseconds = startTimeNanoseconds,
         .endTimeNanoseconds = endTimeNanoseconds,
         .durationNanoseconds = duration,
@@ -455,6 +470,7 @@ void SystemScheduler::TraceSystemExecution(
         .blockedDependencies = std::move(blockedDependencies),
     };
     AddSystemCounters(event);
+    AddStageCounters(event);
     lastTrace_.events.push_back(std::move(event));
 }
 
@@ -470,23 +486,49 @@ void SystemScheduler::AddSystemCounters(const SystemSchedulerTraceEvent& event) 
     if (counters == nullptr) {
         counters = &lastTrace_.systemCounters.emplace_back(SystemSchedulerSystemCounters{
             .systemName = event.systemName,
+            .executionPath = event.executionPath,
             .systemIndex = event.systemIndex,
         });
     }
 
     counters->cpuTimeNanoseconds += event.durationNanoseconds;
     counters->jobsCount += event.jobsCount;
+    counters->chunkJobsCount += event.chunkJobsCount;
     counters->entitiesProcessed += event.entitiesProcessed;
     counters->bytesTouched += event.bytesTouched;
 
     lastTrace_.frameCounters.cpuTimeNanoseconds += event.durationNanoseconds;
     lastTrace_.frameCounters.jobsCount += event.jobsCount;
+    lastTrace_.frameCounters.chunkJobsCount += event.chunkJobsCount;
     lastTrace_.frameCounters.entitiesProcessed += event.entitiesProcessed;
     lastTrace_.frameCounters.bytesTouched += event.bytesTouched;
 }
 
+void SystemScheduler::AddStageCounters(const SystemSchedulerTraceEvent& event) {
+    SystemSchedulerStageCounters* counters = nullptr;
+    for (SystemSchedulerStageCounters& existing : lastTrace_.stageCounters) {
+        if (existing.stageIndex == event.stageIndex) {
+            counters = &existing;
+            break;
+        }
+    }
+
+    if (counters == nullptr) {
+        counters = &lastTrace_.stageCounters.emplace_back(SystemSchedulerStageCounters{
+            .stageIndex = event.stageIndex,
+        });
+    }
+
+    counters->cpuTimeNanoseconds += event.durationNanoseconds;
+    counters->jobsCount += event.jobsCount;
+    counters->chunkJobsCount += event.chunkJobsCount;
+    counters->waitTimeNanoseconds += event.waitTimeNanoseconds;
+    counters->workerBusyTimeNanoseconds += event.durationNanoseconds;
+}
+
 bool SystemScheduler::ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept {
     return parallelExecutionEnabled_ &&
+        parallelismMode_ == SystemSchedulerParallelismMode::SystemStages &&
         schedulingMode_ != SystemSchedulingMode::Deterministic &&
         !workerPoolConfig_.singleThreaded &&
         stage.systems.size() > 1U;

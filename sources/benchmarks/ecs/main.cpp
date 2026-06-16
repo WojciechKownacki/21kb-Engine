@@ -1,4 +1,5 @@
 #include "engine/ecs/QueryBatch.hpp"
+#include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
@@ -241,11 +242,19 @@ struct StructuralBenchmarkData {
     std::size_t operationCount = 0;
 };
 
+struct NativeBulkStorageBenchmarkData {
+    std::vector<BenchPosition> positions;
+    std::vector<BenchVelocity> velocities;
+    std::vector<kb::ecs::Entity> adoptedEntities;
+};
+
 struct PrefabSpawnBenchmarkData {
     std::unique_ptr<kb::scene::Scene> scene;
+    kb::scene::ScenePrefab prefabTemplate;
     kb::scene::ScenePrefabHandle prefab;
     std::size_t instanceCount = 0;
     std::size_t nodeCount = 0;
+    bool registered = true;
 };
 
 struct PrefabOverrideBenchmarkData {
@@ -1316,6 +1325,90 @@ void RegisterStructuralComponents(kb::ecs::World& world) {
     return checksum;
 }
 
+constexpr kb::ecs::ComponentId kNativeBulkPositionId = 70'001;
+constexpr kb::ecs::ComponentId kNativeBulkVelocityId = 70'002;
+
+[[nodiscard]] NativeBulkStorageBenchmarkData CreateNativeBulkStorageBenchmarkData(const BenchmarkOptions& options) {
+    std::vector<BenchPosition> positions;
+    std::vector<BenchVelocity> velocities;
+    std::vector<kb::ecs::Entity> adoptedEntities;
+    positions.reserve(options.entityCount);
+    velocities.reserve(options.entityCount);
+    adoptedEntities.reserve(options.entityCount);
+    for (std::size_t index = 0; index < options.entityCount; ++index) {
+        const float value = static_cast<float>(index % 8192U);
+        positions.push_back(BenchPosition{ .x = value, .y = value * 0.5F });
+        velocities.push_back(BenchVelocity{ .x = 1.0F + static_cast<float>(index % 13U), .y = -0.125F * static_cast<float>(index % 17U) });
+        adoptedEntities.push_back(kb::ecs::Entity{ 50'000'000ULL + static_cast<kb::ecs::Entity::IdType>(index) });
+    }
+    return NativeBulkStorageBenchmarkData{
+        .positions = std::move(positions),
+        .velocities = std::move(velocities),
+        .adoptedEntities = std::move(adoptedEntities),
+    };
+}
+
+[[nodiscard]] double RunNativeBulkCreateAdoptDestroyFrame(
+    const BenchmarkOptions& options,
+    const NativeBulkStorageBenchmarkData& data) {
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = kb::ecs::NativeComponentType{
+                .id = kNativeBulkPositionId,
+                .size = sizeof(BenchPosition),
+                .alignment = alignof(BenchPosition),
+            },
+            .data = data.positions.data(),
+            .stride = sizeof(BenchPosition),
+        },
+        kb::ecs::NativeBulkComponentColumn{
+            .type = kb::ecs::NativeComponentType{
+                .id = kNativeBulkVelocityId,
+                .size = sizeof(BenchVelocity),
+                .alignment = alignof(BenchVelocity),
+            },
+            .data = data.velocities.data(),
+            .stride = sizeof(BenchVelocity),
+        },
+    };
+
+    kb::ecs::WorldConfig config = kb::ecs::WorldConfigPresets::BenchmarkDefault();
+    config.reserveEntities = options.entityCount * 2U;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+    const std::vector<kb::ecs::Entity> createdEntities = storage.CreateEntities(options.entityCount, columns);
+    storage.AdoptEntities(data.adoptedEntities, columns);
+    if (createdEntities.size() != options.entityCount || storage.Stats().liveEntities != options.entityCount * 2U) {
+        throw std::runtime_error("Native bulk benchmark did not create/adopt the expected entity count");
+    }
+
+    double checksum = 0.0;
+    const std::array<std::size_t, 4U> samples{
+        0U,
+        options.entityCount / 3U,
+        (options.entityCount * 2U) / 3U,
+        options.entityCount - 1U,
+    };
+    const std::array movingQuery{ kNativeBulkPositionId, kNativeBulkVelocityId };
+    for (std::size_t index : samples) {
+        const kb::ecs::Entity created = createdEntities[index];
+        const kb::ecs::Entity adopted = data.adoptedEntities[index];
+        if (!storage.EntityArchetypeMatches(created, movingQuery) || !storage.EntityArchetypeMatches(adopted, movingQuery)) {
+            throw std::runtime_error("Native bulk benchmark produced an invalid archetype");
+        }
+        const auto* createdPosition = static_cast<const BenchPosition*>(storage.ComponentData(created, kNativeBulkPositionId));
+        const auto* adoptedVelocity = static_cast<const BenchVelocity*>(storage.ComponentData(adopted, kNativeBulkVelocityId));
+        checksum += static_cast<double>(createdPosition->x) + static_cast<double>(adoptedVelocity->x);
+    }
+
+    storage.DestroyEntities(createdEntities);
+    storage.DestroyEntities(data.adoptedEntities);
+    if (storage.Stats().liveEntities != 0U) {
+        throw std::runtime_error("Native bulk benchmark destroy did not clear the storage");
+    }
+
+    return checksum;
+}
+
 [[nodiscard]] kb::scene::TransformComponent PrefabNodeTransform(std::size_t nodeIndex) noexcept {
     return kb::scene::TransformComponent{
         .localPosition = kb::scene::Vec3{
@@ -1377,18 +1470,22 @@ void RegisterStructuralComponents(kb::ecs::World& world) {
     return prefab;
 }
 
-[[nodiscard]] PrefabSpawnBenchmarkData CreatePrefabSpawnBenchmarkData(std::size_t instanceCount, std::size_t nodeCount) {
+[[nodiscard]] PrefabSpawnBenchmarkData CreatePrefabSpawnBenchmarkData(std::size_t instanceCount, std::size_t nodeCount, bool registered) {
     PrefabSpawnBenchmarkData data{
         .scene = std::make_unique<kb::scene::Scene>(),
+        .prefabTemplate = CreatePrefabSpawnTemplate(nodeCount),
         .prefab = {},
         .instanceCount = instanceCount,
         .nodeCount = nodeCount,
+        .registered = registered,
     };
-    data.prefab = data.scene->Prefabs().Register(
-        "SpawnBenchmark_" + std::to_string(instanceCount) + "_" + std::to_string(nodeCount),
-        CreatePrefabSpawnTemplate(nodeCount));
-    if (!data.prefab.IsValid()) {
-        throw std::runtime_error("Prefab spawn benchmark failed to register prefab");
+    if (data.registered) {
+        data.prefab = data.scene->Prefabs().Register(
+            "SpawnBenchmark_" + std::to_string(instanceCount) + "_" + std::to_string(nodeCount),
+            data.prefabTemplate);
+        if (!data.prefab.IsValid()) {
+            throw std::runtime_error("Prefab spawn benchmark failed to register prefab");
+        }
     }
     return data;
 }
@@ -1397,13 +1494,15 @@ void RegisterStructuralComponents(kb::ecs::World& world) {
     kb::scene::Scene& scene = *data.scene;
     const std::size_t initialEntityCount = scene.Entities().Count();
     double checksum = 0.0;
-    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(data.prefab, data.instanceCount);
+    const std::vector<kb::scene::ScenePrefabInstance> instances = data.registered
+        ? scene.Prefabs().InstantiateMany(data.prefab, data.instanceCount)
+        : scene.Prefabs().InstantiateMany(data.prefabTemplate, data.instanceCount);
     if (instances.size() != data.instanceCount) {
         throw std::runtime_error("Prefab spawn benchmark bulk instantiation returned an unexpected instance count");
     }
     for (const kb::scene::ScenePrefabInstance& instance : instances) {
-        if (instance.ObjectCount() != data.nodeCount || !instance.Handle().IsValid() || !instance.RootObject().IsValid()) {
-            throw std::runtime_error("Prefab spawn benchmark failed to instantiate a complete registered prefab");
+        if (instance.ObjectCount() != data.nodeCount || (data.registered && !instance.Handle().IsValid()) || !instance.RootObject().IsValid()) {
+            throw std::runtime_error("Prefab spawn benchmark failed to instantiate a complete prefab");
         }
         checksum += static_cast<double>(instance.RootObject().Entity().Id() & 0xFFFFU);
     }
@@ -1971,16 +2070,18 @@ template <typename FrameFunction>
 [[nodiscard]] BenchmarkResult RunPrefabSpawnBenchmark(
     const BenchmarkOptions& options,
     std::size_t instanceCount,
-    std::size_t nodeCount) {
+    std::size_t nodeCount,
+    bool registered) {
     using Clock = std::chrono::steady_clock;
 
     std::vector<double> measuredFramesMs;
     measuredFramesMs.reserve(options.frames);
     double checksum = 0.0;
+    const std::string prefabMode = registered ? "registered" : "loose";
 
     const std::size_t totalFrames = options.warmupFrames + options.frames;
     for (std::size_t frame = 0; frame < totalFrames; ++frame) {
-        PrefabSpawnBenchmarkData data = CreatePrefabSpawnBenchmarkData(instanceCount, nodeCount);
+        PrefabSpawnBenchmarkData data = CreatePrefabSpawnBenchmarkData(instanceCount, nodeCount, registered);
 
         const auto start = Clock::now();
         checksum += RunPrefabSpawnFrame(data);
@@ -2002,9 +2103,9 @@ template <typename FrameFunction>
     const FrameStats stats = ComputeFrameStats(std::move(measuredFramesMs));
     const double secondsPerFrame = stats.avgMs / 1000.0;
     return BenchmarkResult{
-        .name = BenchmarkNameForMode("prefab_spawn_" + std::to_string(instanceCount) + "_instances_" + std::to_string(nodeCount) + "_nodes", options),
+        .name = BenchmarkNameForMode("prefab_spawn_" + prefabMode + "_" + std::to_string(instanceCount) + "_instances_" + std::to_string(nodeCount) + "_nodes", options),
         .dataset = BenchmarkDatasetForMode(
-            std::to_string(instanceCount) + " prefab instances, " + std::to_string(nodeCount) + " hierarchy nodes each",
+            prefabMode + ", " + std::to_string(instanceCount) + " prefab instances, " + std::to_string(nodeCount) + " hierarchy nodes each",
             options),
         .validationMode = std::string{ ValidationModeName(options.debugValidationEnabled) },
         .entities = spawnedObjects,
@@ -2193,9 +2294,20 @@ template <typename Operation>
             return checksum;
         }));
 
+    NativeBulkStorageBenchmarkData nativeBulkData = CreateNativeBulkStorageBenchmarkData(options);
+    results.push_back(RunTimedBenchmark(
+        "native_storage_bulk_create_adopt_destroy",
+        "native storage bulk create/adopt/destroy",
+        options,
+        options.entityCount * 4U,
+        [&options, &nativeBulkData]() {
+            return RunNativeBulkCreateAdoptDestroyFrame(options, nativeBulkData);
+        }));
+
     for (const std::size_t instanceCount : options.prefabSpawnInstanceCounts) {
         for (const std::size_t nodeCount : options.prefabHierarchyNodeCounts) {
-            results.push_back(RunPrefabSpawnBenchmark(options, instanceCount, nodeCount));
+            results.push_back(RunPrefabSpawnBenchmark(options, instanceCount, nodeCount, false));
+            results.push_back(RunPrefabSpawnBenchmark(options, instanceCount, nodeCount, true));
         }
     }
 

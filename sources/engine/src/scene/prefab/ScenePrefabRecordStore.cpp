@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabRecordStore.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::scene {
@@ -10,8 +11,12 @@ std::uint64_t ScenePrefabRecordStore::NextId() const noexcept {
 
 ScenePrefabHandle ScenePrefabRecordStore::Insert(ScenePrefabRecord record) {
     const std::uint64_t id = nextId_++;
-    records_.emplace(id, std::move(record));
-    return ScenePrefabHandle{ id };
+    auto [iterator, inserted] = records_.emplace(id, std::move(record));
+    const ScenePrefabHandle handle{ id };
+    if (inserted) {
+        IndexRecord(handle, iterator->second);
+    }
+    return handle;
 }
 
 bool ScenePrefabRecordStore::Contains(ScenePrefabHandle handle) const noexcept {
@@ -41,31 +46,82 @@ ScenePrefabHandle ScenePrefabRecordStore::FindByGuid(std::string_view guid) cons
         return {};
     }
 
-    for (const auto& [id, record] : records_) {
-        if (record.guid == guid) {
-            return ScenePrefabHandle{ id };
-        }
-    }
-    return {};
+    const auto iterator = guidIndex_.find(std::string{ guid });
+    return iterator == guidIndex_.end() ? ScenePrefabHandle{} : iterator->second;
 }
 
 std::vector<ScenePrefabHandle> ScenePrefabRecordStore::VariantChildrenOf(ScenePrefabHandle baseHandle) const {
-    std::vector<ScenePrefabHandle> children;
-    for (const auto& [id, record] : records_) {
-        if (record.kind == ScenePrefabRecordKind::Variant && record.basePrefab == baseHandle) {
-            children.push_back(ScenePrefabHandle{ id });
-        }
+    if (!baseHandle.IsValid()) {
+        return {};
     }
-    return children;
+
+    const auto iterator = variantChildrenIndex_.find(baseHandle.id_);
+    return iterator == variantChildrenIndex_.end() ? std::vector<ScenePrefabHandle>{} : iterator->second;
 }
 
 std::size_t ScenePrefabRecordStore::Count() const noexcept {
     return records_.size();
 }
 
+bool ScenePrefabRecordStore::Remove(ScenePrefabHandle handle) noexcept {
+    if (!handle.IsValid()) {
+        return false;
+    }
+
+    const auto iterator = records_.find(handle.id_);
+    if (iterator == records_.end()) {
+        return false;
+    }
+
+    UnindexRecord(handle, iterator->second);
+    records_.erase(iterator);
+    return true;
+}
+
 void ScenePrefabRecordStore::Clear() noexcept {
     records_.clear();
-    nextId_ = 1;
+    guidIndex_.clear();
+    variantChildrenIndex_.clear();
+}
+
+void ScenePrefabRecordStore::IndexRecord(ScenePrefabHandle handle, const ScenePrefabRecord& record) {
+    if (!record.guid.empty()) {
+        guidIndex_[record.guid] = handle;
+    }
+    if (record.kind == ScenePrefabRecordKind::Variant && record.basePrefab.IsValid()) {
+        variantChildrenIndex_[record.basePrefab.id_].push_back(handle);
+    }
+}
+
+void ScenePrefabRecordStore::UnindexRecord(ScenePrefabHandle handle, const ScenePrefabRecord& record) noexcept {
+    if (!record.guid.empty()) {
+        const auto guidIterator = guidIndex_.find(record.guid);
+        if (guidIterator != guidIndex_.end() && guidIterator->second == handle) {
+            guidIndex_.erase(guidIterator);
+        }
+    }
+
+    if (record.kind == ScenePrefabRecordKind::Variant && record.basePrefab.IsValid()) {
+        const auto childrenIterator = variantChildrenIndex_.find(record.basePrefab.id_);
+        if (childrenIterator != variantChildrenIndex_.end()) {
+            std::vector<ScenePrefabHandle>& children = childrenIterator->second;
+            children.erase(std::remove(children.begin(), children.end(), handle), children.end());
+            if (children.empty()) {
+                variantChildrenIndex_.erase(childrenIterator);
+            }
+        }
+    }
+
+    variantChildrenIndex_.erase(handle.id_);
+    for (auto iterator = variantChildrenIndex_.begin(); iterator != variantChildrenIndex_.end();) {
+        std::vector<ScenePrefabHandle>& children = iterator->second;
+        children.erase(std::remove(children.begin(), children.end(), handle), children.end());
+        if (children.empty()) {
+            iterator = variantChildrenIndex_.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
 }
 
 } // namespace kb::scene
