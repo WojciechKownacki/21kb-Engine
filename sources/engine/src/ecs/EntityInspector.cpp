@@ -1,5 +1,6 @@
 #include "ecs/inspection/EntityInspector.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/inspection/EntityComponentInspectionCollector.hpp"
 #include "ecs/inspection/EntityNameReader.hpp"
 
@@ -9,7 +10,7 @@ namespace kb::ecs {
 
 EntityInspection EntityInspector::Inspect(ecs_world_t* world, Entity entity, Entity parent, std::span<const ComponentTypeInfo> componentTypes) {
     EntityInspection inspection;
-    if (world == nullptr || !entity.IsValid() || !ecs_is_alive(world, entity.Id())) {
+    if (world == nullptr || !entity.IsValid() || !ecs_is_alive(world, FlecsEntityId(entity))) {
         return inspection;
     }
 

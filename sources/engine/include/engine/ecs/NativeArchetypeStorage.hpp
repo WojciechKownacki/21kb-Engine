@@ -86,11 +86,15 @@ public:
     void DestroyEntity(Entity entity);
     void DestroyEntities(std::span<const Entity> entities);
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept;
+    [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept;
 
     void AddComponents(Entity entity, std::span<const NativeComponentValue> components);
+    void AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
+    void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
 
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size);
+    void SetComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components);
     void MarkComponentModified(Entity entity, ComponentId componentId);
     void MarkArchetypeComponentsModified(std::size_t archetypeIndex, std::span<const ComponentId> componentIds);
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId);

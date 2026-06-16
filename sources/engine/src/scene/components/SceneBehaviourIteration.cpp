@@ -1,5 +1,6 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
+#include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/components/SceneComponentIterationAccess.hpp"
 
 #include <flecs.h>
@@ -19,7 +20,10 @@ void SceneComponentIteration::ForEachBehaviour(const kb::ecs::World& world, std:
         }
 
         for (int32_t i = 0; i < it.count; ++i) {
-            visitor(SceneEntity{it.entities[i]}, behaviours[i], context);
+            const SceneEntity entity = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, it.entities[i]);
+            if (entity.IsValid()) {
+                visitor(entity, behaviours[i], context);
+            }
         }
     }
 }

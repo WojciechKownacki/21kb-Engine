@@ -1,6 +1,7 @@
 #include "engine/ecs/World.hpp"
 
 #include "ecs/ComponentRegistry.hpp"
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/world/WorldEntityCatalog.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
 
@@ -29,7 +30,7 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
     std::vector<ecs_entity_t> entityIds;
     entityIds.reserve(entities.size());
     for (Entity entity : entities) {
-        entityIds.push_back(entity.Id());
+        entityIds.push_back(FlecsEntityId(entity));
     }
 
     std::array<void*, FLECS_ID_DESC_MAX> componentData{};
@@ -52,16 +53,15 @@ Entity World::CreateEntity() {
     if (world_ == nullptr || nativeStorage_ == nullptr) {
         throw std::runtime_error("ECS world is not initialized");
     }
-    const Entity entity{ nextEntityId_++ };
+    const Entity entity = nativeStorage_->CreateEntity();
     try {
-        AdoptNativeEntity(entity, {});
-        ecs_make_alive(world_, entity.Id());
+        ecs_make_alive(world_, FlecsEntityId(entity));
     } catch (...) {
         if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
             nativeStorage_->DestroyEntity(entity);
         }
-        if (ecs_is_alive(world_, entity.Id())) {
-            ecs_delete(world_, entity.Id());
+        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+            ecs_delete(world_, FlecsEntityId(entity));
         }
         throw;
     }
@@ -75,7 +75,7 @@ Entity World::CreateEntity(std::string_view name) {
     Entity entity = CreateEntity();
     if (!name.empty()) {
         const std::string ownedName{ name };
-        ecs_set_name(world_, entity.Id(), ownedName.c_str());
+        ecs_set_name(world_, FlecsEntityId(entity), ownedName.c_str());
     }
     return entity;
 }
@@ -110,22 +110,11 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
         componentIds.push_back(component.componentId);
     }
 
-    if (count > static_cast<std::size_t>(std::numeric_limits<Entity::IdType>::max() - nextEntityId_)) {
-        throw std::runtime_error("ECS entity id capacity exceeded");
-    }
-
     std::vector<Entity> entities;
-    entities.reserve(count);
-    const Entity::IdType firstEntityId = nextEntityId_;
-    for (std::size_t entityIndex = 0; entityIndex < count; ++entityIndex) {
-        entities.push_back(Entity{ firstEntityId + static_cast<Entity::IdType>(entityIndex) });
-    }
-
     try {
         const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
-        nativeStorage_->AdoptEntities(entities, nativeComponents);
+        entities = nativeStorage_->CreateEntities(count, nativeComponents);
         BulkInitFlecsEntities(entities, components);
-        nextEntityId_ = firstEntityId + static_cast<Entity::IdType>(count);
         for (Entity entity : entities) {
             if (registries_ != nullptr) {
                 registries_->Entities().Add(entity);
@@ -136,8 +125,8 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
-            if (world_ != nullptr && ecs_is_alive(world_, entity.Id())) {
-                ecs_delete(world_, entity.Id());
+            if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
+                ecs_delete(world_, FlecsEntityId(entity));
             }
             if (registries_ != nullptr) {
                 registries_->Entities().Remove(entity);
@@ -203,20 +192,14 @@ void World::AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityId
             if (registries_ != nullptr) {
                 registries_->Entities().Add(entity);
             }
-            if (entity.Id() >= nextEntityId_) {
-                if (entity.Id() == std::numeric_limits<Entity::IdType>::max()) {
-                    throw std::runtime_error("ECS entity id capacity exceeded");
-                }
-                nextEntityId_ = entity.Id() + 1U;
-            }
         }
     } catch (...) {
         for (Entity entity : adoptedEntities) {
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
-            if (world_ != nullptr && ecs_is_alive(world_, entity.Id())) {
-                ecs_delete(world_, entity.Id());
+            if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
+                ecs_delete(world_, FlecsEntityId(entity));
             }
             if (registries_ != nullptr) {
                 registries_->Entities().Remove(entity);
@@ -235,8 +218,8 @@ void World::DestroyEntity(Entity entity) {
     }
     ecs_table_t* previousArchetype = EntityArchetype(entity);
     DestroyNativeEntity(entity);
-    if (world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, entity.Id())) {
-        ecs_delete(world_, entity.Id());
+    if (world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+        ecs_delete(world_, FlecsEntityId(entity));
     }
     InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
     if (registries_ != nullptr) {
@@ -248,17 +231,21 @@ void World::SetName(Entity entity, std::string_view name) {
     ValidateEntityHandle(entity, "SetName");
 
     const std::string ownedName{ name };
-    ecs_set_name(world_, entity.Id(), ownedName.empty() ? nullptr : ownedName.c_str());
+    ecs_set_name(world_, FlecsEntityId(entity), ownedName.empty() ? nullptr : ownedName.c_str());
 }
 
 bool World::IsAlive(Entity entity) const noexcept {
     return nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity);
 }
 
+Entity World::ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept {
+    return nativeStorage_ != nullptr ? nativeStorage_->ResolveAliveEntity(entityIdWithoutGeneration) : Entity{};
+}
+
 std::string World::Name(Entity entity) const {
     ValidateEntityHandle(entity, "Name");
 
-    if (const char* name = ecs_get_name(world_, entity.Id()); name != nullptr) {
+    if (const char* name = ecs_get_name(world_, FlecsEntityId(entity)); name != nullptr) {
         return std::string{ name };
     }
 

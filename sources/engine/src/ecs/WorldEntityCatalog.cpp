@@ -1,5 +1,7 @@
 #include "ecs/world/WorldEntityCatalog.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
+
 #include <flecs.h>
 
 #include <algorithm>
@@ -28,7 +30,7 @@ std::vector<Entity> WorldEntityCatalog::AliveEntities(const ecs_world_t* world) 
 
     alive.reserve(entities_.size());
     for (Entity entity : entities_) {
-        if (entity.IsValid() && ecs_is_valid(world, entity.Id()) && ecs_is_alive(world, entity.Id())) {
+        if (entity.IsValid() && ecs_is_valid(world, FlecsEntityId(entity)) && ecs_is_alive(world, FlecsEntityId(entity))) {
             alive.push_back(entity);
         }
     }

@@ -12,7 +12,7 @@ std::vector<Entity> HierarchyChildrenCollector::Collect(ecs_world_t* world, Enti
         return children;
     }
 
-    ecs_iter_t iterator = ecs_children(world, parent.Id());
+    ecs_iter_t iterator = ecs_children(world, ecs_strip_generation(parent.Id()));
     while (ecs_children_next(&iterator)) {
         for (int32_t row = 0; row < iterator.count; ++row) {
             children.push_back(Entity{ static_cast<Entity::IdType>(iterator.entities[row]) });

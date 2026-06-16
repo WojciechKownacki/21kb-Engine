@@ -1,5 +1,7 @@
 #include "scene/transform/SceneTransformRootCollector.hpp"
 
+#include "ecs/world/WorldInternalAccess.hpp"
+
 #include <flecs.h>
 
 namespace kb::scene {
@@ -13,7 +15,9 @@ std::vector<SceneEntity> SceneTransformRootCollector::Collect(const kb::ecs::Wor
         for (int32_t i = 0; i < it.count; ++i) {
             const ecs_entity_t entity = it.entities[i];
             if (ecs_get_parent(world.NativeHandle(), entity) == 0) {
-                roots.push_back(SceneEntity{ entity });
+                if (const SceneEntity resolved = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, entity); resolved.IsValid()) {
+                    roots.push_back(resolved);
+                }
             }
         }
     }

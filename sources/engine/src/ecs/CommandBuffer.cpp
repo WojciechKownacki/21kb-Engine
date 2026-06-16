@@ -469,23 +469,27 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                         componentIds.push_back(component.registerComponent(world));
                     }
 
-                    std::vector<World::BulkComponentData> components;
-                    components.resize(command.bulkComponents.size());
-                    for (std::size_t entityIndex = 0; entityIndex < command.entities.size(); ++entityIndex) {
-                        const Entity entity = ResolveForPlayback(command.entities[entityIndex], result);
+                    std::vector<Entity> entities;
+                    entities.reserve(command.entities.size());
+                    for (CommandEntity commandEntity : command.entities) {
+                        const Entity entity = ResolveForPlayback(commandEntity, result);
+                        entities.push_back(entity);
                         for (ComponentId componentId : componentIds) {
                             snapshotComponent(entity, componentId);
                         }
-                        for (std::size_t componentIndex = 0; componentIndex < command.bulkComponents.size(); ++componentIndex) {
-                            const BulkComponentCommand& component = command.bulkComponents[componentIndex];
-                            components[componentIndex] = World::BulkComponentData{
-                                .componentId = componentIds[componentIndex],
-                                .componentSize = component.componentSize,
-                                .data = component.bytes.data() + (entityIndex * component.componentSize),
-                            };
-                        }
-                        world.AddComponents(entity, components);
                     }
+
+                    std::vector<World::BulkComponentData> components;
+                    components.reserve(command.bulkComponents.size());
+                    for (std::size_t componentIndex = 0; componentIndex < command.bulkComponents.size(); ++componentIndex) {
+                        const BulkComponentCommand& component = command.bulkComponents[componentIndex];
+                        components.push_back(World::BulkComponentData{
+                            .componentId = componentIds[componentIndex],
+                            .componentSize = component.componentSize,
+                            .data = component.bytes.data(),
+                        });
+                    }
+                    world.AddComponents(entities, components);
                     break;
                 }
                 case CommandKind::RemoveComponents: {
@@ -504,13 +508,16 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                             componentIds.push_back(componentId);
                         }
                     }
+                    std::vector<Entity> entities;
+                    entities.reserve(command.entities.size());
                     for (CommandEntity commandEntity : command.entities) {
                         const Entity entity = ResolveForPlayback(commandEntity, result);
+                        entities.push_back(entity);
                         for (ComponentId componentId : componentIds) {
                             snapshotComponent(entity, componentId);
                         }
-                        world.RemoveComponents(entity, componentIds);
                     }
+                    world.RemoveComponents(entities, componentIds);
                     break;
                 }
                 case CommandKind::SetParent: {

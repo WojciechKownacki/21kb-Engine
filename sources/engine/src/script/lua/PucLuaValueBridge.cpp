@@ -21,6 +21,9 @@ ScriptValue PucLuaValueBridge::FromLua(lua_State* state, int index) {
             if (value >= std::numeric_limits<int>::min() && value <= std::numeric_limits<int>::max()) {
                 return ScriptValue{ static_cast<int>(value) };
             }
+            if (value >= 0) {
+                return ScriptValue{ static_cast<std::uint64_t>(value), ScriptValueType::Entity };
+            }
             return ScriptValue{ static_cast<float>(value) };
         }
         return ScriptValue{ static_cast<float>(lua_tonumber(state, index)) };
