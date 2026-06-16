@@ -9,14 +9,15 @@
 namespace kb::scene {
 namespace {
 
-[[nodiscard]] bool ReadNodeList(std::istream& input, ScenePrefab& prefab) {
+[[nodiscard]] bool ReadNodeList(std::istream& input, ScenePrefabAssetReadResult& result) {
     std::string nodesValue;
     std::size_t nodeCount = 0;
     if (!ScenePrefabAssetKeyValueReader::Read(input, ScenePrefabAssetFormat::NodesKey, nodesValue) || !ScenePrefabAssetFieldParser::ParseNumber(nodesValue, nodeCount)) {
         return false;
     }
 
-    return ScenePrefabAssetNodeListReader::Read(input, nodeCount, prefab) && ScenePrefabValidator::IsValid(prefab);
+    return ScenePrefabAssetNodeListReader::Read(input, nodeCount, result.prefab, &result.missingNodeStableIds, &result.missingOverrideNodeIds) &&
+        ScenePrefabValidator::IsValid(result.prefab);
 }
 
 } // namespace
@@ -28,12 +29,13 @@ bool ScenePrefabAssetTemplateReader::ReadLegacy(std::istream& input, ScenePrefab
         return false;
     }
 
-    return ReadNodeList(input, result.prefab);
+    result.missingNodeStableIds = true;
+    return ReadNodeList(input, result);
 }
 
 bool ScenePrefabAssetTemplateReader::ReadV2(std::istream& input, ScenePrefabAssetReadResult& result) {
     result.kind = ScenePrefabAssetKind::Template;
-    return ReadNodeList(input, result.prefab);
+    return ReadNodeList(input, result);
 }
 
 } // namespace kb::scene

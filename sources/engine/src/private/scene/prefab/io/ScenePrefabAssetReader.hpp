@@ -17,6 +17,8 @@ struct ScenePrefabAssetReadResult {
     std::string baseGuid;
     ScenePrefab prefab;
     std::vector<ScenePrefabPropertyOverride> overrides;
+    bool missingNodeStableIds = false;
+    bool missingOverrideNodeIds = false;
 };
 
 class ScenePrefabAssetReader {

@@ -16,9 +16,12 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -51,6 +54,60 @@ public:
         return true;
     }
     return false;
+}
+
+[[nodiscard]] std::string ReadTextFile(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    kb::tests::Require(input.good(), "Text file could not be opened for reading");
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+void WriteTextFile(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    kb::tests::Require(output.good(), "Text file could not be opened for writing");
+    output << text;
+    kb::tests::Require(output.good(), "Text file write failed");
+}
+
+[[nodiscard]] std::string RemoveNodeStableIdFields(const std::string& assetText) {
+    std::string migrated;
+    std::string line;
+    bool insideNode = false;
+    bool removedAnyStableId = false;
+    for (const char ch : assetText) {
+        if (ch != '\n') {
+            line.push_back(ch);
+            continue;
+        }
+
+        if (line == "node") {
+            insideNode = true;
+        }
+        if (insideNode && line.rfind("id=", 0U) == 0U) {
+            removedAnyStableId = true;
+        } else {
+            migrated += line;
+            migrated.push_back('\n');
+        }
+        if (line == "endnode") {
+            insideNode = false;
+        }
+        line.clear();
+    }
+
+    if (!line.empty()) {
+        if (line == "node") {
+            insideNode = true;
+        }
+        if (insideNode && line.rfind("id=", 0U) == 0U) {
+            removedAnyStableId = true;
+        } else {
+            migrated += line;
+        }
+    }
+
+    kb::tests::Require(removedAnyStableId, "Prefab asset fixture did not contain a node stable id to remove");
+    return migrated;
 }
 
 void RunPrefabInstantiationTest() {
@@ -809,6 +866,43 @@ void RunPrefabApplyOverrideToAssetTest() {
     std::filesystem::remove(prefabPath, removeError);
 }
 
+void RunPrefabAssetLoadMigratesMissingNodeStableIdsTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_missing_node_ids.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Migration Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Migration Child",
+        .parentNode = rootNode,
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("MigrationPrefab", std::move(prefab));
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Migration prefab asset save failed");
+
+    const std::string currentAsset = ReadTextFile(prefabPath);
+    const std::string legacyAsset = RemoveNodeStableIdFields(currentAsset);
+    WriteTextFile(prefabPath, legacyAsset);
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Prefab asset without node stable ids did not load");
+
+    const kb::scene::ScenePrefab loadedPrefab = loadedScene.Prefabs().Get(loadedHandle);
+    const kb::scene::ScenePrefabNodeDesc* root = loadedPrefab.TryGetNode(rootNode);
+    const kb::scene::ScenePrefabNodeDesc* child = loadedPrefab.TryGetNode(childNode);
+    kb::tests::Require(root != nullptr && child != nullptr, "Migrated prefab asset did not preserve nodes");
+    kb::tests::Require(root->stableId != kb::scene::ScenePrefabNodeDesc::InvalidStableId, "Migrated prefab root did not receive a stable id");
+    kb::tests::Require(child->stableId != kb::scene::ScenePrefabNodeDesc::InvalidStableId, "Migrated prefab child did not receive a stable id");
+    kb::tests::Require(root->stableId != child->stableId, "Migrated prefab node stable ids are not unique");
+
+    const std::string migratedAsset = ReadTextFile(prefabPath);
+    kb::tests::Require(migratedAsset.find("\nid=") != std::string::npos, "Migrated prefab asset was not written back with node stable ids");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
 void RunNestedPrefabCompositionTest() {
     kb::scene::Scene scene;
 
@@ -926,6 +1020,47 @@ void RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest() {
     kb::tests::Require(scene.Prefabs().Overrides(instances[123U].Handle()).properties.size() == 1U, "Private prefab apply changed main-scene override tracking scope");
 }
 
+void RunPrefabStableNodeIdentityOverridesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Stable Root" });
+    const std::uint32_t firstChildNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Stable First Child",
+        .parentNode = rootNode,
+    });
+    const std::uint32_t targetChildNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Stable Target Child",
+        .parentNode = rootNode,
+    });
+
+    const std::uint64_t targetNodeId = prefab.TryGetNode(targetChildNode)->stableId;
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("StableNodeBase", std::move(prefab));
+    kb::tests::Require(baseHandle.IsValid(), "Stable node identity base prefab did not register");
+
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "StableNodeVariant",
+        baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = firstChildNode,
+                .nodeId = targetNodeId,
+                .propertyPath = "name",
+                .value = "Stable Target Changed",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+    kb::tests::Require(variantHandle.IsValid(), "Stable node identity variant did not register");
+
+    const kb::scene::ScenePrefab variant = scene.Prefabs().Get(variantHandle);
+    kb::tests::Require(variant.TryGetNode(firstChildNode)->name == "Stable First Child", "Stable node identity incorrectly applied override by stale node index");
+    kb::tests::Require(variant.TryGetNode(targetChildNode)->name == "Stable Target Changed", "Stable node identity did not apply override by stable node id");
+
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(firstChildNode)) == "Stable First Child", "Stable node identity instance changed the wrong child");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(targetChildNode)) == "Stable Target Changed", "Stable node identity instance did not use the stable node override");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -947,9 +1082,11 @@ void RunScenePrefabInstantiationTests() {
     RunPrefabApplyAddedChildRefreshesExistingInstancesTest();
     RunPrefabRefreshLargeInstanceSetTest();
     RunPrefabApplyOverrideToAssetTest();
+    RunPrefabAssetLoadMigratesMissingNodeStableIdsTest();
     RunNestedPrefabCompositionTest();
     RunNestedPrefabCaptureAndRefreshTest();
     RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest();
+    RunPrefabStableNodeIdentityOverridesTest();
 }
 
 } // namespace kb::tests

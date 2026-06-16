@@ -19,7 +19,7 @@ bool ScenePrefabAssetVariantReader::ReadV2(std::istream& input, ScenePrefabAsset
         return false;
     }
 
-    return ScenePrefabAssetOverrideReader::Read(input, overrideCount, result.overrides);
+    return ScenePrefabAssetOverrideReader::Read(input, overrideCount, result.overrides, &result.missingOverrideNodeIds);
 }
 
 } // namespace kb::scene

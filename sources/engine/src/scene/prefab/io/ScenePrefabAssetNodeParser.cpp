@@ -5,11 +5,19 @@
 #include "scene/prefab/io/ScenePrefabAssetNodeFieldParser.hpp"
 #include "scene/prefab/io/ScenePrefabAssetNestedOverrideParser.hpp"
 
+#include <cstdint>
+#include <string>
+
 namespace kb::scene {
 
 bool ScenePrefabAssetNodeParser::Parse(const ScenePrefabAssetFieldMap& fields, ScenePrefabNodeDesc& node) {
     int parent = 0;
     bool visible = false;
+    std::uint64_t stableId = ScenePrefabNodeDesc::InvalidStableId;
+    const auto stableIdField = fields.find(std::string{ ScenePrefabAssetFormat::NodeStableIdKey });
+    if (stableIdField != fields.end() && !ScenePrefabAssetFieldParser::ParseNumber(stableIdField->second, stableId)) {
+        return false;
+    }
     if (!ScenePrefabAssetNodeFieldParser::ParseEscapedString(fields, ScenePrefabAssetFormat::NameKey, node.name)
         || !ScenePrefabAssetNodeFieldParser::ParseOptionalEscapedString(fields, ScenePrefabAssetFormat::NestedPrefabGuidKey, node.nestedPrefabGuid)
         || !ScenePrefabAssetNestedOverrideParser::Parse(fields, node)
@@ -22,6 +30,7 @@ bool ScenePrefabAssetNodeParser::Parse(const ScenePrefabAssetFieldMap& fields, S
         return false;
     }
 
+    node.stableId = stableId;
     node.parentNode = parent < 0 ? ScenePrefabNodeDesc::NoParent : static_cast<std::uint32_t>(parent);
     node.visibility.visible = visible;
     return true;

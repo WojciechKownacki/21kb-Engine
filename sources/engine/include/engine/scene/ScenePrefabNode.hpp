@@ -36,7 +36,9 @@ struct ScenePrefabNodeComponents {
 
 struct ScenePrefabNodeDesc {
     static constexpr std::uint32_t NoParent = UINT32_MAX;
+    static constexpr std::uint64_t InvalidStableId = 0;
 
+    std::uint64_t stableId = InvalidStableId;
     std::string name;
     std::string nestedPrefabGuid;
     std::vector<ScenePrefabPropertyOverride> nestedPrefabOverrides;

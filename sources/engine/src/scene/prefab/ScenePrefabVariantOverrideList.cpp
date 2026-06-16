@@ -11,6 +11,9 @@ bool ScenePrefabVariantOverrideList::Upsert(std::vector<ScenePrefabPropertyOverr
     }
 
     const auto sameProperty = [&property](const ScenePrefabPropertyOverride& existing) {
+        if (existing.nodeId != 0 && property.nodeId != 0) {
+            return existing.nodeId == property.nodeId && existing.propertyPath == property.propertyPath;
+        }
         return existing.nodeIndex == property.nodeIndex && existing.propertyPath == property.propertyPath;
     };
     const auto iterator = std::find_if(source.begin(), source.end(), sameProperty);

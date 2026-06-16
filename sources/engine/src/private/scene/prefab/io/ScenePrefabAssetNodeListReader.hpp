@@ -11,7 +11,7 @@ class ScenePrefabAssetNodeListReader {
 public:
     ScenePrefabAssetNodeListReader() = delete;
 
-    [[nodiscard]] static bool Read(std::istream& input, std::size_t nodeCount, ScenePrefab& prefab);
+    [[nodiscard]] static bool Read(std::istream& input, std::size_t nodeCount, ScenePrefab& prefab, bool* missingNodeStableIds = nullptr, bool* missingOverrideNodeIds = nullptr);
 };
 
 } // namespace kb::scene
