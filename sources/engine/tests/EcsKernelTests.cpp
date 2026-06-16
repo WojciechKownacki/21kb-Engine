@@ -3,7 +3,12 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/Kernel.hpp"
+#include "engine/ecs/KernelVectorMath.hpp"
 #include "engine/ecs/World.hpp"
+
+#include <array>
+#include <bit>
+#include <cstdint>
 
 namespace {
 
@@ -103,6 +108,73 @@ void PopulateSimdProbeWorld(kb::ecs::World& world, int entityCount) {
         world.Set(entity, EcsVelocity{ .x = 1.0F, .y = 2.0F });
         world.Set(entity, EcsPosition{ .x = 0.0F, .y = 0.0F });
     }
+}
+
+[[nodiscard]] std::uint32_t FloatBits(float value) noexcept {
+    return std::bit_cast<std::uint32_t>(value);
+}
+
+[[nodiscard]] float DeterministicMulAdd(float multiplicand, float multiplier, float addend) noexcept {
+    const float product = multiplicand * multiplier;
+    return product + addend;
+}
+
+template <std::size_t Count>
+[[nodiscard]] std::array<std::uint32_t, Count * 2U> ReferenceMovementBits(
+    std::array<EcsPosition, Count> positions,
+    const std::array<EcsVelocity, Count>& velocities) noexcept {
+    constexpr float deltaSeconds = 0.0166666675F;
+    constexpr float maxSpeedSquared = 2.5F;
+    constexpr float highBias = 0.125F;
+    constexpr float lowBias = -0.25F;
+
+    std::array<std::uint32_t, Count * 2U> bits{};
+    for (std::size_t index = 0; index < Count; ++index) {
+        const float speedSquared = velocities[index].x * velocities[index].x + velocities[index].y * velocities[index].y;
+        const float bias = speedSquared > maxSpeedSquared ? highBias : lowBias;
+        positions[index].x = DeterministicMulAdd(velocities[index].x, deltaSeconds, positions[index].x);
+        positions[index].y = DeterministicMulAdd(velocities[index].y, deltaSeconds, positions[index].y + bias);
+        bits[index * 2U] = FloatBits(positions[index].x);
+        bits[index * 2U + 1U] = FloatBits(positions[index].y);
+    }
+    return bits;
+}
+
+template <typename BackendTag, std::size_t Count>
+[[nodiscard]] std::array<std::uint32_t, Count * 2U> VectorMovementBits(
+    std::array<EcsPosition, Count> positions,
+    const std::array<EcsVelocity, Count>& velocities) noexcept {
+    using FloatLanes = kb::ecs::KernelFloatLanes<BackendTag>;
+    using Vec2Lanes = kb::ecs::KernelFloat2Lanes<BackendTag>;
+
+    constexpr float deltaSeconds = 0.0166666675F;
+    constexpr float maxSpeedSquared = 2.5F;
+    constexpr float highBias = 0.125F;
+    constexpr float lowBias = -0.25F;
+
+    for (std::size_t begin = 0; begin < Count; begin += FloatLanes::LaneCount) {
+        const std::size_t remaining = Count - begin;
+        const std::size_t batchCount = remaining < FloatLanes::LaneCount ? remaining : FloatLanes::LaneCount;
+
+        Vec2Lanes position = Vec2Lanes::LoadMembersPartial(positions.data() + begin, batchCount, 0.0F, &EcsPosition::x, &EcsPosition::y);
+        const Vec2Lanes velocity = Vec2Lanes::LoadMembersPartial(velocities.data() + begin, batchCount, 0.0F, &EcsVelocity::x, &EcsVelocity::y);
+        const FloatLanes speedSquared = kb::ecs::KernelDot(velocity, velocity);
+        const FloatLanes bias = kb::ecs::KernelSelect(
+            kb::ecs::KernelGreaterThan(speedSquared, FloatLanes::Splat(maxSpeedSquared)),
+            FloatLanes::Splat(highBias),
+            FloatLanes::Splat(lowBias));
+
+        position.template Component<1>() = position.template Component<1>() + bias;
+        position = kb::ecs::KernelDeterministicMulAdd(velocity, FloatLanes::Splat(deltaSeconds), position);
+        position.StoreMembersPartial(positions.data() + begin, batchCount, &EcsPosition::x, &EcsPosition::y);
+    }
+
+    std::array<std::uint32_t, Count * 2U> bits{};
+    for (std::size_t index = 0; index < Count; ++index) {
+        bits[index * 2U] = FloatBits(positions[index].x);
+        bits[index * 2U + 1U] = FloatBits(positions[index].y);
+    }
+    return bits;
 }
 
 void RunEcsKernelContractScalarExecutionTest() {
@@ -337,6 +409,30 @@ void RunEcsCompiledKernelQueryExecutionTest() {
     kb::tests::Require(kb::tests::NearlyEqual(sumY, 80.0F), "Compiled ECS kernel query did not persist output component writes to Y");
 }
 
+void RunEcsKernelVectorMathBitDeterminismTest() {
+    constexpr std::size_t kCount = 23U;
+    std::array<EcsPosition, kCount> positions{};
+    std::array<EcsVelocity, kCount> velocities{};
+
+    for (std::size_t index = 0; index < kCount; ++index) {
+        const float sample = static_cast<float>(index);
+        positions[index] = EcsPosition{
+            .x = sample * 0.125F - 1.5F,
+            .y = 3.0F - sample * 0.0625F,
+        };
+        velocities[index] = EcsVelocity{
+            .x = sample * 0.03125F - 0.5F,
+            .y = 1.25F - sample * 0.046875F,
+        };
+    }
+
+    const std::array<std::uint32_t, kCount * 2U> reference = ReferenceMovementBits(positions, velocities);
+    kb::tests::Require(VectorMovementBits<kb::ecs::KernelScalarTag>(positions, velocities) == reference, "ECS scalar vector math was not bit-for-bit with reference movement");
+    kb::tests::Require(VectorMovementBits<kb::ecs::KernelSse2Tag>(positions, velocities) == reference, "ECS SSE2-width vector math was not bit-for-bit deterministic");
+    kb::tests::Require(VectorMovementBits<kb::ecs::KernelAvx2Tag>(positions, velocities) == reference, "ECS AVX2-width vector math was not bit-for-bit deterministic");
+    kb::tests::Require(VectorMovementBits<kb::ecs::KernelAvx512Tag>(positions, velocities) == reference, "ECS AVX-512-width vector math was not bit-for-bit deterministic");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -347,6 +443,7 @@ void RunEcsKernelTests() {
     RunEcsKernelSse2AndAvx2DispatchTest();
     RunEcsKernelAvx512DispatchTest();
     RunEcsCompiledKernelQueryExecutionTest();
+    RunEcsKernelVectorMathBitDeterminismTest();
 }
 
 } // namespace kb::tests
