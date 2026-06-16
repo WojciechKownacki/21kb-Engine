@@ -41,25 +41,29 @@ void World::Set(Entity entity, const T& component) {
 }
 
 template <typename T>
-bool World::Has(Entity entity) const noexcept {
+bool World::Has(Entity entity) const {
+    ValidateEntityHandle(entity, "Has");
     const ComponentId componentId = Component<T>();
     return componentId != 0 && HasComponent(entity, componentId);
 }
 
 template <typename T>
-const T* World::TryGet(Entity entity) const noexcept {
+const T* World::TryGet(Entity entity) const {
+    ValidateEntityHandle(entity, "TryGet");
     const ComponentId componentId = Component<T>();
     return componentId == 0 ? nullptr : static_cast<const T*>(TryGetComponent(entity, componentId));
 }
 
 template <typename T>
-T* World::TryGetMutable(Entity entity) noexcept {
+T* World::TryGetMutable(Entity entity) {
+    ValidateEntityHandle(entity, "TryGetMutable");
     const ComponentId componentId = Component<T>();
     return componentId == 0 ? nullptr : static_cast<T*>(TryGetMutableComponent(entity, componentId));
 }
 
 template <typename T>
-void World::Remove(Entity entity) noexcept {
+void World::Remove(Entity entity) {
+    ValidateEntityHandle(entity, "Remove");
     const ComponentId componentId = Component<T>();
     if (componentId != 0) {
         RemoveComponent(entity, componentId);
@@ -67,7 +71,8 @@ void World::Remove(Entity entity) noexcept {
 }
 
 template <typename T>
-void World::MarkModified(Entity entity) noexcept {
+void World::MarkModified(Entity entity) {
+    ValidateEntityHandle(entity, "MarkModified");
     const ComponentId componentId = Component<T>();
     if (componentId != 0) {
         MarkComponentModified(entity, componentId);

@@ -17,6 +17,7 @@ public:
         : settings_(settings) {
         static_assert(sizeof...(Components) > 0, "ECS query system must declare at least one component");
         static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query system components must be trivially copyable");
+        static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query system components must be trivially destructible");
     }
 
     [[nodiscard]] SystemAccess DeclareAccess(World& world) const override {

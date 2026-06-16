@@ -16,6 +16,7 @@
 namespace kb::ecs {
 
 Entity World::CreateEntity() {
+    ValidateStructuralChangeAllowed("CreateEntity");
     if (world_ == nullptr || nativeStorage_ == nullptr) {
         throw std::runtime_error("ECS world is not initialized");
     }
@@ -51,6 +52,7 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
     if (count == 0) {
         return {};
     }
+    ValidateStructuralChangeAllowed("CreateEntitiesWithComponents");
     if (world_ == nullptr || nativeStorage_ == nullptr) {
         throw std::runtime_error("ECS world is not initialized");
     }
@@ -125,7 +127,11 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
     return entities;
 }
 
-void World::DestroyEntity(Entity entity) noexcept {
+void World::DestroyEntity(Entity entity) {
+    ValidateEntityHandle(entity, "DestroyEntity");
+    if (IsAlive(entity)) {
+        ValidateStructuralChangeAllowed("DestroyEntity");
+    }
     ecs_table_t* previousArchetype = EntityArchetype(entity);
     DestroyNativeEntity(entity);
     if (world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, entity.Id())) {
@@ -138,9 +144,7 @@ void World::DestroyEntity(Entity entity) noexcept {
 }
 
 void World::SetName(Entity entity, std::string_view name) {
-    if (!IsAlive(entity)) {
-        return;
-    }
+    ValidateEntityHandle(entity, "SetName");
 
     const std::string ownedName{ name };
     ecs_set_name(world_, entity.Id(), ownedName.empty() ? nullptr : ownedName.c_str());
@@ -151,9 +155,7 @@ bool World::IsAlive(Entity entity) const noexcept {
 }
 
 std::string World::Name(Entity entity) const {
-    if (!IsAlive(entity)) {
-        return {};
-    }
+    ValidateEntityHandle(entity, "Name");
 
     if (const char* name = ecs_get_name(world_, entity.Id()); name != nullptr) {
         return std::string{ name };

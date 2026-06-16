@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/RuntimeAccessValidator.hpp"
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/ecs/WorkerPool.hpp"
@@ -23,6 +24,7 @@ struct SystemSchedulerConfig {
     SystemSchedulingMode mode = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled = false;
     bool parallelExecutionEnabled = true;
+    bool runtimeAccessValidationEnabled = true;
     WorkerPoolConfig workerPool{};
 };
 
@@ -89,8 +91,10 @@ private:
     SystemSchedulingMode schedulingMode_ = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled_ = false;
     bool parallelExecutionEnabled_ = true;
+    bool runtimeAccessValidationEnabled_ = true;
     WorkerPoolConfig workerPoolConfig_{};
     std::unique_ptr<WorkerPool> workerPool_;
+    RuntimeAccessValidator accessValidator_;
     bool graphDirty_ = false;
     std::uint64_t traceFrameIndex_ = 0;
     SystemSchedulerTrace lastTrace_;

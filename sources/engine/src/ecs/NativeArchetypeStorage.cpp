@@ -1,6 +1,7 @@
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cstdint>
@@ -30,6 +31,8 @@ static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batc
 }
 
 void AssertComponentAlignment(const void* pointer, const NativeComponentType& type) noexcept {
+    static_cast<void>(pointer);
+    static_cast<void>(type);
     assert(IsAlignedAddress(pointer, type.alignment) && "Native ECS component column violated declared alignment");
 }
 
@@ -150,6 +153,9 @@ public:
         if (block == nullptr) {
             return;
         }
+#if !defined(NDEBUG)
+        std::memset(block, 0xDD, payloadBytes_);
+#endif
         --chunksInUse_;
         freeList_.push_back(block);
     }
@@ -266,19 +272,20 @@ public:
     void Set(std::size_t bitIndex) {
         const std::size_t block = bitIndex / kBitsPerBlock;
         if (block >= blocks_.size()) {
-            blocks_.resize(block + 1U);
+            throw std::out_of_range("Native ECS component signature capacity exceeded");
         }
         blocks_[block] |= std::uint64_t{ 1 } << (bitIndex % kBitsPerBlock);
+        blockCount_ = std::max(blockCount_, block + 1U);
     }
 
     [[nodiscard]] bool Has(std::size_t bitIndex) const noexcept {
         const std::size_t block = bitIndex / kBitsPerBlock;
-        return block < blocks_.size() && (blocks_[block] & (std::uint64_t{ 1 } << (bitIndex % kBitsPerBlock))) != 0;
+        return block < blockCount_ && (blocks_[block] & (std::uint64_t{ 1 } << (bitIndex % kBitsPerBlock))) != 0;
     }
 
     [[nodiscard]] bool ContainsAll(const ComponentSignature& required) const noexcept {
-        for (std::size_t index = 0; index < required.blocks_.size(); ++index) {
-            const std::uint64_t available = index < blocks_.size() ? blocks_[index] : 0U;
+        for (std::size_t index = 0; index < required.blockCount_; ++index) {
+            const std::uint64_t available = index < blockCount_ ? blocks_[index] : 0U;
             if ((available & required.blocks_[index]) != required.blocks_[index]) {
                 return false;
             }
@@ -287,13 +294,23 @@ public:
     }
 
     [[nodiscard]] bool operator==(const ComponentSignature& other) const noexcept {
-        return blocks_ == other.blocks_;
+        if (blockCount_ != other.blockCount_) {
+            return false;
+        }
+        for (std::size_t index = 0; index < blockCount_; ++index) {
+            if (blocks_[index] != other.blocks_[index]) {
+                return false;
+            }
+        }
+        return true;
     }
 
 private:
     static constexpr std::size_t kBitsPerBlock = 64;
+    static constexpr std::size_t kMaxBlocks = 64;
 
-    std::vector<std::uint64_t> blocks_;
+    std::array<std::uint64_t, kMaxBlocks> blocks_{};
+    std::size_t blockCount_ = 0;
 };
 
 class ComponentSignatureRegistry {
@@ -604,6 +621,61 @@ private:
     return ids;
 }
 
+class StackComponentIdSet {
+public:
+    [[nodiscard]] bool Assign(std::span<const ComponentId> componentIds) {
+        size_ = 0;
+        return Append(componentIds) && SortAndRejectDuplicates();
+    }
+
+    [[nodiscard]] bool AssignUnion(std::span<const ComponentId> left, std::span<const ComponentId> right) {
+        StackComponentIdSet leftSet;
+        StackComponentIdSet rightSet;
+        if (!leftSet.Assign(left) || !rightSet.Assign(right)) {
+            return false;
+        }
+
+        size_ = 0;
+        return Append(leftSet.Values()) && Append(rightSet.Values()) && SortAndDeduplicate();
+    }
+
+    [[nodiscard]] std::span<const ComponentId> Values() const noexcept {
+        return std::span<const ComponentId>{ ids_.data(), size_ };
+    }
+
+private:
+    [[nodiscard]] bool Append(std::span<const ComponentId> componentIds) {
+        if (componentIds.size() > ids_.size() - size_) {
+            return false;
+        }
+        for (ComponentId componentId : componentIds) {
+            if (componentId == 0) {
+                throw std::invalid_argument("Native ECS component id must be non-zero");
+            }
+            ids_[size_++] = componentId;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool SortAndRejectDuplicates() {
+        std::sort(ids_.begin(), ids_.begin() + static_cast<std::ptrdiff_t>(size_));
+        if (std::adjacent_find(ids_.begin(), ids_.begin() + static_cast<std::ptrdiff_t>(size_)) != ids_.begin() + static_cast<std::ptrdiff_t>(size_)) {
+            throw std::invalid_argument("Native ECS component id list contains duplicate ids");
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool SortAndDeduplicate() noexcept {
+        std::sort(ids_.begin(), ids_.begin() + static_cast<std::ptrdiff_t>(size_));
+        const auto uniqueEnd = std::unique(ids_.begin(), ids_.begin() + static_cast<std::ptrdiff_t>(size_));
+        size_ = static_cast<std::size_t>(uniqueEnd - ids_.begin());
+        return true;
+    }
+
+    std::array<ComponentId, kQueryExecutionScratchMaxTerms * 2U> ids_{};
+    std::size_t size_ = 0;
+};
+
 [[nodiscard]] bool SameTypes(std::span<const NativeComponentType> lhs, std::span<const NativeComponentType> rhs) noexcept {
     if (lhs.size() != rhs.size()) {
         return false;
@@ -825,22 +897,25 @@ public:
             return;
         }
 
-        const std::vector<ComponentId> queryIds = NormalizeComponentIds(componentIds);
-        std::vector<ComponentId> requiredIds = NormalizeComponentIds(requiredComponentIds);
-        requiredIds.insert(requiredIds.end(), queryIds.begin(), queryIds.end());
-        std::sort(requiredIds.begin(), requiredIds.end());
-        requiredIds.erase(std::unique(requiredIds.begin(), requiredIds.end()), requiredIds.end());
+        StackComponentIdSet requiredIds;
+        if (!requiredIds.AssignUnion(componentIds, requiredComponentIds)) {
+            return;
+        }
 
-        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds);
+        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds.Values());
         if (!requiredSignature.has_value()) {
             return;
         }
-        const std::vector<ComponentId> excludedIds = NormalizeComponentIds(excludedComponentIds);
+        StackComponentIdSet excludedIds;
+        if (!excludedIds.Assign(excludedComponentIds)) {
+            return;
+        }
+        const std::span<const ComponentId> excludedIdValues = excludedIds.Values();
 
         std::size_t sequence = 0;
         for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
             const ArchetypeTable& table = tables_[tableIndex];
-            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds)) {
+            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIdValues)) {
                 continue;
             }
             for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
@@ -877,22 +952,25 @@ public:
             return;
         }
 
-        const std::vector<ComponentId> queryIds = NormalizeComponentIds(componentIds);
-        std::vector<ComponentId> requiredIds = NormalizeComponentIds(requiredComponentIds);
-        requiredIds.insert(requiredIds.end(), queryIds.begin(), queryIds.end());
-        std::sort(requiredIds.begin(), requiredIds.end());
-        requiredIds.erase(std::unique(requiredIds.begin(), requiredIds.end()), requiredIds.end());
+        StackComponentIdSet requiredIds;
+        if (!requiredIds.AssignUnion(componentIds, requiredComponentIds)) {
+            return;
+        }
 
-        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds);
+        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds.Values());
         if (!requiredSignature.has_value()) {
             return;
         }
-        const std::vector<ComponentId> excludedIds = NormalizeComponentIds(excludedComponentIds);
+        StackComponentIdSet excludedIds;
+        if (!excludedIds.Assign(excludedComponentIds)) {
+            return;
+        }
+        const std::span<const ComponentId> excludedIdValues = excludedIds.Values();
 
         std::size_t sequence = 0;
         for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
             ArchetypeTable& table = tables_[tableIndex];
-            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIds)) {
+            if (!table.Matches(*requiredSignature) || HasExcludedComponent(table, excludedIdValues)) {
                 continue;
             }
             for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {

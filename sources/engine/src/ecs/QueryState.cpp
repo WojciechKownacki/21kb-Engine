@@ -2,10 +2,14 @@
 
 #include "ecs/query/QueryPlan.hpp"
 #include "ecs/query/QueryTableBatchDispatcher.hpp"
+#include "ecs/query/QueryLimits.hpp"
+#include "engine/ecs/MutableComponentBorrowLocks.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
+#include "engine/ecs/StructuralChangeValidator.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <utility>
 
@@ -42,11 +46,57 @@ void DispatchReadOnlyRecordBatch(
         context);
 }
 
+#if !defined(NDEBUG)
+struct MutableBorrowDispatchContext {
+    MutableComponentBorrowLocks* locks = nullptr;
+    std::span<const ComponentId> componentIds;
+    std::span<const std::size_t> componentSizes;
+    QueryRawMutableBatchVisitor visitor = nullptr;
+    void* context = nullptr;
+};
+
+void DispatchMutableBorrowedBatch(
+    const Entity::IdType* entityIds,
+    std::size_t count,
+    void* const* components,
+    void* context) {
+    auto* borrowContext = static_cast<MutableBorrowDispatchContext*>(context);
+    if (borrowContext == nullptr || borrowContext->visitor == nullptr) {
+        return;
+    }
+
+    if (borrowContext->locks == nullptr) {
+        borrowContext->visitor(entityIds, count, components, borrowContext->context);
+        return;
+    }
+
+    std::array<MutableComponentBorrowRange, kMaxQueryTerms> ranges{};
+    for (std::size_t field = 0; field < borrowContext->componentIds.size(); ++field) {
+        ranges[field] = MutableComponentBorrowRange{
+            .componentId = borrowContext->componentIds[field],
+            .data = components[field],
+            .bytes = borrowContext->componentSizes[field] * count,
+        };
+    }
+
+    MutableComponentBorrowLocks::Guard guard = borrowContext->locks->Acquire(
+        std::span<const MutableComponentBorrowRange>{ ranges.data(), borrowContext->componentIds.size() });
+    borrowContext->visitor(entityIds, count, components, borrowContext->context);
+}
+#endif
+
 } // namespace
 
-QueryState::QueryState(NativeArchetypeStorage* nativeStorage, std::shared_ptr<QueryPlan> plan, std::size_t defaultExecutionGrainSize)
+QueryState::QueryState(
+    NativeArchetypeStorage* nativeStorage,
+    std::shared_ptr<QueryPlan> plan,
+    std::size_t defaultExecutionGrainSize,
+    MutableComponentBorrowLocks* mutableBorrowLocks,
+    StructuralChangeValidator* structuralChangeValidator)
     : nativeStorage_(nativeStorage)
     , plan_(std::move(plan))
+    , mutableBorrowLocks_(mutableBorrowLocks)
+    , structuralChangeValidator_(structuralChangeValidator)
     , defaultExecutionGrainSize_(defaultExecutionGrainSize == 0 ? kDefaultQueryExecutionGrainSize : defaultExecutionGrainSize) {}
 
 bool QueryState::IsValid() const noexcept {
@@ -84,10 +134,30 @@ void QueryState::PrepareBatchExecution(QueryExecutionSettings settings, QueryBat
     scratch.chunks_.clear();
 }
 
+void QueryState::PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const {
+    if (!IsValid()) {
+        scratch.Clear();
+        return;
+    }
+
+    static_cast<void>(settings);
+    nativeStorage_->CollectMutableQueryRecords(
+        plan_->ComponentIds(),
+        plan_->RequiredComponentIds(),
+        plan_->ExcludedComponentIds(),
+        scratch.mutableRecords_);
+    scratch.records_.clear();
+    scratch.workItems_.clear();
+    scratch.chunks_.clear();
+}
+
 void QueryState::ForEach(QueryRawVisitor visitor, void* context) const {
     if (!IsValid() || visitor == nullptr) {
         return;
     }
+
+    [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard =
+        structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
 
     QueryBatchExecutionScratch scratch;
     nativeStorage_->CollectQueryRecords(
@@ -125,6 +195,9 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
     if (!IsValid() || visitor == nullptr) {
         return;
     }
+
+    [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard =
+        structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
 
     nativeStorage_->CollectQueryRecords(
         plan_->ComponentIds(),
@@ -212,6 +285,9 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         return;
     }
 
+    [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard =
+        structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
+
     nativeStorage_->CollectMutableQueryRecords(
         plan_->ComponentIds(),
         plan_->RequiredComponentIds(),
@@ -231,6 +307,20 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
     }
 
     const std::size_t maxBatchSize = ResolveBatchSize(settings, defaultExecutionGrainSize_);
+#if !defined(NDEBUG)
+    MutableBorrowDispatchContext borrowContext{
+        .locks = mutableBorrowLocks_,
+        .componentIds = plan_->ComponentIds(),
+        .componentSizes = plan_->ComponentSizes(),
+        .visitor = visitor,
+        .context = context,
+    };
+    QueryRawMutableBatchVisitor dispatchVisitor = mutableBorrowLocks_ == nullptr ? visitor : &DispatchMutableBorrowedBatch;
+    void* dispatchContext = mutableBorrowLocks_ == nullptr ? context : &borrowContext;
+#else
+    QueryRawMutableBatchVisitor dispatchVisitor = visitor;
+    void* dispatchContext = context;
+#endif
     for (const MutableQueryTableDispatchRecord& record : scratch.mutableRecords_) {
         if (plan_->HasChangeFilters() && !RecordChanged(record)) {
             CommitRecordVersions(record);
@@ -243,8 +333,8 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
             record.fieldComponents,
             maxBatchSize,
             settings.prefetchDistance,
-            visitor,
-            context);
+            dispatchVisitor,
+            dispatchContext);
         nativeStorage_->MarkArchetypeComponentsModified(record.nativeArchetypeIndex, plan_->ComponentIds());
         CommitRecordVersions(record);
     }
@@ -311,6 +401,12 @@ void ForEachQueryState(const QueryState* state, QueryRawVisitor visitor, void* c
 void PrepareQueryStateBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) {
     if (state != nullptr) {
         state->PrepareBatchExecution(settings, scratch);
+    }
+}
+
+void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) {
+    if (state != nullptr) {
+        state->PrepareMutableBatchExecution(settings, scratch);
     }
 }
 

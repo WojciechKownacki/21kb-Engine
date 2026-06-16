@@ -688,6 +688,7 @@ ast::Type Builder::TypesBuilder::subgroup_matrix(core::SubgroupMatrixKind kind,
         case core::SubgroupMatrixKind::kUndefined:
             TINT_UNREACHABLE();
     }
+    return subgroup_matrix_result(el, cols, rows);
 }
 
 ast::Type Builder::TypesBuilder::buffer(uint32_t size) const {

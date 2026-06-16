@@ -22,13 +22,15 @@ void World::AddTag(Entity entity) {
 }
 
 template <typename T>
-bool World::HasTag(Entity entity) const noexcept {
+bool World::HasTag(Entity entity) const {
+    ValidateEntityHandle(entity, "HasTag");
     const TagId tag = Tag<T>();
     return tag != 0 && HasTag(entity, tag);
 }
 
 template <typename T>
-void World::RemoveTag(Entity entity) noexcept {
+void World::RemoveTag(Entity entity) {
+    ValidateEntityHandle(entity, "RemoveTag");
     const TagId tag = Tag<T>();
     if (tag != 0) {
         RemoveTag(entity, tag);

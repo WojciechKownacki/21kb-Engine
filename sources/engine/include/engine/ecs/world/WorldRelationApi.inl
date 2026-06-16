@@ -8,14 +8,14 @@ template <typename T>
 void AddTag(Entity entity);
 
 template <typename T>
-[[nodiscard]] bool HasTag(Entity entity) const noexcept;
+[[nodiscard]] bool HasTag(Entity entity) const;
 
 template <typename T>
-void RemoveTag(Entity entity) noexcept;
+void RemoveTag(Entity entity);
 
-void AddTag(Entity entity, TagId tag) noexcept;
-[[nodiscard]] bool HasTag(Entity entity, TagId tag) const noexcept;
-void RemoveTag(Entity entity, TagId tag) noexcept;
+void AddTag(Entity entity, TagId tag);
+[[nodiscard]] bool HasTag(Entity entity, TagId tag) const;
+void RemoveTag(Entity entity, TagId tag);
 
 template <typename T>
 [[nodiscard]] RelationId RegisterRelation(std::string_view name = {});
@@ -27,20 +27,20 @@ template <typename T>
 void AddRelation(Entity entity, Entity target);
 
 template <typename T>
-[[nodiscard]] bool HasRelation(Entity entity, Entity target) const noexcept;
+[[nodiscard]] bool HasRelation(Entity entity, Entity target) const;
 
 template <typename T>
-void RemoveRelation(Entity entity, Entity target) noexcept;
+void RemoveRelation(Entity entity, Entity target);
 
 template <typename T>
-[[nodiscard]] Entity RelationTarget(Entity entity, int index = 0) const noexcept;
+[[nodiscard]] Entity RelationTarget(Entity entity, int index = 0) const;
 
-void AddRelation(Entity entity, RelationId relation, Entity target) noexcept;
-[[nodiscard]] bool HasRelation(Entity entity, RelationId relation, Entity target) const noexcept;
-void RemoveRelation(Entity entity, RelationId relation, Entity target) noexcept;
-[[nodiscard]] Entity RelationTarget(Entity entity, RelationId relation, int index = 0) const noexcept;
+void AddRelation(Entity entity, RelationId relation, Entity target);
+[[nodiscard]] bool HasRelation(Entity entity, RelationId relation, Entity target) const;
+void RemoveRelation(Entity entity, RelationId relation, Entity target);
+[[nodiscard]] Entity RelationTarget(Entity entity, RelationId relation, int index = 0) const;
 
-void SetParent(Entity child, Entity parent) noexcept;
-void ClearParent(Entity child) noexcept;
-[[nodiscard]] Entity Parent(Entity child) const noexcept;
+void SetParent(Entity child, Entity parent);
+void ClearParent(Entity child);
+[[nodiscard]] Entity Parent(Entity child) const;
 [[nodiscard]] std::vector<Entity> Children(Entity parent) const;

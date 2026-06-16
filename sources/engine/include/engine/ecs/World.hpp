@@ -6,6 +6,7 @@
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/QueryFilter.hpp"
+#include "engine/ecs/StructuralChangeValidator.hpp"
 #include "engine/ecs/TypeIds.hpp"
 #include "engine/ecs/WorldConfig.hpp"
 #include "engine/ecs/WorldEditorInspection.hpp"
@@ -28,6 +29,7 @@ struct ecs_table_t;
 namespace kb::ecs {
 
 class QueryState;
+class MutableComponentBorrowLocks;
 class WorldInternalAccess;
 class WorldRegistrySet;
 class CommandBuffer;
@@ -72,6 +74,10 @@ private:
     [[nodiscard]] std::vector<Entity> CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components);
     void AddComponents(Entity entity, std::span<const BulkComponentData> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
+    void ValidateEntityHandle(Entity entity, std::string_view operation) const;
+    void ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const;
+    void ValidateStructuralChangeAllowed(std::string_view operation) const;
+    [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     [[nodiscard]] NativeComponentValue MakeNativeComponentValue(const BulkComponentData& component) const;
     [[nodiscard]] std::vector<NativeComponentValue> MakeNativeComponentValues(std::span<const BulkComponentData> components) const;
     void AdoptNativeEntity(Entity entity, std::span<const BulkComponentData> components);
@@ -84,6 +90,8 @@ private:
     WorldConfig config_{};
     std::unique_ptr<WorldRegistrySet> registries_;
     std::unique_ptr<NativeArchetypeStorage> nativeStorage_;
+    std::unique_ptr<MutableComponentBorrowLocks> mutableComponentBorrowLocks_;
+    std::unique_ptr<StructuralChangeValidator> structuralChangeValidator_;
     Entity::IdType nextEntityId_ = 1'000'000;
 };
 

@@ -5,6 +5,8 @@
 #include <flecs.h>
 
 #include <span>
+#include <stdexcept>
+#include <string>
 
 namespace kb::ecs {
 
@@ -28,7 +30,9 @@ QueryState* World::CreateQueryState(
         optionalComponentIds,
         excludedComponentIds,
         changedComponentIds,
-        config_);
+        config_,
+        mutableComponentBorrowLocks_.get(),
+        structuralChangeValidator_.get());
 }
 
 ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
@@ -41,6 +45,31 @@ ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
 void World::InvalidateQueryPlansForArchetypeChange(ecs_table_t* previousArchetype, ecs_table_t* currentArchetype) noexcept {
     static_cast<void>(previousArchetype);
     static_cast<void>(currentArchetype);
+}
+
+void World::ValidateStructuralChangeAllowed(std::string_view operation) const {
+    if (structuralChangeValidator_ != nullptr) {
+        structuralChangeValidator_->ValidateStructuralChange(operation);
+    }
+}
+
+void World::ValidateEntityHandle(Entity entity, std::string_view operation) const {
+    if (!entity.IsValid()) {
+        throw std::invalid_argument("ECS " + std::string{ operation } + " received an invalid entity handle");
+    }
+    if (!IsAlive(entity)) {
+        throw std::out_of_range("ECS " + std::string{ operation } + " received a stale entity handle");
+    }
+}
+
+void World::ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const {
+    if (entity.IsValid()) {
+        ValidateEntityHandle(entity, operation);
+    }
+}
+
+StructuralChangeValidator::Guard World::EnterIteration() const noexcept {
+    return structuralChangeValidator_ != nullptr ? structuralChangeValidator_->EnterIteration() : StructuralChangeValidator::Guard{};
 }
 
 } // namespace kb::ecs

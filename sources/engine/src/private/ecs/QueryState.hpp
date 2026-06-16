@@ -14,12 +14,19 @@
 namespace kb::ecs {
 
 class NativeArchetypeStorage;
+class MutableComponentBorrowLocks;
 class QueryPlan;
 class QueryBatchExecutionScratch;
+class StructuralChangeValidator;
 
 class QueryState {
 public:
-    QueryState(NativeArchetypeStorage* nativeStorage, std::shared_ptr<QueryPlan> plan, std::size_t defaultExecutionGrainSize);
+    QueryState(
+        NativeArchetypeStorage* nativeStorage,
+        std::shared_ptr<QueryPlan> plan,
+        std::size_t defaultExecutionGrainSize,
+        MutableComponentBorrowLocks* mutableBorrowLocks,
+        StructuralChangeValidator* structuralChangeValidator);
     ~QueryState() = default;
 
     QueryState(const QueryState&) = delete;
@@ -31,6 +38,7 @@ public:
     [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
     [[nodiscard]] std::span<const std::size_t> ComponentSizes() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
+    void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(QueryRawVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch) const;
@@ -60,6 +68,8 @@ private:
 
     NativeArchetypeStorage* nativeStorage_ = nullptr;
     std::shared_ptr<QueryPlan> plan_;
+    MutableComponentBorrowLocks* mutableBorrowLocks_ = nullptr;
+    StructuralChangeValidator* structuralChangeValidator_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
     mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
 };
