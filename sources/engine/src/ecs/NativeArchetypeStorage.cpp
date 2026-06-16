@@ -19,6 +19,7 @@ namespace {
 
 constexpr std::size_t kChunkAlignment = 64;
 constexpr std::uint32_t kInvalidEntityIndex = std::numeric_limits<std::uint32_t>::max();
+constexpr Entity::IdType kFirstGeneratedEntityId = 1'000'000;
 
 static_assert(sizeof(Entity) == sizeof(Entity::IdType), "Native ECS query batches require Entity to store exactly one id");
 static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batches require Entity id-compatible alignment");
@@ -102,16 +103,20 @@ void AssertComponentAlignment(const void* pointer, const NativeComponentType& ty
 }
 
 [[nodiscard]] Entity PackEntity(std::uint32_t index, std::uint32_t generation) noexcept {
-    return Entity{ (static_cast<Entity::IdType>(generation) << 32U) | (static_cast<Entity::IdType>(index) + 1U) };
+    return Entity{ (static_cast<Entity::IdType>(generation) << 32U) | (static_cast<Entity::IdType>(index) + kFirstGeneratedEntityId) };
 }
 
 [[nodiscard]] std::uint32_t EntityIndex(Entity entity) noexcept {
     const Entity::IdType packedIndex = entity.Id() & 0xFFFFFFFFULL;
-    return packedIndex == 0 ? kInvalidEntityIndex : static_cast<std::uint32_t>(packedIndex - 1U);
+    return packedIndex < kFirstGeneratedEntityId ? kInvalidEntityIndex : static_cast<std::uint32_t>(packedIndex - kFirstGeneratedEntityId);
 }
 
 [[nodiscard]] std::uint32_t EntityGeneration(Entity entity) noexcept {
     return static_cast<std::uint32_t>(entity.Id() >> 32U);
+}
+
+[[nodiscard]] Entity::IdType StripEntityGeneration(Entity entity) noexcept {
+    return entity.Id() & 0xFFFFFFFFULL;
 }
 
 void ValidateComponentType(const NativeComponentType& type) {
@@ -301,7 +306,7 @@ struct EntityLocation {
 };
 
 struct EntityRecord {
-    std::uint32_t generation = 1;
+    std::uint32_t generation = 0;
     bool alive = false;
     bool ownsGeneratedId = true;
     Entity entity{};
@@ -625,6 +630,51 @@ public:
         }
     }
 
+    void CopyEntitiesTo(
+        std::span<const EntityLocation> sources,
+        ArchetypeTable& target,
+        std::span<const EntityLocation> targets) const {
+        if (sources.size() != targets.size()) {
+            throw std::invalid_argument("Native ECS bulk migration requires matching source and target row counts");
+        }
+
+        for (const NativeComponentType& type : types_) {
+            if (!target.HasComponent(type.id)) {
+                continue;
+            }
+
+            std::size_t consumed = 0;
+            while (consumed < sources.size()) {
+                const EntityLocation firstSource = sources[consumed];
+                const EntityLocation firstTarget = targets[consumed];
+                ValidateLocation(firstSource);
+
+                std::size_t count = 1U;
+                while (consumed + count < sources.size()) {
+                    const EntityLocation nextSource = sources[consumed + count];
+                    const EntityLocation nextTarget = targets[consumed + count];
+                    if (nextSource.chunk != firstSource.chunk || nextTarget.chunk != firstTarget.chunk ||
+                        nextSource.row != firstSource.row + count || nextTarget.row != firstTarget.row + count) {
+                        break;
+                    }
+                    ValidateLocation(nextSource);
+                    ++count;
+                }
+
+                const ComponentLayout* sourceColumn = FindColumn(type.id);
+                const ComponentLayout* targetColumn = target.FindColumn(type.id);
+                if (sourceColumn == nullptr || targetColumn == nullptr) {
+                    throw std::out_of_range("Native ECS bulk migration component column is unavailable");
+                }
+                const auto* sourceData = chunks_[firstSource.chunk].payload.Data() + sourceColumn->offset + (firstSource.row * sourceColumn->type.size);
+                auto* targetData = target.chunks_[firstTarget.chunk].payload.Data() + targetColumn->offset + (firstTarget.row * targetColumn->type.size);
+                std::memcpy(targetData, sourceData, count * sourceColumn->type.size);
+                target.TouchComponent(type.id);
+                consumed += count;
+            }
+        }
+    }
+
     void WriteComponent(EntityLocation location, ComponentId componentId, const void* data, std::size_t size) {
         const ComponentLayout* column = FindColumn(componentId);
         if (column == nullptr || column->type.size != size || data == nullptr) {
@@ -663,6 +713,53 @@ public:
             }
         }
         TouchComponent(componentId);
+    }
+
+    void WriteComponentRows(
+        std::span<const EntityLocation> locations,
+        ComponentId componentId,
+        const void* data,
+        std::span<const std::size_t> sourceRows,
+        std::size_t stride) {
+        if (locations.size() != sourceRows.size()) {
+            throw std::invalid_argument("Native ECS component row write requires matching location and source row counts");
+        }
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr || data == nullptr) {
+            throw std::invalid_argument("Invalid native ECS component row write");
+        }
+        const std::size_t sourceStride = stride == 0U ? column->type.size : stride;
+        if (sourceStride < column->type.size) {
+            throw std::invalid_argument("Invalid native ECS component row stride");
+        }
+
+        const auto* source = static_cast<const std::byte*>(data);
+        std::size_t consumed = 0;
+        while (consumed < locations.size()) {
+            const EntityLocation first = locations[consumed];
+            ValidateLocation(first);
+            std::size_t count = 1U;
+            while (consumed + count < locations.size()) {
+                const EntityLocation next = locations[consumed + count];
+                if (next.chunk != first.chunk || next.row != first.row + count || sourceRows[consumed + count] != sourceRows[consumed] + count) {
+                    break;
+                }
+                ValidateLocation(next);
+                ++count;
+            }
+
+            auto* destination = chunks_[first.chunk].payload.Data() + column->offset + (first.row * column->type.size);
+            const auto* sourceData = source + (sourceRows[consumed] * sourceStride);
+            if (sourceStride == column->type.size) {
+                std::memcpy(destination, sourceData, count * column->type.size);
+            } else {
+                for (std::size_t index = 0; index < count; ++index) {
+                    std::memcpy(destination + (index * column->type.size), sourceData + (index * sourceStride), column->type.size);
+                }
+            }
+            TouchComponent(componentId);
+            consumed += count;
+        }
     }
 
     void MarkComponentsModified(std::span<const ComponentId> componentIds) {
@@ -722,6 +819,12 @@ public:
     }
 
 private:
+    void ValidateLocation(EntityLocation location) const {
+        if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
+            throw std::out_of_range("Invalid native ECS row location");
+        }
+    }
+
     [[nodiscard]] const ComponentLayout* FindColumn(ComponentId componentId) const noexcept {
         const auto match = std::lower_bound(
             layout_.columns.begin(),
@@ -931,6 +1034,13 @@ private:
 } // namespace
 
 class NativeArchetypeStorage::Impl {
+    struct BulkMigrationGroup {
+        std::vector<Entity> entities;
+        std::vector<EntityLocation> sourceLocations;
+        std::vector<std::size_t> sourceRows;
+        std::vector<std::uint32_t> recordIndices;
+    };
+
 public:
     explicit Impl(WorldConfig config)
         : chunkPayloadBytes_(kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile))
@@ -994,6 +1104,7 @@ public:
         record.ownsGeneratedId = false;
         record.entity = entity;
         entitySlots_[entity.Id()] = index;
+        strippedEntitySlots_[StripEntityGeneration(entity)] = index;
         ++liveEntities_;
 
         const std::size_t tableIndex = FindOrCreateTable(types);
@@ -1038,6 +1149,7 @@ public:
                 record.ownsGeneratedId = false;
                 record.entity = entity;
                 entitySlots_[entity.Id()] = index;
+                strippedEntitySlots_[StripEntityGeneration(entity)] = index;
                 ++liveEntities_;
                 adopted.push_back(entity);
             }
@@ -1047,6 +1159,7 @@ public:
                 const auto slot = entitySlots_.find(entity.Id());
                 if (slot != entitySlots_.end() && slot->second < records_.size()) {
                     records_[slot->second].alive = false;
+                    strippedEntitySlots_.erase(StripEntityGeneration(entity));
                     entitySlots_.erase(slot);
                     --liveEntities_;
                 }
@@ -1104,6 +1217,7 @@ public:
             EntityRecord& record = records_[recordIndex];
             record.alive = false;
             entitySlots_.erase(record.entity.Id());
+            strippedEntitySlots_.erase(StripEntityGeneration(record.entity));
             if (record.ownsGeneratedId) {
                 ++record.generation;
                 freeEntityIndices_.push_back(recordIndex);
@@ -1119,6 +1233,24 @@ public:
         }
         const EntityRecord& record = records_[found->second];
         return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
+    }
+
+    [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept {
+        if (entityIdWithoutGeneration == 0) {
+            return {};
+        }
+
+        const Entity candidate{ entityIdWithoutGeneration };
+        if (IsAlive(candidate)) {
+            return candidate;
+        }
+
+        const auto found = strippedEntitySlots_.find(entityIdWithoutGeneration & 0xFFFFFFFFULL);
+        if (found == strippedEntitySlots_.end() || found->second >= records_.size()) {
+            return {};
+        }
+        const EntityRecord& record = records_[found->second];
+        return record.alive && StripEntityGeneration(record.entity) == (entityIdWithoutGeneration & 0xFFFFFFFFULL) ? record.entity : Entity{};
     }
 
     void AddComponents(Entity entity, std::span<const NativeComponentValue> components) {
@@ -1142,6 +1274,58 @@ public:
         Migrate(entity, record, sourceIndex, EdgeKind::Add, ComponentIds(addedTypes), targetTypes, components);
     }
 
+    void AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+        if (entities.empty() || components.empty()) {
+            return;
+        }
+
+        const std::vector<NativeComponentType> addedTypes = NormalizeTypes(components);
+        std::unordered_set<Entity::IdType> uniqueIds;
+        uniqueIds.reserve(entities.size());
+        std::unordered_map<std::size_t, BulkMigrationGroup> groups;
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
+            const Entity entity = entities[entityIndex];
+            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
+                throw std::invalid_argument("Native ECS bulk add received an invalid or duplicate entity");
+            }
+
+            const std::uint32_t recordIndex = RecordIndex(entity);
+            const EntityRecord& record = records_[recordIndex];
+            const std::size_t sourceIndex = record.location.table;
+            const ArchetypeTable& source = tables_[sourceIndex];
+            for (const NativeComponentType& addedType : addedTypes) {
+                if (source.HasComponent(addedType.id)) {
+                    throw std::invalid_argument("Native ECS bulk add component already exists on an entity");
+                }
+            }
+
+            BulkMigrationGroup& group = groups[sourceIndex];
+            group.entities.push_back(entity);
+            group.sourceLocations.push_back(record.location);
+            group.sourceRows.push_back(entityIndex);
+            group.recordIndices.push_back(recordIndex);
+        }
+
+        for (auto& [sourceIndex, group] : groups) {
+            const ArchetypeTable& source = tables_[sourceIndex];
+            std::vector<NativeComponentType> targetTypes(source.Types().begin(), source.Types().end());
+            for (const NativeComponentType& addedType : addedTypes) {
+                const auto existing = std::lower_bound(targetTypes.begin(), targetTypes.end(), addedType.id, [](const NativeComponentType& type, ComponentId id) {
+                    return type.id < id;
+                });
+                targetTypes.insert(existing, addedType);
+            }
+
+            BulkMigrate(
+                sourceIndex,
+                EdgeKind::Add,
+                ComponentIds(addedTypes),
+                targetTypes,
+                group,
+                components);
+        }
+    }
+
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds) {
         if (componentIds.empty()) {
             return;
@@ -1163,9 +1347,91 @@ public:
         Migrate(entity, record, sourceIndex, EdgeKind::Remove, removedIds, targetTypes, {});
     }
 
+    void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
+        if (entities.empty() || componentIds.empty()) {
+            return;
+        }
+
+        const std::vector<ComponentId> removedIds = NormalizeComponentIds(componentIds);
+        std::unordered_set<Entity::IdType> uniqueIds;
+        uniqueIds.reserve(entities.size());
+        std::unordered_map<std::size_t, BulkMigrationGroup> groups;
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
+            const Entity entity = entities[entityIndex];
+            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
+                throw std::invalid_argument("Native ECS bulk remove received an invalid or duplicate entity");
+            }
+
+            const std::uint32_t recordIndex = RecordIndex(entity);
+            const EntityRecord& record = records_[recordIndex];
+            const ArchetypeTable& source = tables_[record.location.table];
+            for (ComponentId removedId : removedIds) {
+                if (!source.HasComponent(removedId)) {
+                    throw std::out_of_range("Native ECS bulk remove references a missing component");
+                }
+            }
+
+            BulkMigrationGroup& group = groups[record.location.table];
+            group.entities.push_back(entity);
+            group.sourceLocations.push_back(record.location);
+            group.sourceRows.push_back(entityIndex);
+            group.recordIndices.push_back(recordIndex);
+        }
+
+        for (auto& [sourceIndex, group] : groups) {
+            const ArchetypeTable& source = tables_[sourceIndex];
+            std::vector<NativeComponentType> targetTypes;
+            targetTypes.reserve(source.Types().size());
+            for (const NativeComponentType& type : source.Types()) {
+                if (!std::binary_search(removedIds.begin(), removedIds.end(), type.id)) {
+                    targetTypes.push_back(type);
+                }
+            }
+
+            BulkMigrate(sourceIndex, EdgeKind::Remove, removedIds, targetTypes, group, {});
+        }
+    }
+
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
         EntityRecord& record = LiveRecord(entity);
         tables_[record.location.table].WriteComponent(record.location, componentId, data, size);
+    }
+
+    void SetComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+        if (entities.empty() || components.empty()) {
+            return;
+        }
+
+        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        std::unordered_set<Entity::IdType> uniqueIds;
+        uniqueIds.reserve(entities.size());
+        std::unordered_map<std::size_t, BulkMigrationGroup> groups;
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
+            const Entity entity = entities[entityIndex];
+            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
+                throw std::invalid_argument("Native ECS bulk set received an invalid or duplicate entity");
+            }
+
+            const std::uint32_t recordIndex = RecordIndex(entity);
+            const EntityRecord& record = records_[recordIndex];
+            const ArchetypeTable& table = tables_[record.location.table];
+            for (const NativeComponentType& type : types) {
+                if (!table.HasComponent(type.id)) {
+                    throw std::out_of_range("Native ECS bulk set references a missing component");
+                }
+            }
+
+            BulkMigrationGroup& group = groups[record.location.table];
+            group.sourceLocations.push_back(record.location);
+            group.sourceRows.push_back(entityIndex);
+        }
+
+        for (auto& [tableIndex, group] : groups) {
+            ArchetypeTable& table = tables_[tableIndex];
+            for (const NativeBulkComponentColumn& component : components) {
+                table.WriteComponentRows(group.sourceLocations, component.type.id, component.data, group.sourceRows, component.stride);
+            }
+        }
     }
 
     void MarkComponentModified(Entity entity, ComponentId componentId) {
@@ -1587,6 +1853,37 @@ public:
     }
 
 private:
+    void BulkMigrate(
+        std::size_t sourceIndex,
+        EdgeKind edgeKind,
+        std::vector<ComponentId> edgeComponents,
+        std::span<const NativeComponentType> targetTypes,
+        BulkMigrationGroup& group,
+        std::span<const NativeBulkComponentColumn> addedComponents) {
+        const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, std::move(edgeComponents), targetTypes);
+        ArchetypeTable& target = tables_[targetIndex];
+        std::vector<EntityLocation> targetLocations;
+        target.AddMany(group.entities, targetIndex, targetLocations);
+        if (targetLocations.size() != group.entities.size()) {
+            throw std::runtime_error("Native ECS bulk migration returned an invalid target row count");
+        }
+
+        tables_[sourceIndex].CopyEntitiesTo(group.sourceLocations, target, targetLocations);
+        for (const NativeBulkComponentColumn& component : addedComponents) {
+            target.WriteComponentRows(targetLocations, component.type.id, component.data, group.sourceRows, component.stride);
+        }
+
+        std::vector<std::pair<Entity, EntityLocation>> movedEntities = tables_[sourceIndex].RemoveMany(group.sourceLocations);
+        for (auto& [movedEntity, location] : movedEntities) {
+            location.table = sourceIndex;
+            records_[RecordIndex(movedEntity)].location = location;
+        }
+
+        for (std::size_t index = 0; index < group.recordIndices.size(); ++index) {
+            records_[group.recordIndices[index]].location = targetLocations[index];
+        }
+    }
+
     void AppendEntitiesToTable(
         std::size_t tableIndex,
         std::span<const Entity> entities,
@@ -1646,26 +1943,28 @@ private:
         if (!freeEntityIndices_.empty()) {
             const std::uint32_t index = freeEntityIndices_.back();
             freeEntityIndices_.pop_back();
-            EntityRecord& record = records_[index];
-            record.alive = true;
-            record.ownsGeneratedId = true;
-            record.entity = PackEntity(index, record.generation);
-            entitySlots_[record.entity.Id()] = index;
-            return record.entity;
+        EntityRecord& record = records_[index];
+        record.alive = true;
+        record.ownsGeneratedId = true;
+        record.entity = PackEntity(index, record.generation);
+        entitySlots_[record.entity.Id()] = index;
+        strippedEntitySlots_[StripEntityGeneration(record.entity)] = index;
+        return record.entity;
         }
 
         if (records_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             throw std::runtime_error("Native ECS entity capacity exceeded");
         }
         const std::uint32_t index = static_cast<std::uint32_t>(records_.size());
-        Entity entity = PackEntity(index, 1U);
+        Entity entity = PackEntity(index, 0U);
         records_.push_back(EntityRecord{
-            .generation = 1U,
+            .generation = 0U,
             .alive = true,
             .ownsGeneratedId = true,
             .entity = entity,
         });
         entitySlots_[entity.Id()] = index;
+        strippedEntitySlots_[StripEntityGeneration(entity)] = index;
         return entity;
     }
 
@@ -1767,6 +2066,7 @@ private:
     std::vector<EntityRecord> records_;
     std::vector<std::uint32_t> freeEntityIndices_;
     std::unordered_map<Entity::IdType, std::uint32_t> entitySlots_;
+    std::unordered_map<Entity::IdType, std::uint32_t> strippedEntitySlots_;
     ComponentSignatureRegistry signatureRegistry_;
     std::vector<ArchetypeTable> tables_;
     std::size_t liveEntities_ = 0;
@@ -1818,16 +2118,32 @@ bool NativeArchetypeStorage::IsAlive(Entity entity) const noexcept {
     return impl_ != nullptr && impl_->IsAlive(entity);
 }
 
+Entity NativeArchetypeStorage::ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept {
+    return impl_ != nullptr ? impl_->ResolveAliveEntity(entityIdWithoutGeneration) : Entity{};
+}
+
 void NativeArchetypeStorage::AddComponents(Entity entity, std::span<const NativeComponentValue> components) {
     impl_->AddComponents(entity, components);
+}
+
+void NativeArchetypeStorage::AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+    impl_->AddComponents(entities, components);
 }
 
 void NativeArchetypeStorage::RemoveComponents(Entity entity, std::span<const ComponentId> componentIds) {
     impl_->RemoveComponents(entity, componentIds);
 }
 
+void NativeArchetypeStorage::RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
+    impl_->RemoveComponents(entities, componentIds);
+}
+
 void NativeArchetypeStorage::SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
     impl_->SetComponent(entity, componentId, data, size);
+}
+
+void NativeArchetypeStorage::SetComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+    impl_->SetComponents(entities, components);
 }
 
 void NativeArchetypeStorage::MarkComponentModified(Entity entity, ComponentId componentId) {

@@ -75,19 +75,23 @@ private:
     void AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityIds, std::span<const BulkComponentData> components);
     void BulkInitFlecsEntities(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void AddComponents(Entity entity, std::span<const BulkComponentData> components);
+    void AddComponents(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
+    void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
     void ValidateEntityHandle(Entity entity, std::string_view operation) const;
     void ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const;
     void ValidateStructuralChangeAllowed(std::string_view operation) const;
+    [[nodiscard]] Entity ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const noexcept;
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     [[nodiscard]] NativeComponentValue MakeNativeComponentValue(const BulkComponentData& component) const;
     [[nodiscard]] std::vector<NativeComponentValue> MakeNativeComponentValues(std::span<const BulkComponentData> components) const;
     [[nodiscard]] std::vector<NativeBulkComponentColumn> MakeNativeBulkComponentColumns(std::span<const BulkComponentData> components) const;
-    void AdoptNativeEntity(Entity entity, std::span<const BulkComponentData> components);
     void DestroyNativeEntity(Entity entity) noexcept;
     void SetNativeComponent(Entity entity, const BulkComponentData& component);
     void AddNativeComponents(Entity entity, std::span<const BulkComponentData> components);
+    void AddNativeComponents(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void RemoveNativeComponents(Entity entity, std::span<const ComponentId> componentIds) noexcept;
+    void RemoveNativeComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
 
     ecs_world_t* world_ = nullptr;
     WorldConfig config_{};
@@ -95,7 +99,6 @@ private:
     std::unique_ptr<NativeArchetypeStorage> nativeStorage_;
     std::unique_ptr<MutableComponentBorrowLocks> mutableComponentBorrowLocks_;
     std::unique_ptr<StructuralChangeValidator> structuralChangeValidator_;
-    Entity::IdType nextEntityId_ = 1'000'000;
 };
 
 } // namespace kb::ecs

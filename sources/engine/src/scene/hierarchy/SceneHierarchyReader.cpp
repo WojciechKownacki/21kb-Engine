@@ -1,7 +1,5 @@
 #include "scene/hierarchy/SceneHierarchyReader.hpp"
 
-#include <flecs.h>
-
 #include <algorithm>
 
 namespace kb::scene {
@@ -11,8 +9,7 @@ SceneEntity SceneHierarchyReader::Parent(const kb::ecs::World& world, SceneEntit
         return {};
     }
 
-    const ecs_entity_t parent = ecs_get_parent(world.NativeHandle(), entity.Id());
-    return parent == 0 ? SceneEntity{} : SceneEntity{ parent };
+    return world.Parent(entity);
 }
 
 std::vector<SceneEntity> SceneHierarchyReader::Children(const kb::ecs::World& world, SceneEntity entity) {
@@ -20,14 +17,7 @@ std::vector<SceneEntity> SceneHierarchyReader::Children(const kb::ecs::World& wo
         return {};
     }
 
-    std::vector<SceneEntity> children;
-    ecs_iter_t it = ecs_children(world.NativeHandle(), entity.Id());
-    while (ecs_children_next(&it)) {
-        children.reserve(children.size() + static_cast<std::size_t>(std::max(0, it.count)));
-        for (int32_t i = 0; i < it.count; ++i) {
-            children.push_back(SceneEntity{ it.entities[i] });
-        }
-    }
+    std::vector<SceneEntity> children = world.Children(entity);
 
     std::ranges::sort(children, [](SceneEntity left, SceneEntity right) {
         return left.Id() < right.Id();

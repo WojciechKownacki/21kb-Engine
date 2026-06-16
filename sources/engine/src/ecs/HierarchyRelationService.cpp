@@ -1,9 +1,12 @@
 #include "ecs/relation/HierarchyRelationService.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/relation/HierarchyChildrenCollector.hpp"
 #include "ecs/relation/RelationStorage.hpp"
 
 #include <flecs.h>
+
+#include <unordered_set>
 
 namespace kb::ecs {
 
@@ -26,8 +29,9 @@ void HierarchyRelationService::SetParent(ecs_world_t* world, Entity child, Entit
 }
 
 void HierarchyRelationService::ClearParent(ecs_world_t* world, Entity child) noexcept {
-    for (Entity parent = Parent(world, child); parent.IsValid(); parent = Parent(world, child)) {
-        RelationStorage::Remove(world, child, EcsChildOf, parent);
+    const Entity currentParent = Parent(world, child);
+    if (currentParent.IsValid()) {
+        RelationStorage::Remove(world, child, EcsChildOf, currentParent);
     }
 }
 
@@ -40,8 +44,13 @@ std::vector<Entity> HierarchyRelationService::Children(ecs_world_t* world, Entit
 }
 
 bool HierarchyRelationService::WouldCreateCycle(const ecs_world_t* world, Entity child, Entity parent) noexcept {
-    for (Entity ancestor = parent; ancestor.IsValid(); ancestor = Parent(world, ancestor)) {
-        if (ancestor == child) {
+    std::unordered_set<Entity::IdType> visitedAncestors;
+    const ecs_entity_t childId = FlecsEntityId(child);
+    for (ecs_entity_t ancestor = FlecsEntityId(parent); ancestor != 0; ancestor = ecs_get_parent(world, ancestor)) {
+        if (ancestor == childId) {
+            return true;
+        }
+        if (!visitedAncestors.insert(ancestor).second) {
             return true;
         }
     }

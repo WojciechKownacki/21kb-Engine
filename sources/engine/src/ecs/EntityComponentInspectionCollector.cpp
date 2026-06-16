@@ -1,5 +1,7 @@
 #include "ecs/inspection/EntityComponentInspectionCollector.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
+
 #include <flecs.h>
 
 namespace kb::ecs {
@@ -10,7 +12,7 @@ std::vector<EntityComponentInspection> EntityComponentInspectionCollector::Colle
     std::span<const ComponentTypeInfo> componentTypes) {
     std::vector<EntityComponentInspection> components;
     for (const ComponentTypeInfo& componentType : componentTypes) {
-        if (componentType.id != 0 && ecs_has_id(world, entity.Id(), componentType.id)) {
+        if (componentType.id != 0 && ecs_has_id(world, FlecsEntityId(entity), componentType.id)) {
             components.push_back(ToInspection(componentType));
         }
     }

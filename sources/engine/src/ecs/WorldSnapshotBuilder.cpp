@@ -17,14 +17,18 @@ void SortEntitiesById(WorldSnapshot& snapshot) {
 
 } // namespace
 
-WorldSnapshot WorldSnapshotBuilder::Capture(ecs_world_t* world, std::span<const ComponentTypeInfo> componentTypes) {
+WorldSnapshot WorldSnapshotBuilder::Capture(
+    ecs_world_t* world,
+    std::span<const ComponentTypeInfo> componentTypes,
+    SnapshotEntityIndex::EntityResolver resolver,
+    void* resolverContext) {
     WorldSnapshot snapshot;
     if (world == nullptr) {
         return snapshot;
     }
 
     snapshot.componentTypes.assign(componentTypes.begin(), componentTypes.end());
-    SnapshotEntityIndex entityIndex{ snapshot };
+    SnapshotEntityIndex entityIndex{ snapshot, resolver, resolverContext };
     for (const ComponentTypeInfo& componentType : componentTypes) {
         ComponentSnapshotCapture::Capture(world, componentType, entityIndex);
     }
