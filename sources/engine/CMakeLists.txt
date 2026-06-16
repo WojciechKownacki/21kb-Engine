@@ -55,6 +55,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/SystemAccess.inl
     include/engine/ecs/SystemScheduler.hpp
     include/engine/ecs/SystemSchedulerTrace.hpp
+    include/engine/ecs/SystemSchedulerTraceExport.hpp
     include/engine/ecs/TypeIds.hpp
     include/engine/ecs/WorkerPool.hpp
     include/engine/ecs/World.hpp
@@ -116,6 +117,7 @@ add_library(kb_engine STATIC
     include/engine/scene/SceneDocumentService.hpp
     include/engine/scene/SceneColliderComponents.hpp
     include/engine/scene/SceneMeshRendererComponents.hpp
+    include/engine/scene/SceneMode.hpp
     include/engine/scene/SceneRigidbodyComponents.hpp
     include/engine/scene/BehaviourComponent.hpp
     include/engine/scene/TagsComponent.hpp
@@ -129,6 +131,7 @@ add_library(kb_engine STATIC
     include/engine/scene/ScenePrefabInstantiationSettings.hpp
     include/engine/scene/ScenePrefabNode.hpp
     include/engine/scene/ScenePrefabOverrides.hpp
+    include/engine/scene/ScenePrefabPrivateScene.hpp
     include/engine/scene/ScenePrefabs.hpp
     include/engine/scene/SceneRuntime.hpp
     include/engine/scene/SceneSystem.hpp
@@ -253,6 +256,7 @@ add_library(kb_engine STATIC
     src/ecs/ComponentReflectionRegistry.cpp
     src/ecs/ComponentReflectionValidator.cpp
     src/ecs/ComponentSerializer.cpp
+    src/ecs/ChunkedWorldSnapshotBinaryCodec.cpp
     src/ecs/ComponentStorageIteration.cpp
     src/ecs/ComponentStorageMutation.cpp
     src/ecs/ComponentStoragePairIteration.cpp
@@ -283,6 +287,7 @@ add_library(kb_engine STATIC
     src/ecs/System.cpp
     src/ecs/SystemAccess.cpp
     src/ecs/SystemScheduler.cpp
+    src/ecs/SystemSchedulerTraceExport.cpp
     src/ecs/WorkerPool.cpp
     src/ecs/TagStorage.cpp
     src/ecs/TagTypeRegistry.cpp
@@ -525,6 +530,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefabOverrideTargetResolver.cpp
     src/scene/prefab/ScenePrefabOverrideValueFormatter.cpp
     src/scene/prefab/ScenePrefabParentResolver.cpp
+    src/scene/prefab/ScenePrefabPrivateScene.cpp
     src/scene/prefab/ScenePrefabPropertyApplier.cpp
     src/scene/prefab/ScenePrefabPropertyMutator.cpp
     src/scene/prefab/ScenePrefabPropertyOverrideApplier.cpp
@@ -863,6 +869,7 @@ add_library(kb_engine STATIC
     src/private/ecs/serialization/ComponentBytesFieldValueCodec.hpp
     src/private/ecs/serialization/ComponentFloatArrayFieldValueCodec.hpp
     src/private/ecs/serialization/ComponentScalarFieldValueCodec.hpp
+    src/private/ecs/serialization/ChunkedWorldSnapshotBinaryCodec.hpp
     src/private/ecs/serialization/SerializedComponentBuilder.hpp
     src/private/ecs/serialization/SerializedComponentFieldFinder.hpp
     src/private/ecs/serialization/SerializedComponentFromSnapshot.hpp
@@ -964,9 +971,11 @@ if(BUILD_TESTING)
         tests/EcsNativeArchetypeStorageTests.cpp
         tests/EcsQueryTests.cpp
         tests/EcsQuerySystemTests.cpp
+        tests/EcsDeterministicReplayTests.cpp
         tests/EcsReflectionTests.cpp
         tests/EcsRelationTests.cpp
         tests/EcsRuntimeTests.cpp
+        tests/EcsSeededStressTests.cpp
         tests/EcsSnapshotTests.cpp
         tests/EcsSystemSchedulerTests.cpp
         tests/EcsTestSuites.hpp
@@ -1008,4 +1017,89 @@ if(BUILD_TESTING)
     set_tests_properties(kb_engine_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
     kb_apply_quality_gates(kb_engine_tests)
+
+    function(kb_add_ecs_test_target target_name)
+        add_executable(${target_name}
+            ${ARGN}
+            tests/EcsTestSuites.hpp
+            tests/EcsTestTypes.hpp
+            tests/TestSupport.hpp
+        )
+
+        target_link_libraries(${target_name}
+            PRIVATE
+                kb_engine
+        )
+
+        add_test(NAME ${target_name} COMMAND $<TARGET_FILE:${target_name}>)
+        set_tests_properties(${target_name} PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+        kb_apply_quality_gates(${target_name})
+    endfunction()
+
+    kb_add_ecs_test_target(kb_ecs_api_tests
+        tests/EcsApiTestMain.cpp
+        tests/EcsComponentApiTests.cpp
+        tests/EcsCommandBufferTests.cpp
+        tests/EcsConfigTests.cpp
+        tests/EcsEventTests.cpp
+        tests/EcsInspectionTests.cpp
+        tests/EcsKernelTests.cpp
+        tests/EcsNativeArchetypeStorageTests.cpp
+        tests/EcsQueryTests.cpp
+        tests/EcsQuerySystemTests.cpp
+        tests/EcsReflectionTests.cpp
+        tests/EcsRelationTests.cpp
+        tests/EcsSnapshotTests.cpp
+    )
+    set_tests_properties(kb_ecs_api_tests PROPERTIES LABELS "ecs;api;debug")
+
+    kb_add_ecs_test_target(kb_ecs_scheduler_correctness_tests
+        tests/EcsSchedulerCorrectnessTestMain.cpp
+        tests/EcsSystemSchedulerTests.cpp
+        tests/EcsWorkerPoolTests.cpp
+    )
+    set_tests_properties(kb_ecs_scheduler_correctness_tests PROPERTIES LABELS "ecs;scheduler;correctness;single-thread;multi-thread")
+
+    kb_add_ecs_test_target(kb_ecs_deterministic_replay_tests
+        tests/EcsDeterministicReplayTestMain.cpp
+        tests/EcsDeterministicReplayTests.cpp
+    )
+    set_tests_properties(kb_ecs_deterministic_replay_tests PROPERTIES LABELS "ecs;deterministic;replay")
+
+    kb_add_ecs_test_target(kb_ecs_stress_tests
+        tests/EcsSeededStressTestMain.cpp
+        tests/EcsSeededStressTests.cpp
+    )
+    set_tests_properties(kb_ecs_stress_tests PROPERTIES
+        LABELS "ecs;stress"
+        TIMEOUT 120
+    )
+
+    add_executable(kb_ecs_snapshot_scale_tests
+        tests/EcsSnapshotScaleTests.cpp
+        tests/EcsTestTypes.hpp
+        tests/TestSupport.hpp
+    )
+
+    target_link_libraries(kb_ecs_snapshot_scale_tests
+        PRIVATE
+            kb_engine
+    )
+
+    if(WIN32)
+        target_link_libraries(kb_ecs_snapshot_scale_tests
+            PRIVATE
+                Psapi
+        )
+    endif()
+
+    add_test(NAME kb_ecs_snapshot_scale_tests COMMAND $<TARGET_FILE:kb_ecs_snapshot_scale_tests>)
+    set_tests_properties(kb_ecs_snapshot_scale_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "ecs;scale"
+        RUN_SERIAL TRUE
+        TIMEOUT 600
+    )
+
+    kb_apply_quality_gates(kb_ecs_snapshot_scale_tests)
 endif()

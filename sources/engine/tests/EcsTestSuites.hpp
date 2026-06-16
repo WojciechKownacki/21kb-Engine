@@ -16,5 +16,7 @@ void RunEcsRelationTests();
 void RunEcsSnapshotTests();
 void RunEcsSystemSchedulerTests();
 void RunEcsWorkerPoolTests();
+void RunEcsDeterministicReplayTests();
+void RunEcsSeededStressTests();
 
 } // namespace kb::tests

@@ -86,6 +86,82 @@ void RunChunkProfileAndStatsTest() {
     kb::tests::Require(emptyStats.chunks == 0, "native ECS storage did not return an empty chunk to the free list");
 }
 
+void RunMemoryCountersPerArchetypeAndChunkTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    config.reserveEntities = 16;
+    config.reserveArchetypes = 4;
+
+    kb::ecs::NativeArchetypeStorage storage{ config };
+
+    Position position{ .x = 1.0F, .y = 2.0F };
+    Velocity velocity{ .x = 3.0F, .y = 4.0F };
+    const std::array positionComponents{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position },
+    };
+    const std::array movingComponents{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position },
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &velocity },
+    };
+
+    const kb::ecs::Entity positionEntity = storage.CreateEntity(positionComponents);
+    const kb::ecs::Entity movingEntity = storage.CreateEntity(movingComponents);
+    kb::tests::Require(storage.IsAlive(positionEntity), "native ECS memory counters setup did not create the position entity");
+    kb::tests::Require(storage.IsAlive(movingEntity), "native ECS memory counters setup did not create the moving entity");
+
+    const kb::ecs::NativeEcsStorageStats stats = storage.Stats();
+    const kb::ecs::NativeEcsArchetypeMemoryCounters* positionArchetype = nullptr;
+    const kb::ecs::NativeEcsArchetypeMemoryCounters* movingArchetype = nullptr;
+    std::size_t countedChunks = 0;
+    std::size_t countedUsedBytes = 0;
+    std::size_t countedWastedBytes = 0;
+
+    for (const kb::ecs::NativeEcsArchetypeMemoryCounters& archetype : stats.archetypeCounters) {
+        if (archetype.componentIds.size() == 1U && archetype.componentIds[0] == kPositionId) {
+            positionArchetype = &archetype;
+        }
+        if (archetype.componentIds.size() == 2U && archetype.componentIds[0] == kPositionId && archetype.componentIds[1] == kVelocityId) {
+            movingArchetype = &archetype;
+        }
+
+        kb::tests::Require(archetype.chunkCounters.size() == archetype.chunks, "native ECS memory counters omitted chunk counters");
+        kb::tests::Require(archetype.capacity >= archetype.liveEntities, "native ECS memory counters reported invalid archetype capacity");
+        kb::tests::Require(archetype.usedBytes + archetype.wastedBytes == archetype.payloadBytes, "native ECS memory counters reported invalid archetype byte totals");
+        kb::tests::Require(archetype.version > 0U, "native ECS memory counters omitted archetype version");
+
+        std::size_t archetypeRows = 0;
+        std::size_t archetypeUsedBytes = 0;
+        std::size_t archetypeWastedBytes = 0;
+        std::size_t archetypePayloadBytes = 0;
+        for (const kb::ecs::NativeEcsChunkMemoryCounters& chunk : archetype.chunkCounters) {
+            kb::tests::Require(chunk.archetypeIndex == archetype.archetypeIndex, "native ECS memory counters recorded invalid chunk archetype index");
+            kb::tests::Require(chunk.capacity >= chunk.liveEntities, "native ECS memory counters reported invalid chunk capacity");
+            kb::tests::Require(chunk.payloadBytes == storage.ChunkPayloadBytes(), "native ECS memory counters recorded invalid chunk payload bytes");
+            kb::tests::Require(chunk.usedBytes + chunk.wastedBytes == chunk.payloadBytes, "native ECS memory counters reported invalid chunk byte totals");
+            archetypeRows += chunk.liveEntities;
+            archetypeUsedBytes += chunk.usedBytes;
+            archetypeWastedBytes += chunk.wastedBytes;
+            archetypePayloadBytes += chunk.payloadBytes;
+        }
+
+        kb::tests::Require(archetypeRows == archetype.liveEntities, "native ECS memory counters did not sum chunk entity counts");
+        kb::tests::Require(archetypeUsedBytes == archetype.usedBytes, "native ECS memory counters did not sum chunk used bytes");
+        kb::tests::Require(archetypeWastedBytes == archetype.wastedBytes, "native ECS memory counters did not sum chunk wasted bytes");
+        kb::tests::Require(archetypePayloadBytes == archetype.payloadBytes, "native ECS memory counters did not sum chunk payload bytes");
+
+        countedChunks += archetype.chunks;
+        countedUsedBytes += archetype.usedBytes;
+        countedWastedBytes += archetype.wastedBytes;
+    }
+
+    kb::tests::Require(stats.archetypeCounters.size() == stats.archetypeCount, "native ECS memory counters omitted archetype counters");
+    kb::tests::Require(stats.chunks == countedChunks, "native ECS memory counters did not sum storage chunk count");
+    kb::tests::Require(stats.usedBytes == countedUsedBytes, "native ECS memory counters did not sum storage used bytes");
+    kb::tests::Require(stats.wastedBytes == countedWastedBytes, "native ECS memory counters did not sum storage wasted bytes");
+    kb::tests::Require(positionArchetype != nullptr && positionArchetype->usedBytes == sizeof(Position), "native ECS memory counters missed the position archetype");
+    kb::tests::Require(movingArchetype != nullptr && movingArchetype->usedBytes == sizeof(Position) + sizeof(Velocity), "native ECS memory counters missed the moving archetype");
+}
+
 void RunMultiComponentMigrationTest() {
     kb::ecs::NativeArchetypeStorage storage;
 
@@ -305,6 +381,7 @@ namespace kb::tests {
 
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
+    RunMemoryCountersPerArchetypeAndChunkTest();
     RunMultiComponentMigrationTest();
     RunSwapDeleteAndGenerationTest();
     RunArchetypeSignatureMatchingTest();

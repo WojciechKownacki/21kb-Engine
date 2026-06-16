@@ -27,6 +27,9 @@ public:
     [[nodiscard]] static SceneRuntimeFixedStepSettings FixedStepSettings(const Scene& scene) noexcept;
     [[nodiscard]] static float FixedInterpolationAlpha(const Scene& scene) noexcept;
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;
+    static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;
+    [[nodiscard]] static bool EcsProfilerEnabled(const Scene& scene) noexcept;
+    [[nodiscard]] static const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace(const Scene& scene) noexcept;
     [[nodiscard]] static std::optional<TransformComponent> InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept;
     [[nodiscard]] static std::span<const SceneEntity> TransformRenderProxyUpdateEntities(const Scene& scene) noexcept;
     [[nodiscard]] static bool Update(Scene& scene, float deltaSeconds);

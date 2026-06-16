@@ -2,12 +2,14 @@
 
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabInstanceSynchronizer.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
 
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -124,6 +126,27 @@ ScenePrefabHandle ScenePrefabs::OriginalSourcePrefab(SceneObject object) const n
 
 ScenePrefabHandle ScenePrefabs::OriginalSourcePrefab(SceneEntity entity) const noexcept {
     return OriginalSourcePrefab(SceneAccess::MakeObject(scene_, entity));
+}
+
+ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle) {
+    SceneState& state = SceneAccess::State(scene_);
+    const ScenePrefab* prefab = state.prefabs.Find(handle);
+    if (prefab == nullptr) {
+        return {};
+    }
+
+    auto editScene = std::make_unique<Scene>(SceneMode::PrefabPrivate);
+    const ScenePrefabHandle editHandle = editScene->Prefabs().Register("PrivatePrefabEdit", *prefab);
+    if (!editHandle.IsValid()) {
+        return {};
+    }
+
+    ScenePrefabInstance editInstance = editScene->Prefabs().Instantiate(editHandle);
+    if (!editInstance.Handle().IsValid()) {
+        return {};
+    }
+
+    return ScenePrefabPrivateScene{ scene_, handle, std::move(editScene), editHandle, std::move(editInstance) };
 }
 
 std::size_t ScenePrefabs::RefreshInstances(ScenePrefabHandle handle) {

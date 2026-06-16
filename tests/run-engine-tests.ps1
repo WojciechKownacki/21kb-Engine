@@ -13,5 +13,16 @@ if (!$SkipConfigure) {
     Initialize-CMakeBuild -RepoRoot $repoRoot -BuildPath $buildPath
 }
 
-Invoke-Native cmake --build $buildPath --config $Config --target kb_engine_tests
-Invoke-Native ctest --test-dir $buildPath -C $Config -R '^kb_engine_tests$' --output-on-failure
+$targets = @(
+    'kb_engine_tests',
+    'kb_ecs_api_tests',
+    'kb_ecs_scheduler_correctness_tests',
+    'kb_ecs_deterministic_replay_tests',
+    'kb_ecs_stress_tests'
+)
+
+foreach ($target in $targets) {
+    Invoke-Native cmake --build $buildPath --config $Config --target $target
+}
+
+Invoke-Native ctest --test-dir $buildPath -C $Config -R '^(kb_engine_tests|kb_ecs_api_tests|kb_ecs_scheduler_correctness_tests|kb_ecs_deterministic_replay_tests|kb_ecs_stress_tests)$' --output-on-failure

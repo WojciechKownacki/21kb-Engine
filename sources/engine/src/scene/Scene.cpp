@@ -30,12 +30,23 @@ std::atomic<std::uint64_t> g_nextSceneId{ 1U };
 Scene::Scene()
     : Scene(kb::project::ProjectDescriptor{}) {}
 
-Scene::Scene(kb::project::ProjectDescriptor descriptor)
-    : Scene(std::move(descriptor), {}) {}
+Scene::Scene(SceneMode mode)
+    : Scene(kb::project::ProjectDescriptor{}, mode) {}
 
-Scene::Scene(kb::project::ProjectDescriptor descriptor, std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules)
+Scene::Scene(kb::project::ProjectDescriptor descriptor)
+    : Scene(std::move(descriptor), std::vector<std::unique_ptr<kb::modules::IEngineModule>>{}) {}
+
+Scene::Scene(kb::project::ProjectDescriptor descriptor, SceneMode mode)
+    : Scene(std::move(descriptor), {}, mode) {}
+
+Scene::Scene(
+    kb::project::ProjectDescriptor descriptor,
+    std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
+    SceneMode mode)
     : state_(std::make_unique<SceneState>())
     , id_(g_nextSceneId.fetch_add(1U, std::memory_order_relaxed)) {
+    state_->mode = mode;
+
     const bool registeredPrefabLoader = state_->assets.RegisterLoader(std::make_unique<ScenePrefabAssetLoader>(*this));
     const bool registeredSceneLoader = state_->assets.RegisterLoader(std::make_unique<SceneAssetLoader>());
     const bool registeredLuaScriptLoader = state_->assets.RegisterLoader(std::make_unique<kb::script::LuaScriptAssetLoader>());
@@ -54,6 +65,10 @@ Scene::Scene(kb::project::ProjectDescriptor descriptor, std::vector<std::unique_
     static_cast<void>(registeredInputContextLoader);
     static_cast<void>(registeredAudioClipLoader);
     static_cast<void>(registeredImportedAssetLoader);
+
+    if (mode == SceneMode::PrefabPrivate) {
+        return;
+    }
 
     // Subsystems are driven through the engine module host instead of being wired
     // by hand, so the project's descriptor can enable or disable them. Input is a
@@ -107,6 +122,14 @@ const SceneState& SceneAccess::State(const Scene& scene) noexcept {
 
 std::uint64_t Scene::Id() const noexcept {
     return id_;
+}
+
+SceneMode Scene::Mode() const noexcept {
+    return state_->mode;
+}
+
+bool Scene::IsPrefabPrivate() const noexcept {
+    return Mode() == SceneMode::PrefabPrivate;
 }
 
 void SceneLightingAccess::SetBasicLightingEnabled(Scene& scene, bool enabled) noexcept {

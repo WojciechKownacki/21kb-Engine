@@ -5,8 +5,12 @@
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/RuntimeAccessValidator.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
+#include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
 
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -86,6 +90,32 @@ private:
     kb::ecs::SystemAccess access_;
     std::atomic<int>& running_;
     std::atomic<int>& maxRunning_;
+};
+
+class ProfilingProbeSystem final : public kb::ecs::System {
+public:
+    ProfilingProbeSystem(std::uint64_t entitiesProcessed, std::uint64_t bytesTouched)
+        : entitiesProcessed_(entitiesProcessed)
+        , bytesTouched_(bytesTouched) {}
+
+    [[nodiscard]] std::string_view Name() const noexcept override {
+        return "ProfilingProbe";
+    }
+
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        static_cast<void>(world);
+        return kb::ecs::SystemAccess{};
+    }
+
+    void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
+        static_cast<void>(world);
+        static_cast<void>(deltaSeconds);
+        ReportProfilerWork(entitiesProcessed_, bytesTouched_);
+    }
+
+private:
+    std::uint64_t entitiesProcessed_ = 0;
+    std::uint64_t bytesTouched_ = 0;
 };
 
 [[nodiscard]] kb::ecs::SystemAccess ReadPosition(kb::ecs::World& world) {
@@ -281,6 +311,31 @@ void RunReadOnlySystemsExecuteInParallelTest() {
     scheduler.Shutdown(world);
 }
 
+void RunSingleThreadSchedulerRunsCompatibleSystemsOnCallerThreadTest() {
+    kb::ecs::World world;
+    std::vector<std::string> executionOrder;
+
+    kb::ecs::WorkerPoolConfig workerConfig;
+    workerConfig.singleThreaded = true;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
+        .debugTraceEnabled = true,
+        .parallelExecutionEnabled = false,
+        .workerPool = workerConfig,
+    } };
+    scheduler.Add(std::make_unique<RecordingSystem>("ReadA", ReadPosition(world), executionOrder), world);
+    scheduler.Add(std::make_unique<RecordingSystem>("ReadB", ReadPosition(world), executionOrder), world);
+
+    scheduler.Update(world, 0.0F);
+
+    const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastDebugTrace();
+    kb::tests::Require(executionOrder == std::vector<std::string>{ "ReadA", "ReadB" }, "ECS single-thread scheduler produced invalid execution order");
+    kb::tests::Require(trace.events.size() == 2U, "ECS single-thread scheduler trace omitted systems");
+    kb::tests::Require(trace.workers.size() == 1U, "ECS single-thread scheduler reported extra workers");
+    kb::tests::Require(trace.events[0].workerIndex == 0U && trace.events[1].workerIndex == 0U, "ECS single-thread scheduler did not run on caller worker");
+
+    scheduler.Shutdown(world);
+}
+
 void RunReadWriteConflictCreatesStageBoundaryTest() {
     kb::ecs::World world;
     std::vector<std::string> executionOrder;
@@ -379,6 +434,58 @@ void RunRuntimeAccessValidatorDetectsWriteWriteConflictTest() {
     kb::tests::Require(validator.ActiveAccessCount() == 0U, "ECS runtime access validator did not release writer access");
 }
 
+void RunProfilerCountersCaptureFrameAndSystemWorkTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .profilerEnabled = true } };
+    scheduler.Add(std::make_unique<ProfilingProbeSystem>(42, 336), world);
+
+    scheduler.Update(world, 0.0F);
+
+    const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastProfilerTrace();
+    kb::tests::Require(trace.frameCounters.frameIndex == 0U, "ECS profiler counters did not start at frame zero");
+    kb::tests::Require(trace.frameCounters.systemCount == 1U, "ECS profiler counters recorded invalid system count");
+    kb::tests::Require(trace.frameCounters.stageCount == 1U, "ECS profiler counters recorded invalid stage count");
+    kb::tests::Require(trace.frameCounters.jobsCount == 1U, "ECS profiler counters recorded invalid job count");
+    kb::tests::Require(trace.frameCounters.entitiesProcessed == 42U, "ECS profiler counters omitted processed entities");
+    kb::tests::Require(trace.frameCounters.bytesTouched == 336U, "ECS profiler counters omitted touched bytes");
+    kb::tests::Require(trace.frameCounters.workerCount == 1U, "ECS profiler counters recorded invalid worker count");
+    kb::tests::Require(trace.systemCounters.size() == 1U, "ECS profiler counters omitted per-system counters");
+    kb::tests::Require(trace.systemCounters[0].systemName == "ProfilingProbe", "ECS profiler counters recorded invalid system name");
+    kb::tests::Require(trace.systemCounters[0].jobsCount == 1U, "ECS profiler counters recorded invalid per-system job count");
+    kb::tests::Require(trace.systemCounters[0].entitiesProcessed == 42U, "ECS profiler counters recorded invalid per-system entity count");
+    kb::tests::Require(trace.systemCounters[0].bytesTouched == 336U, "ECS profiler counters recorded invalid per-system byte count");
+    kb::tests::Require(trace.events.size() == 1U, "ECS profiler trace omitted system event");
+    kb::tests::Require(trace.events[0].jobsCount == 1U, "ECS profiler trace recorded invalid event job count");
+    kb::tests::Require(trace.events[0].entitiesProcessed == 42U, "ECS profiler trace recorded invalid event entity count");
+    kb::tests::Require(trace.events[0].bytesTouched == 336U, "ECS profiler trace recorded invalid event byte count");
+    kb::tests::Require(trace.workers[0].utilizationPermille <= 1000U, "ECS profiler counters recorded invalid worker utilization");
+
+    scheduler.Shutdown(world);
+}
+
+void RunProfilerTraceExportWritesExternalJsonFileTest() {
+    kb::ecs::World world;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .profilerEnabled = true } };
+    scheduler.Add(std::make_unique<ProfilingProbeSystem>(7, 56), world);
+    scheduler.Update(world, 0.0F);
+
+    const std::filesystem::path outputPath = std::filesystem::temp_directory_path() / "kb_ecs_scheduler_trace_test.json";
+    kb::ecs::ExportSystemSchedulerTraceToJsonFile(scheduler.LastProfilerTrace(), outputPath);
+
+    std::ifstream input(outputPath, std::ios::binary);
+    kb::tests::Require(input.is_open(), "ECS profiler trace export did not create an output file");
+    const std::string content{ std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(content.find("\"schema\": \"kb.ecs.scheduler_trace.v1\"") != std::string::npos, "ECS profiler trace export omitted schema");
+    kb::tests::Require(content.find("\"system_name\": \"ProfilingProbe\"") != std::string::npos, "ECS profiler trace export omitted system counters");
+    kb::tests::Require(content.find("\"chrome_trace_events\"") != std::string::npos, "ECS profiler trace export omitted external trace events");
+    kb::tests::Require(content.find("\"ph\": \"X\"") != std::string::npos, "ECS profiler trace export omitted duration events");
+    kb::tests::Require(content.find("\"entities_processed\": 7") != std::string::npos, "ECS profiler trace export omitted profiler payload");
+
+    input.close();
+    std::filesystem::remove(outputPath);
+    scheduler.Shutdown(world);
+}
+
 void RunDebugTraceCapturesSystemExecutionTest() {
     kb::ecs::World world;
     std::vector<std::string> executionOrder;
@@ -405,9 +512,11 @@ void RunDebugTraceCapturesSystemExecutionTest() {
     kb::tests::Require(trace.events[1].durationNanoseconds == trace.events[1].endTimeNanoseconds - trace.events[1].startTimeNanoseconds, "ECS scheduler debug trace recorded an invalid second system duration");
     kb::tests::Require(trace.events[0].waitTimeNanoseconds == 0U, "ECS scheduler debug trace recorded dependency wait time for an independent system");
     kb::tests::Require(trace.events[1].blockedDependencies == std::vector<std::string>{ "TraceA" }, "ECS scheduler debug trace did not record blocked dependencies");
+    kb::tests::Require(trace.events[1].waitReason == "dependencies", "ECS scheduler debug trace did not record dependency wait reason");
     kb::tests::Require(trace.workers[0].workerIndex == 0U, "ECS scheduler debug trace recorded an invalid worker occupancy index");
     kb::tests::Require(trace.workers[0].busyTimeNanoseconds == trace.events[0].durationNanoseconds + trace.events[1].durationNanoseconds, "ECS scheduler debug trace worker busy time did not match system durations");
     kb::tests::Require(trace.frameDurationNanoseconds >= trace.workers[0].busyTimeNanoseconds, "ECS scheduler debug trace frame duration is shorter than worker busy time");
+    kb::tests::Require(trace.workers[0].utilizationPermille <= 1000U, "ECS scheduler debug trace recorded invalid worker utilization");
 
     scheduler.Update(world, 0.0F);
     kb::tests::Require(scheduler.LastDebugTrace().frameIndex == 1U, "ECS scheduler debug trace did not advance frame indexes");
@@ -429,11 +538,14 @@ void RunEcsSystemSchedulerTests() {
     RunSchedulerRejectsNullSystemTest();
     RunReadOnlySystemsShareExecutionStageTest();
     RunReadOnlySystemsExecuteInParallelTest();
+    RunSingleThreadSchedulerRunsCompatibleSystemsOnCallerThreadTest();
     RunReadWriteConflictCreatesStageBoundaryTest();
     RunWriteWriteConflictCreatesStageBoundaryTest();
     RunRuntimeAccessValidatorAllowsReadOnlyJobsTest();
     RunRuntimeAccessValidatorDetectsReadWriteConflictTest();
     RunRuntimeAccessValidatorDetectsWriteWriteConflictTest();
+    RunProfilerCountersCaptureFrameAndSystemWorkTest();
+    RunProfilerTraceExportWritesExternalJsonFileTest();
     RunDebugTraceCapturesSystemExecutionTest();
 }
 

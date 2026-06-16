@@ -60,9 +60,12 @@ private:
     static void DispatchBatch(const Batch& batch, void* context) {
         auto* dispatch = static_cast<DispatchContext*>(context);
         if (dispatch != nullptr && dispatch->system != nullptr) {
+            dispatch->system->ReportProfilerWork(batch.Count(), batch.Count() * kBytesPerEntity);
             dispatch->system->OnUpdateBatch(batch, dispatch->deltaSeconds);
         }
     }
+
+    static constexpr std::size_t kBytesPerEntity = (sizeof(Components) + ... + 0U);
 
     Query<Components...> query_;
     QueryExecutionSettings settings_{};

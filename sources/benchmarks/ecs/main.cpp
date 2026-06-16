@@ -4,9 +4,11 @@
 #include "engine/ecs/World.hpp"
 #include "engine/ecs/WorldConfigPresets.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 
 #include <algorithm>
 #include <array>
@@ -130,6 +132,7 @@ struct BenchmarkOptions {
     std::size_t sparseEntitiesPerArchetype = 16;
     std::vector<std::size_t> systemChainCounts{ 16, 64, 256 };
     std::vector<std::size_t> prefabSpawnInstanceCounts{ 10'000, 50'000, 100'000 };
+    std::vector<std::size_t> prefabOverrideInstanceCounts{ 1'000, 10'000, 100'000 };
     std::vector<std::size_t> prefabHierarchyNodeCounts{ 1, 4, 16 };
     std::size_t frames = 64;
     std::size_t warmupFrames = 4;
@@ -245,6 +248,15 @@ struct PrefabSpawnBenchmarkData {
     std::size_t nodeCount = 0;
 };
 
+struct PrefabOverrideBenchmarkData {
+    std::unique_ptr<kb::scene::Scene> scene;
+    kb::scene::ScenePrefabHandle prefab;
+    std::vector<kb::scene::ScenePrefabInstance> instances;
+    std::size_t instanceCount = 0;
+    std::size_t nodeCount = 0;
+    std::uint32_t overrideNode = 0;
+};
+
 struct QueryFanoutBenchmarkData {
     kb::ecs::World hotWorld;
     kb::ecs::World coldWorld;
@@ -275,7 +287,7 @@ struct SystemChainAccess {
 
 struct SystemChainBenchmarkData {
     kb::ecs::World world;
-    kb::ecs::SystemScheduler scheduler;
+    std::unique_ptr<kb::ecs::SystemScheduler> scheduler;
     kb::ecs::Entity stateEntity;
     std::vector<SystemChainAccess> accessChain;
     std::size_t systemCount = 0;
@@ -856,6 +868,7 @@ private:
             options.sparseEntitiesPerArchetype = 4;
             options.systemChainCounts = { 16, 32, 64 };
             options.prefabSpawnInstanceCounts = { 64, 128, 256 };
+            options.prefabOverrideInstanceCounts = { 64, 128, 256 };
             options.prefabHierarchyNodeCounts = { 1, 4, 8 };
             options.frames = 3;
             options.warmupFrames = 1;
@@ -1405,6 +1418,95 @@ void RegisterStructuralComponents(kb::ecs::World& world) {
     return checksum;
 }
 
+void ApplyPrefabOverrideInputs(PrefabOverrideBenchmarkData& data) {
+    kb::scene::Scene& scene = *data.scene;
+    kb::scene::SceneEntities entities = scene.Entities();
+    kb::scene::SceneTransforms transforms = scene.Transforms();
+    kb::scene::SceneComponents components = scene.Components();
+
+    for (std::size_t index = 0; index < data.instances.size(); ++index) {
+        const kb::scene::ScenePrefabInstance& instance = data.instances[index];
+        if (instance.ObjectCount() != data.nodeCount || !instance.Handle().IsValid()) {
+            throw std::runtime_error("Prefab override benchmark has an incomplete prefab instance");
+        }
+
+        const kb::scene::SceneObject object = instance.ObjectAt(data.overrideNode);
+        if (!object.IsValid() || !entities.IsAlive(object)) {
+            throw std::runtime_error("Prefab override benchmark target object is not alive");
+        }
+
+        entities.SetName(object, "OverrideNode");
+
+        kb::scene::TransformComponent transform = transforms.Get(object);
+        transform.localPosition.x += 3.5F;
+        transform.localPosition.y += 1.25F;
+        transform.localScale.x = 1.125F;
+        transforms.Set(object, transform);
+
+        components.Visibility().Set(object.Entity(), kb::scene::VisibilityComponent{ .visible = false });
+    }
+}
+
+[[nodiscard]] PrefabOverrideBenchmarkData CreatePrefabOverrideBenchmarkData(std::size_t instanceCount) {
+    constexpr std::size_t kOverrideNodeCount = 4;
+    constexpr std::uint32_t kOverrideNodeIndex = 1;
+
+    PrefabOverrideBenchmarkData data{
+        .scene = std::make_unique<kb::scene::Scene>(),
+        .prefab = {},
+        .instances = {},
+        .instanceCount = instanceCount,
+        .nodeCount = kOverrideNodeCount,
+        .overrideNode = kOverrideNodeIndex,
+    };
+    data.prefab = data.scene->Prefabs().Register(
+        "OverrideBenchmark_" + std::to_string(instanceCount),
+        CreatePrefabSpawnTemplate(data.nodeCount));
+    if (!data.prefab.IsValid()) {
+        throw std::runtime_error("Prefab override benchmark failed to register prefab");
+    }
+
+    data.instances = data.scene->Prefabs().InstantiateMany(data.prefab, data.instanceCount);
+    if (data.instances.size() != data.instanceCount) {
+        throw std::runtime_error("Prefab override benchmark bulk instantiation returned an unexpected instance count");
+    }
+    ApplyPrefabOverrideInputs(data);
+    return data;
+}
+
+[[nodiscard]] double RunPrefabOverrideRevertFrame(PrefabOverrideBenchmarkData& data) {
+    kb::scene::ScenePrefabs prefabs = data.scene->Prefabs();
+    double checksum = 0.0;
+    for (const kb::scene::ScenePrefabInstance& instance : data.instances) {
+        if (!prefabs.RevertOverrides(instance.Handle())) {
+            throw std::runtime_error("Prefab override revert benchmark failed to revert an instance");
+        }
+        checksum += static_cast<double>(instance.ObjectAt(data.overrideNode).Entity().Id() & 0xFFFFU);
+    }
+    return checksum;
+}
+
+[[nodiscard]] double RunPrefabOverrideApplyFrame(PrefabOverrideBenchmarkData& data) {
+    kb::scene::ScenePrefabs prefabs = data.scene->Prefabs();
+    double checksum = 0.0;
+    for (const kb::scene::ScenePrefabInstance& instance : data.instances) {
+        if (!prefabs.ApplyOverrides(instance.Handle())) {
+            throw std::runtime_error("Prefab override apply benchmark failed to apply an instance");
+        }
+        checksum += static_cast<double>(instance.ObjectAt(data.overrideNode).Entity().Id() & 0xFFFFU);
+    }
+    return checksum;
+}
+
+void ValidatePrefabOverrideBenchmarkState(const PrefabOverrideBenchmarkData& data, std::string_view operation) {
+    kb::scene::ScenePrefabs prefabs = data.scene->Prefabs();
+    for (const kb::scene::ScenePrefabInstance& instance : data.instances) {
+        if (!prefabs.Overrides(instance.Handle()).Empty()) {
+            throw std::runtime_error("Debug validation detected remaining prefab overrides after " + std::string{ operation });
+        }
+    }
+}
+
 template <typename FrameFunction>
 [[nodiscard]] BenchmarkResult RunTimedBenchmark(
     std::string name,
@@ -1743,7 +1845,7 @@ private:
 
     SystemChainBenchmarkData data{
         .world = kb::ecs::World{ config },
-        .scheduler = kb::ecs::SystemScheduler{},
+        .scheduler = std::make_unique<kb::ecs::SystemScheduler>(),
         .stateEntity = {},
         .accessChain = {},
         .systemCount = systemCount,
@@ -1765,7 +1867,7 @@ private:
             .writeSlot = (systemIndex + 1U) % systemCount,
         };
         data.accessChain.push_back(access);
-        data.scheduler.Add(
+        data.scheduler->Add(
             std::make_unique<SystemChainStep>(
                 data.stateEntity,
                 access,
@@ -1777,7 +1879,7 @@ private:
 }
 
 [[nodiscard]] double RunSystemChainFrame(SystemChainBenchmarkData& data, const BenchmarkOptions& options, std::uint32_t expectedWritesPerSlot) {
-    data.scheduler.Update(data.world, options.deltaSeconds);
+    data.scheduler->Update(data.world, options.deltaSeconds);
 
     const BenchSystemChainState* state = data.world.TryGet<BenchSystemChainState>(data.stateEntity);
     if (state == nullptr) {
@@ -1810,7 +1912,7 @@ private:
             ++frame;
             return RunSystemChainFrame(data, options, frame);
         });
-    data.scheduler.Shutdown(data.world);
+    data.scheduler->Shutdown(data.world);
     return result;
 }
 
@@ -1911,6 +2013,58 @@ template <typename FrameFunction>
         .executionGrainSize = options.executionGrainSize,
         .frameTime = stats,
         .throughputEntitiesPerSecond = secondsPerFrame == 0.0 ? 0.0 : static_cast<double>(spawnedObjects) / secondsPerFrame,
+        .checksum = checksum,
+    };
+}
+
+template <typename Operation>
+[[nodiscard]] BenchmarkResult RunPrefabOverrideBenchmark(
+    const BenchmarkOptions& options,
+    std::size_t instanceCount,
+    std::string_view operationName,
+    Operation&& operation) {
+    using Clock = std::chrono::steady_clock;
+
+    std::vector<double> measuredFramesMs;
+    measuredFramesMs.reserve(options.frames);
+    double checksum = 0.0;
+
+    const std::size_t totalFrames = options.warmupFrames + options.frames;
+    for (std::size_t frame = 0; frame < totalFrames; ++frame) {
+        PrefabOverrideBenchmarkData data = CreatePrefabOverrideBenchmarkData(instanceCount);
+
+        const auto start = Clock::now();
+        checksum += operation(data);
+        const auto end = Clock::now();
+
+        if (options.debugValidationEnabled) {
+            ValidatePrefabOverrideBenchmarkState(data, operationName);
+            const std::size_t expectedEntityCount = instanceCount * data.nodeCount;
+            if (data.scene->Entities().Count() != expectedEntityCount) {
+                throw std::runtime_error("Debug validation detected an invalid prefab override entity count");
+            }
+        }
+
+        if (frame >= options.warmupFrames) {
+            const std::chrono::duration<double, std::milli> elapsed = end - start;
+            measuredFramesMs.push_back(elapsed.count());
+        }
+    }
+
+    const FrameStats stats = ComputeFrameStats(std::move(measuredFramesMs));
+    const double secondsPerFrame = stats.avgMs / 1000.0;
+    return BenchmarkResult{
+        .name = BenchmarkNameForMode("prefab_override_" + std::string{ operationName } + "_" + std::to_string(instanceCount) + "_instances", options),
+        .dataset = BenchmarkDatasetForMode(
+            std::to_string(instanceCount) + " prefab instances, 4 hierarchy nodes each, name/transform/visibility overrides",
+            options),
+        .validationMode = std::string{ ValidationModeName(options.debugValidationEnabled) },
+        .entities = instanceCount,
+        .frames = options.frames,
+        .warmupFrames = options.warmupFrames,
+        .executionGrainSize = options.executionGrainSize,
+        .frameTime = stats,
+        .throughputEntitiesPerSecond = secondsPerFrame == 0.0 ? 0.0 : static_cast<double>(instanceCount) / secondsPerFrame,
         .checksum = checksum,
     };
 }
@@ -2043,6 +2197,23 @@ template <typename FrameFunction>
         for (const std::size_t nodeCount : options.prefabHierarchyNodeCounts) {
             results.push_back(RunPrefabSpawnBenchmark(options, instanceCount, nodeCount));
         }
+    }
+
+    for (const std::size_t instanceCount : options.prefabOverrideInstanceCounts) {
+        results.push_back(RunPrefabOverrideBenchmark(
+            options,
+            instanceCount,
+            "revert",
+            [](PrefabOverrideBenchmarkData& data) {
+                return RunPrefabOverrideRevertFrame(data);
+            }));
+        results.push_back(RunPrefabOverrideBenchmark(
+            options,
+            instanceCount,
+            "apply",
+            [](PrefabOverrideBenchmarkData& data) {
+                return RunPrefabOverrideApplyFrame(data);
+            }));
     }
 
     QueryFanoutBenchmarkData fanoutData = CreateQueryFanoutBenchmarkData(options);

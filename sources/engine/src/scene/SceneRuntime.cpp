@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cmath>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace kb::scene {
@@ -97,11 +98,18 @@ void CaptureFixedStepEnd(Scene& scene, SceneState& state) {
 
 void SceneRuntimeService::AddSystem(Scene& scene, std::unique_ptr<kb::ecs::System> system) {
     SceneState& state = SceneAccess::State(scene);
+    if (state.mode == SceneMode::PrefabPrivate) {
+        throw std::logic_error("Cannot register ECS runtime systems in a prefab private scene");
+    }
     state.systemScheduler.Add(std::move(system), state.world);
 }
 
 void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system) {
-    SceneAccess::State(scene).sceneSystemScheduler.Add(std::move(system), scene);
+    SceneState& state = SceneAccess::State(scene);
+    if (state.mode == SceneMode::PrefabPrivate) {
+        throw std::logic_error("Cannot register scene runtime systems in a prefab private scene");
+    }
+    state.sceneSystemScheduler.Add(std::move(system), scene);
 }
 
 void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
@@ -131,6 +139,18 @@ std::size_t SceneRuntimeService::LastFixedStepCount(const Scene& scene) noexcept
     return SceneAccess::State(scene).lastFixedStepCount;
 }
 
+void SceneRuntimeService::SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept {
+    SceneAccess::State(scene).systemScheduler.SetProfilerEnabled(enabled);
+}
+
+bool SceneRuntimeService::EcsProfilerEnabled(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).systemScheduler.ProfilerEnabled();
+}
+
+const kb::ecs::SystemSchedulerTrace& SceneRuntimeService::LastEcsProfilerTrace(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).systemScheduler.LastProfilerTrace();
+}
+
 std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept {
     const SceneState& state = SceneAccess::State(scene);
     const auto sample = state.fixedTransformSamples.find(entity.Id());
@@ -149,6 +169,14 @@ std::span<const SceneEntity> SceneRuntimeService::TransformRenderProxyUpdateEnti
 
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
+    if (state.mode == SceneMode::PrefabPrivate) {
+        state.lastFixedStepCount = 0U;
+        state.fixedInterpolationAlpha = 0.0F;
+        state.transformRenderProxyUpdateEntities.clear();
+        SynchronizeTransformHierarchy(state);
+        return false;
+    }
+
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
     state.transformRenderProxyUpdateEntities.clear();

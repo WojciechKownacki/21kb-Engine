@@ -1,5 +1,7 @@
 #pragma once
 
+#include "engine/scene/SceneMode.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -44,11 +46,16 @@ class SceneTransforms;
 class Scene {
 public:
     Scene();
+    explicit Scene(SceneMode mode);
     // Construct with an explicit project descriptor so the engine module host can
     // honour its enabled/disabled module set. The default constructor delegates here
     // with a default descriptor (every built-in engine module enabled).
     explicit Scene(kb::project::ProjectDescriptor descriptor);
-    explicit Scene(kb::project::ProjectDescriptor descriptor, std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules);
+    Scene(kb::project::ProjectDescriptor descriptor, SceneMode mode);
+    explicit Scene(
+        kb::project::ProjectDescriptor descriptor,
+        std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
+        SceneMode mode = SceneMode::Runtime);
     ~Scene();
 
     Scene(const Scene&) = delete;
@@ -75,6 +82,8 @@ public:
     [[nodiscard]] kb::input::InputSubsystem& Input() noexcept;
     [[nodiscard]] const kb::input::InputSubsystem& Input() const noexcept;
     [[nodiscard]] std::uint64_t Id() const noexcept;
+    [[nodiscard]] SceneMode Mode() const noexcept;
+    [[nodiscard]] bool IsPrefabPrivate() const noexcept;
 
 private:
     friend class SceneAccess;

@@ -8,6 +8,8 @@
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarLayout.hpp"
 #include "rendering/scene_viewport_toolbar/SceneViewportToolbarState.hpp"
 
+#include <utility>
+
 namespace kb::editor {
 
 SceneViewportToolbarRects SceneViewportToolbarRenderer::Resolve(const RECT& content) noexcept {
@@ -26,6 +28,10 @@ void SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderS
     SceneViewportToolbarState::RecordRenderStats(stats);
 }
 
+void SceneViewportToolbarRenderer::RecordEcsStats(SceneViewportToolbarEcsStats stats) {
+    SceneViewportToolbarState::RecordEcsStats(std::move(stats));
+}
+
 bool SceneViewportToolbarRenderer::UpdateInfoHover(const RECT& content, int x, int y) noexcept {
     return SceneViewportToolbarState::UpdateInfoHover(content, x, y);
 }
@@ -36,6 +42,7 @@ void SceneViewportToolbarRenderer::Paint(HDC dc, const RECT& content, const Edit
 
     SceneViewportToolbarInfoRenderer::PaintFpsCounter(dc, rects.fpsCounter, theme);
     SceneViewportToolbarInfoRenderer::PaintRenderStats(dc, rects.renderStats, theme);
+    SceneViewportToolbarInfoRenderer::PaintEcsStats(dc, rects.ecsStats, theme);
 
     SceneViewportToolbarDrawing::DrawValueButton(
         dc,

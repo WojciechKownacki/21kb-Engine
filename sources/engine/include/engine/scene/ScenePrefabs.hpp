@@ -16,6 +16,7 @@ namespace kb::scene {
 
 class Scene;
 class SceneObject;
+class ScenePrefabPrivateScene;
 
 enum class ScenePrefabAssetType {
     None,
@@ -71,6 +72,7 @@ public:
     [[nodiscard]] ScenePrefabHandle OriginalSourcePrefab(ScenePrefabInstanceHandle handle) const noexcept;
     [[nodiscard]] ScenePrefabHandle OriginalSourcePrefab(SceneObject object) const noexcept;
     [[nodiscard]] ScenePrefabHandle OriginalSourcePrefab(SceneEntity entity) const noexcept;
+    [[nodiscard]] ScenePrefabPrivateScene OpenPrivateScene(ScenePrefabHandle handle);
     [[nodiscard]] ScenePrefabInstanceHandle RootInstance(SceneObject object) const noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle RootInstance(SceneEntity entity) const noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept;

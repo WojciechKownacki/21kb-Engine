@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 namespace kb::editor {
 namespace {
@@ -24,6 +25,11 @@ struct SceneViewportFpsMeter {
 
 [[nodiscard]] SceneViewportToolbarRenderStats& LastRenderStats() noexcept {
     static SceneViewportToolbarRenderStats stats;
+    return stats;
+}
+
+[[nodiscard]] SceneViewportToolbarEcsStats& LastEcsStats() noexcept {
+    static SceneViewportToolbarEcsStats stats;
     return stats;
 }
 
@@ -90,6 +96,14 @@ SceneViewportToolbarRenderStats SceneViewportToolbarState::RenderStats() noexcep
     return LastRenderStats();
 }
 
+void SceneViewportToolbarState::RecordEcsStats(SceneViewportToolbarEcsStats stats) {
+    LastEcsStats() = std::move(stats);
+}
+
+const SceneViewportToolbarEcsStats& SceneViewportToolbarState::EcsStats() noexcept {
+    return LastEcsStats();
+}
+
 SceneViewportToolbarInfoHover SceneViewportToolbarState::InfoHover() noexcept {
     return LastInfoHover();
 }
@@ -108,6 +122,8 @@ bool SceneViewportToolbarState::UpdateInfoHover(const RECT& content, int x, int 
     SceneViewportToolbarInfoHover next = SceneViewportToolbarInfoHover::None;
     if (PointInRect(rects.renderStats, x, y)) {
         next = SceneViewportToolbarInfoHover::RenderStats;
+    } else if (PointInRect(rects.ecsStats, x, y)) {
+        next = SceneViewportToolbarInfoHover::EcsStats;
     } else if (PointInRect(rects.pipelineStats, x, y)) {
         next = SceneViewportToolbarInfoHover::PipelineStats;
     }

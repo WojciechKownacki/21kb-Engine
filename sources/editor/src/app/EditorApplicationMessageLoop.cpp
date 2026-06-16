@@ -204,7 +204,11 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     // Feed real device input to the runtime before systems tick (Input phase).
     kb::input::InputSubsystem& input = state.sceneContext.Scene().Input();
     state.inputCollector.Collect(input.MutableDeviceState(), state.window);
-    static_cast<void>(state.sceneContext.Scene().Runtime().Update(deltaSeconds));
+    kb::scene::SceneRuntime runtime = state.sceneContext.Scene().Runtime();
+    if (!runtime.EcsProfilerEnabled()) {
+        runtime.SetEcsProfilerEnabled(true);
+    }
+    static_cast<void>(runtime.Update(deltaSeconds));
     state.sceneContext.MarkSceneRenderDirty();
     if (state.sceneContext.Scene().Runtime().ShouldQuit()) {
         state.playMode.Stop();
