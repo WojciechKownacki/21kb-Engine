@@ -1,37 +1,44 @@
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
-#include "scene/components/SceneComponentAccess.hpp"
-#include "scene/components/SceneComponentRegistry.hpp"
-#include "scene/components/SceneComponentStorageAccess.hpp"
 #include "scene/transform/TransformMath.hpp"
 
-#include <flecs.h>
+#include <algorithm>
 
 namespace kb::scene {
+namespace {
 
-void SceneTransformBranchUpdater::Update(
-    kb::ecs::World& world,
-    const SceneComponentRegistry& components,
-    SceneEntity entity,
-    const TransformComponent& parentTransform,
-    bool parentDirty) const {
-    TransformComponent* transform = SceneComponentStorageAccess::TryGetMutable<TransformComponent>(world.NativeHandle(), entity, components.TransformComponentId());
-    if (transform == nullptr) {
+void UpdateEntry(SceneTransformBatchEntry& entry) noexcept {
+    if (entry.transform == nullptr) {
         return;
     }
 
-    const bool shouldUpdate = parentDirty || transform->worldDirty;
+    const bool shouldUpdate = entry.parentDirty || entry.transform->worldDirty;
     if (shouldUpdate) {
-        *transform = TransformMath::Compose(parentTransform, *transform);
-        SceneComponentAccess::MarkModified(world.NativeHandle(), entity, components.TransformComponentId());
+        *entry.transform = TransformMath::Compose(entry.parentTransform, *entry.transform);
+    }
+    entry.updated = shouldUpdate;
+}
+
+void UpdateEntries(std::span<SceneTransformBatchEntry> entries) noexcept {
+    for (SceneTransformBatchEntry& entry : entries) {
+        UpdateEntry(entry);
+    }
+}
+
+} // namespace
+
+void SceneTransformBranchUpdater::UpdateBatch(kb::ecs::WorkerPool* workerPool, std::span<SceneTransformBatchEntry> entries, std::size_t grainSize) const {
+    if (entries.empty()) {
+        return;
+    }
+    if (workerPool == nullptr || !workerPool->Running() || entries.size() <= grainSize) {
+        UpdateEntries(entries);
+        return;
     }
 
-    ecs_iter_t it = ecs_children(world.NativeHandle(), entity.Id());
-    while (ecs_children_next(&it)) {
-        for (int32_t i = 0; i < it.count; ++i) {
-            Update(world, components, SceneEntity{ it.entities[i] }, *transform, shouldUpdate);
-        }
-    }
+    workerPool->ParallelForChunks(entries.size(), std::max<std::size_t>(1U, grainSize), [&entries](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        UpdateEntries(entries.subspan(chunk.begin, chunk.count));
+    });
 }
 
 } // namespace kb::scene
