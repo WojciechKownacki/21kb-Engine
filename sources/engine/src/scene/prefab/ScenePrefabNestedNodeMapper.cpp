@@ -18,7 +18,8 @@ ScenePrefabNestedNodeMapping ScenePrefabNestedNodeMapper::Append(ScenePrefab& ou
     const std::span<const ScenePrefabNodeDesc> nestedNodes = nestedPrefab.Nodes();
     for (std::uint32_t nestedIndex = 0; nestedIndex < static_cast<std::uint32_t>(nestedNodes.size()); ++nestedIndex) {
         ScenePrefabNodeDesc node = nestedNodes[nestedIndex];
-        ScenePrefabNestedOverrideApplicator::Apply(node, nestedIndex, overlayRoot);
+        ScenePrefabNestedOverrideApplicator::Apply(node, nestedIndex, nestedNodes[nestedIndex].stableId, overlayRoot);
+        node.stableId = ScenePrefabNodeDesc::InvalidStableId;
         if (nestedIndex == 0) {
             node.nestedPrefabGuid = overlayRoot.nestedPrefabGuid;
             node.nestedPrefabOverrides = overlayRoot.nestedPrefabOverrides;

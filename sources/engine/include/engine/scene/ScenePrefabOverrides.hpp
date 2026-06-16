@@ -47,12 +47,14 @@ constexpr ScenePrefabOverrideFlag& operator|=(ScenePrefabOverrideFlag& lhs, Scen
 
 struct ScenePrefabNodeOverride {
     std::uint32_t nodeIndex = 0;
+    std::uint64_t nodeId = 0;
     SceneObject object{};
     ScenePrefabOverrideFlag flags = ScenePrefabOverrideFlag::None;
 };
 
 struct ScenePrefabPropertyOverride {
     std::uint32_t nodeIndex = 0;
+    std::uint64_t nodeId = 0;
     SceneObject target{};
     std::string propertyPath;
     std::string value;

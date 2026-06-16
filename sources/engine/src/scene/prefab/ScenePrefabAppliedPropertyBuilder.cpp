@@ -85,6 +85,7 @@ bool ScenePrefabAppliedPropertyBuilder::Build(Scene& scene, std::uint32_t nodeIn
 
     property = ScenePrefabPropertyOverride{
         .nodeIndex = nodeIndex,
+        .nodeId = 0,
         .target = object,
         .propertyPath = std::string{ propertyPath },
         .value = {},
