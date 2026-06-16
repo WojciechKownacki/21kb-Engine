@@ -34,6 +34,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
     include/engine/ecs/Kernel.hpp
+    include/engine/ecs/KernelVectorMath.hpp
     include/engine/ecs/NativeArchetypeStorage.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
