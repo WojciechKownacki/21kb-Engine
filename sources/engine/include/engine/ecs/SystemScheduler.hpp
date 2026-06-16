@@ -23,6 +23,7 @@ enum class SystemSchedulingMode {
 struct SystemSchedulerConfig {
     SystemSchedulingMode mode = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled = false;
+    bool profilerEnabled = false;
     bool parallelExecutionEnabled = true;
     bool runtimeAccessValidationEnabled = true;
     WorkerPoolConfig workerPool{};
@@ -49,6 +50,9 @@ public:
     void SetDebugTraceEnabled(bool enabled) noexcept;
     [[nodiscard]] bool DebugTraceEnabled() const noexcept;
     [[nodiscard]] const SystemSchedulerTrace& LastDebugTrace() const noexcept;
+    void SetProfilerEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool ProfilerEnabled() const noexcept;
+    [[nodiscard]] const SystemSchedulerTrace& LastProfilerTrace() const noexcept;
 
 private:
     struct ScheduledSystem {
@@ -67,15 +71,21 @@ private:
     void RebuildExecutionOrder();
     void BeginDebugTrace();
     void EndDebugTrace(std::uint64_t frameDurationNanoseconds);
+    void BeginProfilerTrace();
+    void EndProfilerTrace(std::uint64_t frameDurationNanoseconds);
     void TraceSystemExecution(
         std::size_t systemIndex,
         std::size_t stageIndex,
         std::size_t workerIndex,
+        std::uint64_t jobsCount,
         std::uint64_t startTimeNanoseconds,
         std::uint64_t endTimeNanoseconds,
+        SystemProfilerCounters profilerCounters,
         std::span<const std::uint64_t> systemEndTimes,
         const std::vector<std::vector<std::size_t>>& reverseGraph);
+    void AddSystemCounters(const SystemSchedulerTraceEvent& event);
     [[nodiscard]] bool ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept;
+    [[nodiscard]] bool InstrumentationEnabled() const noexcept;
     [[nodiscard]] WorkerPool& RuntimeWorkerPool();
 
     [[nodiscard]] bool IsBeforeInSchedulingOrder(std::size_t left, std::size_t right) const noexcept;
@@ -90,6 +100,7 @@ private:
     std::vector<ExecutionStage> executionStages_;
     SystemSchedulingMode schedulingMode_ = SystemSchedulingMode::Automatic;
     bool debugTraceEnabled_ = false;
+    bool profilerEnabled_ = false;
     bool parallelExecutionEnabled_ = true;
     bool runtimeAccessValidationEnabled_ = true;
     WorkerPoolConfig workerPoolConfig_{};

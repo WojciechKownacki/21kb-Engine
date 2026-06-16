@@ -6,6 +6,7 @@
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "engine/scene/SceneMode.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "scene/components/SceneComponentRegistry.hpp"
 #include "scene/components/SceneComponentStorage.hpp"
@@ -43,6 +44,7 @@ public:
     SceneComponentStorage componentStorage;
     ScenePrefabRegistry prefabs;
     ScenePrefabInstanceRegistry prefabInstances;
+    SceneMode mode = SceneMode::Runtime;
     kb::assets::AssetManager assets;
     kb::input::InputSubsystem inputSubsystem;
     SceneHistoryStack undoHistory;
