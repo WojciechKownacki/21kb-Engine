@@ -19,7 +19,7 @@ public:
     [[nodiscard]] static WorldRegistrySet* Registries(World& world) noexcept;
     [[nodiscard]] static const WorldRegistrySet* Registries(const World& world) noexcept;
 
-    [[nodiscard]] static const void* TryGetComponent(const World& world, Entity entity, ComponentId componentId) noexcept;
+    [[nodiscard]] static const void* TryGetComponent(const World& world, Entity entity, ComponentId componentId);
     static void SetComponent(World& world, Entity entity, ComponentId componentId, std::size_t size, const void* component);
 };
 

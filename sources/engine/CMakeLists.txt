@@ -35,6 +35,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/Entity.hpp
     include/engine/ecs/Kernel.hpp
     include/engine/ecs/KernelVectorMath.hpp
+    include/engine/ecs/MutableComponentBorrowLocks.hpp
     include/engine/ecs/NativeArchetypeStorage.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
@@ -47,6 +48,8 @@ add_library(kb_engine STATIC
     include/engine/ecs/QueryIteration.inl
     include/engine/ecs/QueryLifecycle.inl
     include/engine/ecs/QuerySystem.hpp
+    include/engine/ecs/RuntimeAccessValidator.hpp
+    include/engine/ecs/StructuralChangeValidator.hpp
     include/engine/ecs/System.hpp
     include/engine/ecs/SystemAccess.hpp
     include/engine/ecs/SystemAccess.inl
@@ -265,12 +268,15 @@ add_library(kb_engine STATIC
     src/ecs/EntityNameReader.cpp
     src/ecs/HierarchyRelationService.cpp
     src/ecs/HierarchyChildrenCollector.cpp
+    src/ecs/MutableComponentBorrowLocks.cpp
     src/ecs/NativeArchetypeStorage.cpp
     src/ecs/QueryFilter.cpp
     src/ecs/QueryState.cpp
     src/ecs/QueryStateFactory.cpp
     src/ecs/query/QueryPlan.cpp
     src/ecs/query/QueryTableBatchDispatcher.cpp
+    src/ecs/RuntimeAccessValidator.cpp
+    src/ecs/StructuralChangeValidator.cpp
     src/ecs/RelationStorage.cpp
     src/ecs/RelationTypeRegistry.cpp
     src/ecs/SnapshotEntityIndex.cpp

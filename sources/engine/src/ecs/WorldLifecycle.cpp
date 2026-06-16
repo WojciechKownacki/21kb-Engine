@@ -1,5 +1,7 @@
 #include "engine/ecs/World.hpp"
 
+#include "engine/ecs/MutableComponentBorrowLocks.hpp"
+#include "engine/ecs/StructuralChangeValidator.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
 
 #include <flecs.h>
@@ -14,7 +16,9 @@ World::World(WorldConfig config)
     : world_(ecs_init())
     , config_(config)
     , registries_(std::make_unique<WorldRegistrySet>())
-    , nativeStorage_(std::make_unique<NativeArchetypeStorage>(config)) {
+    , nativeStorage_(std::make_unique<NativeArchetypeStorage>(config))
+    , mutableComponentBorrowLocks_(std::make_unique<MutableComponentBorrowLocks>())
+    , structuralChangeValidator_(std::make_unique<StructuralChangeValidator>()) {
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
     }
@@ -29,6 +33,8 @@ World::World(World&& other) noexcept
     , config_(other.config_)
     , registries_(std::move(other.registries_))
     , nativeStorage_(std::move(other.nativeStorage_))
+    , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
+    , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
     , nextEntityId_(std::exchange(other.nextEntityId_, 1'000'000)) {}
 
 World& World::operator=(World&& other) noexcept {
@@ -38,6 +44,8 @@ World& World::operator=(World&& other) noexcept {
         config_ = other.config_;
         registries_ = std::move(other.registries_);
         nativeStorage_ = std::move(other.nativeStorage_);
+        mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
+        structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
         nextEntityId_ = std::exchange(other.nextEntityId_, 1'000'000);
     }
     return *this;
@@ -51,6 +59,10 @@ void World::Reset() noexcept {
     if (registries_ != nullptr) {
         registries_->Clear();
     }
+    if (mutableComponentBorrowLocks_ != nullptr) {
+        mutableComponentBorrowLocks_->Clear();
+    }
+    structuralChangeValidator_.reset();
     nativeStorage_.reset();
 }
 
