@@ -1,8 +1,38 @@
 #include "TestSuites.hpp"
 
 #include <cstdlib>
+#include <string_view>
 
-int main() {
+namespace {
+
+bool RunSuite(std::string_view suite) {
+    if (suite == "assets") {
+        kb::tests::RunAssetRuntimeTests();
+    } else if (suite == "ecs") {
+        kb::tests::RunEcsRuntimeTests();
+    } else if (suite == "scene-hierarchy") {
+        kb::tests::RunSceneHierarchyTests();
+    } else if (suite == "scene-system") {
+        kb::tests::RunSceneSystemTests();
+    } else if (suite == "scene-prefab") {
+        kb::tests::RunScenePrefabTests();
+    } else if (suite == "project-scene") {
+        kb::tests::RunProjectSceneTests();
+    } else if (suite == "script") {
+        kb::tests::RunScriptRuntimeTests();
+    } else if (suite == "visual-graph") {
+        kb::tests::RunVisualGraphTests();
+    } else if (suite == "input") {
+        kb::tests::RunInputTests();
+    } else if (suite == "engine-module") {
+        kb::tests::RunEngineModuleTests();
+    } else {
+        return false;
+    }
+    return true;
+}
+
+void RunAllSuites() {
     kb::tests::RunAssetRuntimeTests();
     kb::tests::RunEcsRuntimeTests();
     kb::tests::RunSceneHierarchyTests();
@@ -13,5 +43,21 @@ int main() {
     kb::tests::RunVisualGraphTests();
     kb::tests::RunInputTests();
     kb::tests::RunEngineModuleTests();
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc <= 1) {
+        RunAllSuites();
+        return EXIT_SUCCESS;
+    }
+
+    for (int index = 1; index < argc; ++index) {
+        if (!RunSuite(argv[index])) {
+            return EXIT_FAILURE;
+        }
+    }
+
     return EXIT_SUCCESS;
 }

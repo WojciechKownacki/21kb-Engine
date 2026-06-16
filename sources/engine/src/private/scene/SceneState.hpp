@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetManager.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/scene/SceneEntity.hpp"
@@ -14,8 +15,10 @@
 #include "scene/systems/SceneSystemScheduler.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::audio {
 
@@ -57,6 +60,13 @@ public:
     std::unordered_map<SceneEntity::IdType, FixedTransformSample> fixedTransformSamples;
     std::unordered_map<SceneEntity::IdType, TransformComponent> fixedTransformStepStart;
     std::unordered_map<SceneEntity::IdType, std::uint64_t> hierarchyOrder;
+    std::vector<SceneEntity> hierarchyRoots;
+    std::unordered_map<SceneEntity::IdType, SceneEntity> hierarchyParents;
+    std::unordered_map<SceneEntity::IdType, std::vector<SceneEntity>> hierarchyChildren;
+    std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
+    std::unordered_map<SceneEntity::IdType, bool> transformDirtyScratch;
+    std::unordered_map<SceneEntity::IdType, TransformComponent> transformWorldScratch;
+    std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;
     bool basicLightingEnabled = false;

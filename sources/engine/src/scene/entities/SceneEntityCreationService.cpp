@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <utility>
 
@@ -24,6 +25,7 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
     SceneState& state = SceneAccess::State(scene);
     kb::ecs::Entity entity = desc.name.empty() ? state.world.CreateEntity() : state.world.CreateEntity(desc.name);
     state.hierarchyOrder[entity.Id()] = state.nextHierarchyOrder++;
+    SceneHierarchyCache::AddRoot(state, entity);
     state.componentStorage.SetDefaults(entity, desc.transform, desc.visibility);
 
     if (desc.parent.EntityHandle().IsValid()) {

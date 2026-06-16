@@ -123,6 +123,67 @@ void RunHierarchyCreationOrderSurvivesDeletionTest() {
     kb::tests::Require(roots[1] == third.Entity(), "New root should be appended at the bottom after deletion");
 }
 
+void RunHierarchyNoOpParentingKeepsSiblingOrderTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
+    const kb::scene::SceneObject firstChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "First Child", .parent = parent });
+    const kb::scene::SceneObject secondChild = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Second Child", .parent = parent });
+
+    kb::tests::Require(!scene.Hierarchy().SetParent(firstChild, parent), "Reparenting to the current parent should be reported as a no-op");
+
+    const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(parent.Entity());
+    kb::tests::Require(children.size() == 2, "No-op reparent should not change child count");
+    kb::tests::Require(children[0] == firstChild.Entity(), "No-op reparent should keep first child before later siblings");
+    kb::tests::Require(children[1] == secondChild.Entity(), "No-op reparent should keep second child after earlier siblings");
+}
+
+void RunTransformTopologicalBatchMassParentingTest() {
+    kb::scene::Scene scene;
+    constexpr std::size_t kRootCount = 160U;
+
+    std::vector<kb::scene::SceneObject> roots;
+    std::vector<kb::scene::SceneObject> children;
+    roots.reserve(kRootCount);
+    children.reserve(kRootCount);
+
+    for (std::size_t index = 0; index < kRootCount; ++index) {
+        kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Root",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(index), 0.0F, 0.0F },
+            },
+        });
+        kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Child",
+            .parent = root,
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+            },
+        });
+        roots.push_back(root);
+        children.push_back(child);
+    }
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.x, 7.0F), "Topological transform batch did not compose child X");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.y, 1.0F), "Topological transform batch did not compose child Y");
+
+    kb::scene::SceneObject batchParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Batch Parent",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 100.0F, 0.0F, 0.0F },
+        },
+    });
+    for (std::size_t index = 0; index < kRootCount / 2U; ++index) {
+        kb::tests::Require(scene.Hierarchy().SetParent(roots[index], batchParent), "Mass reparent failed");
+    }
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.x, 107.0F), "Mass reparent did not propagate parent dirty transform");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.y, 1.0F), "Mass reparent changed child local Y unexpectedly");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[120]).worldPosition.x, 120.0F), "Independent subtree was dirtied by unrelated reparent");
+}
+
 void RunSceneBatchDuplicateTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Parent" });
@@ -185,6 +246,8 @@ void RunSceneHierarchyTests() {
     RunParentChildrenOwnershipTest();
     RunHierarchyStableCreationOrderTest();
     RunHierarchyCreationOrderSurvivesDeletionTest();
+    RunHierarchyNoOpParentingKeepsSiblingOrderTest();
+    RunTransformTopologicalBatchMassParentingTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
 }
