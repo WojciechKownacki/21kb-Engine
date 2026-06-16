@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace kb::scene {
@@ -10,7 +11,7 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
     }
 
     const std::uint64_t id = nextId_++;
-    records_.emplace(
+    auto [iterator, inserted] = records_.emplace(
         id,
         ScenePrefabInstanceRecord{
             .prefab = prefab,
@@ -18,7 +19,11 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
             .objects = std::move(objects),
             .resolvedPrefab = std::move(resolvedPrefab),
         });
-    return ScenePrefabInstanceHandle{ id };
+    const ScenePrefabInstanceHandle handle{ id };
+    if (inserted) {
+        IndexRecord(handle, iterator->second);
+    }
+    return handle;
 }
 
 bool ScenePrefabInstanceRegistry::Contains(ScenePrefabInstanceHandle handle) const noexcept {
@@ -48,12 +53,8 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindRootInstance(SceneObj
         return {};
     }
 
-    for (const auto& [id, record] : records_) {
-        if (!record.objects.empty() && record.objects.front().Entity() == object.Entity()) {
-            return ScenePrefabInstanceHandle{ id };
-        }
-    }
-    return {};
+    const auto iterator = rootIndex_.find(object.Entity().Id());
+    return iterator == rootIndex_.end() ? ScenePrefabInstanceHandle{} : iterator->second;
 }
 
 ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept {
@@ -62,15 +63,12 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::FindContainingInstance(Sc
         return {};
     }
 
-    for (const auto& [id, record] : records_) {
-        for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(record.objects.size()); ++index) {
-            if (record.objects[index].Entity() == object.Entity()) {
-                nodeIndex = index;
-                return ScenePrefabInstanceHandle{ id };
-            }
-        }
+    const auto iterator = objectIndex_.find(object.Entity().Id());
+    if (iterator == objectIndex_.end()) {
+        return {};
     }
-    return {};
+    nodeIndex = iterator->second.nodeIndex;
+    return iterator->second.instance;
 }
 
 std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::Handles() const {
@@ -84,33 +82,108 @@ std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::Handles() co
 }
 
 std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::HandlesForPrefab(ScenePrefabHandle prefab) const {
-    std::vector<ScenePrefabInstanceHandle> handles;
     if (!prefab.IsValid()) {
-        return handles;
+        return {};
     }
 
-    for (const auto& [id, record] : records_) {
-        if (record.prefab == prefab) {
-            handles.push_back(ScenePrefabInstanceHandle{ id });
-        }
-    }
-    return handles;
+    const auto iterator = prefabIndex_.find(prefab);
+    return iterator == prefabIndex_.end() ? std::vector<ScenePrefabInstanceHandle>{} : iterator->second;
 }
 
 std::size_t ScenePrefabInstanceRegistry::Count() const noexcept {
     return records_.size();
 }
 
+void ScenePrefabInstanceRegistry::ReindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> oldObjects) noexcept {
+    ScenePrefabInstanceRecord* record = FindMutable(handle);
+    if (record == nullptr) {
+        return;
+    }
+
+    UnindexObjects(handle, oldObjects);
+    IndexObjects(handle, record->objects);
+}
+
 bool ScenePrefabInstanceRegistry::Remove(ScenePrefabInstanceHandle handle) noexcept {
     if (!handle.IsValid()) {
         return false;
     }
-    return records_.erase(handle.id_) > 0U;
+    const auto iterator = records_.find(handle.id_);
+    if (iterator == records_.end()) {
+        return false;
+    }
+
+    RemoveFromPrefabIndex(iterator->second.prefab, handle);
+    UnindexObjects(handle, iterator->second.objects);
+    records_.erase(iterator);
+    return true;
 }
 
 void ScenePrefabInstanceRegistry::Clear() noexcept {
     records_.clear();
+    prefabIndex_.clear();
+    rootIndex_.clear();
+    objectIndex_.clear();
     nextId_ = 1;
+}
+
+void ScenePrefabInstanceRegistry::IndexRecord(ScenePrefabInstanceHandle handle, const ScenePrefabInstanceRecord& record) {
+    prefabIndex_[record.prefab].push_back(handle);
+    IndexObjects(handle, record.objects);
+}
+
+void ScenePrefabInstanceRegistry::IndexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) {
+    if (!handle.IsValid()) {
+        return;
+    }
+
+    if (!objects.empty() && objects.front().IsValid()) {
+        rootIndex_[objects.front().Entity().Id()] = handle;
+    }
+
+    for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(objects.size()); ++nodeIndex) {
+        const SceneObject object = objects[nodeIndex];
+        if (object.IsValid()) {
+            objectIndex_[object.Entity().Id()] = ObjectIndexEntry{
+                .instance = handle,
+                .nodeIndex = nodeIndex,
+            };
+        }
+    }
+}
+
+void ScenePrefabInstanceRegistry::UnindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept {
+    if (!objects.empty() && objects.front().IsValid()) {
+        const auto rootIterator = rootIndex_.find(objects.front().Entity().Id());
+        if (rootIterator != rootIndex_.end() && rootIterator->second == handle) {
+            rootIndex_.erase(rootIterator);
+        }
+    }
+
+    for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(objects.size()); ++nodeIndex) {
+        const SceneObject object = objects[nodeIndex];
+        if (!object.IsValid()) {
+            continue;
+        }
+
+        const auto objectIterator = objectIndex_.find(object.Entity().Id());
+        if (objectIterator != objectIndex_.end() && objectIterator->second.instance == handle) {
+            objectIndex_.erase(objectIterator);
+        }
+    }
+}
+
+void ScenePrefabInstanceRegistry::RemoveFromPrefabIndex(ScenePrefabHandle prefab, ScenePrefabInstanceHandle handle) noexcept {
+    const auto iterator = prefabIndex_.find(prefab);
+    if (iterator == prefabIndex_.end()) {
+        return;
+    }
+
+    std::vector<ScenePrefabInstanceHandle>& handles = iterator->second;
+    handles.erase(std::remove(handles.begin(), handles.end(), handle), handles.end());
+    if (handles.empty()) {
+        prefabIndex_.erase(iterator);
+    }
 }
 
 } // namespace kb::scene

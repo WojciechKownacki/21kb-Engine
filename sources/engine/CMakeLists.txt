@@ -451,6 +451,7 @@ add_library(kb_engine STATIC
     src/scene/prefab/ScenePrefab.cpp
     src/scene/prefab/ScenePrefabAppliedPropertyBuilder.cpp
     src/scene/prefab/ScenePrefabAssetFacade.cpp
+    src/scene/prefab/ScenePrefabBakedData.cpp
     src/scene/prefab/ScenePrefabCameraOverrideReporter.cpp
     src/scene/prefab/ScenePrefabBulkInstantiationService.cpp
     src/scene/prefab/ScenePrefabCaptureFacade.cpp
@@ -679,6 +680,7 @@ add_library(kb_engine STATIC
     src/private/scene/document/SceneDocumentCaptureService.hpp
     src/private/scene/prefab/ScenePrefabAppliedPropertyBuilder.hpp
     src/private/scene/prefab/ScenePrefabAssetFacade.hpp
+    src/private/scene/prefab/ScenePrefabBakedData.hpp
     src/private/scene/prefab/ScenePrefabCameraOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabCaptureFacade.hpp
     src/private/scene/prefab/ScenePrefabCaptureNodeBuilder.hpp

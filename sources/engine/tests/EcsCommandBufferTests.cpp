@@ -161,6 +161,42 @@ void RunCommandBufferBulkCreateSameArchetypeTest() {
     kb::tests::Require(counters.visited == static_cast<int>(positions.size()), "ECS command buffer bulk create produced unexpected query results");
 }
 
+void RunCommandBufferRuntimeBulkCreateArchetypeTest() {
+    kb::ecs::World world;
+    kb::ecs::CommandBuffer buffer{ 1 };
+
+    std::vector<EcsPosition> positions{
+        EcsPosition{ .x = 1.0F, .y = 2.0F },
+        EcsPosition{ .x = 3.0F, .y = 4.0F },
+        EcsPosition{ .x = 5.0F, .y = 6.0F },
+    };
+    std::vector<EcsVelocity> velocities{
+        EcsVelocity{ .x = 10.0F, .y = 20.0F },
+        EcsVelocity{ .x = 30.0F, .y = 40.0F },
+        EcsVelocity{ .x = 50.0F, .y = 60.0F },
+    };
+    std::vector<kb::ecs::CommandBuffer::BulkComponentView> components{
+        kb::ecs::CommandBuffer::MakeBulkComponentView<EcsPosition>(std::span<const EcsPosition>{ positions }),
+        kb::ecs::CommandBuffer::MakeBulkComponentView<EcsVelocity>(std::span<const EcsVelocity>{ velocities }),
+    };
+
+    std::vector<kb::ecs::CommandEntity> entities = buffer.Worker(0).CreateEntities(positions.size(), std::span<const kb::ecs::CommandBuffer::BulkComponentView>{ components });
+    kb::tests::Require(buffer.CommandCount() == 1, "ECS command buffer runtime bulk create did not record one archetype command");
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.Playback(world);
+    const kb::ecs::ComponentId positionId = world.Component<EcsPosition>();
+    const kb::ecs::ComponentId velocityId = world.Component<EcsVelocity>();
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const kb::ecs::Entity entity = result.Resolve(entities[index]);
+        const EcsPosition* position = world.TryGet<EcsPosition>(entity);
+        const EcsVelocity* velocity = world.TryGet<EcsVelocity>(entity);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "ECS command buffer runtime bulk create did not create the requested archetype");
+        kb::tests::Require(world.NativeStorage().HasComponent(entity, positionId) && world.NativeStorage().HasComponent(entity, velocityId), "ECS command buffer runtime bulk create did not mirror native components");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, positions[index].x), "ECS command buffer runtime bulk create lost position data");
+        kb::tests::Require(kb::tests::NearlyEqual(velocity->x, velocities[index].x), "ECS command buffer runtime bulk create lost velocity data");
+    }
+}
+
 void RunCommandBufferBulkComponentMutationTest() {
     kb::ecs::World world;
     std::vector<kb::ecs::Entity> existingEntities;
@@ -361,6 +397,7 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferDeterministicPlaybackTest();
     RunCommandBufferStructuralChangesTest();
     RunCommandBufferBulkCreateSameArchetypeTest();
+    RunCommandBufferRuntimeBulkCreateArchetypeTest();
     RunCommandBufferBulkComponentMutationTest();
     RunCommandBufferDeferredDestroySyncPointTest();
     RunCommandBufferNestedCreateDestroyFromJobsTest();
