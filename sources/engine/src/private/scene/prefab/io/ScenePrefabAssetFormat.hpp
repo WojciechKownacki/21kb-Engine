@@ -23,6 +23,7 @@ struct ScenePrefabAssetFormat {
     static constexpr std::string_view OverrideMarker = "override";
     static constexpr std::string_view EndOverrideMarker = "endoverride";
     static constexpr std::string_view OverrideNodeKey = "node";
+    static constexpr std::string_view OverrideNodeIdKey = "nodeId";
     static constexpr std::string_view OverridePropertyPathKey = "propertyPath";
     static constexpr std::string_view OverrideValueKey = "value";
     static constexpr std::string_view OverrideObjectReferenceKey = "objectReference";
@@ -31,6 +32,7 @@ struct ScenePrefabAssetFormat {
     static constexpr std::string_view NestedOverrideCountKey = "nestedOverrideCount";
     static constexpr std::string_view NestedOverridePrefix = "nestedOverride.";
     static constexpr std::string_view NodesKey = "nodes";
+    static constexpr std::string_view NodeStableIdKey = "id";
     static constexpr std::string_view ParentKey = "parent";
     static constexpr std::string_view LocalPositionKey = "localPosition";
     static constexpr std::string_view LocalRotationKey = "localRotation";

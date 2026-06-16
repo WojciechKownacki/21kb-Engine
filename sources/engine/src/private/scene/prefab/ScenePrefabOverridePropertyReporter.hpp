@@ -15,7 +15,15 @@ class ScenePrefabOverridePropertyReporter {
 public:
     ScenePrefabOverridePropertyReporter() = delete;
 
-    static void Add(ScenePrefabOverrideReport& report, std::uint32_t nodeIndex, SceneObject target, std::string propertyPath, std::string value, ScenePrefabOverrideFlag flag, SceneObject objectReference = {});
+    static void Add(
+        ScenePrefabOverrideReport& report,
+        std::uint32_t nodeIndex,
+        SceneObject target,
+        std::string propertyPath,
+        std::string value,
+        ScenePrefabOverrideFlag flag,
+        SceneObject objectReference = {},
+        std::uint64_t nodeId = 0);
     static void AppendChangedProperties(Scene& scene, const ScenePrefabNodeDesc& node, SceneObject expectedParent, std::uint32_t nodeIndex, SceneObject object, ScenePrefabOverrideReport& report);
 };
 

@@ -43,6 +43,9 @@ bool ScenePrefabVariantOverrideService::ApplyProperty(Scene& scene, ScenePrefabR
     if (!ScenePrefabAppliedPropertyBuilder::Build(scene, nodeIndex, object, propertyPath, property)) {
         return false;
     }
+    if (const ScenePrefabNodeDesc* node = instance.resolvedPrefab.TryGetNode(nodeIndex); node != nullptr) {
+        property.nodeId = node->stableId;
+    }
     if (!registry.UpsertVariantOverride(instance.prefab, std::move(property))) {
         return false;
     }

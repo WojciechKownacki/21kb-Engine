@@ -12,7 +12,7 @@ class ScenePrefabAssetOverrideReader {
 public:
     ScenePrefabAssetOverrideReader() = delete;
 
-    [[nodiscard]] static bool Read(std::istream& input, std::size_t overrideCount, std::vector<ScenePrefabPropertyOverride>& output);
+    [[nodiscard]] static bool Read(std::istream& input, std::size_t overrideCount, std::vector<ScenePrefabPropertyOverride>& output, bool* missingOverrideNodeIds = nullptr);
 };
 
 } // namespace kb::scene
