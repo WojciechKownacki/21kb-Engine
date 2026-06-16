@@ -98,6 +98,53 @@ std::vector<CommandEntity> CommandBuffer::WorkerBuffer::CreateEntities(std::size
     return entities;
 }
 
+std::vector<CommandEntity> CommandBuffer::WorkerBuffer::CreateEntities(std::size_t count, std::span<const BulkComponentView> components) {
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (components.empty()) {
+        return CreateEntities(count);
+    }
+
+    for (const BulkComponentView& component : components) {
+        if (component.registerComponent == nullptr || component.componentSize == 0) {
+            throw std::invalid_argument("ECS command buffer runtime bulk create component is incomplete");
+        }
+        if (component.componentCount != count) {
+            throw std::invalid_argument("ECS command buffer runtime bulk create component counts must match entity count");
+        }
+        if (count != 0 && component.data == nullptr) {
+            throw std::invalid_argument("ECS command buffer runtime bulk create component payload is null");
+        }
+        if (component.componentSize != 0 && count > std::numeric_limits<std::size_t>::max() / component.componentSize) {
+            throw std::length_error("ECS command buffer runtime bulk create component payload exceeds addressable size");
+        }
+    }
+
+    std::vector<CommandEntity> entities = owner_->AllocateDeferredEntities(workerIndex_, count);
+    if (count == 0) {
+        return entities;
+    }
+
+    Command command;
+    command.kind = CommandKind::CreateEntities;
+    command.first = entities.front();
+    command.count = count;
+    command.bulkComponents.reserve(components.size());
+    for (const BulkComponentView& componentView : components) {
+        BulkComponentCommand component;
+        component.registerComponent = componentView.registerComponent;
+        component.componentSize = componentView.componentSize;
+        component.bytes.resize(componentView.componentSize * componentView.componentCount);
+        const auto* source = static_cast<const std::byte*>(componentView.data);
+        std::copy(source, source + component.bytes.size(), component.bytes.begin());
+        command.bulkComponents.push_back(std::move(component));
+    }
+
+    owner_->Push(workerIndex_, std::move(command));
+    return entities;
+}
+
 void CommandBuffer::WorkerBuffer::DestroyEntity(CommandEntity entity) {
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
