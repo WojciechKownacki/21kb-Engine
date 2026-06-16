@@ -4,8 +4,10 @@
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
+#include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -23,6 +25,7 @@ namespace {
 constexpr float kGizmoTargetPixels = 90.0F;
 constexpr float kGizmoAxisLength = 1.16F;
 constexpr float kMinGizmoDepth = 0.25F;
+constexpr std::size_t kEcsOverlayTopSystemCount = 4U;
 
 struct SceneViewportRenderProfileDesc {
     kb::render::SceneRenderMeshPassMode meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueOnly;
@@ -162,6 +165,47 @@ struct SceneViewportRenderProfileDesc {
     return ids;
 }
 
+[[nodiscard]] SceneViewportToolbarEcsStats BuildEcsStats(const EditorSceneContext& sceneContext) {
+    const kb::ecs::SystemSchedulerTrace& trace = sceneContext.Scene().Runtime().LastEcsProfilerTrace();
+    SceneViewportToolbarEcsStats stats{
+        .frameIndex = trace.frameCounters.frameIndex,
+        .frameDurationNanoseconds = trace.frameCounters.frameDurationNanoseconds,
+        .cpuTimeNanoseconds = trace.frameCounters.cpuTimeNanoseconds,
+        .jobsCount = trace.frameCounters.jobsCount,
+        .entitiesProcessed = trace.frameCounters.entitiesProcessed,
+        .bytesTouched = trace.frameCounters.bytesTouched,
+        .systemCount = static_cast<std::uint64_t>(trace.frameCounters.systemCount),
+        .workerCount = static_cast<std::uint64_t>(trace.frameCounters.workerCount),
+        .valid = sceneContext.Scene().Runtime().EcsProfilerEnabled() && trace.frameCounters.frameDurationNanoseconds > 0U,
+    };
+
+    stats.topSystems.reserve(std::min(kEcsOverlayTopSystemCount, trace.systemCounters.size()));
+    std::vector<const kb::ecs::SystemSchedulerSystemCounters*> sortedSystems;
+    sortedSystems.reserve(trace.systemCounters.size());
+    for (const kb::ecs::SystemSchedulerSystemCounters& system : trace.systemCounters) {
+        sortedSystems.push_back(&system);
+    }
+    std::sort(sortedSystems.begin(), sortedSystems.end(), [](const kb::ecs::SystemSchedulerSystemCounters* lhs, const kb::ecs::SystemSchedulerSystemCounters* rhs) {
+        if (lhs->cpuTimeNanoseconds != rhs->cpuTimeNanoseconds) {
+            return lhs->cpuTimeNanoseconds > rhs->cpuTimeNanoseconds;
+        }
+        return lhs->systemName < rhs->systemName;
+    });
+
+    const std::size_t count = std::min(kEcsOverlayTopSystemCount, sortedSystems.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const kb::ecs::SystemSchedulerSystemCounters& system = *sortedSystems[index];
+        stats.topSystems.push_back(SceneViewportToolbarEcsSystemStat{
+            .name = system.systemName,
+            .cpuTimeNanoseconds = system.cpuTimeNanoseconds,
+            .jobsCount = system.jobsCount,
+            .entitiesProcessed = system.entitiesProcessed,
+            .bytesTouched = system.bytesTouched,
+        });
+    }
+    return stats;
+}
+
 [[nodiscard]] RECT SelectionBoxLocalRect(const EditorSceneViewportBoxSelectionState& selection) noexcept {
     RECT rect{selection.start.x, selection.start.y, selection.current.x, selection.current.y};
     if (rect.left > rect.right) {
@@ -283,6 +327,7 @@ void ScenePanelContentRenderer::Paint(
     EditorSceneBgfxViewport* sceneViewport,
     HWND sceneViewportHost) const {
     const EditorViewportPreviewState& viewportState = sceneContext.ViewportPreview(panel.id);
+    SceneViewportToolbarRenderer::RecordEcsStats(BuildEcsStats(sceneContext));
     SceneViewportToolbarRenderer::Paint(dc, content, theme, viewportState);
 
     if (sceneViewport == nullptr) {

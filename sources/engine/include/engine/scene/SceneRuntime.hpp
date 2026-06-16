@@ -11,6 +11,7 @@
 namespace kb::ecs {
 
 class System;
+struct SystemSchedulerTrace;
 class World;
 
 } // namespace kb::ecs
@@ -35,6 +36,8 @@ public:
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
+    [[nodiscard]] bool EcsProfilerEnabled() const noexcept;
+    [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
 
@@ -53,6 +56,9 @@ public:
     [[nodiscard]] SceneRuntimeFixedStepSettings FixedStepSettings() const noexcept;
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
+    void SetEcsProfilerEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool EcsProfilerEnabled() const noexcept;
+    [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] bool Update(float deltaSeconds);
