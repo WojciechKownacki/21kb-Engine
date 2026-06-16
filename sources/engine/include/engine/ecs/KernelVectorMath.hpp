@@ -3,10 +3,45 @@
 #include "engine/ecs/Kernel.hpp"
 
 #include <array>
+#include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace kb::ecs {
+
+namespace detail {
+
+template <typename BackendTag>
+struct KernelFloatLaneAlignment {
+    static constexpr std::size_t Value = alignof(float);
+};
+
+template <>
+struct KernelFloatLaneAlignment<KernelSse2Tag> {
+    static constexpr std::size_t Value = 16U;
+};
+
+template <>
+struct KernelFloatLaneAlignment<KernelAvx2Tag> {
+    static constexpr std::size_t Value = 32U;
+};
+
+template <>
+struct KernelFloatLaneAlignment<KernelAvx512Tag> {
+    static constexpr std::size_t Value = 64U;
+};
+
+[[nodiscard]] inline bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
+    return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
+}
+
+} // namespace detail
+
+[[nodiscard]] inline bool IsKernelDataAligned(const void* pointer, std::size_t alignment) noexcept {
+    return detail::IsAlignedAddress(pointer, alignment);
+}
 
 template <typename BackendTag>
 class KernelLaneMask {
@@ -59,6 +94,7 @@ class KernelFloatLanes {
 public:
     using Backend = BackendTag;
     static constexpr std::size_t LaneCount = BackendTag::FloatLaneCount;
+    static constexpr std::size_t PreferredAlignment = detail::KernelFloatLaneAlignment<BackendTag>::Value;
 
     constexpr KernelFloatLanes() noexcept = default;
     explicit constexpr KernelFloatLanes(float value) noexcept {
@@ -78,7 +114,19 @@ public:
         return KernelFloatLanes{ value };
     }
 
+    [[nodiscard]] static bool IsAligned(const void* values) noexcept {
+        return detail::IsAlignedAddress(values, PreferredAlignment);
+    }
+
     [[nodiscard]] static KernelFloatLanes Load(const float* values) noexcept {
+        if (!IsAligned(values)) {
+            return LoadUnaligned(values);
+        }
+        return LoadAligned(values);
+    }
+
+    [[nodiscard]] static KernelFloatLanes LoadAligned(const float* values) noexcept {
+        assert(IsAligned(values) && "ECS kernel aligned load received unaligned data");
         KernelFloatLanes result;
         for (std::size_t lane = 0; lane < LaneCount; ++lane) {
             result.lanes_[lane] = values[lane];
@@ -86,10 +134,36 @@ public:
         return result;
     }
 
+    [[nodiscard]] static KernelFloatLanes LoadUnaligned(const void* values) noexcept {
+        KernelFloatLanes result;
+        const auto* bytes = static_cast<const std::byte*>(values);
+        for (std::size_t lane = 0; lane < LaneCount; ++lane) {
+            std::memcpy(&result.lanes_[lane], bytes + lane * sizeof(float), sizeof(float));
+        }
+        return result;
+    }
+
     [[nodiscard]] static KernelFloatLanes LoadPartial(const float* values, std::size_t count, float fill = 0.0F) noexcept {
+        if (!IsAligned(values)) {
+            return LoadUnalignedPartial(values, count, fill);
+        }
+        return LoadAlignedPartial(values, count, fill);
+    }
+
+    [[nodiscard]] static KernelFloatLanes LoadAlignedPartial(const float* values, std::size_t count, float fill = 0.0F) noexcept {
+        assert(IsAligned(values) && "ECS kernel aligned partial load received unaligned data");
         KernelFloatLanes result{ fill };
         for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
             result.lanes_[lane] = values[lane];
+        }
+        return result;
+    }
+
+    [[nodiscard]] static KernelFloatLanes LoadUnalignedPartial(const void* values, std::size_t count, float fill = 0.0F) noexcept {
+        KernelFloatLanes result{ fill };
+        const auto* bytes = static_cast<const std::byte*>(values);
+        for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
+            std::memcpy(&result.lanes_[lane], bytes + lane * sizeof(float), sizeof(float));
         }
         return result;
     }
@@ -101,6 +175,7 @@ public:
 
     template <typename Component>
     [[nodiscard]] static KernelFloatLanes LoadMemberPartial(const Component* components, std::size_t count, float Component::*member, float fill = 0.0F) noexcept {
+        assert((count == 0U || detail::IsAlignedAddress(components, alignof(Component))) && "ECS kernel component member load received unaligned typed component data");
         KernelFloatLanes result{ fill };
         for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
             result.lanes_[lane] = components[lane].*member;
@@ -109,14 +184,46 @@ public:
     }
 
     void Store(float* values) const noexcept {
+        if (!IsAligned(values)) {
+            StoreUnaligned(values);
+            return;
+        }
+        StoreAligned(values);
+    }
+
+    void StoreAligned(float* values) const noexcept {
+        assert(IsAligned(values) && "ECS kernel aligned store received unaligned data");
         for (std::size_t lane = 0; lane < LaneCount; ++lane) {
             values[lane] = lanes_[lane];
         }
     }
 
+    void StoreUnaligned(void* values) const noexcept {
+        auto* bytes = static_cast<std::byte*>(values);
+        for (std::size_t lane = 0; lane < LaneCount; ++lane) {
+            std::memcpy(bytes + lane * sizeof(float), &lanes_[lane], sizeof(float));
+        }
+    }
+
     void StorePartial(float* values, std::size_t count) const noexcept {
+        if (!IsAligned(values)) {
+            StoreUnalignedPartial(values, count);
+            return;
+        }
+        StoreAlignedPartial(values, count);
+    }
+
+    void StoreAlignedPartial(float* values, std::size_t count) const noexcept {
+        assert(IsAligned(values) && "ECS kernel aligned partial store received unaligned data");
         for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
             values[lane] = lanes_[lane];
+        }
+    }
+
+    void StoreUnalignedPartial(void* values, std::size_t count) const noexcept {
+        auto* bytes = static_cast<std::byte*>(values);
+        for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
+            std::memcpy(bytes + lane * sizeof(float), &lanes_[lane], sizeof(float));
         }
     }
 
@@ -127,6 +234,7 @@ public:
 
     template <typename Component>
     void StoreMemberPartial(Component* components, std::size_t count, float Component::*member) const noexcept {
+        assert((count == 0U || detail::IsAlignedAddress(components, alignof(Component))) && "ECS kernel component member store received unaligned typed component data");
         for (std::size_t lane = 0; lane < LaneCount && lane < count; ++lane) {
             components[lane].*member = lanes_[lane];
         }
