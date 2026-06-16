@@ -26,19 +26,19 @@ template <typename T>
 void Set(Entity entity, const T& component);
 
 template <typename T>
-[[nodiscard]] bool Has(Entity entity) const noexcept;
+[[nodiscard]] bool Has(Entity entity) const;
 
 template <typename T>
-[[nodiscard]] const T* TryGet(Entity entity) const noexcept;
+[[nodiscard]] const T* TryGet(Entity entity) const;
 
 template <typename T>
-[[nodiscard]] T* TryGetMutable(Entity entity) noexcept;
+[[nodiscard]] T* TryGetMutable(Entity entity);
 
 template <typename T>
-void Remove(Entity entity) noexcept;
+void Remove(Entity entity);
 
 template <typename T>
-void MarkModified(Entity entity) noexcept;
+void MarkModified(Entity entity);
 
 template <typename T>
 void ForEach(ConstComponentVisitor<T> visitor, void* context) const;

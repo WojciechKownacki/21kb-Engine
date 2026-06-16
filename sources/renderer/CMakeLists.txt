@@ -422,7 +422,6 @@ add_custom_command(
         -P "${CMAKE_SOURCE_DIR}/CMake/ValidateBgfxShaderManifest.cmake"
     COMMAND ${CMAKE_COMMAND} -E touch "${KB_RENDERER_SHADER_MANIFEST_STAMP}"
     DEPENDS
-        "${KB_RENDERER_SHADER_STAGE_STAMP}"
         "${CMAKE_SOURCE_DIR}/CMake/ValidateBgfxShaderManifest.cmake"
     COMMENT "Validate bgfx shader manifest variants"
     VERBATIM
@@ -431,6 +430,7 @@ add_custom_command(
 add_custom_target(kb_renderer_shader_manifest ALL
     DEPENDS "${KB_RENDERER_SHADER_MANIFEST_STAMP}"
 )
+add_dependencies(kb_renderer_shader_manifest kb_renderer_shaders)
 
 add_dependencies(kb_renderer kb_renderer_shader_manifest)
 

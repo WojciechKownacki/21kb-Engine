@@ -61,12 +61,14 @@ struct KernelAvx512Tag {
 template <typename... Components>
 struct KernelInputComponents {
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS kernel input components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS kernel input components must be trivially destructible");
     static constexpr std::size_t Count = sizeof...(Components);
 };
 
 template <typename... Components>
 struct KernelOutputComponents {
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS kernel output components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS kernel output components must be trivially destructible");
     static constexpr std::size_t Count = sizeof...(Components);
 };
 
@@ -251,40 +253,6 @@ void InvokeKernelScalar(Kernel& kernel, Batch& batch) {
 }
 
 template <typename Kernel, typename Batch>
-void InvokeKernelWithPreference(Kernel& kernel, Batch& batch, KernelBackendPreference preference) {
-    static_assert(CanInvokeKernelScalar<Kernel, Batch>, "ECS kernels must provide a scalar KernelBatch fallback");
-
-    if (preference == KernelBackendPreference::Avx512 || preference == KernelBackendPreference::Auto) {
-        if constexpr (CanInvokeKernelAvx512<Kernel, Batch>) {
-            if (CpuSupportsAvx512()) {
-                std::invoke(kernel, batch, KernelAvx512Tag{});
-                return;
-            }
-        }
-    }
-
-    if (preference == KernelBackendPreference::Avx2 || preference == KernelBackendPreference::Auto) {
-        if constexpr (CanInvokeKernelAvx2<Kernel, Batch>) {
-            if (CpuSupportsAvx2()) {
-                std::invoke(kernel, batch, KernelAvx2Tag{});
-                return;
-            }
-        }
-    }
-
-    if (preference == KernelBackendPreference::Sse2 || preference == KernelBackendPreference::Auto) {
-        if constexpr (CanInvokeKernelSse2<Kernel, Batch>) {
-            if (CpuSupportsSse2()) {
-                std::invoke(kernel, batch, KernelSse2Tag{});
-                return;
-            }
-        }
-    }
-
-    InvokeKernelScalar(kernel, batch);
-}
-
-template <typename Kernel, typename Batch>
 [[nodiscard]] KernelBackend ResolveKernelBackend(KernelBackendPreference preference) noexcept {
     if (preference == KernelBackendPreference::Scalar) {
         return KernelBackend::Scalar;
@@ -302,6 +270,36 @@ template <typename Kernel, typename Batch>
         return KernelBackend::Sse2;
     }
     return KernelBackend::Scalar;
+}
+
+template <typename Kernel, typename Batch>
+void InvokeKernelWithBackend(Kernel& kernel, Batch& batch, KernelBackend backend) {
+    static_assert(CanInvokeKernelScalar<Kernel, Batch>, "ECS kernels must provide a scalar KernelBatch fallback");
+
+    switch (backend) {
+    case KernelBackend::Avx512:
+        if constexpr (CanInvokeKernelAvx512<Kernel, Batch>) {
+            std::invoke(kernel, batch, KernelAvx512Tag{});
+            return;
+        }
+        break;
+    case KernelBackend::Avx2:
+        if constexpr (CanInvokeKernelAvx2<Kernel, Batch>) {
+            std::invoke(kernel, batch, KernelAvx2Tag{});
+            return;
+        }
+        break;
+    case KernelBackend::Sse2:
+        if constexpr (CanInvokeKernelSse2<Kernel, Batch>) {
+            std::invoke(kernel, batch, KernelSse2Tag{});
+            return;
+        }
+        break;
+    case KernelBackend::Scalar:
+        break;
+    }
+
+    InvokeKernelScalar(kernel, batch);
 }
 
 } // namespace detail
@@ -425,6 +423,7 @@ public:
         , kernel_(std::move(kernel))
         , assets_(assets)
         , constants_(constants) {
+        ResolveBackend();
         Prepare();
     }
 
@@ -436,9 +435,7 @@ public:
     [[nodiscard]] bool IsValid() const noexcept { return query_.IsValid(); }
     [[nodiscard]] QueryExecutionSettings Settings() const noexcept { return settings_; }
     [[nodiscard]] KernelBackendPreference BackendPreference() const noexcept { return backendPreference_; }
-    [[nodiscard]] KernelBackend ResolvedBackend() const noexcept {
-        return detail::ResolveKernelBackend<KernelType, BatchType>(backendPreference_);
-    }
+    [[nodiscard]] KernelBackend ResolvedBackend() const noexcept { return resolvedBackend_; }
 
     void SetSettings(QueryExecutionSettings settings) {
         settings_ = settings;
@@ -447,11 +444,12 @@ public:
 
     void SetBackendPreference(KernelBackendPreference backendPreference) noexcept {
         backendPreference_ = backendPreference;
+        ResolveBackend();
     }
 
     void Prepare() {
         if (query_.IsValid()) {
-            query_.PrepareBatchExecution(settings_, scratch_);
+            query_.PrepareMutableBatchExecution(settings_, scratch_);
         }
     }
 
@@ -465,17 +463,147 @@ public:
 
     void operator()(MutableBatchType& queryBatch) {
         BatchType batch{ queryBatch, assets_, constants_ };
-        detail::InvokeKernelWithPreference(kernel_, batch, backendPreference_);
+        detail::InvokeKernelWithBackend(kernel_, batch, resolvedBackend_);
+    }
+
+private:
+    void ResolveBackend() noexcept {
+        resolvedBackend_ = detail::ResolveKernelBackend<KernelType, BatchType>(backendPreference_);
+    }
+
+    QueryType query_;
+    QueryExecutionSettings settings_{};
+    KernelBackendPreference backendPreference_ = KernelBackendPreference::Auto;
+    KernelBackend resolvedBackend_ = KernelBackend::Scalar;
+    KernelType kernel_;
+    AssetBindings assets_;
+    Constants constants_;
+    QueryBatchExecutionScratch scratch_;
+};
+
+template <typename Contract>
+class EditorKernelBinding {
+public:
+    using BatchType = KernelBatch<Contract>;
+    using Function = void (*)(BatchType& batch, void* context);
+
+    constexpr EditorKernelBinding() noexcept = default;
+
+    constexpr EditorKernelBinding(Function function, void* context = nullptr) noexcept
+        : function_(function)
+        , context_(context) {}
+
+    [[nodiscard]] bool IsBound() const noexcept { return function_ != nullptr; }
+    [[nodiscard]] Function BoundFunction() const noexcept { return function_; }
+    [[nodiscard]] void* Context() const noexcept { return context_; }
+
+    void Bind(Function function, void* context = nullptr) noexcept {
+        function_ = function;
+        context_ = context;
+    }
+
+    void Clear() noexcept {
+        function_ = nullptr;
+        context_ = nullptr;
+    }
+
+    [[nodiscard]] bool Invoke(BatchType& batch) const {
+        if (function_ == nullptr) {
+            return false;
+        }
+        function_(batch, context_);
+        return true;
+    }
+
+private:
+    Function function_ = nullptr;
+    void* context_ = nullptr;
+};
+
+template <typename Contract>
+using EditorKernelBindingPtr = std::shared_ptr<EditorKernelBinding<Contract>>;
+
+template <typename Contract>
+[[nodiscard]] EditorKernelBindingPtr<Contract> MakeEditorKernelBinding(
+    typename EditorKernelBinding<Contract>::Function function,
+    void* context = nullptr) {
+    return std::make_shared<EditorKernelBinding<Contract>>(function, context);
+}
+
+template <typename Contract>
+class EditorCompiledKernelQuery {
+public:
+    using QueryType = KernelQuery<Contract>;
+    using AssetBindings = KernelAssetBindings<Contract>;
+    using Constants = KernelConstants<Contract>;
+    using MutableBatchType = typename Contract::MutableBatchType;
+    using BatchType = KernelBatch<Contract>;
+    using Binding = EditorKernelBinding<Contract>;
+
+    EditorCompiledKernelQuery(
+        QueryType query,
+        QueryExecutionSettings settings,
+        EditorKernelBindingPtr<Contract> binding,
+        AssetBindings assets,
+        Constants constants) noexcept(std::is_nothrow_move_constructible_v<QueryType>)
+        : query_(std::move(query))
+        , settings_(settings)
+        , binding_(std::move(binding))
+        , assets_(assets)
+        , constants_(constants) {
+        Prepare();
+    }
+
+    EditorCompiledKernelQuery(const EditorCompiledKernelQuery&) = delete;
+    EditorCompiledKernelQuery& operator=(const EditorCompiledKernelQuery&) = delete;
+    EditorCompiledKernelQuery(EditorCompiledKernelQuery&&) noexcept = default;
+    EditorCompiledKernelQuery& operator=(EditorCompiledKernelQuery&&) noexcept = default;
+
+    [[nodiscard]] bool IsValid() const noexcept { return query_.IsValid() && HasKernelBinding(); }
+    [[nodiscard]] bool HasKernelBinding() const noexcept { return binding_ != nullptr && binding_->IsBound(); }
+    [[nodiscard]] QueryExecutionSettings Settings() const noexcept { return settings_; }
+    [[nodiscard]] EditorKernelBindingPtr<Contract> KernelBinding() const noexcept { return binding_; }
+
+    void SetSettings(QueryExecutionSettings settings) {
+        settings_ = settings;
+        Prepare();
+    }
+
+    void SetKernelBinding(EditorKernelBindingPtr<Contract> binding) noexcept {
+        binding_ = std::move(binding);
+    }
+
+    void Prepare() {
+        if (query_.IsValid()) {
+            query_.PrepareMutableBatchExecution(settings_, scratch_);
+        }
+    }
+
+    [[nodiscard]] bool Execute() {
+        if (!query_.IsValid() || !HasKernelBinding()) {
+            return false;
+        }
+
+        invocationFailed_ = false;
+        query_.ForEachMutableBatchKernel(settings_, *this, scratch_);
+        return !invocationFailed_;
+    }
+
+    void operator()(MutableBatchType& queryBatch) {
+        BatchType batch{ queryBatch, assets_, constants_ };
+        if (binding_ == nullptr || !binding_->Invoke(batch)) {
+            invocationFailed_ = true;
+        }
     }
 
 private:
     QueryType query_;
     QueryExecutionSettings settings_{};
-    KernelBackendPreference backendPreference_ = KernelBackendPreference::Auto;
-    KernelType kernel_;
+    EditorKernelBindingPtr<Contract> binding_;
     AssetBindings assets_;
     Constants constants_;
     QueryBatchExecutionScratch scratch_;
+    bool invocationFailed_ = false;
 };
 
 namespace detail {
@@ -503,6 +631,30 @@ struct CompiledKernelQueryFactory<
             assets,
             constants,
             backendPreference,
+        };
+    }
+};
+
+template <typename Contract>
+struct EditorCompiledKernelQueryFactory;
+
+template <typename... InputTypes, typename... OutputTypes, typename... AssetTypes, typename ConstantsType>
+struct EditorCompiledKernelQueryFactory<
+    KernelContract<KernelInputComponents<InputTypes...>, KernelOutputComponents<OutputTypes...>, KernelReadOnlyAssets<AssetTypes...>, ConstantsType>> {
+    using Contract = KernelContract<KernelInputComponents<InputTypes...>, KernelOutputComponents<OutputTypes...>, KernelReadOnlyAssets<AssetTypes...>, ConstantsType>;
+
+    [[nodiscard]] static EditorCompiledKernelQuery<Contract> Compile(
+        World& world,
+        QueryExecutionSettings settings,
+        EditorKernelBindingPtr<Contract> binding,
+        const KernelAssetBindings<Contract>& assets,
+        const KernelConstants<Contract>& constants) {
+        return EditorCompiledKernelQuery<Contract>{
+            world.CreateQuery<InputTypes..., OutputTypes...>(),
+            settings,
+            std::move(binding),
+            assets,
+            constants,
         };
     }
 };
@@ -594,6 +746,69 @@ template <typename Contract, typename Kernel>
     return CompileKernelQuery<Contract>(world, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants);
 }
 
+template <typename Contract>
+[[nodiscard]] EditorCompiledKernelQuery<Contract> CompileEditorKernelQuery(
+    KernelQuery<Contract> query,
+    QueryExecutionSettings settings,
+    EditorKernelBindingPtr<Contract> binding,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    return EditorCompiledKernelQuery<Contract>{
+        std::move(query),
+        settings,
+        std::move(binding),
+        assets,
+        constants,
+    };
+}
+
+template <typename Contract>
+[[nodiscard]] EditorCompiledKernelQuery<Contract> CompileEditorKernelQuery(
+    KernelQuery<Contract> query,
+    QueryExecutionSettings settings,
+    typename EditorKernelBinding<Contract>::Function function,
+    void* context,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    return CompileEditorKernelQuery<Contract>(
+        std::move(query),
+        settings,
+        MakeEditorKernelBinding<Contract>(function, context),
+        assets,
+        constants);
+}
+
+template <typename Contract>
+[[nodiscard]] EditorCompiledKernelQuery<Contract> CompileEditorKernelQuery(
+    World& world,
+    QueryExecutionSettings settings,
+    EditorKernelBindingPtr<Contract> binding,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    return detail::EditorCompiledKernelQueryFactory<Contract>::Compile(
+        world,
+        settings,
+        std::move(binding),
+        assets,
+        constants);
+}
+
+template <typename Contract>
+[[nodiscard]] EditorCompiledKernelQuery<Contract> CompileEditorKernelQuery(
+    World& world,
+    QueryExecutionSettings settings,
+    typename EditorKernelBinding<Contract>::Function function,
+    void* context,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    return CompileEditorKernelQuery<Contract>(
+        world,
+        settings,
+        MakeEditorKernelBinding<Contract>(function, context),
+        assets,
+        constants);
+}
+
 template <typename... Inputs, typename... Outputs, typename... Assets, typename Constants>
 [[nodiscard]] SystemAccess DeclareKernelAccess(
     World& world,
@@ -615,7 +830,8 @@ void ExecuteKernelScalar(
     QueryExecutionSettings settings,
     Kernel&& kernel,
     const KernelAssetBindings<Contract>& assets,
-    const KernelConstants<Contract>& constants) {
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
     if (!query.IsValid()) {
         return;
     }
@@ -637,7 +853,34 @@ void ExecuteKernelScalar(
         .assets = std::addressof(assets),
         .constants = std::addressof(constants),
     };
-    query.ForEachMutableBatchKernel(settings, invocation);
+    query.ForEachMutableBatchKernel(settings, invocation, scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelScalar(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    QueryBatchExecutionScratch scratch;
+    ExecuteKernelScalar<Contract>(
+        query,
+        settings,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelScalar(
+    KernelQuery<Contract>& query,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernelScalar<Contract>(query, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants, scratch);
 }
 
 template <typename Contract, typename Kernel>
@@ -656,7 +899,8 @@ void ExecuteKernel(
     KernelBackendPreference backendPreference,
     Kernel&& kernel,
     const KernelAssetBindings<Contract>& assets,
-    const KernelConstants<Contract>& constants) {
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
     if (!query.IsValid()) {
         return;
     }
@@ -669,11 +913,11 @@ void ExecuteKernel(
         KernelType* kernel = nullptr;
         const KernelAssetBindings<Contract>* assets = nullptr;
         const KernelConstants<Contract>* constants = nullptr;
-        KernelBackendPreference backendPreference = KernelBackendPreference::Auto;
+        KernelBackend backend = KernelBackend::Scalar;
 
         void operator()(typename Contract::MutableBatchType& queryBatch) {
             KernelBatch<Contract> batch{ queryBatch, *assets, *constants };
-            detail::InvokeKernelWithPreference(*kernel, batch, backendPreference);
+            detail::InvokeKernelWithBackend(*kernel, batch, backend);
         }
     };
 
@@ -681,9 +925,46 @@ void ExecuteKernel(
         .kernel = std::addressof(kernel),
         .assets = std::addressof(assets),
         .constants = std::addressof(constants),
-        .backendPreference = backendPreference,
+        .backend = detail::ResolveKernelBackend<KernelType, BatchType>(backendPreference),
     };
-    query.ForEachMutableBatchKernel(settings, invocation);
+    query.ForEachMutableBatchKernel(settings, invocation, scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernel(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    KernelBackendPreference backendPreference,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    QueryBatchExecutionScratch scratch;
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        backendPreference,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernel(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Auto,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
 }
 
 template <typename Contract, typename Kernel>
@@ -693,13 +974,24 @@ void ExecuteKernel(
     Kernel&& kernel,
     const KernelAssetBindings<Contract>& assets,
     const KernelConstants<Contract>& constants) {
+    QueryBatchExecutionScratch scratch;
     ExecuteKernel<Contract>(
         query,
         settings,
-        KernelBackendPreference::Auto,
         std::forward<Kernel>(kernel),
         assets,
-        constants);
+        constants,
+        scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernel(
+    KernelQuery<Contract>& query,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(query, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants, scratch);
 }
 
 template <typename Contract, typename Kernel>
@@ -709,6 +1001,24 @@ void ExecuteKernel(
     const KernelAssetBindings<Contract>& assets,
     const KernelConstants<Contract>& constants) {
     ExecuteKernel<Contract>(query, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelSse2(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Sse2,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
 }
 
 template <typename Contract, typename Kernel>
@@ -733,6 +1043,24 @@ void ExecuteKernelAvx2(
     QueryExecutionSettings settings,
     Kernel&& kernel,
     const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Avx2,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelAvx2(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
     const KernelConstants<Contract>& constants) {
     ExecuteKernel<Contract>(
         query,
@@ -741,6 +1069,24 @@ void ExecuteKernelAvx2(
         std::forward<Kernel>(kernel),
         assets,
         constants);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelAvx512(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Avx512,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
 }
 
 template <typename Contract, typename Kernel>

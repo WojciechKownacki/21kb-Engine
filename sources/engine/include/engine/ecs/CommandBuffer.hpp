@@ -211,6 +211,7 @@ template <typename... Components>
 std::vector<CommandEntity> CommandBuffer::WorkerBuffer::CreateEntities(std::span<const Components>... components) {
     static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component create requires at least one component span");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
@@ -241,6 +242,7 @@ std::vector<CommandEntity> CommandBuffer::WorkerBuffer::CreateEntities(std::span
 template <typename T>
 void CommandBuffer::WorkerBuffer::Set(CommandEntity entity, const T& component) {
     static_assert(std::is_trivially_copyable_v<T>, "ECS command buffer components must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<T>, "ECS command buffer components must be trivially destructible");
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
@@ -265,6 +267,7 @@ template <typename... Components>
 void CommandBuffer::WorkerBuffer::Set(std::span<const CommandEntity> entities, std::span<const Components>... components) {
     static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component set requires at least one component span");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
@@ -300,6 +303,7 @@ void CommandBuffer::WorkerBuffer::Set(std::span<const Entity> entities, std::spa
 template <typename T>
 void CommandBuffer::WorkerBuffer::Remove(CommandEntity entity) {
     static_assert(std::is_trivially_copyable_v<T>, "ECS command buffer components must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<T>, "ECS command buffer components must be trivially destructible");
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
@@ -390,6 +394,7 @@ void CommandBuffer::AppendBulkComponent(Command& command, std::span<const T> com
 template <typename T>
 void CommandBuffer::AppendBulkRemoveComponent(Command& command) {
     static_assert(std::is_trivially_copyable_v<T>, "ECS command buffer components must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<T>, "ECS command buffer components must be trivially destructible");
     BulkRemoveComponentCommand component;
     component.findComponent = &CommandBuffer::FindBulkComponent<T>;
     command.bulkRemoveComponents.push_back(component);

@@ -3,6 +3,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/System.hpp"
+#include "engine/ecs/RuntimeAccessValidator.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/World.hpp"
 
@@ -320,6 +321,64 @@ void RunWriteWriteConflictCreatesStageBoundaryTest() {
     scheduler.Shutdown(world);
 }
 
+void RunRuntimeAccessValidatorAllowsReadOnlyJobsTest() {
+    kb::ecs::World world;
+    kb::ecs::RuntimeAccessValidator validator;
+    const kb::ecs::SystemAccess readAccess = ReadPosition(world);
+
+    kb::ecs::RuntimeAccessValidator::Guard firstRead = validator.Acquire("ReadA", readAccess, 0);
+    kb::ecs::RuntimeAccessValidator::Guard secondRead = validator.Acquire("ReadB", readAccess, 1);
+
+    kb::tests::Require(firstRead.Active() && secondRead.Active(), "ECS runtime access validator did not track read-only jobs");
+    kb::tests::Require(validator.ActiveAccessCount() == 2U, "ECS runtime access validator rejected compatible read-only jobs");
+}
+
+void RunRuntimeAccessValidatorDetectsReadWriteConflictTest() {
+    kb::ecs::World world;
+    kb::ecs::RuntimeAccessValidator validator;
+    const kb::ecs::SystemAccess readAccess = ReadPosition(world);
+    const kb::ecs::SystemAccess writeAccess = WritePosition(world);
+
+    kb::ecs::RuntimeAccessValidator::Guard readGuard = validator.Acquire("ReadPosition", readAccess, 0);
+
+    bool detectedConflict = false;
+    try {
+        kb::ecs::RuntimeAccessValidator::Guard writeGuard = validator.Acquire("WritePosition", writeAccess, 1);
+        static_cast<void>(writeGuard);
+    } catch (const std::logic_error& error) {
+        detectedConflict = std::string_view{ error.what() }.find("ReadPosition") != std::string_view::npos &&
+            std::string_view{ error.what() }.find("WritePosition") != std::string_view::npos;
+    }
+
+    kb::tests::Require(detectedConflict, "ECS runtime access validator did not report a read/write conflict between active jobs");
+    kb::tests::Require(validator.ActiveAccessCount() == 1U, "ECS runtime access validator registered a rejected conflicting job");
+
+    readGuard.Release();
+    kb::ecs::RuntimeAccessValidator::Guard writeGuard = validator.Acquire("WritePosition", writeAccess, 1);
+    kb::tests::Require(writeGuard.Active(), "ECS runtime access validator did not release completed job access");
+}
+
+void RunRuntimeAccessValidatorDetectsWriteWriteConflictTest() {
+    kb::ecs::World world;
+    kb::ecs::RuntimeAccessValidator validator;
+    const kb::ecs::SystemAccess writeAccess = WritePosition(world);
+
+    kb::ecs::RuntimeAccessValidator::Guard firstWrite = validator.Acquire("WriteA", writeAccess, 0);
+
+    bool detectedConflict = false;
+    try {
+        kb::ecs::RuntimeAccessValidator::Guard secondWrite = validator.Acquire("WriteB", writeAccess, 1);
+        static_cast<void>(secondWrite);
+    } catch (const std::logic_error&) {
+        detectedConflict = true;
+    }
+
+    kb::tests::Require(detectedConflict, "ECS runtime access validator did not report a write/write conflict between active jobs");
+    kb::tests::Require(validator.ActiveAccessCount() == 1U, "ECS runtime access validator leaked a rejected writer");
+    firstWrite.Release();
+    kb::tests::Require(validator.ActiveAccessCount() == 0U, "ECS runtime access validator did not release writer access");
+}
+
 void RunDebugTraceCapturesSystemExecutionTest() {
     kb::ecs::World world;
     std::vector<std::string> executionOrder;
@@ -372,6 +431,9 @@ void RunEcsSystemSchedulerTests() {
     RunReadOnlySystemsExecuteInParallelTest();
     RunReadWriteConflictCreatesStageBoundaryTest();
     RunWriteWriteConflictCreatesStageBoundaryTest();
+    RunRuntimeAccessValidatorAllowsReadOnlyJobsTest();
+    RunRuntimeAccessValidatorDetectsReadWriteConflictTest();
+    RunRuntimeAccessValidatorDetectsWriteWriteConflictTest();
     RunDebugTraceCapturesSystemExecutionTest();
 }
 

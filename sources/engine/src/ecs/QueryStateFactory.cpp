@@ -16,7 +16,9 @@ QueryState* QueryStateFactory::Create(
     std::span<const ComponentId> optionalComponentIds,
     std::span<const ComponentId> excludedComponentIds,
     std::span<const ComponentId> changedComponentIds,
-    const WorldConfig& config) {
+    const WorldConfig& config,
+    MutableComponentBorrowLocks* mutableBorrowLocks,
+    StructuralChangeValidator* structuralChangeValidator) {
     if (nativeStorage == nullptr || componentIds.empty() || componentIds.size() != componentSizes.size()) {
         return nullptr;
     }
@@ -32,7 +34,7 @@ QueryState* QueryStateFactory::Create(
         return nullptr;
     }
 
-    return new QueryState{ nativeStorage, std::move(plan), config.executionGrainSize };
+    return new QueryState{ nativeStorage, std::move(plan), config.executionGrainSize, mutableBorrowLocks, structuralChangeValidator };
 }
 
 } // namespace kb::ecs

@@ -20,6 +20,7 @@ void DestroyQueryState(QueryState* state) noexcept;
 [[nodiscard]] bool IsQueryStateValid(const QueryState* state) noexcept;
 void ForEachQueryState(const QueryState* state, QueryRawVisitor visitor, void* context);
 void PrepareQueryStateBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
+void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context);
 void ForEachQueryStateBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawBatchVisitor visitor, void* context, QueryBatchExecutionScratch& scratch);
 void ForEachQueryStateMutableBatch(const QueryState* state, QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context);
@@ -38,6 +39,7 @@ public:
 
     [[nodiscard]] bool IsValid() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
+    void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(Visitor visitor, void* context) const;
     void ForEachBatch(BatchVisitor visitor, void* context) const;
     void ForEachBatch(QueryExecutionSettings settings, BatchVisitor visitor, void* context) const;

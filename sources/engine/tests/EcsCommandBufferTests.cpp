@@ -252,8 +252,21 @@ void RunCommandBufferDeferredDestroySyncPointTest() {
     kb::tests::Require(result.WasDestroyed(existing), "ECS command buffer deferred destroy did not report a destroyed existing entity");
     kb::tests::Require(!world.IsAlive(resolvedCreated), "ECS command buffer kept a deferred-destroyed created entity alive after playback sync point");
     kb::tests::Require(!world.IsAlive(existing), "ECS command buffer kept a deferred-destroyed existing entity alive after playback sync point");
-    kb::tests::Require(!world.Has<EcsPosition>(resolvedCreated), "ECS command buffer left component references on a destroyed deferred entity");
-    kb::tests::Require(!world.Has<EcsVelocity>(existing), "ECS command buffer left component references on a destroyed existing entity");
+    bool destroyedComponentReadRejected = false;
+    try {
+        static_cast<void>(world.Has<EcsPosition>(resolvedCreated));
+    } catch (const std::out_of_range&) {
+        destroyedComponentReadRejected = true;
+    }
+    kb::tests::Require(destroyedComponentReadRejected, "ECS command buffer allowed component access on a destroyed deferred entity");
+
+    bool existingComponentReadRejected = false;
+    try {
+        static_cast<void>(world.Has<EcsVelocity>(existing));
+    } catch (const std::out_of_range&) {
+        existingComponentReadRejected = true;
+    }
+    kb::tests::Require(existingComponentReadRejected, "ECS command buffer allowed component access on a destroyed existing entity");
 }
 
 void RunCommandBufferNestedCreateDestroyFromJobsTest() {

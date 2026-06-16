@@ -30,6 +30,7 @@ SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
     : schedulingMode_(config.mode)
     , debugTraceEnabled_(config.debugTraceEnabled)
     , parallelExecutionEnabled_(config.parallelExecutionEnabled)
+    , runtimeAccessValidationEnabled_(config.runtimeAccessValidationEnabled)
     , workerPoolConfig_(config.workerPool) {}
 
 SystemScheduler::~SystemScheduler() = default;
@@ -86,6 +87,9 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 if (debugTraceEnabled_) {
                     systemStart = std::chrono::steady_clock::now();
                 }
+                RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
+                    ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, context.workerIndex)
+                    : RuntimeAccessValidator::Guard{};
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
                 if (debugTraceEnabled_) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
@@ -120,6 +124,9 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 if (debugTraceEnabled_) {
                     systemStart = std::chrono::steady_clock::now();
                 }
+                RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
+                    ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, 0)
+                    : RuntimeAccessValidator::Guard{};
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
                 if (debugTraceEnabled_) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
@@ -145,6 +152,7 @@ void SystemScheduler::Shutdown(World& world) {
     executionOrder_.clear();
     executionStages_.clear();
     workerPool_.reset();
+    accessValidator_.Clear();
     graphDirty_ = false;
     lastTrace_ = {};
 }

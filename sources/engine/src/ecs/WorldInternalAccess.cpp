@@ -20,7 +20,7 @@ const WorldRegistrySet* WorldInternalAccess::Registries(const World& world) noex
     return world.registries_.get();
 }
 
-const void* WorldInternalAccess::TryGetComponent(const World& world, Entity entity, ComponentId componentId) noexcept {
+const void* WorldInternalAccess::TryGetComponent(const World& world, Entity entity, ComponentId componentId) {
     return world.TryGetComponent(entity, componentId);
 }
 

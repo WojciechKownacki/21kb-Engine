@@ -10,6 +10,7 @@ template <typename... Components>
 void Query<Components...>::PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid()) {
         return;
@@ -19,9 +20,23 @@ void Query<Components...>::PrepareBatchExecution(QueryExecutionSettings settings
 }
 
 template <typename... Components>
+void Query<Components...>::PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const {
+    static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
+
+    if (!IsValid()) {
+        return;
+    }
+
+    PrepareQueryStateMutableBatchExecution(state_.get(), settings, scratch);
+}
+
+template <typename... Components>
 void Query<Components...>::ForEach(Visitor visitor, void* context) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid() || visitor == nullptr) {
         return;
@@ -43,6 +58,7 @@ template <typename... Components>
 void Query<Components...>::ForEachBatch(QueryExecutionSettings settings, BatchVisitor visitor, void* context) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid() || visitor == nullptr) {
         return;
@@ -64,6 +80,7 @@ template <typename... Components>
 void Query<Components...>::ForEachMutableBatch(QueryExecutionSettings settings, MutableBatchVisitor visitor, void* context) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid() || visitor == nullptr) {
         return;
@@ -87,6 +104,7 @@ template <typename Kernel>
 void Query<Components...>::ForEachBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid()) {
         return;
@@ -107,6 +125,7 @@ template <typename Kernel>
 void Query<Components...>::ForEachMutableBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid()) {
         return;
@@ -121,6 +140,7 @@ template <typename Kernel>
 void Query<Components...>::ForEachMutableBatchKernel(QueryExecutionSettings settings, Kernel&& kernel, QueryBatchExecutionScratch& scratch) const {
     static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
     static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
 
     if (!IsValid()) {
         return;

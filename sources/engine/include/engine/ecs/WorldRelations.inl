@@ -22,13 +22,17 @@ void World::AddRelation(Entity entity, Entity target) {
 }
 
 template <typename T>
-bool World::HasRelation(Entity entity, Entity target) const noexcept {
+bool World::HasRelation(Entity entity, Entity target) const {
+    ValidateEntityHandle(entity, "HasRelation");
+    ValidateEntityHandle(target, "HasRelation");
     const RelationId relation = Relation<T>();
     return relation != 0 && HasRelation(entity, relation, target);
 }
 
 template <typename T>
-void World::RemoveRelation(Entity entity, Entity target) noexcept {
+void World::RemoveRelation(Entity entity, Entity target) {
+    ValidateEntityHandle(entity, "RemoveRelation");
+    ValidateEntityHandle(target, "RemoveRelation");
     const RelationId relation = Relation<T>();
     if (relation != 0) {
         RemoveRelation(entity, relation, target);
@@ -36,7 +40,8 @@ void World::RemoveRelation(Entity entity, Entity target) noexcept {
 }
 
 template <typename T>
-Entity World::RelationTarget(Entity entity, int index) const noexcept {
+Entity World::RelationTarget(Entity entity, int index) const {
+    ValidateEntityHandle(entity, "RelationTarget");
     const RelationId relation = Relation<T>();
     return relation == 0 ? Entity{} : RelationTarget(entity, relation, index);
 }

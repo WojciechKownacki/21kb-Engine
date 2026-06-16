@@ -250,6 +250,46 @@ void RunTypedEcsMutableQueryBatchTest() {
     kb::tests::Require(kb::tests::NearlyEqual(changedAfterMutable.sumX, 85.0F), "Mutable ECS batch query did not persist component writes");
 }
 
+#if !defined(NDEBUG)
+void RunTypedEcsMutableQueryBorrowLockTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 4,
+    });
+
+    for (int index = 0; index < 4; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 0.0F });
+    }
+
+    kb::ecs::Query<EcsPosition> outerQuery = world.CreateQuery<EcsPosition>();
+    kb::ecs::Query<EcsPosition> innerQuery = world.CreateQuery<EcsPosition>();
+
+    bool conflictRejected = false;
+    try {
+        outerQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 }, [&innerQuery](kb::ecs::MutableQueryBatch<EcsPosition>& batch) {
+            EcsPosition* positions = batch.Components<0>();
+            positions[0].x += 1.0F;
+            innerQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 }, [](kb::ecs::MutableQueryBatch<EcsPosition>& nestedBatch) {
+                EcsPosition* nestedPositions = nestedBatch.Components<0>();
+                nestedPositions[0].x += 1.0F;
+            });
+        });
+    } catch (const std::logic_error&) {
+        conflictRejected = true;
+    }
+
+    kb::tests::Require(conflictRejected, "Debug ECS mutable borrow locks allowed overlapping mutable component views");
+
+    bool releasedAfterException = false;
+    outerQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 }, [&releasedAfterException](kb::ecs::MutableQueryBatch<EcsPosition>& batch) {
+        EcsPosition* positions = batch.Components<0>();
+        positions[0].x += 1.0F;
+        releasedAfterException = true;
+    });
+    kb::tests::Require(releasedAfterException, "Debug ECS mutable borrow lock was not released after an exception");
+}
+#endif
+
 void RunTypedEcsQueryBatchKernelTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 96,
@@ -469,6 +509,53 @@ void RunTypedEcsQueryStructuralChangeConsistencyTest() {
         "Fresh ECS query did not match existing query after structural changes");
 }
 
+void RunTypedEcsQueryStructuralChangeValidationTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 4,
+    });
+
+    const kb::ecs::Entity first = world.CreateEntity();
+    world.Set(first, EcsPosition{ .x = 1.0F, .y = 0.0F });
+
+    const kb::ecs::Entity second = world.CreateEntity();
+    world.Set(second, EcsPosition{ .x = 2.0F, .y = 0.0F });
+
+    const kb::ecs::Entity target = world.CreateEntity();
+    world.Set(target, EcsPosition{ .x = 3.0F, .y = 0.0F });
+
+    kb::ecs::Query<EcsPosition> query = world.CreateQuery<EcsPosition>();
+    bool queryMutationRejected = false;
+    try {
+        query.ForEachBatchKernel([&world, target](const kb::ecs::QueryBatch<EcsPosition>& batch) {
+            if (batch.Count() != 0) {
+                world.Set(target, EcsVelocity{ .x = 1.0F, .y = 0.0F });
+            }
+        });
+    } catch (const std::logic_error&) {
+        queryMutationRejected = true;
+    }
+
+    kb::tests::Require(queryMutationRejected, "ECS query iteration allowed a direct structural component mutation");
+    world.Set(target, EcsVelocity{ .x = 1.0F, .y = 0.0F });
+    kb::tests::Require(world.Has<EcsVelocity>(target), "ECS structural iteration guard was not released after query exception");
+
+    bool componentIterationMutationRejected = false;
+    try {
+        world.ForEach<EcsPosition>(
+            [](kb::ecs::Entity entity, const EcsPosition&, void* context) {
+                auto* activeWorld = static_cast<kb::ecs::World*>(context);
+                activeWorld->DestroyEntity(entity);
+            },
+            &world);
+    } catch (const std::logic_error&) {
+        componentIterationMutationRejected = true;
+    }
+
+    kb::tests::Require(componentIterationMutationRejected, "ECS component iteration allowed a direct structural entity mutation");
+    world.DestroyEntity(second);
+    kb::tests::Require(!world.IsAlive(second), "ECS structural iteration guard was not released after component iteration exception");
+}
+
 void RunTypedEcsQueryComponentFilterTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 16,
@@ -610,11 +697,15 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryBatchTest();
     RunTypedEcsQueryBatchWorkStealingTest();
     RunTypedEcsMutableQueryBatchTest();
+#if !defined(NDEBUG)
+    RunTypedEcsMutableQueryBorrowLockTest();
+#endif
     RunTypedEcsQueryBatchKernelTest();
     RunTypedEcsQueryPrefetchHintTest();
     RunTypedEcsQueryIterationOrderPolicyTest();
     RunTypedEcsQueryRepeatedPlanConsistencyTest();
     RunTypedEcsQueryStructuralChangeConsistencyTest();
+    RunTypedEcsQueryStructuralChangeValidationTest();
     RunTypedEcsQueryComponentFilterTest();
     RunTypedEcsQueryChangeFilterTest();
     RunTypedEcsQueryFilterValidationTest();
