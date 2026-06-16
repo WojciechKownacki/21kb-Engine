@@ -8,7 +8,9 @@
 
 #include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace {
 
@@ -433,6 +435,48 @@ void RunEcsKernelVectorMathBitDeterminismTest() {
     kb::tests::Require(VectorMovementBits<kb::ecs::KernelAvx512Tag>(positions, velocities) == reference, "ECS AVX-512-width vector math was not bit-for-bit deterministic");
 }
 
+template <typename BackendTag>
+void RunKernelVectorMathUnalignedFallbackCase() {
+    using FloatLanes = kb::ecs::KernelFloatLanes<BackendTag>;
+
+    alignas(FloatLanes::PreferredAlignment) std::array<float, FloatLanes::LaneCount> alignedValues{};
+    for (std::size_t lane = 0; lane < FloatLanes::LaneCount; ++lane) {
+        alignedValues[lane] = static_cast<float>(lane) * 0.5F - 2.0F;
+    }
+    kb::tests::Require(FloatLanes::IsAligned(alignedValues.data()), "ECS kernel aligned test buffer was not aligned to the backend lane width");
+    const FloatLanes alignedLoaded = FloatLanes::LoadAligned(alignedValues.data());
+    kb::tests::Require(FloatBits(alignedLoaded.Lane(FloatLanes::LaneCount - 1U)) == FloatBits(alignedValues.back()), "ECS kernel aligned load read invalid data");
+
+    std::array<std::byte, sizeof(float) * FloatLanes::LaneCount + 1U> inputBytes{};
+    std::array<std::byte, sizeof(float) * FloatLanes::LaneCount + 1U> outputBytes{};
+    std::byte* input = inputBytes.data() + 1U;
+    std::byte* output = outputBytes.data() + 1U;
+    kb::tests::Require(!FloatLanes::IsAligned(input), "ECS kernel unaligned test input unexpectedly met backend alignment");
+    kb::tests::Require(!FloatLanes::IsAligned(output), "ECS kernel unaligned test output unexpectedly met backend alignment");
+
+    for (std::size_t lane = 0; lane < FloatLanes::LaneCount; ++lane) {
+        const float value = static_cast<float>(lane) * 1.25F + 0.75F;
+        std::memcpy(input + lane * sizeof(float), &value, sizeof(float));
+    }
+
+    const FloatLanes shifted = FloatLanes::Load(reinterpret_cast<const float*>(input)) + FloatLanes::Splat(3.5F);
+    shifted.Store(reinterpret_cast<float*>(output));
+
+    for (std::size_t lane = 0; lane < FloatLanes::LaneCount; ++lane) {
+        const float expected = static_cast<float>(lane) * 1.25F + 4.25F;
+        float actual = 0.0F;
+        std::memcpy(&actual, output + lane * sizeof(float), sizeof(float));
+        kb::tests::Require(FloatBits(actual) == FloatBits(expected), "ECS kernel vector math unaligned fallback did not preserve float bits");
+    }
+}
+
+void RunEcsKernelVectorMathUnalignedFallbackTest() {
+    RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelScalarTag>();
+    RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelSse2Tag>();
+    RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelAvx2Tag>();
+    RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelAvx512Tag>();
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -444,6 +488,7 @@ void RunEcsKernelTests() {
     RunEcsKernelAvx512DispatchTest();
     RunEcsCompiledKernelQueryExecutionTest();
     RunEcsKernelVectorMathBitDeterminismTest();
+    RunEcsKernelVectorMathUnalignedFallbackTest();
 }
 
 } // namespace kb::tests

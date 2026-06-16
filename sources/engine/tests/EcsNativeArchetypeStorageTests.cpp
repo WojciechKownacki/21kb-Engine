@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -29,10 +30,15 @@ struct RuntimeTag {
     std::uint32_t value = 0;
 };
 
+struct alignas(32) WideAlignedComponent {
+    std::array<float, 8U> values{};
+};
+
 constexpr kb::ecs::ComponentId kPositionId = 101;
 constexpr kb::ecs::ComponentId kVelocityId = 102;
 constexpr kb::ecs::ComponentId kMassId = 103;
 constexpr kb::ecs::ComponentId kRuntimeTagId = 104;
+constexpr kb::ecs::ComponentId kWideAlignedId = 105;
 
 template <typename T>
 [[nodiscard]] constexpr kb::ecs::NativeComponentType ComponentType(kb::ecs::ComponentId id) noexcept {
@@ -42,6 +48,10 @@ template <typename T>
 template <typename T>
 [[nodiscard]] const T& Component(const kb::ecs::NativeArchetypeStorage& storage, kb::ecs::Entity entity, kb::ecs::ComponentId id) {
     return *static_cast<const T*>(storage.ComponentData(entity, id));
+}
+
+[[nodiscard]] bool IsAligned(const void* pointer, std::size_t alignment) noexcept {
+    return pointer != nullptr && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
 }
 
 void RunChunkProfileAndStatsTest() {
@@ -239,6 +249,56 @@ void RunWorldNativeStorageMirrorTest() {
     kb::tests::Require(world.NativeStorageStats().liveEntities == 0, "World native storage stats did not mirror entity destruction");
 }
 
+void RunNativeComponentAlignmentTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+
+    WideAlignedComponent first{};
+    first.values[0] = 1.0F;
+    WideAlignedComponent second{};
+    second.values[0] = 2.0F;
+    const kb::ecs::NativeComponentType wideType = ComponentType<WideAlignedComponent>(kWideAlignedId);
+    const std::array firstComponents{ kb::ecs::NativeComponentValue{ .type = wideType, .data = &first } };
+    const std::array secondComponents{ kb::ecs::NativeComponentValue{ .type = wideType, .data = &second } };
+
+    const kb::ecs::Entity firstEntity = storage.CreateEntity(firstComponents);
+    const kb::ecs::Entity secondEntity = storage.CreateEntity(secondComponents);
+    kb::tests::Require(storage.IsAlive(secondEntity), "native ECS aligned component setup did not create the second entity");
+
+    kb::tests::Require(IsAligned(storage.ComponentData(firstEntity, kWideAlignedId), alignof(WideAlignedComponent)), "native ECS component data did not preserve declared alignment");
+
+    std::vector<kb::ecs::QueryTableDispatchRecord> records;
+    const std::array queryIds{ kWideAlignedId };
+    storage.CollectQueryRecords(queryIds, {}, {}, records);
+    kb::tests::Require(records.size() == 1U && records.front().entityCount == 2U, "native ECS aligned component query did not return the expected chunk");
+    kb::tests::Require(IsAligned(records.front().fieldComponents[0], alignof(WideAlignedComponent)), "native ECS readonly query returned an unaligned component column");
+
+    std::vector<kb::ecs::MutableQueryTableDispatchRecord> mutableRecords;
+    storage.CollectMutableQueryRecords(queryIds, {}, {}, mutableRecords);
+    kb::tests::Require(mutableRecords.size() == 1U && mutableRecords.front().entityCount == 2U, "native ECS mutable aligned component query did not return the expected chunk");
+    kb::tests::Require(IsAligned(mutableRecords.front().fieldComponents[0], alignof(WideAlignedComponent)), "native ECS mutable query returned an unaligned component column");
+}
+
+void RunNativeComponentAlignmentValidationTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    std::uint32_t value = 7U;
+    const std::array invalidComponents{
+        kb::ecs::NativeComponentValue{
+            .type = kb::ecs::NativeComponentType{ .id = kWideAlignedId, .size = sizeof(value), .alignment = 8U },
+            .data = &value,
+        },
+    };
+
+    bool rejected = false;
+    try {
+        const kb::ecs::Entity invalidEntity = storage.CreateEntity(invalidComponents);
+        static_cast<void>(invalidEntity);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+
+    kb::tests::Require(rejected, "native ECS storage accepted a component type whose size cannot preserve row alignment");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -249,6 +309,8 @@ void RunEcsNativeArchetypeStorageTests() {
     RunSwapDeleteAndGenerationTest();
     RunArchetypeSignatureMatchingTest();
     RunWorldNativeStorageMirrorTest();
+    RunNativeComponentAlignmentTest();
+    RunNativeComponentAlignmentValidationTest();
 }
 
 } // namespace kb::tests
