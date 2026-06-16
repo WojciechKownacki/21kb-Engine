@@ -1,5 +1,6 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
+#include "ecs/world/WorldInternalAccess.hpp"
 #include "scene/components/SceneComponentIterationAccess.hpp"
 
 #include <flecs.h>
@@ -24,7 +25,10 @@ void SceneComponentIteration::ForEachLight(
         }
 
         for (int32_t i = 0; i < it.count; ++i) {
-            const SceneEntity entity{ it.entities[i] };
+            const SceneEntity entity = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, it.entities[i]);
+            if (!entity.IsValid()) {
+                continue;
+            }
             const auto* transform = SceneComponentIterationAccess::TryGet<TransformComponent>(world, entity, transformComponentId);
             if (transform != nullptr) {
                 visitor(entity, *transform, lights[i], context);

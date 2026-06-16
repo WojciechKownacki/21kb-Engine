@@ -20,6 +20,10 @@ const WorldRegistrySet* WorldInternalAccess::Registries(const World& world) noex
     return world.registries_.get();
 }
 
+Entity WorldInternalAccess::ResolveAliveEntity(const World& world, Entity::IdType entityIdWithoutGeneration) noexcept {
+    return world.ResolveAliveEntity(entityIdWithoutGeneration);
+}
+
 const void* WorldInternalAccess::TryGetComponent(const World& world, Entity entity, ComponentId componentId) {
     return world.TryGetComponent(entity, componentId);
 }

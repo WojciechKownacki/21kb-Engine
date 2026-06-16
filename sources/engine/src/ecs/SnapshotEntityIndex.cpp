@@ -1,20 +1,26 @@
 #include "ecs/snapshot/SnapshotEntityIndex.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
+
 #include <flecs.h>
 
 #include <string>
 
 namespace kb::ecs {
 
-SnapshotEntityIndex::SnapshotEntityIndex(WorldSnapshot& snapshot)
-    : snapshot_(snapshot) {}
+SnapshotEntityIndex::SnapshotEntityIndex(WorldSnapshot& snapshot, EntityResolver resolver, void* resolverContext)
+    : snapshot_(snapshot)
+    , resolver_(resolver)
+    , resolverContext_(resolverContext) {}
 
 EntitySnapshot& SnapshotEntityIndex::FindOrAdd(ecs_world_t* world, Entity entity) {
-    const auto [it, inserted] = entityIndices_.try_emplace(entity.Id(), snapshot_.entities.size());
+    const Entity resolved = resolver_ != nullptr ? resolver_(entity.Id(), resolverContext_) : entity;
+    const Entity snapshotEntity = resolved.IsValid() ? resolved : entity;
+    const auto [it, inserted] = entityIndices_.try_emplace(snapshotEntity.Id(), snapshot_.entities.size());
     if (inserted) {
         snapshot_.entities.push_back(EntitySnapshot{
-            .id = entity.Id(),
-            .name = ReadName(world, entity),
+            .id = snapshotEntity.Id(),
+            .name = ReadName(world, snapshotEntity),
             .components = {},
         });
     }
@@ -22,7 +28,7 @@ EntitySnapshot& SnapshotEntityIndex::FindOrAdd(ecs_world_t* world, Entity entity
 }
 
 std::string SnapshotEntityIndex::ReadName(ecs_world_t* world, Entity entity) {
-    const char* name = ecs_get_name(world, entity.Id());
+    const char* name = ecs_get_name(world, FlecsEntityId(entity));
     return name == nullptr ? std::string{} : std::string{ name };
 }
 

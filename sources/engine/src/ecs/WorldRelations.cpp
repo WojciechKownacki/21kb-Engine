@@ -1,9 +1,14 @@
 #include "engine/ecs/World.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/relation/HierarchyRelationService.hpp"
 #include "ecs/relation/RelationStorage.hpp"
 #include "ecs/type/RelationTypeRegistry.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
+
+#include <flecs.h>
+
+#include <unordered_set>
 
 namespace kb::ecs {
 
@@ -45,17 +50,32 @@ void World::RemoveRelation(Entity entity, RelationId relation, Entity target) {
 
 Entity World::RelationTarget(Entity entity, RelationId relation, int index) const {
     ValidateEntityHandle(entity, "RelationTarget");
-    return RelationStorage::Target(world_, entity, relation, index);
+    const Entity target = RelationStorage::Target(world_, entity, relation, index);
+    return ResolveAliveEntity(target.Id());
 }
 
 void World::SetParent(Entity child, Entity parent) {
     ValidateEntityHandle(child, "SetParent");
     ValidateOptionalEntityHandle(parent, "SetParent");
-    if (Parent(child) != parent) {
-        ValidateStructuralChangeAllowed("SetParent");
+    std::unordered_set<ecs_entity_t> visitedAncestors;
+    const ecs_entity_t childId = FlecsEntityId(child);
+    for (ecs_entity_t ancestor = FlecsEntityId(parent); ancestor != 0; ancestor = ecs_get_parent(world_, ancestor)) {
+        if (ancestor == childId) {
+            return;
+        }
+        if (!visitedAncestors.insert(ancestor).second) {
+            return;
+        }
     }
+    ValidateStructuralChangeAllowed("SetParent");
     ecs_table_t* previousArchetype = EntityArchetype(child);
-    HierarchyRelationService::SetParent(world_, child, parent);
+    const Entity currentParent = ResolveAliveEntity(RelationStorage::Target(world_, child, EcsChildOf).Id());
+    if (currentParent.IsValid()) {
+        RelationStorage::Remove(world_, child, EcsChildOf, currentParent);
+    }
+    if (parent.IsValid() && child != parent) {
+        RelationStorage::Add(world_, child, EcsChildOf, parent);
+    }
     InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(child));
 }
 
@@ -65,18 +85,30 @@ void World::ClearParent(Entity child) {
         ValidateStructuralChangeAllowed("ClearParent");
     }
     ecs_table_t* previousArchetype = EntityArchetype(child);
-    HierarchyRelationService::ClearParent(world_, child);
+    const Entity currentParent = ResolveAliveEntity(RelationStorage::Target(world_, child, EcsChildOf).Id());
+    if (currentParent.IsValid()) {
+        RelationStorage::Remove(world_, child, EcsChildOf, currentParent);
+    }
     InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(child));
 }
 
 Entity World::Parent(Entity child) const {
     ValidateEntityHandle(child, "Parent");
-    return HierarchyRelationService::Parent(world_, child);
+    const Entity parent = HierarchyRelationService::Parent(world_, child);
+    return ResolveAliveEntity(parent.Id());
 }
 
 std::vector<Entity> World::Children(Entity parent) const {
     ValidateEntityHandle(parent, "Children");
-    return HierarchyRelationService::Children(world_, parent);
+    std::vector<Entity> children = HierarchyRelationService::Children(world_, parent);
+    std::vector<Entity> resolvedChildren;
+    resolvedChildren.reserve(children.size());
+    for (Entity child : children) {
+        if (Entity resolved = ResolveAliveEntity(child.Id()); resolved.IsValid()) {
+            resolvedChildren.push_back(resolved);
+        }
+    }
+    return resolvedChildren;
 }
 
 } // namespace kb::ecs

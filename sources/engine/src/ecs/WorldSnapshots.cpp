@@ -12,7 +12,14 @@ WorldSnapshot World::CaptureSnapshot() const {
     if (registries_ == nullptr) {
         return {};
     }
-    return WorldSnapshotBuilder::Capture(world_, registries_->Components().Types());
+    return WorldSnapshotBuilder::Capture(
+        world_,
+        registries_->Components().Types(),
+        +[](Entity::IdType entityIdWithoutGeneration, void* context) -> Entity {
+            const auto* world = static_cast<const World*>(context);
+            return world != nullptr ? world->ResolveAliveEntity(entityIdWithoutGeneration) : Entity{};
+        },
+        const_cast<World*>(this));
 }
 
 ChunkedWorldSnapshot World::CaptureChunkedSnapshot() const {

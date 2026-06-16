@@ -34,8 +34,7 @@ World::World(World&& other) noexcept
     , registries_(std::move(other.registries_))
     , nativeStorage_(std::move(other.nativeStorage_))
     , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
-    , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
-    , nextEntityId_(std::exchange(other.nextEntityId_, 1'000'000)) {}
+    , structuralChangeValidator_(std::move(other.structuralChangeValidator_)) {}
 
 World& World::operator=(World&& other) noexcept {
     if (this != &other) {
@@ -46,7 +45,6 @@ World& World::operator=(World&& other) noexcept {
         nativeStorage_ = std::move(other.nativeStorage_);
         mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
         structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
-        nextEntityId_ = std::exchange(other.nextEntityId_, 1'000'000);
     }
     return *this;
 }
