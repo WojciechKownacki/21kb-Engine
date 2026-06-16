@@ -47,14 +47,15 @@ namespace {
 }
 
 [[nodiscard]] bool ApplyStoredProperty(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& baseline, const ScenePrefabPropertyOverride& property) {
-    if (property.nodeIndex >= instance.objects.size()) {
+    const std::uint32_t nodeIndex = baseline.ResolveNodeIndex(property);
+    if (nodeIndex == ScenePrefabNodeDesc::NoParent || nodeIndex >= instance.objects.size()) {
         return true;
     }
     if (property.propertyPath == "object" || property.propertyPath == "children") {
         return true;
     }
 
-    SceneObject object = instance.objects[property.nodeIndex];
+    SceneObject object = instance.objects[nodeIndex];
     if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
         return false;
     }
@@ -62,7 +63,7 @@ namespace {
         return scene.Hierarchy().SetParent(object, property.objectReference);
     }
 
-    const ScenePrefabNodeDesc* baselineNode = baseline.TryGetNode(property.nodeIndex);
+    const ScenePrefabNodeDesc* baselineNode = baseline.TryGetNode(nodeIndex);
     if (baselineNode == nullptr) {
         return true;
     }

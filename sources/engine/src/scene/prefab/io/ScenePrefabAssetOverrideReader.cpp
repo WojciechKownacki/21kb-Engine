@@ -11,14 +11,16 @@
 namespace kb::scene {
 namespace {
 
-[[nodiscard]] bool ReadOverrideFields(std::istream& input, ScenePrefabPropertyOverride& property) {
+[[nodiscard]] bool ReadOverrideFields(std::istream& input, ScenePrefabPropertyOverride& property, bool* missingOverrideNodeIds) {
     std::string line;
     ScenePrefabAssetFieldMap fields;
     while (ScenePrefabAssetFieldParser::ReadLine(input, line)) {
         if (line == ScenePrefabAssetFormat::EndOverrideMarker) {
             std::size_t nodeIndex = 0;
+            std::uint64_t nodeId = 0;
             std::size_t flag = 0;
             const auto node = fields.find(std::string{ ScenePrefabAssetFormat::OverrideNodeKey });
+            const auto stableNode = fields.find(std::string{ ScenePrefabAssetFormat::OverrideNodeIdKey });
             const auto propertyPath = fields.find(std::string{ ScenePrefabAssetFormat::OverridePropertyPathKey });
             const auto value = fields.find(std::string{ ScenePrefabAssetFormat::OverrideValueKey });
             const auto flagValue = fields.find(std::string{ ScenePrefabAssetFormat::OverrideFlagKey });
@@ -32,8 +34,15 @@ namespace {
                 || !ScenePrefabAssetKeyValueReader::ReadEscaped(value->second, property.value)) {
                 return false;
             }
+            if (stableNode != fields.end() && !ScenePrefabAssetFieldParser::ParseNumber(stableNode->second, nodeId)) {
+                return false;
+            }
+            if (stableNode == fields.end() && missingOverrideNodeIds != nullptr) {
+                *missingOverrideNodeIds = true;
+            }
 
             property.nodeIndex = static_cast<std::uint32_t>(nodeIndex);
+            property.nodeId = nodeId;
             property.flag = static_cast<ScenePrefabOverrideFlag>(static_cast<std::uint32_t>(flag));
             return true;
         }
@@ -50,7 +59,7 @@ namespace {
 
 } // namespace
 
-bool ScenePrefabAssetOverrideReader::Read(std::istream& input, std::size_t overrideCount, std::vector<ScenePrefabPropertyOverride>& output) {
+bool ScenePrefabAssetOverrideReader::Read(std::istream& input, std::size_t overrideCount, std::vector<ScenePrefabPropertyOverride>& output, bool* missingOverrideNodeIds) {
     output.clear();
     output.reserve(overrideCount);
     std::string line;
@@ -59,7 +68,7 @@ bool ScenePrefabAssetOverrideReader::Read(std::istream& input, std::size_t overr
             return false;
         }
         ScenePrefabPropertyOverride property;
-        if (!ReadOverrideFields(input, property)) {
+        if (!ReadOverrideFields(input, property, missingOverrideNodeIds)) {
             return false;
         }
         output.push_back(std::move(property));

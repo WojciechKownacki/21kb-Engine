@@ -12,6 +12,7 @@ namespace {
 void WriteOverride(std::ostream& output, const ScenePrefabPropertyOverride& property) {
     output << ScenePrefabAssetFormat::OverrideMarker << '\n';
     output << ScenePrefabAssetFormat::OverrideNodeKey << '=' << property.nodeIndex << '\n';
+    output << ScenePrefabAssetFormat::OverrideNodeIdKey << '=' << property.nodeId << '\n';
     output << ScenePrefabAssetFormat::OverridePropertyPathKey << '=' << ScenePrefabAssetEscaper::Escape(property.propertyPath) << '\n';
     output << ScenePrefabAssetFormat::OverrideValueKey << '=' << ScenePrefabAssetEscaper::Escape(property.value) << '\n';
     output << ScenePrefabAssetFormat::OverrideObjectReferenceKey << '=' << property.objectReference.Entity().Id() << '\n';

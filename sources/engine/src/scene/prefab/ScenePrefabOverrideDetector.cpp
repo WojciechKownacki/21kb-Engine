@@ -20,11 +20,12 @@ ScenePrefabOverrideReport ScenePrefabOverrideDetector::Detect(Scene& scene, cons
         ScenePrefabOverrideFlag flags = ScenePrefabNodeComparator::Compare(scene, object, expectedParent, nodes[nodeIndex]);
         if (ScenePrefabInstanceTopology::HasUntrackedChild(scene, object, trackedEntities)) {
             flags |= ScenePrefabOverrideFlag::AddedChild;
-            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "children", "added", ScenePrefabOverrideFlag::AddedChild);
+            ScenePrefabOverridePropertyReporter::Add(report, nodeIndex, object, "children", "added", ScenePrefabOverrideFlag::AddedChild, {}, nodes[nodeIndex].stableId);
         }
         if (flags != ScenePrefabOverrideFlag::None) {
             report.nodes.push_back(ScenePrefabNodeOverride{
                 .nodeIndex = nodeIndex,
+                .nodeId = nodes[nodeIndex].stableId,
                 .object = object,
                 .flags = flags,
             });

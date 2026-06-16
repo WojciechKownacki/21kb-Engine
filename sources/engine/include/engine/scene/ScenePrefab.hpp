@@ -18,6 +18,10 @@ public:
     [[nodiscard]] std::span<const ScenePrefabNodeDesc> Nodes() const noexcept;
     [[nodiscard]] const ScenePrefabNodeDesc* TryGetNode(std::uint32_t nodeIndex) const noexcept;
     [[nodiscard]] ScenePrefabNodeDesc* TryGetMutableNode(std::uint32_t nodeIndex) noexcept;
+    [[nodiscard]] std::uint32_t FindNodeIndexByStableId(std::uint64_t stableId) const noexcept;
+    [[nodiscard]] const ScenePrefabNodeDesc* TryGetNodeByStableId(std::uint64_t stableId) const noexcept;
+    [[nodiscard]] ScenePrefabNodeDesc* TryGetMutableNodeByStableId(std::uint64_t stableId) noexcept;
+    [[nodiscard]] std::uint32_t ResolveNodeIndex(const ScenePrefabPropertyOverride& property) const noexcept;
 
     [[nodiscard]] std::uint32_t AddNode(ScenePrefabNodeDesc desc);
     void Reserve(std::size_t nodeCount);

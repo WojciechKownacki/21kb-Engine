@@ -10,7 +10,9 @@ namespace kb::scene {
 bool ScenePrefabVariantMaterializer::Materialize(const ScenePrefab& basePrefab, std::span<const ScenePrefabPropertyOverride> overrides, ScenePrefab& output) {
     ScenePrefab variant = basePrefab;
     for (const ScenePrefabPropertyOverride& property : overrides) {
-        ScenePrefabNodeDesc* node = variant.TryGetMutableNode(property.nodeIndex);
+        ScenePrefabNodeDesc* node = property.nodeId != ScenePrefabNodeDesc::InvalidStableId
+            ? variant.TryGetMutableNodeByStableId(property.nodeId)
+            : variant.TryGetMutableNode(property.nodeIndex);
         if (node == nullptr || !ScenePrefabPropertyOverrideApplier::Apply(*node, property)) {
             return false;
         }
