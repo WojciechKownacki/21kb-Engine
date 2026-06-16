@@ -108,6 +108,9 @@ kb::scene::TransformComponent EcsRenderTransformResolver::Identity() noexcept {
     return kb::scene::TransformComponent{
         .localScale = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
         .worldScale = kb::scene::Vec3{ 1.0F, 1.0F, 1.0F },
+        .localVersion = 0,
+        .parentVersion = 0,
+        .worldVersion = 0,
         .worldDirty = false,
     };
 }
@@ -119,6 +122,8 @@ kb::scene::TransformComponent EcsRenderTransformResolver::Compose(
     result.worldScale = Multiply(parent.worldScale, local.localScale);
     result.worldRotation = Normalize(Multiply(parent.worldRotation, local.localRotation));
     result.worldPosition = Add(parent.worldPosition, Rotate(parent.worldRotation, Multiply(parent.worldScale, local.localPosition)));
+    result.parentVersion = parent.worldVersion;
+    result.worldVersion = local.worldVersion + 1U;
     result.worldDirty = false;
     return result;
 }

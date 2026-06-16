@@ -248,6 +248,42 @@ void RunBulkPrefabInstantiationTest() {
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 2.0F), "Bulk prefab world transform did not include prefab parent Y");
 }
 
+void RunLargePrefabHierarchyTransformTest() {
+    kb::scene::Scene scene;
+    constexpr std::uint32_t kDepth = 128U;
+    constexpr std::size_t kInstanceCount = 4U;
+
+    kb::scene::ScenePrefab prefab;
+    std::uint32_t parentNode = kb::scene::ScenePrefabNodeDesc::NoParent;
+    for (std::uint32_t node = 0U; node < kDepth; ++node) {
+        parentNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+            .name = "Large Hierarchy Node",
+            .parentNode = parentNode,
+            .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+        });
+    }
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefab, kInstanceCount);
+    kb::tests::Require(instances.size() == kInstanceCount, "Large prefab hierarchy bulk instantiation lost instances");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        kb::tests::Require(instance.ObjectCount() == kDepth, "Large prefab hierarchy instance has an unexpected node count");
+        kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(1U).Entity()) == instance.ObjectAt(0U).Entity(), "Large prefab hierarchy first child parent is invalid");
+        kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(kDepth - 1U).Entity()) == instance.ObjectAt(kDepth - 2U).Entity(), "Large prefab hierarchy deepest parent is invalid");
+    }
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const std::span<const kb::scene::SceneEntity> dirtyRenderEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+    kb::tests::Require(dirtyRenderEntities.size() >= kDepth * kInstanceCount, "Large prefab hierarchy did not populate transform render update cache");
+
+    const kb::scene::ScenePrefabInstance& first = instances.front();
+    const kb::scene::TransformComponent parentTransform = scene.Transforms().Get(first.ObjectAt(kDepth - 2U));
+    const kb::scene::TransformComponent deepestTransform = scene.Transforms().Get(first.ObjectAt(kDepth - 1U));
+    kb::tests::Require(kb::tests::NearlyEqual(deepestTransform.worldPosition.x, static_cast<float>(kDepth)), "Large prefab hierarchy did not propagate deepest world transform");
+    kb::tests::Require(deepestTransform.localVersion == 1U, "Large prefab hierarchy changed local version during world sync");
+    kb::tests::Require(deepestTransform.parentVersion == parentTransform.worldVersion, "Large prefab hierarchy did not record parent world version");
+    kb::tests::Require(deepestTransform.worldVersion > 0U, "Large prefab hierarchy did not initialize world version");
+}
+
 void RunRegisteredBulkPrefabInstantiationTest() {
     kb::scene::Scene scene;
 
@@ -715,6 +751,7 @@ void RunPrefabRefreshLargeInstanceSetTest() {
     kb::tests::Require(foundAddedChild, "Large prefab refresh did not index the refreshed child object");
     kb::tests::Require(scene.Prefabs().RootInstance(unrelatedInstances.front().ObjectAt(0U)) == unrelatedInstances.front().Handle(), "Large prefab refresh disturbed unrelated prefab instance indexes");
 }
+
 void RunPrefabApplyOverrideToAssetTest() {
     const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_apply_override.kbprefab";
     std::error_code removeError;
@@ -814,6 +851,7 @@ void RunScenePrefabInstantiationTests() {
     RunInvalidPrefabInstantiationTest();
     RunRegisteredPrefabInstantiationTest();
     RunBulkPrefabInstantiationTest();
+    RunLargePrefabHierarchyTransformTest();
     RunRegisteredBulkPrefabInstantiationTest();
     RunRegisteredPrefabOverrideLifecycleTest();
     RunMissingPrefabInstanceObjectOverrideTest();

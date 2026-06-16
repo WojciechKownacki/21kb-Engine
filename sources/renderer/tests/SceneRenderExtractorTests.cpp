@@ -113,6 +113,7 @@ void RunSceneExtractorExtractIntoReusesSnapshotAndSyncScratchTest() {
         .meshProxies = 8U,
         .transformCacheEntries = 8U,
         .transformResolvingEntries = 8U,
+        .transformUpdateEntities = 8U,
     });
     SceneRenderSnapshot snapshot;
     extractor.ExtractInto(scene, 1280, 720, snapshot);
@@ -120,6 +121,7 @@ void RunSceneExtractorExtractIntoReusesSnapshotAndSyncScratchTest() {
     Require(snapshot.meshes.size() == 2U, "SceneRenderExtractor ExtractInto did not extract both visible meshes");
     Require(extractor.SyncStats().meshSeenCapacity >= 8U, "SceneRenderExtractor did not preserve reserved sync scratch");
     Require(extractor.SyncStats().transformCacheCapacity >= 8U, "SceneRenderExtractor did not preserve reserved transform scratch");
+    Require(extractor.SyncStats().transformUpdateEntityCapacity >= 8U, "SceneRenderExtractor did not preserve reserved transform update scratch");
 
     scene.Components().MeshRenderers().Remove(secondMesh);
     extractor.ExtractInto(scene, 1280, 720, snapshot);

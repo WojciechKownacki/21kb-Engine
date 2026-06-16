@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace kb::ecs {
 
@@ -35,6 +36,7 @@ public:
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
+    [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
 
 private:
     const Scene& scene_;
@@ -52,6 +54,7 @@ public:
     [[nodiscard]] float FixedInterpolationAlpha() const noexcept;
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
+    [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] bool Update(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;

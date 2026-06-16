@@ -9,6 +9,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
@@ -223,6 +224,41 @@ void RunSyncEntitiesUpdatesOnlyRequestedProxyTest() {
     Require(secondProxy->dirty == RenderProxyDirtyFlag::None, "Incremental sync dirtied an untouched proxy");
     Require(NearlyEqual(firstProxy->desc.model[12], 11.0F), "Incremental sync did not update requested mesh transform");
     Require(NearlyEqual(secondProxy->desc.model[12], 2.0F), "Incremental sync updated an entity that was not requested");
+}
+
+void RunSyncTransformUpdatesUsesRuntimeCacheTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "First",
+        .transform = LocalOnlyTransformAt(1.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(first.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 10U });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Second",
+        .transform = LocalOnlyTransformAt(2.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(second.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 20U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    synchronizer.Sync(scene, renderScene);
+    renderScene.ClearDirty();
+
+    kb::scene::TransformComponent firstTransform = scene.Transforms().Get(first);
+    firstTransform.localPosition = kb::scene::Vec3{ 11.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(first, firstTransform);
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    synchronizer.SyncTransformUpdates(scene, renderScene);
+
+    const MeshRenderProxy* firstProxy = renderScene.FindMeshByEntity(first.Entity().Id());
+    const MeshRenderProxy* secondProxy = renderScene.FindMeshByEntity(second.Entity().Id());
+    Require(firstProxy != nullptr && secondProxy != nullptr, "Transform update sync lost mesh proxies");
+    Require(HasDirtyFlag(firstProxy->dirty, RenderProxyDirtyFlag::Transform), "Transform update sync did not dirty changed proxy");
+    Require(secondProxy->dirty == RenderProxyDirtyFlag::None, "Transform update sync dirtied unchanged proxy");
+    Require(NearlyEqual(firstProxy->desc.model[12], 11.0F), "Transform update sync did not publish changed transform");
+    Require(NearlyEqual(secondProxy->desc.model[12], 2.0F), "Transform update sync changed an unrelated transform");
+    Require(synchronizer.Stats().transformUpdateEntityCount == scene.Runtime().TransformRenderProxyUpdateEntities().size(), "Transform update sync stats did not mirror runtime cache size");
 }
 
 void RunSyncEntitiesRemovesDestroyedProxyTest() {
@@ -1534,6 +1570,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
+    RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();
     RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest();
     RunDeletesRemovedComponentsAndEntitiesTest();
