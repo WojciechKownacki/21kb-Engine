@@ -18,6 +18,8 @@ void RunEcsRuntimeTests() {
     RunEcsSnapshotTests();
     RunEcsSystemSchedulerTests();
     RunEcsWorkerPoolTests();
+    RunEcsDeterministicReplayTests();
+    RunEcsSeededStressTests();
 }
 
 } // namespace kb::tests

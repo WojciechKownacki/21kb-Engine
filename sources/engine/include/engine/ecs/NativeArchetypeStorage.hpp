@@ -5,6 +5,7 @@
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/QueryExecutionScratch.hpp"
 #include "engine/ecs/WorldConfig.hpp"
+#include "engine/ecs/WorldSnapshot.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,12 +25,36 @@ struct NativeComponentValue {
     const void* data = nullptr;
 };
 
+struct NativeEcsChunkMemoryCounters {
+    std::size_t archetypeIndex = 0;
+    std::size_t chunkIndex = 0;
+    std::size_t liveEntities = 0;
+    std::size_t capacity = 0;
+    std::size_t payloadBytes = 0;
+    std::size_t usedBytes = 0;
+    std::size_t wastedBytes = 0;
+};
+
+struct NativeEcsArchetypeMemoryCounters {
+    std::size_t archetypeIndex = 0;
+    std::vector<ComponentId> componentIds;
+    std::size_t liveEntities = 0;
+    std::size_t chunks = 0;
+    std::size_t capacity = 0;
+    std::size_t payloadBytes = 0;
+    std::size_t usedBytes = 0;
+    std::size_t wastedBytes = 0;
+    std::uint64_t version = 0;
+    std::vector<NativeEcsChunkMemoryCounters> chunkCounters;
+};
+
 struct NativeEcsStorageStats {
     std::size_t chunks = 0;
     std::size_t usedBytes = 0;
     std::size_t wastedBytes = 0;
     std::size_t archetypeCount = 0;
     std::size_t liveEntities = 0;
+    std::vector<NativeEcsArchetypeMemoryCounters> archetypeCounters;
 };
 
 struct NativeArchetypeMatch {
@@ -74,12 +99,21 @@ public:
         std::span<const ComponentId> requiredComponentIds,
         std::span<const ComponentId> excludedComponentIds,
         std::vector<MutableQueryTableDispatchRecord>& records);
+    void CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const;
+    void CaptureChunkedDeltaSnapshot(
+        std::span<const ComponentTypeInfo> componentTypes,
+        const ChunkedWorldSnapshot& baseline,
+        ChunkedWorldDeltaSnapshot& delta) const;
+    [[nodiscard]] bool StreamChunkedSnapshot(
+        std::span<const ComponentTypeInfo> componentTypes,
+        ChunkedWorldSnapshotChunkVisitor visitor,
+        void* context) const;
 
     [[nodiscard]] std::uint64_t ArchetypeVersion(Entity entity) const;
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const;
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept;
-    [[nodiscard]] NativeEcsStorageStats Stats() const noexcept;
+    [[nodiscard]] NativeEcsStorageStats Stats() const;
 
 private:
     class Impl;

@@ -30,7 +30,7 @@ const NativeArchetypeStorage& World::NativeStorage() const noexcept {
     return *nativeStorage_;
 }
 
-NativeEcsStorageStats World::NativeStorageStats() const noexcept {
+NativeEcsStorageStats World::NativeStorageStats() const {
     return nativeStorage_ != nullptr ? nativeStorage_->Stats() : NativeEcsStorageStats{};
 }
 

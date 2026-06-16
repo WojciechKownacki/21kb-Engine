@@ -18,6 +18,10 @@ namespace {
     return value ? "on" : "off";
 }
 
+[[nodiscard]] double Milliseconds(std::uint64_t nanoseconds) noexcept {
+    return static_cast<double>(nanoseconds) / 1'000'000.0;
+}
+
 [[nodiscard]] COLORREF StatusFill(bool active) noexcept {
     return active ? RGB(34, 79, 65) : RGB(39, 42, 48);
 }
@@ -116,6 +120,55 @@ void PaintPipelineTooltip(HDC dc, RECT line, const SceneViewportToolbarRenderSta
     DrawTooltipLine(dc, line, bloom, RGB(198, 208, 220));
 }
 
+void PaintEcsTooltip(HDC dc, RECT line, const SceneViewportToolbarEcsStats& stats) {
+    constexpr int lineHeight = 18;
+    constexpr int headerHeight = 20;
+    DrawTooltipLine(dc, line, "ECS runtime", RGB(226, 234, 244), FW_SEMIBOLD);
+    line.top += headerHeight;
+    line.bottom = line.top + lineHeight;
+
+    if (!stats.valid) {
+        DrawTooltipLine(dc, line, "No ECS frame.", RGB(132, 144, 158));
+        return;
+    }
+
+    char frame[128]{};
+    std::snprintf(
+        frame,
+        sizeof(frame),
+        "Frame %.3f ms    CPU %.3f ms",
+        Milliseconds(stats.frameDurationNanoseconds),
+        Milliseconds(stats.cpuTimeNanoseconds));
+    DrawTooltipLine(dc, line, frame, RGB(198, 208, 220));
+    line.top += lineHeight;
+    line.bottom = line.top + lineHeight;
+
+    char work[128]{};
+    std::snprintf(
+        work,
+        sizeof(work),
+        "Systems: %llu    Jobs: %llu    Workers: %llu",
+        static_cast<unsigned long long>(stats.systemCount),
+        static_cast<unsigned long long>(stats.jobsCount),
+        static_cast<unsigned long long>(stats.workerCount));
+    DrawTooltipLine(dc, line, work, RGB(198, 208, 220));
+    line.top += lineHeight;
+    line.bottom = line.top + lineHeight;
+
+    for (const SceneViewportToolbarEcsSystemStat& system : stats.topSystems) {
+        char systemLine[160]{};
+        std::snprintf(
+            systemLine,
+            sizeof(systemLine),
+            "%.3f ms  %s",
+            Milliseconds(system.cpuTimeNanoseconds),
+            system.name.c_str());
+        DrawTooltipLine(dc, line, systemLine, RGB(198, 208, 220));
+        line.top += lineHeight;
+        line.bottom = line.top + lineHeight;
+    }
+}
+
 } // namespace
 
 void SceneViewportToolbarInfoRenderer::PaintFpsCounter(HDC dc, RECT rect, const EditorTheme& theme) {
@@ -157,6 +210,22 @@ void SceneViewportToolbarInfoRenderer::PaintRenderStats(HDC dc, RECT rect, const
     DrawStatusChip(dc, InfoChipRect(inner, cursor, std::max<int>(38, static_cast<int>(inner.right - cursor))), "GPU", stats.gpuDrivenActive || stats.gpuDispatches != 0U);
 }
 
+void SceneViewportToolbarInfoRenderer::PaintEcsStats(HDC dc, RECT rect, const EditorTheme& theme) {
+    const COLORREF fill = SceneViewportToolbarDrawing::Blend(SceneViewportToolbarDrawing::ToolbarRowColor(theme), RGB(0, 0, 0), 1, 5);
+    const COLORREF border = SceneViewportToolbarDrawing::Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
+    SceneViewportToolbarDrawing::FillRound(dc, rect, fill, border, SceneViewportToolbarMetrics::ButtonRadius);
+
+    const SceneViewportToolbarEcsStats& stats = SceneViewportToolbarState::EcsStats();
+    char text[32]{};
+    if (stats.valid) {
+        std::snprintf(text, sizeof(text), "ECS %.2f ms", Milliseconds(stats.frameDurationNanoseconds));
+    } else {
+        std::snprintf(text, sizeof(text), "ECS --");
+    }
+
+    DrawCenteredChipText(dc, rect, text, stats.valid ? RGB(205, 224, 248) : GdiDrawing::ToColorRef(theme.textSecondary));
+}
+
 void SceneViewportToolbarInfoRenderer::PaintPipelineStats(HDC dc, RECT rect, const EditorTheme& theme) {
     const COLORREF fill = SceneViewportToolbarDrawing::Blend(SceneViewportToolbarDrawing::ToolbarRowColor(theme), RGB(0, 0, 0), 1, 5);
     const COLORREF border = SceneViewportToolbarDrawing::Blend(GdiDrawing::ToColorRef(theme.borderPanel), RGB(96, 109, 132), 1, 8);
@@ -171,12 +240,17 @@ void SceneViewportToolbarInfoRenderer::PaintTooltip(HDC dc, const RECT& content,
         return;
     }
 
-    const SceneViewportToolbarRenderStats stats = SceneViewportToolbarState::RenderStats();
-    const RECT anchor = hover == SceneViewportToolbarInfoHover::RenderStats ? rects.renderStats : rects.pipelineStats;
-    constexpr int width = 282;
+    const SceneViewportToolbarRenderStats renderStats = SceneViewportToolbarState::RenderStats();
+    const SceneViewportToolbarEcsStats& ecsStats = SceneViewportToolbarState::EcsStats();
+    const RECT anchor = hover == SceneViewportToolbarInfoHover::RenderStats
+        ? rects.renderStats
+        : (hover == SceneViewportToolbarInfoHover::EcsStats ? rects.ecsStats : rects.pipelineStats);
+    constexpr int width = 312;
     constexpr int lineHeight = 18;
     constexpr int headerHeight = 20;
-    constexpr int lineCount = 4;
+    const int lineCount = hover == SceneViewportToolbarInfoHover::EcsStats
+        ? static_cast<int>(std::max<std::size_t>(3U, 3U + ecsStats.topSystems.size()))
+        : 4;
     const int height = SceneViewportToolbarMetrics::TooltipPaddingY * 2 + headerHeight + (lineHeight * lineCount);
     const int left = std::clamp(
         anchor.left,
@@ -198,10 +272,14 @@ void SceneViewportToolbarInfoRenderer::PaintTooltip(HDC dc, const RECT& content,
         popup.top + SceneViewportToolbarMetrics::TooltipPaddingY + headerHeight,
     };
     if (hover == SceneViewportToolbarInfoHover::RenderStats) {
-        PaintSubmissionTooltip(dc, line, stats);
+        PaintSubmissionTooltip(dc, line, renderStats);
         return;
     }
-    PaintPipelineTooltip(dc, line, stats);
+    if (hover == SceneViewportToolbarInfoHover::EcsStats) {
+        PaintEcsTooltip(dc, line, ecsStats);
+        return;
+    }
+    PaintPipelineTooltip(dc, line, renderStats);
 }
 
 } // namespace kb::editor

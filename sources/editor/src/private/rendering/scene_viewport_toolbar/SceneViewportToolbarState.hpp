@@ -11,6 +11,7 @@ namespace kb::editor {
 enum class SceneViewportToolbarInfoHover : std::uint8_t {
     None,
     RenderStats,
+    EcsStats,
     PipelineStats,
 };
 
@@ -22,6 +23,8 @@ public:
     [[nodiscard]] static int CurrentPresentedFps() noexcept;
     static void RecordRenderStats(SceneViewportToolbarRenderStats stats) noexcept;
     [[nodiscard]] static SceneViewportToolbarRenderStats RenderStats() noexcept;
+    static void RecordEcsStats(SceneViewportToolbarEcsStats stats);
+    [[nodiscard]] static const SceneViewportToolbarEcsStats& EcsStats() noexcept;
     [[nodiscard]] static SceneViewportToolbarInfoHover InfoHover() noexcept;
     [[nodiscard]] static bool UpdateInfoHover(const RECT& content, int x, int y) noexcept;
 };

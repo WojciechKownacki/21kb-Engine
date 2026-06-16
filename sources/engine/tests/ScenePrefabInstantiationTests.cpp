@@ -1,24 +1,57 @@
 #include "ScenePrefabTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/System.hpp"
 #include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/ScenePrefab.hpp"
+#include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 #include <vector>
 
 namespace {
+
+class PrivateSceneRejectedSystem final : public kb::scene::SceneSystem {};
+
+class PrivateSceneRejectedEcsSystem final : public kb::ecs::System {
+public:
+    [[nodiscard]] kb::ecs::SystemAccess DeclareAccess(kb::ecs::World& world) const override {
+        static_cast<void>(world);
+        return {};
+    }
+};
+
+[[nodiscard]] bool ThrowsPrivateSceneRuntimeRegistration(kb::scene::Scene& scene) {
+    try {
+        scene.Runtime().AddSceneSystem(std::make_unique<PrivateSceneRejectedSystem>());
+    } catch (const std::logic_error&) {
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ThrowsPrivateSceneEcsRuntimeRegistration(kb::scene::Scene& scene) {
+    try {
+        scene.Runtime().AddSystem(std::make_unique<PrivateSceneRejectedEcsSystem>());
+    } catch (const std::logic_error&) {
+        return true;
+    }
+    return false;
+}
 
 void RunPrefabInstantiationTest() {
     kb::scene::Scene scene;
@@ -842,6 +875,57 @@ void RunNestedPrefabCaptureAndRefreshTest() {
     kb::tests::Require(scene.Entities().Name(outerInstance.ObjectAt(2)) == "Captured Inner Child Override", "Nested prefab composition did not apply stored child override");
 }
 
+void RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest() {
+    kb::scene::Scene scene;
+    constexpr std::size_t kInstanceCount = 10'000U;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Private Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Private Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F } },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("PrivateEditPrefab", std::move(prefab));
+    kb::tests::Require(prefabHandle.IsValid(), "Private prefab edit setup failed to register source prefab");
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, kInstanceCount);
+    kb::tests::Require(instances.size() == kInstanceCount, "Private prefab edit setup did not create the full main-scene instance set");
+
+    kb::scene::TransformComponent localOverride = scene.Transforms().Get(instances[123U].ObjectAt(childNode));
+    localOverride.localPosition = kb::scene::Vec3{ 0.0F, 99.0F, 0.0F };
+    scene.Transforms().Set(instances[123U].ObjectAt(childNode), localOverride);
+
+    kb::scene::ScenePrefabPrivateScene privateScene = scene.Prefabs().OpenPrivateScene(prefabHandle);
+    kb::tests::Require(privateScene.IsValid(), "Private prefab scene did not open");
+    kb::tests::Require(privateScene.EditScene().IsPrefabPrivate(), "Private prefab scene did not use prefab-private mode");
+    kb::tests::Require(ThrowsPrivateSceneRuntimeRegistration(privateScene.EditScene()), "Private prefab scene accepted a runtime scene system");
+    kb::tests::Require(ThrowsPrivateSceneEcsRuntimeRegistration(privateScene.EditScene()), "Private prefab scene accepted an ECS runtime system");
+    kb::tests::Require(!privateScene.EditScene().Runtime().Update(0.016F), "Private prefab scene advanced runtime world progress");
+    kb::tests::Require(privateScene.EditScene().Runtime().LastFixedStepCount() == 0U, "Private prefab scene executed fixed runtime steps");
+    kb::tests::Require(privateScene.SourcePrefab() == prefabHandle, "Private prefab scene lost source prefab identity");
+    kb::tests::Require(privateScene.ObjectCount() == 2U, "Private prefab scene did not instantiate the source prefab");
+
+    privateScene.EditScene().Entities().SetName(privateScene.ObjectAt(childNode), "Private Child Applied");
+    kb::scene::TransformComponent privateTransform = privateScene.EditScene().Transforms().Get(privateScene.ObjectAt(childNode));
+    privateTransform.localPosition = kb::scene::Vec3{ 0.0F, 7.0F, 0.0F };
+    privateScene.EditScene().Transforms().Set(privateScene.ObjectAt(childNode), privateTransform);
+
+    kb::tests::Require(!privateScene.Overrides().Empty(), "Private prefab scene did not track edit overrides");
+    kb::tests::Require(scene.Prefabs().Overrides(instances[123U].Handle()).properties.size() == 1U, "Main scene override tracking changed before private apply");
+    kb::tests::Require(privateScene.Apply(), "Private prefab scene apply failed");
+
+    kb::tests::Require(scene.Entities().Name(instances.front().ObjectAt(childNode)) == "Private Child Applied", "Private prefab apply did not refresh inherited instance name");
+    const kb::scene::TransformComponent inheritedTransform = scene.Transforms().Get(instances.front().ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(inheritedTransform.localPosition.y, 7.0F), "Private prefab apply did not refresh inherited transform");
+
+    const kb::scene::TransformComponent preservedTransform = scene.Transforms().Get(instances[123U].ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(preservedTransform.localPosition.y, 99.0F), "Private prefab apply lost a local main-scene transform override");
+    kb::tests::Require(scene.Entities().Name(instances[123U].ObjectAt(childNode)) == "Private Child Applied", "Private prefab apply did not update non-overridden properties on a locally overridden instance");
+    kb::tests::Require(scene.Prefabs().RootInstance(instances.back().ObjectAt(rootNode)) == instances.back().Handle(), "Private prefab apply disturbed main-scene instance source tracking");
+    kb::tests::Require(scene.Prefabs().Overrides(instances[123U].Handle()).properties.size() == 1U, "Private prefab apply changed main-scene override tracking scope");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -865,6 +949,7 @@ void RunScenePrefabInstantiationTests() {
     RunPrefabApplyOverrideToAssetTest();
     RunNestedPrefabCompositionTest();
     RunNestedPrefabCaptureAndRefreshTest();
+    RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest();
 }
 
 } // namespace kb::tests

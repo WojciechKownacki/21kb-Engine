@@ -64,7 +64,7 @@ void RunPersistentQuerySystemTest() {
     }
 
     QuerySystemCounters counters;
-    kb::ecs::SystemScheduler scheduler;
+    kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{ .profilerEnabled = true } };
     scheduler.Add(std::make_unique<CountingMovementQuerySystem>(counters), world);
 
     kb::tests::Require(counters.queryCreated == 1, "ECS query system did not create its persistent query");
@@ -75,6 +75,11 @@ void RunPersistentQuerySystemTest() {
     kb::tests::Require(counters.maxBatch <= 64, "ECS query system exceeded configured batch size");
     kb::tests::Require(kb::tests::NearlyEqual(counters.lastDelta, 0.5F), "ECS query system received invalid delta time");
     kb::tests::Require(kb::tests::NearlyEqual(counters.sumX, 750.0F), "ECS query system saw invalid component data");
+    const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastProfilerTrace();
+    kb::tests::Require(trace.frameCounters.entitiesProcessed == 150U, "ECS query system did not report processed entities to profiler");
+    kb::tests::Require(
+        trace.frameCounters.bytesTouched == 150U * (sizeof(EcsPosition) + sizeof(EcsVelocity)),
+        "ECS query system did not report touched component bytes to profiler");
 
     scheduler.Shutdown(world);
     kb::tests::Require(counters.destroyed == 1, "ECS query system was not destroyed by scheduler shutdown");
