@@ -26,6 +26,10 @@ public:
         return access;
     }
 
+    [[nodiscard]] std::string_view ExecutionPathName() const noexcept override {
+        return "query_callback";
+    }
+
     void OnCreate(World& world) override {
         query_ = world.CreateQuery<Components...>();
         OnQueryCreated(world);
@@ -37,11 +41,21 @@ public:
             return;
         }
 
+        QueryExecutionSettings settings = settings_;
+        if (settings.workerPool == nullptr) {
+            settings.workerPool = executionWorkerPool_;
+        }
+
         DispatchContext context{
             .system = this,
             .deltaSeconds = deltaSeconds,
         };
-        query_.ForEachBatch(settings_, &DispatchBatch, &context);
+        query_.ForEachBatch(settings, &DispatchBatch, &context);
+        executionWorkerPool_ = nullptr;
+    }
+
+    void SetExecutionWorkerPool(WorkerPool* workerPool) noexcept override {
+        executionWorkerPool_ = workerPool;
     }
 
 protected:
@@ -60,6 +74,7 @@ private:
     static void DispatchBatch(const Batch& batch, void* context) {
         auto* dispatch = static_cast<DispatchContext*>(context);
         if (dispatch != nullptr && dispatch->system != nullptr) {
+            dispatch->system->ReportProfilerJobs(1);
             dispatch->system->ReportProfilerWork(batch.Count(), batch.Count() * kBytesPerEntity);
             dispatch->system->OnUpdateBatch(batch, dispatch->deltaSeconds);
         }
@@ -69,6 +84,7 @@ private:
 
     Query<Components...> query_;
     QueryExecutionSettings settings_{};
+    WorkerPool* executionWorkerPool_ = nullptr;
 };
 
 } // namespace kb::ecs

@@ -69,6 +69,20 @@ std::vector<NativeComponentValue> World::MakeNativeComponentValues(std::span<con
     return nativeComponents;
 }
 
+std::vector<NativeBulkComponentColumn> World::MakeNativeBulkComponentColumns(std::span<const BulkComponentData> components) const {
+    std::vector<NativeBulkComponentColumn> nativeComponents;
+    nativeComponents.reserve(components.size());
+    for (const BulkComponentData& component : components) {
+        const NativeComponentValue nativeComponent = MakeNativeComponentValue(component);
+        nativeComponents.push_back(NativeBulkComponentColumn{
+            .type = nativeComponent.type,
+            .data = component.data,
+            .stride = component.componentSize,
+        });
+    }
+    return nativeComponents;
+}
+
 void World::AdoptNativeEntity(Entity entity, std::span<const BulkComponentData> components) {
     if (nativeStorage_ == nullptr) {
         return;

@@ -221,6 +221,8 @@ void RunRegisteredPrefabInstantiationTest() {
             .localPosition = kb::scene::Vec3{ 0.0F, 3.0F, 0.0F },
         },
     });
+    const std::uint64_t rootNodeId = prefab.TryGetNode(rootNode)->stableId;
+    const std::uint64_t childNodeId = prefab.TryGetNode(childNode)->stableId;
 
     const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("RegisteredPrefab", std::move(prefab));
     kb::tests::Require(handle.IsValid(), "Registered prefab did not return a valid engine handle");
@@ -235,10 +237,16 @@ void RunRegisteredPrefabInstantiationTest() {
     kb::tests::Require(!scene.Prefabs().RootInstance(instance.ObjectAt(childNode)).IsValid(), "Registered prefab child must not own a separate prefab instance handle");
     std::uint32_t rootContainingNode = 99;
     std::uint32_t childContainingNode = 99;
+    std::uint64_t rootContainingNodeId = 0;
+    std::uint64_t childContainingNodeId = 0;
     kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(rootNode), rootContainingNode) == instance.Handle(), "Registered prefab root should map to the tracked prefab instance");
     kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(childNode), childContainingNode) == instance.Handle(), "Registered prefab child should remain tracked inside the parent prefab instance");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(rootNode), rootContainingNode, rootContainingNodeId) == instance.Handle(), "Registered prefab root should expose its stable node mapping");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(instance.ObjectAt(childNode), childContainingNode, childContainingNodeId) == instance.Handle(), "Registered prefab child should expose its stable node mapping");
     kb::tests::Require(rootContainingNode == rootNode, "Registered prefab root should map to the root prefab node");
     kb::tests::Require(childContainingNode == childNode, "Registered prefab child should map to the child prefab node");
+    kb::tests::Require(rootContainingNodeId == rootNodeId, "Registered prefab root stable node mapping is wrong");
+    kb::tests::Require(childContainingNodeId == childNodeId, "Registered prefab child stable node mapping is wrong");
     kb::tests::Require(scene.Prefabs().Overrides(instance.Handle()).Empty(), "Fresh registered prefab instance should not report overrides");
     kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Registered Root", "Registered prefab root name was not assigned");
     kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Registered prefab child parent was not assigned");
@@ -306,6 +314,7 @@ void RunBulkPrefabInstantiationTest() {
     kb::tests::Require(instances.size() == 3, "Bulk prefab instantiation did not return every requested instance");
     kb::tests::Require(scene.Entities().Count() == 7, "Bulk prefab instantiation created an unexpected entity count");
     const kb::ecs::World& world = scene.Runtime().EcsWorld();
+    kb::tests::Require(world.NativeStorageStats().liveEntities == scene.Entities().Count(), "Bulk prefab spawn created objects outside the native ECS entity model");
     const std::vector<kb::ecs::ComponentId> rootArchetype{
         world.Component<kb::scene::TransformComponent>(),
         world.Component<kb::scene::VisibilityComponent>(),
@@ -321,6 +330,7 @@ void RunBulkPrefabInstantiationTest() {
     for (const kb::scene::ScenePrefabInstance& instance : instances) {
         kb::tests::Require(instance.ObjectCount() == 2, "Bulk prefab instance did not contain every node");
         kb::tests::Require(!instance.Handle().IsValid(), "Loose bulk prefab instance should not be tracked");
+        kb::tests::Require(scene.Entities().IsAlive(instance.ObjectAt(rootNode)) && scene.Entities().IsAlive(instance.ObjectAt(childNode)), "Bulk prefab returned a non-live ECS entity object");
         kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Bulk/Bulk Root", "Bulk prefab root name was not assigned");
         kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(rootNode).Entity()) == externalParent.Entity(), "Bulk prefab root parent was not assigned");
         kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Bulk prefab child parent was not assigned");
@@ -336,6 +346,58 @@ void RunBulkPrefabInstantiationTest() {
     const kb::scene::TransformComponent childTransform = scene.Transforms().Get(instances.front().ObjectAt(childNode));
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 11.0F), "Bulk prefab world transform did not include external parent X");
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 2.0F), "Bulk prefab world transform did not include prefab parent Y");
+}
+
+void RunBulkPrefabMultiArchetypeNodeOrderTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Multi Archetype Root",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .tags = [] {
+                kb::scene::TagsComponent tags;
+                kb::scene::SetTagsText(tags, "root");
+                return tags;
+            }(),
+        },
+    });
+    const std::uint32_t cameraNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Multi Archetype Camera",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{ .primary = true },
+        },
+    });
+    const std::uint32_t meshNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Multi Archetype Mesh",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{ .meshAssetId = 31, .materialAssetId = 62 },
+        },
+    });
+    const std::uint32_t lightNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Multi Archetype Light",
+        .parentNode = meshNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .light = kb::scene::LightComponent{ .kind = kb::scene::LightKind::Point, .intensity = 2.5F },
+        },
+    });
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefab, 2);
+    kb::tests::Require(instances.size() == 2U, "Multi-archetype bulk prefab did not create all instances");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        kb::tests::Require(instance.ObjectCount() == 4U, "Multi-archetype bulk prefab instance lost nodes");
+        kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Multi Archetype Root", "Multi-archetype bulk prefab root mapping is wrong");
+        kb::tests::Require(scene.Entities().Name(instance.ObjectAt(cameraNode)) == "Multi Archetype Camera", "Multi-archetype bulk prefab camera mapping is wrong");
+        kb::tests::Require(scene.Entities().Name(instance.ObjectAt(meshNode)) == "Multi Archetype Mesh", "Multi-archetype bulk prefab mesh mapping is wrong");
+        kb::tests::Require(scene.Entities().Name(instance.ObjectAt(lightNode)) == "Multi Archetype Light", "Multi-archetype bulk prefab light mapping is wrong");
+        kb::tests::Require(scene.Components().Tags().Has(instance.ObjectAt(rootNode).Entity()), "Multi-archetype bulk prefab root components are wrong");
+        kb::tests::Require(scene.Components().Cameras().Has(instance.ObjectAt(cameraNode).Entity()), "Multi-archetype bulk prefab camera components are wrong");
+        kb::tests::Require(scene.Components().MeshRenderers().Has(instance.ObjectAt(meshNode).Entity()), "Multi-archetype bulk prefab mesh components are wrong");
+        kb::tests::Require(scene.Components().Lights().Has(instance.ObjectAt(lightNode).Entity()), "Multi-archetype bulk prefab light components are wrong");
+        kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(lightNode).Entity()) == instance.ObjectAt(meshNode).Entity(), "Multi-archetype bulk prefab hierarchy mapping is wrong");
+    }
 }
 
 void RunLargePrefabHierarchyTransformTest() {
@@ -536,7 +598,17 @@ void RunMissingPrefabInstanceObjectOverrideTest() {
     kb::tests::Require(report.nodes[0].nodeIndex == childNode, "Prefab missing object override reported the wrong node");
     kb::tests::Require(kb::scene::HasPrefabOverride(report.nodes[0].flags, kb::scene::ScenePrefabOverrideFlag::MissingObject), "Prefab override detector missed missing object");
     kb::tests::Require(!scene.Prefabs().RevertOverrides(instanceHandle), "Prefab override revert should fail when an instance object is missing");
-    kb::tests::Require(!scene.Prefabs().ApplyOverrides(instanceHandle), "Prefab override apply should fail when an instance object is missing");
+    kb::tests::Require(scene.Prefabs().ApplyOverrides(instanceHandle), "Prefab override apply should remove a missing child node from the prefab baseline");
+    kb::tests::Require(scene.Prefabs().Get(prefabHandle).NodeCount() == 1U, "Prefab missing child apply did not remove the prefab node");
+    const kb::scene::ScenePrefabInstance childRemovedInstance = scene.Prefabs().Instantiate(prefabHandle);
+    kb::tests::Require(childRemovedInstance.ObjectCount() == 1U, "Prefab missing child apply did not affect future instances");
+
+    kb::scene::ScenePrefab rootMissingPrefab;
+    static_cast<void>(rootMissingPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Missing Root Only" }));
+    const kb::scene::ScenePrefabHandle rootMissingHandle = scene.Prefabs().Register("MissingRootPrefab", std::move(rootMissingPrefab));
+    const kb::scene::ScenePrefabInstance rootMissingInstance = scene.Prefabs().Instantiate(rootMissingHandle);
+    scene.Entities().Destroy(rootMissingInstance.ObjectAt(0U));
+    kb::tests::Require(!scene.Prefabs().ApplyOverrides(rootMissingInstance.Handle()), "Prefab apply should reject a missing root object");
 }
 
 void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
@@ -696,6 +768,86 @@ void RunPrefabVariantInstantiationTest() {
     kb::tests::Require(!scene.Components().Visibility().Get(refreshedVariantInstance.ObjectAt(rootNode).Entity()).visible, "Prefab variant did not inherit refreshed base data");
 }
 
+void RunPrefabVariantApplyUpdatesVariantOnlyTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Variant Apply Base" });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("VariantApplyBase", std::move(prefab));
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "VariantApplyVariant",
+        baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = rootNode,
+                .propertyPath = "name",
+                .value = "Variant Apply Initial",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+    kb::tests::Require(variantHandle.IsValid(), "Variant apply setup did not register variant");
+
+    const kb::scene::ScenePrefabInstance variantInstance = scene.Prefabs().Instantiate(variantHandle);
+    scene.Entities().SetName(variantInstance.ObjectAt(rootNode), "Variant Apply Changed");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(variantInstance.Handle(), rootNode, "name"), "Variant instance property apply failed");
+
+    const kb::scene::ScenePrefab basePrefab = scene.Prefabs().Get(baseHandle);
+    const kb::scene::ScenePrefab variantPrefab = scene.Prefabs().Get(variantHandle);
+    kb::tests::Require(basePrefab.TryGetNode(rootNode)->name == "Variant Apply Base", "Applying a variant instance override mutated the base prefab");
+    kb::tests::Require(variantPrefab.TryGetNode(rootNode)->name == "Variant Apply Changed", "Applying a variant instance override did not update the variant prefab");
+
+    const kb::scene::ScenePrefabInstance baseInstance = scene.Prefabs().Instantiate(baseHandle);
+    const kb::scene::ScenePrefabInstance refreshedVariantInstance = scene.Prefabs().Instantiate(variantHandle);
+    kb::tests::Require(scene.Entities().Name(baseInstance.ObjectAt(rootNode)) == "Variant Apply Base", "Variant apply changed future base instances");
+    kb::tests::Require(scene.Entities().Name(refreshedVariantInstance.ObjectAt(rootNode)) == "Variant Apply Changed", "Variant apply did not change future variant instances");
+}
+
+void RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Base Refresh Variant Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Base Refresh Variant Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F } },
+    });
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("BaseRefreshVariantBase", std::move(prefab));
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "BaseRefreshVariant",
+        baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = childNode,
+                .propertyPath = "name",
+                .value = "Base Refresh Variant Override Child",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+    kb::tests::Require(variantHandle.IsValid(), "Base refresh variant setup did not register variant");
+
+    const kb::scene::ScenePrefabInstance baseSource = scene.Prefabs().Instantiate(baseHandle);
+    const kb::scene::ScenePrefabInstance inheritedVariant = scene.Prefabs().Instantiate(variantHandle);
+    const kb::scene::ScenePrefabInstance localOverrideVariant = scene.Prefabs().Instantiate(variantHandle);
+
+    kb::scene::TransformComponent localTransform = scene.Transforms().Get(localOverrideVariant.ObjectAt(childNode));
+    localTransform.localPosition = kb::scene::Vec3{ 0.0F, 99.0F, 0.0F };
+    scene.Transforms().Set(localOverrideVariant.ObjectAt(childNode), localTransform);
+
+    kb::scene::TransformComponent sourceTransform = scene.Transforms().Get(baseSource.ObjectAt(childNode));
+    sourceTransform.localPosition = kb::scene::Vec3{ 0.0F, 8.0F, 0.0F };
+    scene.Transforms().Set(baseSource.ObjectAt(childNode), sourceTransform);
+    kb::tests::Require(scene.Prefabs().ApplyOverride(baseSource.Handle(), childNode, "transform.localPosition"), "Base prefab apply did not refresh variant descendants");
+
+    const kb::scene::TransformComponent inheritedTransform = scene.Transforms().Get(inheritedVariant.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(inheritedTransform.localPosition.y, 8.0F), "Existing variant instance did not inherit refreshed base transform");
+    kb::tests::Require(scene.Entities().Name(inheritedVariant.ObjectAt(childNode)) == "Base Refresh Variant Override Child", "Existing variant instance lost variant name override");
+
+    const kb::scene::TransformComponent preservedTransform = scene.Transforms().Get(localOverrideVariant.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(preservedTransform.localPosition.y, 99.0F), "Existing variant instance lost its local transform override during base refresh");
+    kb::tests::Require(scene.Entities().Name(localOverrideVariant.ObjectAt(childNode)) == "Base Refresh Variant Override Child", "Locally overridden variant instance lost non-local variant data");
+}
+
 void RunPrefabConnectionMetadataAndUnpackTest() {
     kb::scene::Scene scene;
 
@@ -729,6 +881,133 @@ void RunPrefabConnectionMetadataAndUnpackTest() {
     kb::tests::Require(scene.Prefabs().InstanceStatus(instance.Handle()) == kb::scene::ScenePrefabInstanceStatus::NotInstance, "Unpacked prefab should no longer report instance status");
     kb::tests::Require(!scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)).IsValid(), "Unpacked prefab root should not keep a root instance link");
     kb::tests::Require(scene.Entities().IsAlive(instance.ObjectAt(rootNode)), "Unpack should keep the scene object alive");
+}
+
+void RunPrefabStaleHandleProtectionTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab firstPrefab;
+    const std::uint32_t firstRootNode = firstPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Stale First Root" });
+    static_cast<void>(firstRootNode);
+    const kb::scene::ScenePrefabHandle stalePrefabHandle = scene.Prefabs().Register("StaleFirst", std::move(firstPrefab));
+    kb::tests::Require(stalePrefabHandle.IsValid(), "Stale prefab setup did not register the first prefab");
+    kb::tests::Require(scene.Prefabs().Unload(stalePrefabHandle), "Stale prefab setup did not unload the first prefab");
+    kb::tests::Require(!scene.Prefabs().Contains(stalePrefabHandle), "Unloaded prefab handle should not remain contained");
+    kb::tests::Require(scene.Prefabs().AssetType(stalePrefabHandle) == kb::scene::ScenePrefabAssetType::Missing, "Unloaded prefab handle should report missing asset status");
+
+    kb::scene::ScenePrefab secondPrefab;
+    const std::uint32_t secondRootNode = secondPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Stale Second Root" });
+    static_cast<void>(secondRootNode);
+    const kb::scene::ScenePrefabHandle replacementPrefabHandle = scene.Prefabs().Register("StaleSecond", std::move(secondPrefab));
+    kb::tests::Require(replacementPrefabHandle.IsValid(), "Stale prefab setup did not register the replacement prefab");
+    kb::tests::Require(replacementPrefabHandle != stalePrefabHandle, "Prefab registry reused an unloaded stale prefab handle");
+    kb::tests::Require(!scene.Prefabs().Contains(stalePrefabHandle), "Stale prefab handle resolved after registering a new prefab");
+    kb::tests::Require(scene.Prefabs().Contains(replacementPrefabHandle), "Replacement prefab handle was not retained");
+
+    const kb::scene::ScenePrefabInstance firstInstance = scene.Prefabs().Instantiate(replacementPrefabHandle);
+    const kb::scene::ScenePrefabInstanceHandle staleInstanceHandle = firstInstance.Handle();
+    kb::tests::Require(staleInstanceHandle.IsValid(), "Stale instance setup did not create a tracked prefab instance");
+    kb::tests::Require(scene.Prefabs().Unpack(staleInstanceHandle), "Stale instance setup did not unpack the first instance");
+    kb::tests::Require(!scene.Prefabs().IsInstance(staleInstanceHandle), "Unpacked prefab instance handle should not remain active");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(staleInstanceHandle) == kb::scene::ScenePrefabInstanceStatus::NotInstance, "Unpacked prefab instance handle should report not-instance status");
+
+    const kb::scene::ScenePrefabInstance replacementInstance = scene.Prefabs().Instantiate(replacementPrefabHandle);
+    kb::tests::Require(replacementInstance.Handle().IsValid(), "Stale instance setup did not create a replacement instance");
+    kb::tests::Require(replacementInstance.Handle() != staleInstanceHandle, "Prefab instance registry reused an unpacked stale instance handle");
+    kb::tests::Require(!scene.Prefabs().IsInstance(staleInstanceHandle), "Stale instance handle resolved after creating a new instance");
+    kb::tests::Require(scene.Prefabs().IsInstance(replacementInstance.Handle()), "Replacement prefab instance handle was not retained");
+}
+
+void RunPrefabMissingSourceUnloadUnpackReconnectTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_missing_source_reconnect.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Missing Source Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Missing Source Child",
+        .parentNode = rootNode,
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("MissingSourcePrefab", std::move(prefab));
+    kb::tests::Require(prefabHandle.IsValid(), "Missing source prefab setup failed");
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Missing source prefab asset save failed");
+
+    const kb::scene::ScenePrefabInstance unpackInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance reconnectInstance = scene.Prefabs().Instantiate(prefabHandle);
+    kb::tests::Require(scene.Prefabs().InstanceStatus(unpackInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::Connected, "Missing source setup instance was not connected");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(reconnectInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::Connected, "Missing source reconnect setup instance was not connected");
+
+    kb::tests::Require(scene.Prefabs().Unload(prefabHandle), "Prefab unload failed");
+    kb::tests::Require(scene.Prefabs().AssetType(prefabHandle) == kb::scene::ScenePrefabAssetType::Missing, "Unloaded prefab should report missing asset type");
+    kb::tests::Require(scene.Prefabs().IsInstance(unpackInstance.Handle()), "Missing source unload removed instance tracking");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(unpackInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::MissingAsset, "Unloaded prefab instance should report missing asset status");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(reconnectInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::MissingAsset, "Reconnect candidate should report missing asset status");
+
+    kb::tests::Require(scene.Prefabs().Unpack(unpackInstance.Handle()), "Missing source unpack failed");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(unpackInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::NotInstance, "Unpacked missing source instance should not remain an instance");
+    kb::tests::Require(scene.Entities().IsAlive(unpackInstance.ObjectAt(rootNode)) && scene.Entities().IsAlive(unpackInstance.ObjectAt(childNode)), "Missing source unpack destroyed scene objects");
+
+    const kb::scene::ScenePrefabHandle loadedHandle = scene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Missing source reload failed");
+    kb::tests::Require(scene.Prefabs().Reconnect(reconnectInstance.Handle(), loadedHandle), "Missing source reconnect failed");
+    kb::tests::Require(scene.Prefabs().InstanceStatus(reconnectInstance.Handle()) == kb::scene::ScenePrefabInstanceStatus::Connected, "Reconnected prefab instance did not report connected status");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(reconnectInstance.Handle()) == loadedHandle, "Reconnected prefab instance did not update its source handle");
+    kb::tests::Require(scene.Prefabs().RootInstance(reconnectInstance.ObjectAt(rootNode)) == reconnectInstance.Handle(), "Reconnected prefab root lost registry mapping");
+    kb::tests::Require(scene.Entities().Name(reconnectInstance.ObjectAt(childNode)) == "Missing Source Child", "Reconnected prefab child did not refresh from loaded asset");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
+void RunPrefabUnpackNestedVariantModesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab parentPrefab;
+    const std::uint32_t parentRoot = parentPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Unpack Parent Root" });
+    const kb::scene::ScenePrefabHandle parentHandle = scene.Prefabs().Register("UnpackParentPrefab", std::move(parentPrefab));
+
+    kb::scene::ScenePrefab childBasePrefab;
+    const std::uint32_t childRoot = childBasePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Unpack Child Base" });
+    const kb::scene::ScenePrefabHandle childBaseHandle = scene.Prefabs().Register("UnpackChildBase", std::move(childBasePrefab));
+    const kb::scene::ScenePrefabHandle childVariantHandle = scene.Prefabs().RegisterVariant(
+        "UnpackChildVariant",
+        childBaseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = childRoot,
+                .propertyPath = "name",
+                .value = "Unpack Child Variant",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+    kb::tests::Require(parentHandle.IsValid() && childVariantHandle.IsValid(), "Nested variant unpack setup failed");
+
+    const kb::scene::ScenePrefabInstance rootOnlyParent = scene.Prefabs().Instantiate(parentHandle);
+    const kb::scene::ScenePrefabInstance rootOnlyNested = scene.Prefabs().Instantiate(
+        childVariantHandle,
+        kb::scene::ScenePrefabInstantiationSettings{ .parent = rootOnlyParent.ObjectAt(parentRoot) });
+    kb::tests::Require(scene.Prefabs().RootInstance(rootOnlyParent.ObjectAt(parentRoot)) == rootOnlyParent.Handle(), "Root-only unpack setup lost parent instance");
+    kb::tests::Require(scene.Prefabs().RootInstance(rootOnlyNested.ObjectAt(childRoot)) == rootOnlyNested.Handle(), "Root-only unpack setup lost nested variant instance");
+
+    kb::tests::Require(scene.Prefabs().Unpack(rootOnlyParent.Handle(), kb::scene::ScenePrefabUnpackMode::RootOnly), "Root-only unpack of parent prefab failed");
+    kb::tests::Require(!scene.Prefabs().IsInstance(rootOnlyParent.Handle()), "Root-only unpack should remove only the parent instance link");
+    kb::tests::Require(scene.Prefabs().IsInstance(rootOnlyNested.Handle()), "Root-only unpack removed a nested variant instance link");
+    kb::tests::Require(scene.Prefabs().RootInstance(rootOnlyNested.ObjectAt(childRoot)) == rootOnlyNested.Handle(), "Root-only unpack did not preserve nested variant root link");
+    kb::tests::Require(scene.Entities().IsAlive(rootOnlyParent.ObjectAt(parentRoot)) && scene.Entities().IsAlive(rootOnlyNested.ObjectAt(childRoot)), "Root-only unpack destroyed scene objects");
+
+    const kb::scene::ScenePrefabInstance completeParent = scene.Prefabs().Instantiate(parentHandle);
+    const kb::scene::ScenePrefabInstance completeNested = scene.Prefabs().Instantiate(
+        childVariantHandle,
+        kb::scene::ScenePrefabInstantiationSettings{ .parent = completeParent.ObjectAt(parentRoot) });
+
+    kb::tests::Require(scene.Prefabs().Unpack(completeParent.Handle(), kb::scene::ScenePrefabUnpackMode::Complete), "Complete unpack of parent prefab failed");
+    kb::tests::Require(!scene.Prefabs().IsInstance(completeParent.Handle()), "Complete unpack did not remove the parent instance link");
+    kb::tests::Require(!scene.Prefabs().IsInstance(completeNested.Handle()), "Complete unpack did not remove the nested variant instance link");
+    kb::tests::Require(!scene.Prefabs().RootInstance(completeParent.ObjectAt(parentRoot)).IsValid(), "Complete unpack left parent root link");
+    kb::tests::Require(!scene.Prefabs().RootInstance(completeNested.ObjectAt(childRoot)).IsValid(), "Complete unpack left nested variant root link");
+    kb::tests::Require(scene.Entities().IsAlive(completeParent.ObjectAt(parentRoot)) && scene.Entities().IsAlive(completeNested.ObjectAt(childRoot)), "Complete unpack destroyed scene objects");
 }
 
 void RunPrefabApplyRefreshesExistingInstancesTest() {
@@ -784,19 +1063,134 @@ void RunPrefabApplyAddedChildRefreshesExistingInstancesTest() {
 
     kb::tests::Require(scene.Prefabs().ApplyOverrides(sourceInstance.Handle()), "Prefab added child apply for refresh failed");
     kb::tests::Require(inheritedInstance.ObjectCount() == 1, "ScenePrefabInstance value should remain an immutable spawn result");
+    const kb::scene::ScenePrefab refreshedPrefab = scene.Prefabs().Get(prefabHandle);
+    const kb::scene::ScenePrefabNodeDesc* addedPrefabNode = refreshedPrefab.TryGetNode(1U);
+    kb::tests::Require(addedPrefabNode != nullptr && addedPrefabNode->stableId != kb::scene::ScenePrefabNodeDesc::InvalidStableId, "Applied child prefab node did not receive a stable id");
 
     std::uint32_t addedNodeIndex = 99;
+    std::uint64_t rootNodeId = 0;
     const kb::scene::ScenePrefabInstanceHandle refreshedHandle = scene.Prefabs().ContainingInstance(inheritedInstance.ObjectAt(rootNode), addedNodeIndex);
     kb::tests::Require(refreshedHandle == inheritedInstance.Handle() && addedNodeIndex == rootNode, "Refreshed prefab root should keep its tracked mapping");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(inheritedInstance.ObjectAt(rootNode), addedNodeIndex, rootNodeId) == inheritedInstance.Handle(), "Refreshed prefab root should keep its stable node mapping");
+    kb::tests::Require(rootNodeId == refreshedPrefab.TryGetNode(rootNode)->stableId, "Refreshed prefab root stable node mapping is wrong");
 
     bool foundAppliedChild = false;
     for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(inheritedInstance.ObjectAt(rootNode).Entity())) {
         if (scene.Entities().Name(child) == "Applied Child Refresh") {
             std::uint32_t childNodeIndex = 99;
-            foundAppliedChild = scene.Prefabs().ContainingInstance(child, childNodeIndex) == inheritedInstance.Handle() && childNodeIndex == 1;
+            std::uint64_t childNodeId = 0;
+            foundAppliedChild = scene.Prefabs().ContainingInstance(child, childNodeIndex, childNodeId) == inheritedInstance.Handle()
+                && childNodeIndex == 1
+                && childNodeId == addedPrefabNode->stableId;
         }
     }
-    kb::tests::Require(foundAppliedChild, "Existing instance did not receive the applied tracked child node");
+    kb::tests::Require(foundAppliedChild, "Existing instance did not receive the applied tracked child node stable mapping");
+}
+
+void RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_node_identity_refresh_save.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    constexpr std::uint64_t kRootStableId = 101U;
+    constexpr std::uint64_t kRemovedStableId = 102U;
+    constexpr std::uint64_t kTargetStableId = 103U;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kRootStableId,
+        .name = "Stable Refresh Root",
+    });
+    const std::uint32_t removedNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kRemovedStableId,
+        .name = "Stable Refresh Removed",
+        .parentNode = rootNode,
+    });
+    const std::uint32_t targetNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kTargetStableId,
+        .name = "Stable Refresh Target",
+        .parentNode = rootNode,
+    });
+
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("StableRefreshSavePrefab", std::move(prefab));
+    kb::tests::Require(prefabHandle.IsValid(), "Stable refresh/save prefab did not register");
+    kb::tests::Require(scene.Prefabs().Save(prefabHandle, prefabPath), "Stable refresh/save initial asset save failed");
+
+    const kb::scene::ScenePrefabInstance sourceInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance inheritedInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstance missingInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::SceneObject inheritedRemovedObject = inheritedInstance.ObjectAt(removedNode);
+    const kb::scene::SceneObject inheritedTargetObject = inheritedInstance.ObjectAt(targetNode);
+
+    scene.Entities().Destroy(missingInstance.ObjectAt(targetNode));
+    scene.Entities().Destroy(sourceInstance.ObjectAt(removedNode));
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Stable Refresh Added",
+        .parent = sourceInstance.ObjectAt(rootNode),
+    }));
+
+    kb::tests::Require(scene.Prefabs().ApplyOverrides(sourceInstance.Handle(), prefabPath), "Stable refresh/save apply-to-asset failed");
+
+    const kb::scene::ScenePrefab refreshedPrefab = scene.Prefabs().Get(prefabHandle);
+    kb::tests::Require(refreshedPrefab.NodeCount() == 3U, "Stable refresh/save prefab should contain root, target and added nodes");
+    kb::tests::Require(refreshedPrefab.FindNodeIndexByStableId(kRemovedStableId) == kb::scene::ScenePrefabNodeDesc::NoParent, "Removed prefab node stable id survived in the refreshed prefab");
+    const std::uint32_t refreshedTargetNode = refreshedPrefab.FindNodeIndexByStableId(kTargetStableId);
+    kb::tests::Require(refreshedTargetNode != kb::scene::ScenePrefabNodeDesc::NoParent, "Target prefab node lost its stable id after refresh");
+    kb::tests::Require(refreshedPrefab.TryGetNode(refreshedTargetNode)->name == "Stable Refresh Target", "Target prefab node changed after removed-node refresh");
+
+    const kb::scene::SceneObject refreshedInheritedTarget = inheritedTargetObject;
+    std::uint32_t mappedTargetNode = 0U;
+    std::uint64_t mappedTargetNodeId = 0U;
+    kb::tests::Require(!scene.Entities().IsAlive(inheritedRemovedObject), "Removed prefab node left an old inherited object alive after refresh");
+    kb::tests::Require(scene.Prefabs().ContainingInstance(refreshedInheritedTarget, mappedTargetNode, mappedTargetNodeId) == inheritedInstance.Handle(), "Target object lost prefab instance mapping after removed-node refresh");
+    kb::tests::Require(mappedTargetNode == refreshedTargetNode && mappedTargetNodeId == kTargetStableId, "Target object was remapped by index instead of stable id");
+    kb::tests::Require(scene.Entities().Name(refreshedInheritedTarget) == "Stable Refresh Target", "Target object received removed-node state after refresh");
+
+    const kb::scene::ScenePrefabOverrideReport missingReport = scene.Prefabs().Overrides(missingInstance.Handle());
+    bool foundMissingTarget = false;
+    for (const kb::scene::ScenePrefabNodeOverride& node : missingReport.nodes) {
+        foundMissingTarget = foundMissingTarget
+            || (node.nodeId == kTargetStableId && kb::scene::HasPrefabOverride(node.flags, kb::scene::ScenePrefabOverrideFlag::MissingObject));
+    }
+    kb::tests::Require(foundMissingTarget, "Missing object override did not survive stable-id refresh");
+
+    bool foundAddedMapping = false;
+    std::uint64_t addedStableId = kb::scene::ScenePrefabNodeDesc::InvalidStableId;
+    for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(refreshedPrefab.NodeCount()); ++nodeIndex) {
+        const kb::scene::ScenePrefabNodeDesc* node = refreshedPrefab.TryGetNode(nodeIndex);
+        if (node != nullptr && node->name == "Stable Refresh Added") {
+            addedStableId = node->stableId;
+        }
+    }
+    kb::tests::Require(addedStableId != kb::scene::ScenePrefabNodeDesc::InvalidStableId, "Added prefab node did not receive a stable id");
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(inheritedInstance.ObjectAt(rootNode).Entity())) {
+        if (scene.Entities().Name(child) != "Stable Refresh Added") {
+            continue;
+        }
+
+        std::uint32_t addedNodeIndex = 0U;
+        std::uint64_t addedNodeId = 0U;
+        foundAddedMapping = scene.Prefabs().ContainingInstance(child, addedNodeIndex, addedNodeId) == inheritedInstance.Handle()
+            && addedNodeId == addedStableId;
+    }
+    kb::tests::Require(foundAddedMapping, "Added prefab node did not receive stable mapping in refreshed instances");
+
+    kb::scene::Scene loadedScene;
+    const kb::scene::ScenePrefabHandle loadedHandle = loadedScene.Prefabs().Load(prefabPath);
+    kb::tests::Require(loadedHandle.IsValid(), "Stable refresh/save prefab asset did not reload");
+    const kb::scene::ScenePrefab loadedPrefab = loadedScene.Prefabs().Get(loadedHandle);
+    kb::tests::Require(loadedPrefab.FindNodeIndexByStableId(kRemovedStableId) == kb::scene::ScenePrefabNodeDesc::NoParent, "Removed prefab node stable id was persisted after save");
+    kb::tests::Require(loadedPrefab.FindNodeIndexByStableId(kTargetStableId) != kb::scene::ScenePrefabNodeDesc::NoParent, "Target prefab stable id was not persisted after save");
+    const kb::scene::ScenePrefabInstance loadedInstance = loadedScene.Prefabs().Instantiate(loadedHandle);
+    kb::tests::Require(loadedInstance.ObjectCount() == 3U, "Stable refresh/save loaded instance has invalid node count");
+    bool loadedAdded = false;
+    for (const kb::scene::SceneObject object : loadedInstance.Objects()) {
+        loadedAdded = loadedAdded || loadedScene.Entities().Name(object) == "Stable Refresh Added";
+    }
+    kb::tests::Require(loadedAdded, "Added prefab node was not persisted after save");
+
+    std::filesystem::remove(prefabPath, removeError);
 }
 
 void RunPrefabRefreshLargeInstanceSetTest() {
@@ -1061,6 +1455,169 @@ void RunPrefabStableNodeIdentityOverridesTest() {
     kb::tests::Require(scene.Entities().Name(instance.ObjectAt(targetChildNode)) == "Stable Target Changed", "Stable node identity instance did not use the stable node override");
 }
 
+void RunPrefabRemovedNodeOverrideDoesNotFallbackToIndexTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    constexpr std::uint64_t kRootNodeId = 1U;
+    constexpr std::uint64_t kDeletedNodeId = 2U;
+    constexpr std::uint64_t kSurvivorNodeId = 3U;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kRootNodeId,
+        .name = "Removed Stable Root",
+    });
+    const std::uint32_t survivorNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kSurvivorNodeId,
+        .name = "Removed Stable Survivor",
+        .parentNode = rootNode,
+    });
+
+    const kb::scene::ScenePrefabHandle baseHandle = scene.Prefabs().Register("RemovedStableNodeBase", std::move(prefab));
+    kb::tests::Require(baseHandle.IsValid(), "Removed stable node base prefab did not register");
+
+    const kb::scene::ScenePrefabHandle variantHandle = scene.Prefabs().RegisterVariant(
+        "RemovedStableNodeVariant",
+        baseHandle,
+        std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = survivorNode,
+                .nodeId = kDeletedNodeId,
+                .propertyPath = "name",
+                .value = "Wrong Survivor Override",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        });
+    kb::tests::Require(!variantHandle.IsValid(), "Removed stable node override should not fall back to a reused node index");
+
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(baseHandle);
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(survivorNode)) == "Removed Stable Survivor", "Removed stable node override changed the survivor node");
+}
+
+void RunNestedPrefabOverrideSurvivesInnerReorderTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab innerPrefab;
+    constexpr std::uint64_t kInnerRootNodeId = 1U;
+    constexpr std::uint64_t kInnerFirstChildNodeId = 2U;
+    constexpr std::uint64_t kInnerTargetChildNodeId = 3U;
+    const std::uint32_t innerRoot = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kInnerRootNodeId,
+        .name = "Nested Reorder Root",
+    });
+    const std::uint32_t reorderedTargetChild = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kInnerTargetChildNodeId,
+        .name = "Nested Reorder Target",
+        .parentNode = innerRoot,
+    });
+    const std::uint32_t reorderedFirstChild = innerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .stableId = kInnerFirstChildNodeId,
+        .name = "Nested Reorder First",
+        .parentNode = innerRoot,
+    });
+    const kb::scene::ScenePrefabHandle innerHandle = scene.Prefabs().Register("NestedReorderedInnerPrefab", std::move(innerPrefab));
+    const std::string innerGuid = scene.Prefabs().Guid(innerHandle);
+    kb::tests::Require(!innerGuid.empty(), "Nested reorder inner prefab did not receive a guid");
+
+    kb::scene::ScenePrefab outerPrefab;
+    const std::uint32_t outerRoot = outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Nested Reorder Outer Root" });
+    static_cast<void>(outerPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Nested Reorder Placeholder",
+        .nestedPrefabGuid = innerGuid,
+        .nestedPrefabOverrides = std::vector<kb::scene::ScenePrefabPropertyOverride>{
+            kb::scene::ScenePrefabPropertyOverride{
+                .nodeIndex = reorderedFirstChild,
+                .nodeId = kInnerTargetChildNodeId,
+                .propertyPath = "name",
+                .value = "Nested Reorder Target Override",
+                .flag = kb::scene::ScenePrefabOverrideFlag::Name,
+            },
+        },
+        .parentNode = outerRoot,
+    }));
+    const kb::scene::ScenePrefabHandle outerHandle = scene.Prefabs().Register("NestedReorderedOuterPrefab", std::move(outerPrefab));
+    kb::tests::Require(outerHandle.IsValid(), "Nested reorder outer prefab did not register");
+
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(outerHandle);
+    kb::tests::Require(instance.ObjectCount() == 4U, "Nested reorder prefab did not expand all nodes");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(reorderedTargetChild + 1U)) == "Nested Reorder Target Override", "Nested reorder override did not apply by stable node id");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(reorderedFirstChild + 1U)) == "Nested Reorder First", "Nested reorder override incorrectly applied by stale node index");
+}
+
+void RunPrefabClearDoesNotReuseStaleHandlesTest() {
+    const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_clear_stale_handles.kbprefab";
+    std::error_code removeError;
+    std::filesystem::remove(prefabPath, removeError);
+
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Clear Stale Root" }));
+    const kb::scene::ScenePrefabHandle stalePrefab = scene.Prefabs().Register("ClearStalePrefab", std::move(prefab));
+    kb::tests::Require(stalePrefab.IsValid(), "Clear stale prefab setup did not register prefab");
+    kb::tests::Require(scene.Prefabs().Save(stalePrefab, prefabPath), "Clear stale prefab setup did not save prefab");
+
+    const kb::scene::ScenePrefabInstance staleInstance = scene.Prefabs().Instantiate(stalePrefab);
+    kb::tests::Require(staleInstance.Handle().IsValid(), "Clear stale prefab setup did not instantiate prefab");
+
+    scene.Prefabs().Clear();
+
+    kb::tests::Require(!scene.Prefabs().Contains(stalePrefab), "Stale prefab handle should be invalid immediately after prefab registry clear");
+    kb::tests::Require(!scene.Prefabs().IsInstance(staleInstance.Handle()), "Stale prefab instance handle should be invalid immediately after instance registry clear");
+
+    const kb::scene::ScenePrefabHandle reloadedPrefab = scene.Prefabs().Load(prefabPath);
+    kb::tests::Require(reloadedPrefab.IsValid(), "Clear stale prefab reload failed");
+    kb::tests::Require(reloadedPrefab != stalePrefab, "Reload after prefab registry clear reused a stale prefab handle");
+    kb::tests::Require(!scene.Prefabs().Contains(stalePrefab), "Stale prefab handle resolved to a reloaded prefab");
+
+    const kb::scene::ScenePrefabInstance reloadedInstance = scene.Prefabs().Instantiate(reloadedPrefab);
+    kb::tests::Require(reloadedInstance.Handle().IsValid(), "Clear stale prefab reload did not instantiate");
+    kb::tests::Require(reloadedInstance.Handle() != staleInstance.Handle(), "Instantiate after instance registry clear reused a stale instance handle");
+    kb::tests::Require(!scene.Prefabs().IsInstance(staleInstance.Handle()), "Stale prefab instance handle resolved to a new instance");
+
+    std::filesystem::remove(prefabPath, removeError);
+}
+
+void RunPrefabMappingsIgnoreDestroyedEntitiesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Destroyed Mapping Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Destroyed Mapping Child",
+        .parentNode = rootNode,
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("DestroyedMappingPrefab", std::move(prefab));
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(prefabHandle);
+    kb::tests::Require(instance.Handle().IsValid(), "Destroyed mapping setup did not instantiate prefab");
+
+    const kb::scene::SceneObject rootObject = instance.ObjectAt(rootNode);
+    const kb::scene::SceneObject childObject = instance.ObjectAt(childNode);
+    std::uint32_t nodeIndex = 99;
+    std::uint64_t nodeId = 99;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(childObject, nodeIndex, nodeId) == instance.Handle(), "Destroyed mapping setup did not track child object");
+
+    scene.Entities().Destroy(childObject);
+    kb::tests::Require(!scene.Entities().IsAlive(childObject), "Destroyed mapping child was not destroyed");
+    const kb::scene::SceneObject replacement = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Destroyed Mapping Replacement" });
+    scene.Entities().SetName(childObject, "Stale Prefab Object Rename");
+    kb::scene::TagsComponent staleTags;
+    kb::scene::SetTagsText(staleTags, "stale-prefab-object");
+    scene.Components().Tags().Set(childObject.Entity(), staleTags);
+    kb::tests::Require(scene.Entities().Name(replacement) == "Destroyed Mapping Replacement", "Stale prefab SceneObject renamed a replacement object");
+    kb::tests::Require(!scene.Components().Tags().Has(replacement.Entity()), "Stale prefab SceneObject modified replacement components");
+    nodeIndex = 99;
+    nodeId = 99;
+    kb::tests::Require(!scene.Prefabs().ContainingInstance(childObject, nodeIndex).IsValid(), "Destroyed child still resolved to a prefab instance");
+    kb::tests::Require(!scene.Prefabs().ContainingInstance(childObject, nodeIndex, nodeId).IsValid(), "Destroyed child still resolved to a stable prefab node mapping");
+    kb::tests::Require(nodeIndex == 0 && nodeId == kb::scene::ScenePrefabNodeDesc::InvalidStableId, "Destroyed child mapping did not reset output values");
+
+    scene.Entities().Destroy(rootObject);
+    kb::tests::Require(!scene.Entities().IsAlive(rootObject), "Destroyed mapping root was not destroyed");
+    nodeIndex = 99;
+    kb::tests::Require(!scene.Prefabs().RootInstance(rootObject).IsValid(), "Destroyed root still resolved as prefab root");
+    kb::tests::Require(!scene.Prefabs().ContainingInstance(rootObject, nodeIndex).IsValid(), "Destroyed root still resolved to a prefab instance");
+    kb::tests::Require(!scene.Prefabs().SourcePrefab(rootObject).IsValid(), "Destroyed root still resolved to a source prefab");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1070,6 +1627,7 @@ void RunScenePrefabInstantiationTests() {
     RunInvalidPrefabInstantiationTest();
     RunRegisteredPrefabInstantiationTest();
     RunBulkPrefabInstantiationTest();
+    RunBulkPrefabMultiArchetypeNodeOrderTest();
     RunLargePrefabHierarchyTransformTest();
     RunRegisteredBulkPrefabInstantiationTest();
     RunRegisteredPrefabOverrideLifecycleTest();
@@ -1077,9 +1635,15 @@ void RunScenePrefabInstantiationTests() {
     RunRegisteredPrefabFullComponentOverrideLifecycleTest();
     RunPrefabApplyRejectsDetachedTrackedChildTest();
     RunPrefabVariantInstantiationTest();
+    RunPrefabVariantApplyUpdatesVariantOnlyTest();
+    RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest();
     RunPrefabConnectionMetadataAndUnpackTest();
+    RunPrefabStaleHandleProtectionTest();
+    RunPrefabMissingSourceUnloadUnpackReconnectTest();
+    RunPrefabUnpackNestedVariantModesTest();
     RunPrefabApplyRefreshesExistingInstancesTest();
     RunPrefabApplyAddedChildRefreshesExistingInstancesTest();
+    RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest();
     RunPrefabRefreshLargeInstanceSetTest();
     RunPrefabApplyOverrideToAssetTest();
     RunPrefabAssetLoadMigratesMissingNodeStableIdsTest();
@@ -1087,6 +1651,10 @@ void RunScenePrefabInstantiationTests() {
     RunNestedPrefabCaptureAndRefreshTest();
     RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest();
     RunPrefabStableNodeIdentityOverridesTest();
+    RunPrefabRemovedNodeOverrideDoesNotFallbackToIndexTest();
+    RunNestedPrefabOverrideSurvivesInnerReorderTest();
+    RunPrefabClearDoesNotReuseStaleHandlesTest();
+    RunPrefabMappingsIgnoreDestroyedEntitiesTest();
 }
 
 } // namespace kb::tests

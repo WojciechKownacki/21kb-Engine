@@ -57,6 +57,7 @@ void WriteFrameCounters(std::ostream& output, const SystemSchedulerFrameCounters
     output << "      \"frame_duration_ns\": " << counters.frameDurationNanoseconds << ",\n";
     output << "      \"cpu_time_ns\": " << counters.cpuTimeNanoseconds << ",\n";
     output << "      \"jobs_count\": " << counters.jobsCount << ",\n";
+    output << "      \"chunk_jobs_count\": " << counters.chunkJobsCount << ",\n";
     output << "      \"entities_processed\": " << counters.entitiesProcessed << ",\n";
     output << "      \"bytes_touched\": " << counters.bytesTouched << ",\n";
     output << "      \"system_count\": " << counters.systemCount << ",\n";
@@ -70,11 +71,27 @@ void WriteSystemCounters(std::ostream& output, const SystemSchedulerSystemCounte
     output << "      \"system_name\": ";
     WriteJsonString(output, counters.systemName);
     output << ",\n";
+    output << "      \"execution_path\": ";
+    WriteJsonString(output, counters.executionPath);
+    output << ",\n";
     output << "      \"system_index\": " << counters.systemIndex << ",\n";
     output << "      \"cpu_time_ns\": " << counters.cpuTimeNanoseconds << ",\n";
     output << "      \"jobs_count\": " << counters.jobsCount << ",\n";
+    output << "      \"chunk_jobs_count\": " << counters.chunkJobsCount << ",\n";
     output << "      \"entities_processed\": " << counters.entitiesProcessed << ",\n";
     output << "      \"bytes_touched\": " << counters.bytesTouched << '\n';
+    output << "    }";
+}
+
+void WriteStageCounters(std::ostream& output, const SystemSchedulerStageCounters& counters) {
+    output << "    {\n";
+    output << "      \"stage_index\": " << counters.stageIndex << ",\n";
+    output << "      \"system_count\": " << counters.systemCount << ",\n";
+    output << "      \"cpu_time_ns\": " << counters.cpuTimeNanoseconds << ",\n";
+    output << "      \"jobs_count\": " << counters.jobsCount << ",\n";
+    output << "      \"chunk_jobs_count\": " << counters.chunkJobsCount << ",\n";
+    output << "      \"wait_time_ns\": " << counters.waitTimeNanoseconds << ",\n";
+    output << "      \"worker_busy_time_ns\": " << counters.workerBusyTimeNanoseconds << '\n';
     output << "    }";
 }
 
@@ -103,10 +120,14 @@ void WriteEvent(std::ostream& output, const SystemSchedulerTraceEvent& event) {
     output << "      \"system_name\": ";
     WriteJsonString(output, event.systemName);
     output << ",\n";
+    output << "      \"execution_path\": ";
+    WriteJsonString(output, event.executionPath);
+    output << ",\n";
     output << "      \"system_index\": " << event.systemIndex << ",\n";
     output << "      \"stage_index\": " << event.stageIndex << ",\n";
     output << "      \"worker_index\": " << event.workerIndex << ",\n";
     output << "      \"jobs_count\": " << event.jobsCount << ",\n";
+    output << "      \"chunk_jobs_count\": " << event.chunkJobsCount << ",\n";
     output << "      \"start_time_ns\": " << event.startTimeNanoseconds << ",\n";
     output << "      \"end_time_ns\": " << event.endTimeNanoseconds << ",\n";
     output << "      \"duration_ns\": " << event.durationNanoseconds << ",\n";
@@ -135,8 +156,12 @@ void WriteChromeTraceEvent(std::ostream& output, const SystemSchedulerTraceEvent
     output << "      \"dur\": " << std::max<std::uint64_t>(1U, NanosecondsToMicroseconds(event.durationNanoseconds)) << ",\n";
     output << "      \"args\": {\n";
     output << "        \"system_index\": " << event.systemIndex << ",\n";
+    output << "        \"execution_path\": ";
+    WriteJsonString(output, event.executionPath);
+    output << ",\n";
     output << "        \"stage_index\": " << event.stageIndex << ",\n";
     output << "        \"jobs_count\": " << event.jobsCount << ",\n";
+    output << "        \"chunk_jobs_count\": " << event.chunkJobsCount << ",\n";
     output << "        \"entities_processed\": " << event.entitiesProcessed << ",\n";
     output << "        \"bytes_touched\": " << event.bytesTouched << ",\n";
     output << "        \"wait_time_ns\": " << event.waitTimeNanoseconds << ",\n";
@@ -169,6 +194,13 @@ void ExportSystemSchedulerTraceToJsonFile(const SystemSchedulerTrace& trace, con
     output << "  \"frame_counters\": {\n";
     WriteFrameCounters(output, trace.frameCounters);
     output << "  },\n";
+
+    output << "  \"stage_counters\": [\n";
+    for (std::size_t index = 0; index < trace.stageCounters.size(); ++index) {
+        WriteStageCounters(output, trace.stageCounters[index]);
+        output << (index + 1U == trace.stageCounters.size() ? "\n" : ",\n");
+    }
+    output << "  ],\n";
 
     output << "  \"system_counters\": [\n";
     for (std::size_t index = 0; index < trace.systemCounters.size(); ++index) {

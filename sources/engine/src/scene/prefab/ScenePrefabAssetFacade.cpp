@@ -5,6 +5,7 @@
 #include "scene/prefab/ScenePrefabCaptureFacade.hpp"
 #include "scene/prefab/ScenePrefabChildrenReader.hpp"
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
+#include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/io/ScenePrefabAssetService.hpp"
 
 #include <utility>
@@ -32,8 +33,8 @@ void RegisterCreatedAssetInstance(Scene& scene, SceneObject root, const ScenePre
     }
 
     SceneState& state = SceneAccess::State(scene);
-    const ScenePrefab* prefab = state.prefabs.Find(handle);
-    if (prefab == nullptr) {
+    const ScenePrefabRecord* record = state.prefabs.FindRecord(handle);
+    if (record == nullptr) {
         return;
     }
 
@@ -42,8 +43,8 @@ void RegisterCreatedAssetInstance(Scene& scene, SceneObject root, const ScenePre
         return;
     }
 
-    ScenePrefab resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, *prefab);
-    static_cast<void>(state.prefabInstances.Register(handle, root.Parent(), std::move(objects), std::move(resolvedPrefab)));
+    ScenePrefab resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab);
+    static_cast<void>(state.prefabInstances.Register(handle, record->guid, root.Parent(), std::move(objects), std::move(resolvedPrefab)));
 }
 
 } // namespace

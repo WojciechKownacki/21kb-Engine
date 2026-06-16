@@ -498,6 +498,43 @@ public:
         return location;
     }
 
+    void AddMany(std::span<const Entity> entities, std::size_t tableIndex, std::vector<EntityLocation>& locations) {
+        locations.clear();
+        locations.reserve(entities.size());
+        if (entities.empty()) {
+            return;
+        }
+        if (componentVersions_.empty()) {
+            componentVersions_.resize(layout_.columns.size(), 1U);
+        }
+
+        std::size_t consumed = 0;
+        while (consumed < entities.size()) {
+            if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
+                chunks_.emplace_back(*pool_, layout_.capacity);
+            }
+
+            NativeChunk& chunk = chunks_.back();
+            const std::size_t chunkIndex = chunks_.size() - 1U;
+            const std::size_t firstRow = chunk.rowCount;
+            const std::size_t writable = std::min(entities.size() - consumed, layout_.capacity - firstRow);
+            std::memcpy(chunk.entities.data() + firstRow, entities.data() + consumed, writable * sizeof(Entity));
+
+            for (const ComponentLayout& column : layout_.columns) {
+                std::memset(chunk.payload.Data() + column.offset + (firstRow * column.type.size), 0, writable * column.type.size);
+            }
+
+            for (std::size_t offset = 0; offset < writable; ++offset) {
+                locations.push_back(EntityLocation{ .table = tableIndex, .chunk = chunkIndex, .row = firstRow + offset });
+            }
+
+            chunk.rowCount += writable;
+            liveEntities_ += writable;
+            consumed += writable;
+        }
+        version_ += entities.size();
+    }
+
     [[nodiscard]] Entity RemoveAt(EntityLocation location) {
         if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
             throw std::out_of_range("Invalid native ECS row location");
@@ -525,6 +562,56 @@ public:
         return movedEntity;
     }
 
+    [[nodiscard]] std::vector<std::pair<Entity, EntityLocation>> RemoveMany(std::span<const EntityLocation> locations) {
+        std::vector<std::pair<Entity, EntityLocation>> movedEntities;
+        if (locations.empty()) {
+            return movedEntities;
+        }
+
+        std::vector<std::size_t> removedRows;
+        removedRows.reserve(locations.size());
+        for (EntityLocation location : locations) {
+            if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
+                throw std::out_of_range("Invalid native ECS row location");
+            }
+            removedRows.push_back(FlatRow(location));
+        }
+        std::sort(removedRows.begin(), removedRows.end());
+        if (std::adjacent_find(removedRows.begin(), removedRows.end()) != removedRows.end()) {
+            throw std::invalid_argument("Native ECS bulk destroy received duplicate row locations");
+        }
+
+        const std::size_t originalLiveEntities = liveEntities_;
+        const std::size_t targetLiveEntities = originalLiveEntities - removedRows.size();
+        std::size_t tail = originalLiveEntities - 1U;
+        for (std::size_t removedIndex = 0; removedIndex < removedRows.size(); ++removedIndex) {
+            const std::size_t destinationRow = removedRows[removedIndex];
+            if (destinationRow >= targetLiveEntities) {
+                continue;
+            }
+
+            while (std::binary_search(removedRows.begin(), removedRows.end(), tail)) {
+                --tail;
+            }
+
+            const EntityLocation source = LocationFromFlatRow(tail);
+            const EntityLocation destination = LocationFromFlatRow(destinationRow);
+            CopyRow(source, destination);
+            Entity movedEntity = chunks_[source.chunk].entities[source.row];
+            chunks_[destination.chunk].entities[destination.row] = movedEntity;
+            movedEntities.push_back(std::pair{ movedEntity, destination });
+            --tail;
+        }
+
+        ResizeRows(targetLiveEntities);
+        liveEntities_ = targetLiveEntities;
+        version_ += removedRows.size();
+        for (std::uint64_t& componentVersion : componentVersions_) {
+            componentVersion += removedRows.size();
+        }
+        return movedEntities;
+    }
+
     void CopyEntityTo(EntityLocation source, ArchetypeTable& target, EntityLocation targetLocation) const {
         if (source.chunk >= chunks_.size() || source.row >= chunks_[source.chunk].rowCount) {
             throw std::out_of_range("Invalid native ECS source row location");
@@ -544,6 +631,37 @@ public:
             throw std::invalid_argument("Invalid native ECS component write");
         }
         std::memcpy(ComponentData(location, componentId), data, size);
+        TouchComponent(componentId);
+    }
+
+    void WriteComponentColumn(
+        std::size_t chunkIndex,
+        std::size_t firstRow,
+        ComponentId componentId,
+        const void* data,
+        std::size_t count,
+        std::size_t stride) {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr || data == nullptr || count == 0U) {
+            throw std::invalid_argument("Invalid native ECS component column write");
+        }
+        if (chunkIndex >= chunks_.size() || firstRow + count > chunks_[chunkIndex].rowCount) {
+            throw std::out_of_range("Invalid native ECS component column range");
+        }
+
+        auto* destination = chunks_[chunkIndex].payload.Data() + column->offset + (firstRow * column->type.size);
+        const auto* source = static_cast<const std::byte*>(data);
+        const std::size_t sourceStride = stride == 0U ? column->type.size : stride;
+        if (sourceStride < column->type.size) {
+            throw std::invalid_argument("Invalid native ECS component column stride");
+        }
+        if (sourceStride == column->type.size) {
+            std::memcpy(destination, source, count * column->type.size);
+        } else {
+            for (std::size_t row = 0; row < count; ++row) {
+                std::memcpy(destination + (row * column->type.size), source + (row * sourceStride), column->type.size);
+            }
+        }
         TouchComponent(componentId);
     }
 
@@ -649,6 +767,33 @@ private:
         }
     }
 
+    [[nodiscard]] std::size_t FlatRow(EntityLocation location) const noexcept {
+        return location.chunk * layout_.capacity + location.row;
+    }
+
+    [[nodiscard]] EntityLocation LocationFromFlatRow(std::size_t flatRow) const noexcept {
+        return EntityLocation{
+            .chunk = flatRow / layout_.capacity,
+            .row = flatRow % layout_.capacity,
+        };
+    }
+
+    void ResizeRows(std::size_t targetLiveEntities) {
+        if (targetLiveEntities == 0U) {
+            chunks_.clear();
+            return;
+        }
+
+        const std::size_t requiredChunks = ((targetLiveEntities - 1U) / layout_.capacity) + 1U;
+        while (chunks_.size() > requiredChunks) {
+            chunks_.pop_back();
+        }
+        for (std::size_t chunkIndex = 0; chunkIndex < chunks_.size(); ++chunkIndex) {
+            const std::size_t firstRow = chunkIndex * layout_.capacity;
+            chunks_[chunkIndex].rowCount = std::min(layout_.capacity, targetLiveEntities - firstRow);
+        }
+    }
+
     NativeChunkPool* pool_ = nullptr;
     std::vector<NativeComponentType> types_;
     ComponentSignature signature_;
@@ -665,6 +810,31 @@ private:
     types.reserve(components.size());
     for (const NativeComponentValue& component : components) {
         ValidateComponentType(component.type);
+        types.push_back(component.type);
+    }
+    std::sort(types.begin(), types.end(), [](const NativeComponentType& lhs, const NativeComponentType& rhs) {
+        return lhs.id < rhs.id;
+    });
+    const auto duplicate = std::adjacent_find(types.begin(), types.end(), [](const NativeComponentType& lhs, const NativeComponentType& rhs) {
+        return lhs.id == rhs.id;
+    });
+    if (duplicate != types.end()) {
+        throw std::invalid_argument("Native ECS archetype contains duplicate component types");
+    }
+    return types;
+}
+
+[[nodiscard]] std::vector<NativeComponentType> NormalizeTypes(std::span<const NativeBulkComponentColumn> components) {
+    std::vector<NativeComponentType> types;
+    types.reserve(components.size());
+    for (const NativeBulkComponentColumn& component : components) {
+        ValidateComponentType(component.type);
+        if (component.data == nullptr) {
+            throw std::invalid_argument("Native ECS bulk component column is missing data");
+        }
+        if (component.stride != 0U && component.stride < component.type.size) {
+            throw std::invalid_argument("Native ECS bulk component column stride is too small");
+        }
         types.push_back(component.type);
     }
     std::sort(types.begin(), types.end(), [](const NativeComponentType& lhs, const NativeComponentType& rhs) {
@@ -790,6 +960,22 @@ public:
         return entity;
     }
 
+    [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+        if (count == 0U) {
+            return {};
+        }
+
+        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        const std::size_t tableIndex = FindOrCreateTable(types);
+        std::vector<Entity> entities;
+        entities.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            entities.push_back(AllocateEntity());
+        }
+        AppendEntitiesToTable(tableIndex, entities, components);
+        return entities;
+    }
+
     void AdoptEntity(Entity entity, std::span<const NativeComponentValue> components) {
         if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex) {
             throw std::invalid_argument("Native ECS cannot adopt an invalid entity");
@@ -823,6 +1009,52 @@ public:
         }
     }
 
+    void AdoptEntities(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+        if (entities.empty()) {
+            return;
+        }
+
+        std::unordered_set<Entity::IdType> uniqueIds;
+        uniqueIds.reserve(entities.size());
+        for (Entity entity : entities) {
+            if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex || !uniqueIds.insert(entity.Id()).second ||
+                entitySlots_.find(entity.Id()) != entitySlots_.end()) {
+                throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
+            }
+        }
+
+        const std::vector<NativeComponentType> types = NormalizeTypes(components);
+        const std::size_t tableIndex = FindOrCreateTable(types);
+
+        records_.reserve(records_.size() + entities.size());
+        std::vector<Entity> adopted;
+        adopted.reserve(entities.size());
+        try {
+            for (Entity entity : entities) {
+                const std::uint32_t index = AllocateExternalRecord(entity);
+                EntityRecord& record = records_[index];
+                record.generation = EntityGeneration(entity);
+                record.alive = true;
+                record.ownsGeneratedId = false;
+                record.entity = entity;
+                entitySlots_[entity.Id()] = index;
+                ++liveEntities_;
+                adopted.push_back(entity);
+            }
+            AppendEntitiesToTable(tableIndex, adopted, components);
+        } catch (...) {
+            for (Entity entity : adopted) {
+                const auto slot = entitySlots_.find(entity.Id());
+                if (slot != entitySlots_.end() && slot->second < records_.size()) {
+                    records_[slot->second].alive = false;
+                    entitySlots_.erase(slot);
+                    --liveEntities_;
+                }
+            }
+            throw;
+        }
+    }
+
     void DestroyEntity(Entity entity) {
         const std::uint32_t recordIndex = RecordIndex(entity);
         EntityRecord& record = LiveRecord(entity);
@@ -838,6 +1070,46 @@ public:
             freeEntityIndices_.push_back(recordIndex);
         }
         --liveEntities_;
+    }
+
+    void DestroyEntities(std::span<const Entity> entities) {
+        if (entities.empty()) {
+            return;
+        }
+
+        std::unordered_set<Entity::IdType> uniqueIds;
+        uniqueIds.reserve(entities.size());
+        std::vector<std::uint32_t> recordIndices;
+        recordIndices.reserve(entities.size());
+        std::unordered_map<std::size_t, std::vector<EntityLocation>> locationsByTable;
+        for (Entity entity : entities) {
+            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
+                throw std::invalid_argument("Native ECS bulk destroy received an invalid or duplicate entity");
+            }
+            const std::uint32_t recordIndex = RecordIndex(entity);
+            const EntityRecord& record = records_[recordIndex];
+            recordIndices.push_back(recordIndex);
+            locationsByTable[record.location.table].push_back(record.location);
+        }
+
+        for (auto& [tableIndex, locations] : locationsByTable) {
+            std::vector<std::pair<Entity, EntityLocation>> movedEntities = tables_[tableIndex].RemoveMany(locations);
+            for (auto& [movedEntity, location] : movedEntities) {
+                location.table = tableIndex;
+                records_[RecordIndex(movedEntity)].location = location;
+            }
+        }
+
+        for (std::uint32_t recordIndex : recordIndices) {
+            EntityRecord& record = records_[recordIndex];
+            record.alive = false;
+            entitySlots_.erase(record.entity.Id());
+            if (record.ownsGeneratedId) {
+                ++record.generation;
+                freeEntityIndices_.push_back(recordIndex);
+            }
+        }
+        liveEntities_ -= entities.size();
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
@@ -1315,6 +1587,42 @@ public:
     }
 
 private:
+    void AppendEntitiesToTable(
+        std::size_t tableIndex,
+        std::span<const Entity> entities,
+        std::span<const NativeBulkComponentColumn> components) {
+        ArchetypeTable& table = tables_[tableIndex];
+        std::vector<EntityLocation> locations;
+        table.AddMany(entities, tableIndex, locations);
+        if (locations.size() != entities.size()) {
+            throw std::runtime_error("Native ECS bulk append returned an invalid location count");
+        }
+
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            records_[RecordIndex(entities[index])].location = locations[index];
+        }
+
+        for (const NativeBulkComponentColumn& component : components) {
+            const std::size_t stride = component.stride == 0U ? component.type.size : component.stride;
+            std::size_t consumed = 0;
+            while (consumed < locations.size()) {
+                const EntityLocation first = locations[consumed];
+                std::size_t count = 1U;
+                while (consumed + count < locations.size()) {
+                    const EntityLocation next = locations[consumed + count];
+                    if (next.chunk != first.chunk || next.row != first.row + count) {
+                        break;
+                    }
+                    ++count;
+                }
+
+                const auto* data = static_cast<const std::byte*>(component.data) + (consumed * stride);
+                table.WriteComponentColumn(first.chunk, first.row, component.type.id, data, count, stride);
+                consumed += count;
+            }
+        }
+    }
+
     [[nodiscard]] static std::vector<ComponentId> ComponentIds(std::span<const NativeComponentType> types) {
         std::vector<ComponentId> ids;
         ids.reserve(types.size());
@@ -1486,12 +1794,24 @@ Entity NativeArchetypeStorage::CreateEntity(std::span<const NativeComponentValue
     return impl_->CreateEntity(components);
 }
 
+std::vector<Entity> NativeArchetypeStorage::CreateEntities(std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+    return impl_->CreateEntities(count, components);
+}
+
 void NativeArchetypeStorage::AdoptEntity(Entity entity, std::span<const NativeComponentValue> components) {
     impl_->AdoptEntity(entity, components);
 }
 
+void NativeArchetypeStorage::AdoptEntities(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
+    impl_->AdoptEntities(entities, components);
+}
+
 void NativeArchetypeStorage::DestroyEntity(Entity entity) {
     impl_->DestroyEntity(entity);
+}
+
+void NativeArchetypeStorage::DestroyEntities(std::span<const Entity> entities) {
+    impl_->DestroyEntities(entities);
 }
 
 bool NativeArchetypeStorage::IsAlive(Entity entity) const noexcept {
