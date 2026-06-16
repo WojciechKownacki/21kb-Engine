@@ -66,12 +66,22 @@ private:
 
 class CommandBuffer {
 public:
+    using RegisterComponentFn = ComponentId (*)(World&);
+
+    struct BulkComponentView {
+        RegisterComponentFn registerComponent = nullptr;
+        std::size_t componentSize = 0;
+        std::size_t componentCount = 0;
+        const void* data = nullptr;
+    };
+
     class WorkerBuffer {
     public:
         WorkerBuffer() noexcept = default;
 
         [[nodiscard]] CommandEntity CreateEntity(std::string_view name = {});
         [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::size_t count);
+        [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::size_t count, std::span<const BulkComponentView> components);
 
         template <typename... Components>
         [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::span<const Components>... components);
@@ -124,6 +134,9 @@ public:
     [[nodiscard]] std::size_t CommandCount() const noexcept;
     [[nodiscard]] bool Empty() const noexcept;
 
+    template <typename T>
+    [[nodiscard]] static BulkComponentView MakeBulkComponentView(std::span<const T> components) noexcept;
+
     CommandBufferPlaybackResult Playback(World& world);
     void Clear() noexcept;
 
@@ -142,7 +155,6 @@ private:
 
     using SetComponentFn = void (*)(World&, CommandEntity, std::span<const std::byte>, const CommandBufferPlaybackResult&);
     using RemoveComponentFn = void (*)(World&, CommandEntity, const CommandBufferPlaybackResult&);
-    using RegisterComponentFn = ComponentId (*)(World&);
     using FindComponentFn = ComponentId (*)(const World&);
 
     struct ComponentCommand {
@@ -398,6 +410,18 @@ void CommandBuffer::AppendBulkRemoveComponent(Command& command) {
     BulkRemoveComponentCommand component;
     component.findComponent = &CommandBuffer::FindBulkComponent<T>;
     command.bulkRemoveComponents.push_back(component);
+}
+
+template <typename T>
+CommandBuffer::BulkComponentView CommandBuffer::MakeBulkComponentView(std::span<const T> components) noexcept {
+    static_assert(std::is_trivially_copyable_v<T>, "ECS command buffer components must be trivially copyable");
+    static_assert(std::is_trivially_destructible_v<T>, "ECS command buffer components must be trivially destructible");
+    return BulkComponentView{
+        .registerComponent = &CommandBuffer::RegisterBulkComponent<T>,
+        .componentSize = sizeof(T),
+        .componentCount = components.size(),
+        .data = components.data(),
+    };
 }
 
 } // namespace kb::ecs

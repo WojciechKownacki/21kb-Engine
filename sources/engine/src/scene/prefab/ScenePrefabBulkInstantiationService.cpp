@@ -4,14 +4,16 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
+#include <cstdint>
 #include <limits>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace kb::scene {
 namespace {
@@ -27,33 +29,88 @@ namespace {
     return instanceIndex * nodeCount + nodeIndex;
 }
 
-template <typename T, typename Reader>
-void QueueOptionalComponents(
-    kb::ecs::CommandBuffer::WorkerBuffer& worker,
-    std::span<const kb::ecs::CommandEntity> entities,
-    std::span<const ScenePrefabNodeDesc> nodes,
-    std::size_t instanceCount,
-    Reader reader) {
-    std::vector<kb::ecs::CommandEntity> targets;
-    std::vector<T> values;
-    targets.reserve(entities.size());
-    values.reserve(entities.size());
-
+template <typename T>
+void RepeatComponents(std::vector<T>& output, std::span<const T> source, std::size_t instanceCount) {
+    const std::size_t totalCount = TotalNodeCount(instanceCount, source.size());
+    output.clear();
+    output.reserve(totalCount);
     for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
-            const std::optional<T>& component = reader(nodes[nodeIndex].components);
-            if (!component.has_value()) {
-                continue;
-            }
-            targets.push_back(entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())]);
-            values.push_back(*component);
-        }
-    }
-
-    if (!targets.empty()) {
-        worker.Set(std::span<const kb::ecs::CommandEntity>{ targets.data(), targets.size() }, std::span<const T>{ values.data(), values.size() });
+        output.insert(output.end(), source.begin(), source.end());
     }
 }
+
+template <typename T>
+void AddComponentView(std::vector<kb::ecs::CommandBuffer::BulkComponentView>& views, std::span<const T> components) {
+    views.push_back(kb::ecs::CommandBuffer::MakeBulkComponentView<T>(components));
+}
+
+struct ScenePrefabArchetypeSpawnPayload {
+    std::vector<TransformComponent> transforms;
+    std::vector<VisibilityComponent> visibility;
+    std::vector<CameraComponent> cameras;
+    std::vector<MeshRendererComponent> meshRenderers;
+    std::vector<LightComponent> lights;
+    std::vector<InputComponent> inputs;
+    std::vector<RigidbodyComponent> rigidbodies;
+    std::vector<ColliderComponent> colliders;
+    std::vector<TagsComponent> tags;
+    std::vector<BehaviourComponent> behaviours;
+    std::vector<AudioSourceComponent> audioSources;
+    std::vector<AudioListenerComponent> audioListeners;
+    std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
+
+    void Build(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
+        RepeatComponents(transforms, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
+        RepeatComponents(visibility, std::span<const VisibilityComponent>{ archetype.visibility }, instanceCount);
+
+        views.clear();
+        views.reserve(12U);
+        AddComponentView(views, std::span<const TransformComponent>{ transforms });
+        AddComponentView(views, std::span<const VisibilityComponent>{ visibility });
+
+        const std::uint16_t mask = archetype.componentMask;
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Camera)) {
+            RepeatComponents(cameras, std::span<const CameraComponent>{ archetype.cameras }, instanceCount);
+            AddComponentView(views, std::span<const CameraComponent>{ cameras });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::MeshRenderer)) {
+            RepeatComponents(meshRenderers, std::span<const MeshRendererComponent>{ archetype.meshRenderers }, instanceCount);
+            AddComponentView(views, std::span<const MeshRendererComponent>{ meshRenderers });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Light)) {
+            RepeatComponents(lights, std::span<const LightComponent>{ archetype.lights }, instanceCount);
+            AddComponentView(views, std::span<const LightComponent>{ lights });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Input)) {
+            RepeatComponents(inputs, std::span<const InputComponent>{ archetype.inputs }, instanceCount);
+            AddComponentView(views, std::span<const InputComponent>{ inputs });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Rigidbody)) {
+            RepeatComponents(rigidbodies, std::span<const RigidbodyComponent>{ archetype.rigidbodies }, instanceCount);
+            AddComponentView(views, std::span<const RigidbodyComponent>{ rigidbodies });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Collider)) {
+            RepeatComponents(colliders, std::span<const ColliderComponent>{ archetype.colliders }, instanceCount);
+            AddComponentView(views, std::span<const ColliderComponent>{ colliders });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Tags)) {
+            RepeatComponents(tags, std::span<const TagsComponent>{ archetype.tags }, instanceCount);
+            AddComponentView(views, std::span<const TagsComponent>{ tags });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::Behaviour)) {
+            RepeatComponents(behaviours, std::span<const BehaviourComponent>{ archetype.behaviours }, instanceCount);
+            AddComponentView(views, std::span<const BehaviourComponent>{ behaviours });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AudioSource)) {
+            RepeatComponents(audioSources, std::span<const AudioSourceComponent>{ archetype.audioSources }, instanceCount);
+            AddComponentView(views, std::span<const AudioSourceComponent>{ audioSources });
+        }
+        if (ScenePrefabBakedMaskHas(mask, ScenePrefabBakedComponentMask::AudioListener)) {
+            RepeatComponents(audioListeners, std::span<const AudioListenerComponent>{ archetype.audioListeners }, instanceCount);
+            AddComponentView(views, std::span<const AudioListenerComponent>{ audioListeners });
+        }
+    }
+};
 
 void QueueHierarchy(
     kb::ecs::CommandBuffer::WorkerBuffer& worker,
@@ -76,41 +133,29 @@ void QueueHierarchy(
     }
 }
 
-void QueuePrefabComponents(
+[[nodiscard]] std::vector<kb::ecs::CommandEntity> CreateBakedEntities(
     kb::ecs::CommandBuffer::WorkerBuffer& worker,
-    std::span<const kb::ecs::CommandEntity> entities,
-    std::span<const ScenePrefabNodeDesc> nodes,
+    const ScenePrefabBakedData& baked,
     std::size_t instanceCount) {
-    QueueOptionalComponents<CameraComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<CameraComponent>& {
-        return components.camera;
-    });
-    QueueOptionalComponents<MeshRendererComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<MeshRendererComponent>& {
-        return components.meshRenderer;
-    });
-    QueueOptionalComponents<LightComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<LightComponent>& {
-        return components.light;
-    });
-    QueueOptionalComponents<InputComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<InputComponent>& {
-        return components.input;
-    });
-    QueueOptionalComponents<RigidbodyComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<RigidbodyComponent>& {
-        return components.rigidbody;
-    });
-    QueueOptionalComponents<ColliderComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<ColliderComponent>& {
-        return components.collider;
-    });
-    QueueOptionalComponents<TagsComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<TagsComponent>& {
-        return components.tags;
-    });
-    QueueOptionalComponents<BehaviourComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<BehaviourComponent>& {
-        return components.behaviour;
-    });
-    QueueOptionalComponents<AudioSourceComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<AudioSourceComponent>& {
-        return components.audioSource;
-    });
-    QueueOptionalComponents<AudioListenerComponent>(worker, entities, nodes, instanceCount, [](const ScenePrefabNodeComponents& components) -> const std::optional<AudioListenerComponent>& {
-        return components.audioListener;
-    });
+    std::vector<kb::ecs::CommandEntity> entities(TotalNodeCount(instanceCount, baked.NodeCount()));
+    ScenePrefabArchetypeSpawnPayload payload;
+
+    for (const ScenePrefabBakedArchetype& archetype : baked.Archetypes()) {
+        const std::size_t archetypeNodeCount = archetype.nodeIndices.size();
+        const std::size_t archetypeEntityCount = TotalNodeCount(instanceCount, archetypeNodeCount);
+        payload.Build(archetype, instanceCount);
+
+        std::vector<kb::ecs::CommandEntity> created = worker.CreateEntities(archetypeEntityCount, std::span<const kb::ecs::CommandBuffer::BulkComponentView>{ payload.views });
+        for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+            for (std::size_t archetypeNodeIndex = 0; archetypeNodeIndex < archetypeNodeCount; ++archetypeNodeIndex) {
+                const std::size_t createdIndex = EntityIndex(instanceIndex, archetypeNodeIndex, archetypeNodeCount);
+                const std::size_t prefabIndex = EntityIndex(instanceIndex, archetype.nodeIndices[archetypeNodeIndex], baked.NodeCount());
+                entities[prefabIndex] = created[createdIndex];
+            }
+        }
+    }
+
+    return entities;
 }
 
 [[nodiscard]] std::vector<ScenePrefabInstance> BuildInstances(
@@ -160,32 +205,15 @@ std::vector<ScenePrefabInstance> ScenePrefabBulkInstantiationService::Instantiat
     }
 
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
-    const std::size_t totalCount = TotalNodeCount(count, nodes.size());
+    const ScenePrefabBakedData baked = ScenePrefabBakedData::Bake(nodes);
+    const std::size_t totalCount = TotalNodeCount(count, baked.NodeCount());
     if (totalCount == 0) {
         return {};
     }
 
-    std::vector<TransformComponent> transforms;
-    std::vector<VisibilityComponent> visibility;
-    transforms.reserve(totalCount);
-    visibility.reserve(totalCount);
-
-    for (std::size_t instanceIndex = 0; instanceIndex < count; ++instanceIndex) {
-        static_cast<void>(instanceIndex);
-        for (const ScenePrefabNodeDesc& node : nodes) {
-            TransformComponent transform = node.transform;
-            transform.worldDirty = true;
-            transforms.push_back(transform);
-            visibility.push_back(node.visibility);
-        }
-    }
-
     kb::ecs::CommandBuffer commandBuffer{ 1 };
     kb::ecs::CommandBuffer::WorkerBuffer worker = commandBuffer.Worker(0);
-    std::vector<kb::ecs::CommandEntity> entities = worker.CreateEntities(
-        std::span<const TransformComponent>{ transforms.data(), transforms.size() },
-        std::span<const VisibilityComponent>{ visibility.data(), visibility.size() });
-    QueuePrefabComponents(worker, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, nodes, count);
+    std::vector<kb::ecs::CommandEntity> entities = CreateBakedEntities(worker, baked, count);
     QueueHierarchy(worker, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, nodes, count, settings.parent);
 
     kb::ecs::CommandBufferPlaybackResult playback = commandBuffer.Playback(SceneAccess::State(scene).world);

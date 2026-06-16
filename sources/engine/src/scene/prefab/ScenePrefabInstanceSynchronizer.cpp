@@ -126,9 +126,15 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     const std::vector<ScenePrefabInstanceHandle> handles = instances.HandlesForPrefab(handle);
     for (const ScenePrefabInstanceHandle instanceHandle : handles) {
         ScenePrefabInstanceRecord* instance = instances.FindMutable(instanceHandle);
-        if (instance != nullptr && ScenePrefabInstanceSynchronizer::RefreshInstance(scene, registry, *instance)) {
+        if (instance == nullptr) {
+            continue;
+        }
+
+        const std::vector<SceneObject> oldObjects = instance->objects;
+        if (ScenePrefabInstanceSynchronizer::RefreshInstance(scene, registry, *instance)) {
             ++refreshedCount;
         }
+        instances.ReindexObjects(instanceHandle, oldObjects);
     }
     return refreshedCount;
 }
