@@ -1,5 +1,7 @@
 #include "scene/components/SceneComponentAccess.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
+
 #include <flecs.h>
 
 namespace kb::scene {
@@ -9,7 +11,7 @@ const void* SceneComponentAccess::TryGet(const ecs_world_t* world, SceneEntity e
         return nullptr;
     }
 
-    return ecs_get_id(world, entity.Id(), componentId);
+    return ecs_get_id(world, kb::ecs::FlecsEntityId(entity), componentId);
 }
 
 void* SceneComponentAccess::TryGetMutable(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept {
@@ -17,26 +19,26 @@ void* SceneComponentAccess::TryGetMutable(ecs_world_t* world, SceneEntity entity
         return nullptr;
     }
 
-    return ecs_get_mut_id(world, entity.Id(), componentId);
+    return ecs_get_mut_id(world, kb::ecs::FlecsEntityId(entity), componentId);
 }
 
 bool SceneComponentAccess::Has(const ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept {
-    return world != nullptr && entity.IsValid() && ecs_has_id(world, entity.Id(), componentId);
+    return world != nullptr && entity.IsValid() && ecs_has_id(world, kb::ecs::FlecsEntityId(entity), componentId);
 }
 
 void SceneComponentAccess::Set(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId, std::size_t size, const void* value) {
-    ecs_set_id(world, entity.Id(), componentId, size, value);
+    ecs_set_id(world, kb::ecs::FlecsEntityId(entity), componentId, size, value);
 }
 
 void SceneComponentAccess::Remove(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept {
     if (world != nullptr && entity.IsValid()) {
-        ecs_remove_id(world, entity.Id(), componentId);
+        ecs_remove_id(world, kb::ecs::FlecsEntityId(entity), componentId);
     }
 }
 
 void SceneComponentAccess::MarkModified(ecs_world_t* world, SceneEntity entity, std::uint64_t componentId) noexcept {
     if (world != nullptr && entity.IsValid()) {
-        ecs_modified_id(world, entity.Id(), componentId);
+        ecs_modified_id(world, kb::ecs::FlecsEntityId(entity), componentId);
     }
 }
 

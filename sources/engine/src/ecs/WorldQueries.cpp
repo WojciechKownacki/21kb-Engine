@@ -1,5 +1,6 @@
 #include "engine/ecs/World.hpp"
 
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/QueryStateFactory.hpp"
 
 #include <flecs.h>
@@ -36,10 +37,10 @@ QueryState* World::CreateQueryState(
 }
 
 ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
-    if (world_ == nullptr || !entity.IsValid() || !ecs_is_alive(world_, entity.Id())) {
+    if (world_ == nullptr || !entity.IsValid() || !ecs_is_alive(world_, FlecsEntityId(entity))) {
         return nullptr;
     }
-    return ecs_get_table(world_, entity.Id());
+    return ecs_get_table(world_, FlecsEntityId(entity));
 }
 
 void World::InvalidateQueryPlansForArchetypeChange(ecs_table_t* previousArchetype, ecs_table_t* currentArchetype) noexcept {
