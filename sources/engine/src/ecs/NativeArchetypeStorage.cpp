@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -23,6 +25,14 @@ static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batc
     return (value + alignment - 1U) & ~(alignment - 1U);
 }
 
+[[nodiscard]] bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
+    return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
+}
+
+void AssertComponentAlignment(const void* pointer, const NativeComponentType& type) noexcept {
+    assert(IsAlignedAddress(pointer, type.alignment) && "Native ECS component column violated declared alignment");
+}
+
 [[nodiscard]] Entity PackEntity(std::uint32_t index, std::uint32_t generation) noexcept {
     return Entity{ (static_cast<Entity::IdType>(generation) << 32U) | (static_cast<Entity::IdType>(index) + 1U) };
 }
@@ -39,6 +49,12 @@ static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batc
 void ValidateComponentType(const NativeComponentType& type) {
     if (type.id == 0 || type.size == 0 || type.alignment == 0 || !std::has_single_bit(type.alignment)) {
         throw std::invalid_argument("Invalid native ECS component type");
+    }
+    if (type.alignment > kChunkAlignment) {
+        throw std::invalid_argument("Native ECS component alignment exceeds chunk alignment");
+    }
+    if ((type.size % type.alignment) != 0U) {
+        throw std::invalid_argument("Native ECS component size must preserve row alignment");
     }
 }
 
@@ -523,11 +539,15 @@ private:
     }
 
     [[nodiscard]] void* ComponentData(EntityLocation location, const ComponentLayout& column) {
-        return chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        void* data = chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        AssertComponentAlignment(data, column.type);
+        return data;
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, const ComponentLayout& column) const {
-        return chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        const void* data = chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        AssertComponentAlignment(data, column.type);
+        return data;
     }
 
     void CopyRow(EntityLocation source, EntityLocation target) {
