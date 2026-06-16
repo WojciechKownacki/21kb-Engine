@@ -1,6 +1,7 @@
 #include "ScenePrefabTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -10,7 +11,9 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <span>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -212,6 +215,19 @@ void RunBulkPrefabInstantiationTest() {
 
     kb::tests::Require(instances.size() == 3, "Bulk prefab instantiation did not return every requested instance");
     kb::tests::Require(scene.Entities().Count() == 7, "Bulk prefab instantiation created an unexpected entity count");
+    const kb::ecs::World& world = scene.Runtime().EcsWorld();
+    const std::vector<kb::ecs::ComponentId> rootArchetype{
+        world.Component<kb::scene::TransformComponent>(),
+        world.Component<kb::scene::VisibilityComponent>(),
+        world.Component<kb::scene::MeshRendererComponent>(),
+        world.Component<kb::scene::TagsComponent>(),
+    };
+    const std::vector<kb::ecs::ComponentId> childArchetype{
+        world.Component<kb::scene::TransformComponent>(),
+        world.Component<kb::scene::VisibilityComponent>(),
+        world.Component<kb::scene::CameraComponent>(),
+        world.Component<kb::scene::LightComponent>(),
+    };
     for (const kb::scene::ScenePrefabInstance& instance : instances) {
         kb::tests::Require(instance.ObjectCount() == 2, "Bulk prefab instance did not contain every node");
         kb::tests::Require(!instance.Handle().IsValid(), "Loose bulk prefab instance should not be tracked");
@@ -222,6 +238,8 @@ void RunBulkPrefabInstantiationTest() {
         kb::tests::Require(scene.Components().Tags().Has(instance.ObjectAt(rootNode).Entity()), "Bulk prefab tags component was not assigned");
         kb::tests::Require(scene.Components().Cameras().Has(instance.ObjectAt(childNode).Entity()), "Bulk prefab camera component was not assigned");
         kb::tests::Require(scene.Components().Lights().Has(instance.ObjectAt(childNode).Entity()), "Bulk prefab light component was not assigned");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(instance.ObjectAt(rootNode).Entity(), std::span<const kb::ecs::ComponentId>{ rootArchetype }), "Bulk prefab root was not baked into the expected native archetype");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(instance.ObjectAt(childNode).Entity(), std::span<const kb::ecs::ComponentId>{ childArchetype }), "Bulk prefab child was not baked into the expected native archetype");
     }
 
     [[maybe_unused]] const bool progressed = scene.Runtime().Update(0.016F);
@@ -655,6 +673,48 @@ void RunPrefabApplyAddedChildRefreshesExistingInstancesTest() {
     kb::tests::Require(foundAppliedChild, "Existing instance did not receive the applied tracked child node");
 }
 
+void RunPrefabRefreshLargeInstanceSetTest() {
+    kb::scene::Scene scene;
+    constexpr std::size_t kInstanceCount = 1024U;
+    constexpr std::size_t kUnrelatedInstanceCount = 128U;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Scale Refresh Root" });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("ScaleRefreshPrefab", std::move(prefab));
+
+    kb::scene::ScenePrefab unrelatedPrefab;
+    static_cast<void>(unrelatedPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Unrelated Refresh Root" }));
+    const kb::scene::ScenePrefabHandle unrelatedHandle = scene.Prefabs().Register("UnrelatedRefreshPrefab", std::move(unrelatedPrefab));
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, kInstanceCount);
+    const std::vector<kb::scene::ScenePrefabInstance> unrelatedInstances = scene.Prefabs().InstantiateMany(unrelatedHandle, kUnrelatedInstanceCount);
+    kb::tests::Require(instances.size() == kInstanceCount, "Large prefab refresh setup lost target instances");
+    kb::tests::Require(unrelatedInstances.size() == kUnrelatedInstanceCount, "Large prefab refresh setup lost unrelated instances");
+
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Scale Refresh Added Child",
+        .parent = instances.front().ObjectAt(rootNode),
+    }));
+    kb::tests::Require(scene.Prefabs().ApplyOverrides(instances.front().Handle()), "Large prefab refresh apply failed");
+
+    const std::size_t refreshedCount = scene.Prefabs().RefreshInstances(prefabHandle);
+    kb::tests::Require(refreshedCount == kInstanceCount, "Large prefab refresh did not use the target instance set");
+
+    const kb::scene::ScenePrefabInstance& sample = instances[kInstanceCount - 1U];
+    kb::tests::Require(scene.Prefabs().RootInstance(sample.ObjectAt(rootNode)) == sample.Handle(), "Large prefab refresh root index is stale");
+
+    bool foundAddedChild = false;
+    for (const kb::scene::SceneEntity child : scene.Hierarchy().ChildEntities(sample.ObjectAt(rootNode).Entity())) {
+        if (scene.Entities().Name(child) != "Scale Refresh Added Child") {
+            continue;
+        }
+
+        std::uint32_t childNodeIndex = 0U;
+        foundAddedChild = scene.Prefabs().ContainingInstance(child, childNodeIndex) == sample.Handle() && childNodeIndex == 1U;
+    }
+    kb::tests::Require(foundAddedChild, "Large prefab refresh did not index the refreshed child object");
+    kb::tests::Require(scene.Prefabs().RootInstance(unrelatedInstances.front().ObjectAt(0U)) == unrelatedInstances.front().Handle(), "Large prefab refresh disturbed unrelated prefab instance indexes");
+}
 void RunPrefabApplyOverrideToAssetTest() {
     const std::filesystem::path prefabPath = std::filesystem::temp_directory_path() / "21kb_engine_prefab_apply_override.kbprefab";
     std::error_code removeError;
@@ -763,6 +823,7 @@ void RunScenePrefabInstantiationTests() {
     RunPrefabConnectionMetadataAndUnpackTest();
     RunPrefabApplyRefreshesExistingInstancesTest();
     RunPrefabApplyAddedChildRefreshesExistingInstancesTest();
+    RunPrefabRefreshLargeInstanceSetTest();
     RunPrefabApplyOverrideToAssetTest();
     RunNestedPrefabCompositionTest();
     RunNestedPrefabCaptureAndRefreshTest();
