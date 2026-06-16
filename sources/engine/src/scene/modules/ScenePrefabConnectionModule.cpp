@@ -10,6 +10,7 @@
 #include "scene/prefab/ScenePrefabRecord.hpp"
 
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -151,6 +152,54 @@ ScenePrefabPrivateScene ScenePrefabs::OpenPrivateScene(ScenePrefabHandle handle)
 
 std::size_t ScenePrefabs::RefreshInstances(ScenePrefabHandle handle) {
     return ScenePrefabInstanceSynchronizer::Refresh(scene_, handle);
+}
+
+bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle sourcePrefab) {
+    if (!handle.IsValid() || !sourcePrefab.IsValid()) {
+        return false;
+    }
+
+    SceneState& state = SceneAccess::State(scene_);
+    ScenePrefabInstanceRecord* instance = state.prefabInstances.FindMutable(handle);
+    const ScenePrefabRecord* source = state.prefabs.FindRecord(sourcePrefab);
+    if (instance == nullptr || source == nullptr) {
+        return false;
+    }
+    if (!instance->prefabGuid.empty() && instance->prefabGuid != source->guid) {
+        return false;
+    }
+
+    const ScenePrefabHandle previousPrefab = instance->prefab;
+    const std::string previousGuid = instance->prefabGuid;
+    const ScenePrefab previousResolvedPrefab = instance->resolvedPrefab;
+    const std::vector<SceneObject> oldObjects = instance->objects;
+
+    if (!state.prefabInstances.UpdateSource(handle, sourcePrefab, source->guid)) {
+        return false;
+    }
+
+    instance = state.prefabInstances.FindMutable(handle);
+    if (instance == nullptr) {
+        return false;
+    }
+
+    if (ScenePrefabInstanceSynchronizer::RefreshInstance(scene_, state.prefabs, *instance)) {
+        state.prefabInstances.ReindexObjects(handle, oldObjects);
+        return true;
+    }
+
+    static_cast<void>(state.prefabInstances.UpdateSource(handle, previousPrefab, previousGuid));
+    instance = state.prefabInstances.FindMutable(handle);
+    if (instance != nullptr) {
+        instance->resolvedPrefab = previousResolvedPrefab;
+    }
+    return false;
+}
+
+void ScenePrefabs::Clear() noexcept {
+    SceneState& state = SceneAccess::State(scene_);
+    state.prefabInstances.Clear();
+    state.prefabs.Clear();
 }
 
 bool ScenePrefabs::Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode) {

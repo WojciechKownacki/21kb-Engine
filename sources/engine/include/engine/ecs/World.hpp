@@ -73,6 +73,7 @@ private:
 
     [[nodiscard]] std::vector<Entity> CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components);
     void AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityIds, std::span<const BulkComponentData> components);
+    void BulkInitFlecsEntities(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void AddComponents(Entity entity, std::span<const BulkComponentData> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
     void ValidateEntityHandle(Entity entity, std::string_view operation) const;
@@ -81,6 +82,7 @@ private:
     [[nodiscard]] StructuralChangeValidator::Guard EnterIteration() const noexcept;
     [[nodiscard]] NativeComponentValue MakeNativeComponentValue(const BulkComponentData& component) const;
     [[nodiscard]] std::vector<NativeComponentValue> MakeNativeComponentValues(std::span<const BulkComponentData> components) const;
+    [[nodiscard]] std::vector<NativeBulkComponentColumn> MakeNativeBulkComponentColumns(std::span<const BulkComponentData> components) const;
     void AdoptNativeEntity(Entity entity, std::span<const BulkComponentData> components);
     void DestroyNativeEntity(Entity entity) noexcept;
     void SetNativeComponent(Entity entity, const BulkComponentData& component);

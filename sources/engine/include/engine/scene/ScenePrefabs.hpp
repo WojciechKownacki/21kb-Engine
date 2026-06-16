@@ -8,6 +8,7 @@
 #include "engine/scene/SceneObject.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -56,6 +57,7 @@ public:
     [[nodiscard]] std::string Guid(ScenePrefabHandle handle) const;
     [[nodiscard]] ScenePrefabAssetType AssetType(ScenePrefabHandle handle) const noexcept;
     [[nodiscard]] std::size_t RegisteredCount() const noexcept;
+    void Clear() noexcept;
     [[nodiscard]] ScenePrefab Get(ScenePrefabHandle handle) const;
     [[nodiscard]] ScenePrefabInstance Instantiate(ScenePrefabHandle handle);
     [[nodiscard]] ScenePrefabInstance Instantiate(ScenePrefabHandle handle, const ScenePrefabInstantiationSettings& settings);
@@ -63,6 +65,7 @@ public:
     [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] bool Save(ScenePrefabHandle handle, const std::filesystem::path& path) const;
     [[nodiscard]] ScenePrefabHandle Load(const std::filesystem::path& path);
+    [[nodiscard]] bool Unload(ScenePrefabHandle handle) noexcept;
     [[nodiscard]] bool IsInstance(ScenePrefabInstanceHandle handle) const noexcept;
     [[nodiscard]] ScenePrefabInstanceStatus InstanceStatus(ScenePrefabInstanceHandle handle) const noexcept;
     [[nodiscard]] ScenePrefabHandle SourcePrefab(ScenePrefabInstanceHandle handle) const noexcept;
@@ -77,7 +80,10 @@ public:
     [[nodiscard]] ScenePrefabInstanceHandle RootInstance(SceneEntity entity) const noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneObject object, std::uint32_t& nodeIndex) const noexcept;
     [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneEntity entity, std::uint32_t& nodeIndex) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneObject object, std::uint32_t& nodeIndex, std::uint64_t& nodeId) const noexcept;
+    [[nodiscard]] ScenePrefabInstanceHandle ContainingInstance(SceneEntity entity, std::uint32_t& nodeIndex, std::uint64_t& nodeId) const noexcept;
     [[nodiscard]] std::size_t RefreshInstances(ScenePrefabHandle handle);
+    [[nodiscard]] bool Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle sourcePrefab);
     [[nodiscard]] bool Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode = ScenePrefabUnpackMode::RootOnly);
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);

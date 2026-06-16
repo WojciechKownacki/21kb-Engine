@@ -1,19 +1,51 @@
 #include "engine/ecs/World.hpp"
 
 #include "ecs/ComponentRegistry.hpp"
-#include "ecs/world/WorldComponentMutator.hpp"
 #include "ecs/world/WorldEntityCatalog.hpp"
 #include "ecs/world/WorldRegistrySet.hpp"
 
 #include <flecs.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
 
 namespace kb::ecs {
+
+void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<const BulkComponentData> components) {
+    if (world_ == nullptr || entities.empty()) {
+        return;
+    }
+    if (entities.size() > static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
+        throw std::runtime_error("ECS bulk create entity count exceeds Flecs limits");
+    }
+    if (components.size() >= FLECS_ID_DESC_MAX) {
+        throw std::runtime_error("ECS bulk create component count exceeds Flecs bulk descriptor limits");
+    }
+
+    std::vector<ecs_entity_t> entityIds;
+    entityIds.reserve(entities.size());
+    for (Entity entity : entities) {
+        entityIds.push_back(entity.Id());
+    }
+
+    std::array<void*, FLECS_ID_DESC_MAX> componentData{};
+    ecs_bulk_desc_t descriptor{};
+    descriptor.entities = entityIds.data();
+    descriptor.count = static_cast<int32_t>(entityIds.size());
+    descriptor.data = componentData.data();
+    for (std::size_t index = 0; index < components.size(); ++index) {
+        descriptor.ids[index] = components[index].componentId;
+        componentData[index] = const_cast<void*>(components[index].data);
+    }
+
+    if (ecs_bulk_init(world_, &descriptor) == nullptr) {
+        throw std::runtime_error("ECS bulk create failed to populate Flecs entities");
+    }
+}
 
 Entity World::CreateEntity() {
     ValidateStructuralChangeAllowed("CreateEntity");
@@ -78,32 +110,23 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
         componentIds.push_back(component.componentId);
     }
 
+    if (count > static_cast<std::size_t>(std::numeric_limits<Entity::IdType>::max() - nextEntityId_)) {
+        throw std::runtime_error("ECS entity id capacity exceeded");
+    }
+
     std::vector<Entity> entities;
     entities.reserve(count);
+    const Entity::IdType firstEntityId = nextEntityId_;
+    for (std::size_t entityIndex = 0; entityIndex < count; ++entityIndex) {
+        entities.push_back(Entity{ firstEntityId + static_cast<Entity::IdType>(entityIndex) });
+    }
+
     try {
-        std::vector<NativeComponentValue> nativeComponents;
-        nativeComponents.reserve(components.size());
-        for (std::size_t entityIndex = 0; entityIndex < count; ++entityIndex) {
-            nativeComponents.clear();
-            for (const BulkComponentData& component : components) {
-                const auto* bytes = static_cast<const std::uint8_t*>(component.data);
-                BulkComponentData entityComponent{
-                    .componentId = component.componentId,
-                    .componentSize = component.componentSize,
-                    .data = bytes + entityIndex * component.componentSize,
-                };
-                nativeComponents.push_back(MakeNativeComponentValue(entityComponent));
-            }
-            const Entity entity{ nextEntityId_++ };
-            nativeStorage_->AdoptEntity(entity, nativeComponents);
-            entities.push_back(entity);
-            if (world_ != nullptr) {
-                ecs_make_alive(world_, entity.Id());
-                for (const BulkComponentData& component : components) {
-                    const auto* bytes = static_cast<const std::uint8_t*>(component.data);
-                    WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, bytes + entityIndex * component.componentSize);
-                }
-            }
+        const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
+        nativeStorage_->AdoptEntities(entities, nativeComponents);
+        BulkInitFlecsEntities(entities, components);
+        nextEntityId_ = firstEntityId + static_cast<Entity::IdType>(count);
+        for (Entity entity : entities) {
             if (registries_ != nullptr) {
                 registries_->Entities().Add(entity);
             }
@@ -168,29 +191,15 @@ void World::AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityId
 
     std::vector<Entity> adoptedEntities;
     adoptedEntities.reserve(entityIds.size());
-    try {
-        std::vector<NativeComponentValue> nativeComponents;
-        nativeComponents.reserve(components.size());
-        for (std::size_t entityIndex = 0; entityIndex < entityIds.size(); ++entityIndex) {
-            nativeComponents.clear();
-            for (const BulkComponentData& component : components) {
-                const auto* bytes = static_cast<const std::uint8_t*>(component.data);
-                const BulkComponentData entityComponent{
-                    .componentId = component.componentId,
-                    .componentSize = component.componentSize,
-                    .data = bytes + entityIndex * component.componentSize,
-                };
-                nativeComponents.push_back(MakeNativeComponentValue(entityComponent));
-            }
+    for (Entity::IdType entityId : entityIds) {
+        adoptedEntities.push_back(Entity{ entityId });
+    }
 
-            const Entity entity{ entityIds[entityIndex] };
-            nativeStorage_->AdoptEntity(entity, nativeComponents);
-            adoptedEntities.push_back(entity);
-            ecs_make_alive(world_, entity.Id());
-            for (const BulkComponentData& component : components) {
-                const auto* bytes = static_cast<const std::uint8_t*>(component.data);
-                WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, bytes + entityIndex * component.componentSize);
-            }
+    try {
+        const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
+        nativeStorage_->AdoptEntities(adoptedEntities, nativeComponents);
+        BulkInitFlecsEntities(adoptedEntities, components);
+        for (Entity entity : adoptedEntities) {
             if (registries_ != nullptr) {
                 registries_->Entities().Add(entity);
             }

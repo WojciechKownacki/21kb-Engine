@@ -276,6 +276,31 @@ void RunSceneHistoryUndoRedoTest() {
     kb::tests::Require(!scene.History().CanRedo(), "Scene history did not clear redo stack after branch record");
 }
 
+void RunDestroyedEntityHandleDoesNotAffectNewEntityTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject destroyed = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Destroyed Handle" });
+    const kb::scene::SceneEntity destroyedEntity = destroyed.Entity();
+    scene.Entities().Destroy(destroyed);
+    kb::tests::Require(!scene.Entities().IsAlive(destroyed), "Destroyed entity handle test did not destroy the source object");
+
+    const kb::scene::SceneObject replacement = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Replacement" });
+    kb::tests::Require(scene.Entities().IsAlive(replacement), "Destroyed entity handle test did not create a replacement object");
+    kb::tests::Require(replacement.Entity() != destroyedEntity, "Scene entity creation reused a stale destroyed handle");
+
+    scene.Entities().SetName(destroyed, "Stale Rename");
+    scene.Entities().SetName(destroyedEntity, "Stale Entity Rename");
+    kb::tests::Require(scene.Entities().Name(destroyed).empty(), "Destroyed object returned a stale name");
+    kb::tests::Require(scene.Entities().Name(destroyedEntity).empty(), "Destroyed entity returned a stale name");
+    kb::tests::Require(scene.Entities().Name(replacement) == "Replacement", "Stale destroyed handle renamed the replacement object");
+
+    kb::scene::TagsComponent staleTags;
+    kb::scene::SetTagsText(staleTags, "stale");
+    scene.Components().Tags().Set(destroyedEntity, staleTags);
+    kb::tests::Require(!scene.Components().Tags().Has(destroyedEntity), "Destroyed entity accepted a stale component write");
+    kb::tests::Require(!scene.Components().Tags().Has(replacement.Entity()), "Stale destroyed component write affected the replacement object");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -290,6 +315,7 @@ void RunSceneHierarchyTests() {
     RunTransformVersioningTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
+    RunDestroyedEntityHandleDoesNotAffectNewEntityTest();
 }
 
 } // namespace kb::tests

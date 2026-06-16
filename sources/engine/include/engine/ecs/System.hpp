@@ -8,9 +8,11 @@
 
 namespace kb::ecs {
 
+class WorkerPool;
 class World;
 
 struct SystemProfilerCounters {
+    std::uint64_t chunkJobsCount = 0;
     std::uint64_t entitiesProcessed = 0;
     std::uint64_t bytesTouched = 0;
 };
@@ -20,18 +22,22 @@ public:
     virtual ~System() = default;
 
     [[nodiscard]] virtual std::string_view Name() const noexcept;
+    [[nodiscard]] virtual std::string_view ExecutionPathName() const noexcept;
     [[nodiscard]] virtual SystemAccess DeclareAccess(World& world) const = 0;
     [[nodiscard]] SystemProfilerCounters ProfilerCounters() const noexcept;
     void ResetProfilerCounters() noexcept;
 
     virtual void OnCreate(World& world);
+    virtual void SetExecutionWorkerPool(WorkerPool* workerPool) noexcept;
     virtual void OnUpdate(World& world, float deltaSeconds);
     virtual void OnDestroy(World& world);
 
 protected:
     void ReportProfilerWork(std::uint64_t entitiesProcessed, std::uint64_t bytesTouched) noexcept;
+    void ReportProfilerJobs(std::uint64_t chunkJobsCount) noexcept;
 
 private:
+    std::atomic<std::uint64_t> profilerChunkJobsCount_{ 0 };
     std::atomic<std::uint64_t> profilerEntitiesProcessed_{ 0 };
     std::atomic<std::uint64_t> profilerBytesTouched_{ 0 };
 };

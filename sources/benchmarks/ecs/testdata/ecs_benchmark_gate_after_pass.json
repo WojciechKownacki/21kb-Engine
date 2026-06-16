@@ -1,0 +1,79 @@
+{
+  "commit": "candidate",
+  "branch": "local",
+  "build_config": "Gate",
+  "cpu": "deterministic-fixture",
+  "thread_count": 1,
+  "results": [
+    {
+      "name": "prefab_spawn_registered_10000_instances_4_nodes",
+      "dataset": "registered prefab spawn",
+      "validation_mode": "off",
+      "entities": 40000,
+      "frames": 3,
+      "warmup_frames": 1,
+      "execution_grain_size": 256,
+      "time_ms_min": 9.8,
+      "time_ms_avg": 9.8,
+      "time_ms_p95": 9.8,
+      "throughput_entities_per_second": 4081632.65,
+      "checksum": 1.0
+    },
+    {
+      "name": "structural_changes_command_buffer",
+      "dataset": "4000 create/destroy/add/remove component commands per frame",
+      "validation_mode": "off",
+      "entities": 100000,
+      "frames": 3,
+      "warmup_frames": 1,
+      "execution_grain_size": 256,
+      "time_ms_min": 20.2,
+      "time_ms_avg": 20.2,
+      "time_ms_p95": 20.2,
+      "throughput_entities_per_second": 4950495.05,
+      "checksum": 2.0
+    },
+    {
+      "name": "native_storage_bulk_create_adopt_destroy",
+      "dataset": "native storage bulk create/adopt/destroy",
+      "validation_mode": "off",
+      "entities": 400000,
+      "frames": 3,
+      "warmup_frames": 1,
+      "execution_grain_size": 256,
+      "time_ms_min": 8.1,
+      "time_ms_avg": 8.1,
+      "time_ms_p95": 8.1,
+      "throughput_entities_per_second": 49382716.05,
+      "checksum": 2.5
+    },
+    {
+      "name": "query_fanout_hot_4_components",
+      "dataset": "hot archetypes, 4 query components",
+      "validation_mode": "off",
+      "entities": 100000,
+      "frames": 3,
+      "warmup_frames": 1,
+      "execution_grain_size": 256,
+      "time_ms_min": 5.1,
+      "time_ms_avg": 5.1,
+      "time_ms_p95": 5.1,
+      "throughput_entities_per_second": 19607843.14,
+      "checksum": 3.0
+    },
+    {
+      "name": "compiled_kernel_execution",
+      "dataset": "compiled kernels",
+      "validation_mode": "off",
+      "entities": 100000,
+      "frames": 3,
+      "warmup_frames": 1,
+      "execution_grain_size": 256,
+      "time_ms_min": 4.0,
+      "time_ms_avg": 4.0,
+      "time_ms_p95": 4.0,
+      "throughput_entities_per_second": 25000000.0,
+      "checksum": 4.0
+    }
+  ]
+}

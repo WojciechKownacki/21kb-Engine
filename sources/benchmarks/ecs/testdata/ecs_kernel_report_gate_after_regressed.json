@@ -1,0 +1,48 @@
+{
+  "commit": "candidate-regressed",
+  "branch": "local",
+  "build_config": "Gate",
+  "compiler_id": "fixture",
+  "compiler_version": "fixture",
+  "elements": 1024,
+  "iterations": 1,
+  "samples": 1,
+  "warmup_samples": 1,
+  "assembly": {
+    "available": false,
+    "path": "",
+    "bytes": 0
+  },
+  "kernels": [
+    {
+      "kernel": "movement",
+      "backend": "scalar",
+      "symbol": "KbEcsKernelReportMovementScalar",
+      "time_ms_min": 12.0,
+      "time_ms_avg": 12.0,
+      "time_ms_p95": 12.0,
+      "throughput_elements_per_second": 83333.0,
+      "checksum": 1.0
+    },
+    {
+      "kernel": "transform_local_to_world",
+      "backend": "avx2",
+      "symbol": "KbEcsKernelReportTransformAvx2",
+      "time_ms_min": 6.0,
+      "time_ms_avg": 6.0,
+      "time_ms_p95": 6.0,
+      "throughput_elements_per_second": 166667.0,
+      "checksum": 2.0
+    },
+    {
+      "kernel": "bounds_world_aabb",
+      "backend": "avx512",
+      "symbol": "KbEcsKernelReportBoundsAvx512",
+      "time_ms_min": 5.0,
+      "time_ms_avg": 5.0,
+      "time_ms_p95": 5.0,
+      "throughput_elements_per_second": 200000.0,
+      "checksum": 3.0
+    }
+  ]
+}

@@ -21,6 +21,8 @@
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
 #include <span>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -51,7 +53,17 @@ namespace {
     if (nodeIndex == ScenePrefabNodeDesc::NoParent || nodeIndex >= instance.objects.size()) {
         return true;
     }
-    if (property.propertyPath == "object" || property.propertyPath == "children") {
+    if (property.propertyPath == "object") {
+        if (property.value == "missing") {
+            SceneObject& object = instance.objects[nodeIndex];
+            if (object.IsValid() && scene.Entities().IsAlive(object)) {
+                scene.Entities().Destroy(object);
+            }
+            object = SceneObject{};
+        }
+        return true;
+    }
+    if (property.propertyPath == "children") {
         return true;
     }
 
@@ -86,22 +98,48 @@ namespace {
 }
 
 void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects, std::span<const SceneObject> newObjects) {
-    for (std::size_t index = newObjects.size(); index < oldObjects.size(); ++index) {
-        if (oldObjects[index].IsValid() && scene.Entities().IsAlive(oldObjects[index])) {
-            scene.Entities().Destroy(oldObjects[index]);
+    std::unordered_set<SceneEntity::IdType> retainedEntities;
+    retainedEntities.reserve(newObjects.size());
+    for (const SceneObject object : newObjects) {
+        if (object.IsValid()) {
+            retainedEntities.insert(object.Entity().Id());
+        }
+    }
+
+    for (const SceneObject object : oldObjects) {
+        if (object.IsValid() && scene.Entities().IsAlive(object) && !retainedEntities.contains(object.Entity().Id())) {
+            scene.Entities().Destroy(object);
         }
     }
 }
 
-[[nodiscard]] bool RebuildTrackedObjects(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& baseline) {
-    const std::vector<SceneObject> oldObjects = instance.objects;
+[[nodiscard]] std::unordered_map<std::uint64_t, SceneObject> BuildStableObjectMap(const ScenePrefab& baseline, std::span<const SceneObject> objects) {
+    std::unordered_map<std::uint64_t, SceneObject> stableObjects;
     const std::span<const ScenePrefabNodeDesc> nodes = baseline.Nodes();
+    stableObjects.reserve(nodes.size());
+    for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()) && nodeIndex < objects.size(); ++nodeIndex) {
+        const std::uint64_t stableId = nodes[nodeIndex].stableId;
+        if (stableId != ScenePrefabNodeDesc::InvalidStableId) {
+            stableObjects.emplace(stableId, objects[nodeIndex]);
+        }
+    }
+    return stableObjects;
+}
+
+[[nodiscard]] bool RebuildTrackedObjects(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& previousBaseline, const ScenePrefab& nextBaseline) {
+    const std::vector<SceneObject> oldObjects = instance.objects;
+    const std::unordered_map<std::uint64_t, SceneObject> stableObjects = BuildStableObjectMap(previousBaseline, oldObjects);
+    const std::span<const ScenePrefabNodeDesc> nodes = nextBaseline.Nodes();
     std::vector<SceneObject> rebuiltObjects;
     rebuiltObjects.reserve(nodes.size());
 
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
-        SceneObject object = nodeIndex < oldObjects.size() ? oldObjects[nodeIndex] : SceneObject{};
+        SceneObject object;
+        const auto stableObject = stableObjects.find(node.stableId);
+        if (stableObject != stableObjects.end()) {
+            object = stableObject->second;
+        }
         if (object.IsValid() && scene.Entities().IsAlive(object)) {
             ScenePrefabNodeStateWriter::Write(scene, object, ParentForNode(node, instance, rebuiltObjects), node);
         } else {
@@ -170,7 +208,7 @@ bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabR
     }
 
     const ScenePrefab previousBaseline = instance.resolvedPrefab.Empty() ? record->prefab : instance.resolvedPrefab;
-    if (!ScenePrefabValidator::IsValid(previousBaseline) || !ScenePrefabInstanceTopology::AllTrackedObjectsAlive(scene, instance)) {
+    if (!ScenePrefabValidator::IsValid(previousBaseline)) {
         return false;
     }
 
@@ -180,7 +218,7 @@ bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabR
         return false;
     }
 
-    if (!RebuildTrackedObjects(scene, instance, nextBaseline)) {
+    if (!RebuildTrackedObjects(scene, instance, previousBaseline, nextBaseline)) {
         return false;
     }
 

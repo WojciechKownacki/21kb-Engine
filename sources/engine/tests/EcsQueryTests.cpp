@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <initializer_list>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -287,6 +289,55 @@ void RunTypedEcsMutableQueryBorrowLockTest() {
         releasedAfterException = true;
     });
     kb::tests::Require(releasedAfterException, "Debug ECS mutable borrow lock was not released after an exception");
+}
+
+void RunTypedEcsParallelMutableQueryBorrowConflictTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 16,
+    });
+
+    for (int index = 0; index < 16; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 0.0F });
+    }
+
+    kb::ecs::Query<EcsPosition> firstQuery = world.CreateQuery<EcsPosition>();
+    kb::ecs::Query<EcsPosition> secondQuery = world.CreateQuery<EcsPosition>();
+    std::atomic<bool> firstBatchEntered = false;
+    std::atomic<bool> releaseFirstBatch = false;
+    std::atomic<bool> firstThreadCompleted = false;
+
+    std::thread firstThread{ [&] {
+        firstQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 16 }, [&](kb::ecs::MutableQueryBatch<EcsPosition>& batch) {
+            firstBatchEntered.store(true, std::memory_order_release);
+            while (!releaseFirstBatch.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+            }
+            EcsPosition* positions = batch.Components<0>();
+            positions[0].x += 1.0F;
+        });
+        firstThreadCompleted.store(true, std::memory_order_release);
+    } };
+
+    while (!firstBatchEntered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 1 });
+    }
+
+    bool conflictRejected = false;
+    try {
+        secondQuery.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 16 }, [](kb::ecs::MutableQueryBatch<EcsPosition>& batch) {
+            EcsPosition* positions = batch.Components<0>();
+            positions[0].x += 1.0F;
+        });
+    } catch (const std::logic_error&) {
+        conflictRejected = true;
+    }
+
+    releaseFirstBatch.store(true, std::memory_order_release);
+    firstThread.join();
+
+    kb::tests::Require(conflictRejected, "Debug ECS mutable borrow locks allowed parallel mutable query batches to overlap");
+    kb::tests::Require(firstThreadCompleted.load(std::memory_order_acquire), "Debug ECS parallel mutable query setup did not release the first batch");
 }
 #endif
 
@@ -699,6 +750,7 @@ void RunEcsQueryTests() {
     RunTypedEcsMutableQueryBatchTest();
 #if !defined(NDEBUG)
     RunTypedEcsMutableQueryBorrowLockTest();
+    RunTypedEcsParallelMutableQueryBorrowConflictTest();
 #endif
     RunTypedEcsQueryBatchKernelTest();
     RunTypedEcsQueryPrefetchHintTest();

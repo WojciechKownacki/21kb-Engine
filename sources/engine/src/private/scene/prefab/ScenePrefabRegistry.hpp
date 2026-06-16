@@ -30,6 +30,7 @@ public:
     void RefreshContentHash(ScenePrefabHandle handle) noexcept;
     void RefreshDerivedPrefabs(ScenePrefabHandle baseHandle);
     [[nodiscard]] std::size_t Count() const noexcept;
+    [[nodiscard]] bool Remove(ScenePrefabHandle handle) noexcept;
     void Clear() noexcept;
 
 private:

@@ -4,6 +4,9 @@
 #include "scene/SceneState.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <span>
+#include <stdexcept>
 #include <vector>
 
 namespace kb::scene {
@@ -19,6 +22,31 @@ public:
 
     static void AddRoot(SceneState& state, SceneEntity entity) {
         Add(state, entity, {});
+    }
+
+    static void AddMany(SceneState& state, std::span<const SceneEntity> entities, std::span<const SceneEntity> parents) {
+        if (entities.size() != parents.size()) {
+            throw std::invalid_argument("Scene hierarchy cache bulk add requires matching entity and parent counts");
+        }
+
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            const SceneEntity entity = entities[index];
+            const SceneEntity parent = parents[index];
+            state.hierarchyParents[entity.Id()] = parent;
+            if (parent.IsValid()) {
+                state.hierarchyChildren[parent.Id()].push_back(entity);
+            } else {
+                state.hierarchyRoots.push_back(entity);
+            }
+        }
+    }
+
+    static void AssignOrderRange(SceneState& state, std::span<const SceneEntity> entities) {
+        const std::uint64_t firstOrder = state.nextHierarchyOrder;
+        state.nextHierarchyOrder += entities.size();
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            state.hierarchyOrder[entities[index].Id()] = firstOrder + index;
+        }
     }
 
     static void Move(SceneState& state, SceneEntity child, SceneEntity oldParent, SceneEntity newParent) {

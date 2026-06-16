@@ -2,6 +2,7 @@
 #include "EcsTestTypes.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/CommandBuffer.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <cstddef>
@@ -194,6 +195,22 @@ kb::ecs::ChunkedWorldSnapshotStreamReadResult ReadStreamChunk(kb::ecs::ChunkedWo
         }
     }
     return false;
+}
+
+[[nodiscard]] bool DeltaContainsOnlyComponentColumns(const kb::ecs::ChunkedWorldDeltaSnapshot& delta, kb::ecs::ComponentId componentId) {
+    bool sawChangedColumn = false;
+    for (const kb::ecs::ChunkedWorldDeltaSnapshotChunk& chunk : delta.chunks) {
+        if (chunk.fullArchetype || chunk.components.empty()) {
+            return false;
+        }
+        for (const kb::ecs::ChunkedComponentSnapshot& component : chunk.components) {
+            if (component.componentId != componentId) {
+                return false;
+            }
+            sawChangedColumn = true;
+        }
+    }
+    return sawChangedColumn;
 }
 
 void RunWorldSnapshotTest() {
@@ -453,6 +470,74 @@ void RunChunkedWorldDeltaSnapshotApplyTest() {
         "ECS structural delta left target entity count out of sync");
 }
 
+void RunChunkedWorldDeltaSnapshotAfterBulkComponentWriteTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+
+    kb::ecs::World source{ config };
+    RegisterSnapshotTestReflection(source);
+
+    constexpr std::size_t entityCount = 96;
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<EcsPosition> initialPositions;
+    std::vector<EcsVelocity> velocities;
+    entities.reserve(entityCount);
+    initialPositions.reserve(entityCount);
+    velocities.reserve(entityCount);
+    for (std::size_t index = 0; index < entityCount; ++index) {
+        const kb::ecs::Entity entity = source.CreateEntity();
+        entities.push_back(entity);
+        initialPositions.push_back(EcsPosition{ .x = static_cast<float>(index), .y = static_cast<float>(index + 1U) });
+        velocities.push_back(EcsVelocity{ .x = static_cast<float>(index + 2U), .y = static_cast<float>(index + 3U) });
+        source.Set(entity, initialPositions.back());
+        source.Set(entity, velocities.back());
+    }
+
+    const kb::ecs::ChunkedWorldSnapshot baseline = source.CaptureChunkedSnapshot();
+    kb::ecs::World target{ config };
+    RegisterSnapshotTestReflectionReversed(target);
+    StreamRestoreContext restoreBaseline{
+        .chunks = &baseline.chunks,
+    };
+    const kb::ecs::ChunkedWorldSnapshotHeader baselineHeader{
+        .componentTypes = baseline.componentTypes,
+        .entityCount = baseline.entityCount,
+    };
+    kb::tests::Require(
+        target.RestoreChunkedSnapshotStream(baselineHeader, &ReadStreamChunk, &restoreBaseline),
+        "ECS bulk write delta baseline restore failed");
+
+    std::vector<EcsPosition> updatedPositions;
+    updatedPositions.reserve(entityCount);
+    for (std::size_t index = 0; index < entityCount; ++index) {
+        updatedPositions.push_back(EcsPosition{ .x = static_cast<float>(index + 1000U), .y = static_cast<float>(index + 2000U) });
+    }
+
+    kb::ecs::CommandBuffer writeBuffer;
+    writeBuffer.Worker(0).Set(std::span<const kb::ecs::Entity>{ entities }, std::span<const EcsPosition>{ updatedPositions });
+    static_cast<void>(writeBuffer.Playback(source));
+
+    const kb::ecs::ChunkedWorldDeltaSnapshot delta = source.CaptureChunkedDeltaSnapshot(baseline);
+    kb::tests::Require(delta.entityCount == entityCount, "ECS bulk write delta changed entity count");
+    kb::tests::Require(delta.destroyedEntityIds.empty(), "ECS bulk write delta captured destroyed entities");
+    kb::tests::Require(
+        DeltaContainsOnlyComponentColumns(delta, source.Component<EcsPosition>()),
+        "ECS bulk write delta included unchanged component columns or full chunks");
+
+    kb::tests::Require(target.ApplyChunkedDeltaSnapshot(delta), "ECS bulk write delta apply failed");
+    for (std::size_t index = 0; index < entityCount; ++index) {
+        const EcsPosition* position = target.TryGet<EcsPosition>(entities[index]);
+        const EcsVelocity* velocity = target.TryGet<EcsVelocity>(entities[index]);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "ECS bulk write delta target missed components");
+        kb::tests::Require(
+            kb::tests::NearlyEqual(position->x, updatedPositions[index].x) && kb::tests::NearlyEqual(position->y, updatedPositions[index].y),
+            "ECS bulk write delta did not apply changed position");
+        kb::tests::Require(
+            kb::tests::NearlyEqual(velocity->x, velocities[index].x) && kb::tests::NearlyEqual(velocity->y, velocities[index].y),
+            "ECS bulk write delta modified unchanged velocity");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -463,6 +548,7 @@ void RunEcsSnapshotTests() {
     RunChunkedWorldSnapshotStreamRoundTripTest();
     RunChunkedWorldSnapshotBinaryRoundTripTest();
     RunChunkedWorldDeltaSnapshotApplyTest();
+    RunChunkedWorldDeltaSnapshotAfterBulkComponentWriteTest();
 }
 
 } // namespace kb::tests

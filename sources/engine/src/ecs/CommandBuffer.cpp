@@ -176,6 +176,43 @@ void CommandBuffer::WorkerBuffer::SetParent(Entity child, Entity parent) {
     SetParent(CommandEntity::Existing(child), CommandEntity::Existing(parent));
 }
 
+void CommandBuffer::WorkerBuffer::SetParents(std::span<const CommandEntity> children, std::span<const CommandEntity> parents) {
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (children.size() != parents.size()) {
+        throw std::invalid_argument("ECS command buffer bulk parent changes require matching child and parent counts");
+    }
+    if (children.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetParents;
+    command.entities.assign(children.begin(), children.end());
+    command.parents.assign(parents.begin(), parents.end());
+    command.count = children.size();
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+void CommandBuffer::WorkerBuffer::SetParents(std::span<const Entity> children, std::span<const Entity> parents) {
+    if (children.size() != parents.size()) {
+        throw std::invalid_argument("ECS command buffer bulk parent changes require matching child and parent counts");
+    }
+
+    std::vector<CommandEntity> commandChildren;
+    std::vector<CommandEntity> commandParents;
+    commandChildren.reserve(children.size());
+    commandParents.reserve(parents.size());
+    for (Entity child : children) {
+        commandChildren.push_back(CommandEntity::Existing(child));
+    }
+    for (Entity parent : parents) {
+        commandParents.push_back(CommandEntity::Existing(parent));
+    }
+    SetParents(std::span<const CommandEntity>{ commandChildren }, std::span<const CommandEntity>{ commandParents });
+}
+
 void CommandBuffer::WorkerBuffer::ClearParent(CommandEntity child) {
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
@@ -189,6 +226,30 @@ void CommandBuffer::WorkerBuffer::ClearParent(CommandEntity child) {
 
 void CommandBuffer::WorkerBuffer::ClearParent(Entity child) {
     ClearParent(CommandEntity::Existing(child));
+}
+
+void CommandBuffer::WorkerBuffer::ClearParents(std::span<const CommandEntity> children) {
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (children.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::ClearParents;
+    command.entities.assign(children.begin(), children.end());
+    command.count = children.size();
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+void CommandBuffer::WorkerBuffer::ClearParents(std::span<const Entity> children) {
+    std::vector<CommandEntity> commandChildren;
+    commandChildren.reserve(children.size());
+    for (Entity child : children) {
+        commandChildren.push_back(CommandEntity::Existing(child));
+    }
+    ClearParents(std::span<const CommandEntity>{ commandChildren });
 }
 
 CommandBuffer::CommandBuffer(std::size_t workerCount)
@@ -459,10 +520,33 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                     world.SetParent(child, parent);
                     break;
                 }
+                case CommandKind::SetParents: {
+                    if (command.entities.size() != command.count || command.parents.size() != command.count) {
+                        throw std::logic_error("ECS command buffer bulk parent command has an invalid entity count");
+                    }
+                    for (std::size_t index = 0; index < command.count; ++index) {
+                        const Entity child = ResolveForPlayback(command.entities[index], result);
+                        const Entity parent = ResolveForPlayback(command.parents[index], result);
+                        snapshotParent(child);
+                        world.SetParent(child, parent);
+                    }
+                    break;
+                }
                 case CommandKind::ClearParent: {
                     const Entity child = ResolveForPlayback(command.first, result);
                     snapshotParent(child);
                     world.ClearParent(child);
+                    break;
+                }
+                case CommandKind::ClearParents: {
+                    if (command.entities.size() != command.count) {
+                        throw std::logic_error("ECS command buffer bulk clear parent command has an invalid entity count");
+                    }
+                    for (CommandEntity commandEntity : command.entities) {
+                        const Entity child = ResolveForPlayback(commandEntity, result);
+                        snapshotParent(child);
+                        world.ClearParent(child);
+                    }
                     break;
                 }
                 }

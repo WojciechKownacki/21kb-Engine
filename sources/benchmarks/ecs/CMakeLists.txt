@@ -185,6 +185,56 @@ if(BUILD_TESTING)
             --samples 1
             --warmup 1
     )
+
+    add_test(
+        NAME kb_ecs_benchmark_regression_gate_pass
+        COMMAND "$<TARGET_FILE:kb_ecs_benchmarks>"
+            --compare-before "${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_benchmark_gate_before.json"
+            --compare-after "${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_benchmark_gate_after_pass.json"
+            --compare-output "${CMAKE_CURRENT_BINARY_DIR}/ecs_benchmark_gate_pass.json"
+            --fail-on-regression 5
+    )
+    set_tests_properties(kb_ecs_benchmark_regression_gate_pass PROPERTIES
+        LABELS "ecs;benchmark;regression"
+    )
+
+    add_test(
+        NAME kb_ecs_benchmark_regression_gate_detects_regression
+        COMMAND "$<TARGET_FILE:kb_ecs_benchmarks>"
+            --compare-before "${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_benchmark_gate_before.json"
+            --compare-after "${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_benchmark_gate_after_regressed.json"
+            --compare-output "${CMAKE_CURRENT_BINARY_DIR}/ecs_benchmark_gate_regressed.json"
+            --fail-on-regression 5
+    )
+    set_tests_properties(kb_ecs_benchmark_regression_gate_detects_regression PROPERTIES
+        LABELS "ecs;benchmark;regression"
+        WILL_FAIL TRUE
+    )
+
+    add_test(
+        NAME kb_ecs_kernel_report_regression_gate_pass
+        COMMAND ${CMAKE_COMMAND}
+            "-DBEFORE=${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_kernel_report_gate_before.json"
+            "-DAFTER=${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_kernel_report_gate_after_pass.json"
+            "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ecs_kernel_report_gate_pass.json"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompareKernelReport.cmake"
+    )
+    set_tests_properties(kb_ecs_kernel_report_regression_gate_pass PROPERTIES
+        LABELS "ecs;benchmark;regression;kernel"
+    )
+
+    add_test(
+        NAME kb_ecs_kernel_report_regression_gate_detects_regression
+        COMMAND ${CMAKE_COMMAND}
+            "-DBEFORE=${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_kernel_report_gate_before.json"
+            "-DAFTER=${CMAKE_CURRENT_SOURCE_DIR}/testdata/ecs_kernel_report_gate_after_regressed.json"
+            "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ecs_kernel_report_gate_regressed.json"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CompareKernelReport.cmake"
+    )
+    set_tests_properties(kb_ecs_kernel_report_regression_gate_detects_regression PROPERTIES
+        LABELS "ecs;benchmark;regression;kernel"
+        WILL_FAIL TRUE
+    )
 endif()
 
 add_custom_target(kb_ecs_benchmarks_full
