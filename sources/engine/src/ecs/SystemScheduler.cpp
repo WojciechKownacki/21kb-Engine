@@ -20,8 +20,10 @@ namespace {
 struct SystemExecutionSample {
     std::size_t systemIndex = 0;
     std::size_t workerIndex = 0;
+    std::uint64_t jobsCount = 0;
     std::uint64_t startTimeNanoseconds = 0;
     std::uint64_t endTimeNanoseconds = 0;
+    SystemProfilerCounters profilerCounters;
 };
 
 } // namespace
@@ -29,6 +31,7 @@ struct SystemExecutionSample {
 SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
     : schedulingMode_(config.mode)
     , debugTraceEnabled_(config.debugTraceEnabled)
+    , profilerEnabled_(config.profilerEnabled)
     , parallelExecutionEnabled_(config.parallelExecutionEnabled)
     , runtimeAccessValidationEnabled_(config.runtimeAccessValidationEnabled)
     , workerPoolConfig_(config.workerPool) {}
@@ -57,8 +60,9 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
     std::vector<std::vector<std::size_t>> reverseGraph;
     std::vector<std::uint64_t> systemEndTimes;
     std::chrono::steady_clock::time_point frameStart;
-    if (debugTraceEnabled_) {
-        BeginDebugTrace();
+    const bool instrumentationEnabled = InstrumentationEnabled();
+    if (instrumentationEnabled) {
+        BeginProfilerTrace();
         reverseGraph = BuildReverseDependencyGraph();
         systemEndTimes.assign(systems_.size(), 0);
         frameStart = std::chrono::steady_clock::now();
@@ -67,7 +71,11 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
     std::vector<SystemExecutionSample> executionSamples;
     for (std::size_t stageIndex = 0; stageIndex < executionStages_.size(); ++stageIndex) {
         const ExecutionStage& stage = executionStages_[stageIndex];
-        if (ShouldRunStageInParallel(stage)) {
+        const bool runStageInParallel = ShouldRunStageInParallel(stage);
+        if (runStageInParallel) {
+            if (instrumentationEnabled) {
+                ++lastTrace_.frameCounters.parallelStageCount;
+            }
             executionSamples.assign(stage.systems.size(), {});
             std::vector<WorkerPoolBatch> batches;
             batches.reserve(stage.systems.size());
@@ -80,18 +88,19 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                 });
             }
 
-            auto stageJob = [this, &world, deltaSeconds, &stage, frameStart, &systemEndTimes, &executionSamples](WorkerContext context, const WorkerPoolBatch& batch) {
+            auto stageJob = [this, &world, deltaSeconds, &stage, frameStart, &systemEndTimes, &executionSamples, instrumentationEnabled](WorkerContext context, const WorkerPoolBatch& batch) {
                 const std::size_t slot = batch.index;
                 const std::size_t systemIndex = stage.systems[slot];
                 std::chrono::steady_clock::time_point systemStart;
-                if (debugTraceEnabled_) {
+                if (instrumentationEnabled) {
+                    systems_[systemIndex].system->ResetProfilerCounters();
                     systemStart = std::chrono::steady_clock::now();
                 }
                 RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
                     ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, context.workerIndex)
                     : RuntimeAccessValidator::Guard{};
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
-                if (debugTraceEnabled_) {
+                if (instrumentationEnabled) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
                     const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
                     const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
@@ -99,21 +108,25 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
                     executionSamples[slot] = SystemExecutionSample{
                         .systemIndex = systemIndex,
                         .workerIndex = context.workerIndex,
+                        .jobsCount = 1,
                         .startTimeNanoseconds = startTimeNanoseconds,
                         .endTimeNanoseconds = endTimeNanoseconds,
+                        .profilerCounters = systems_[systemIndex].system->ProfilerCounters(),
                     };
                 }
             };
             RuntimeWorkerPool().RunBatches(batches, stageJob);
 
-            if (debugTraceEnabled_) {
+            if (instrumentationEnabled) {
                 for (const SystemExecutionSample& sample : executionSamples) {
                     TraceSystemExecution(
                         sample.systemIndex,
                         stageIndex,
                         sample.workerIndex,
+                        sample.jobsCount,
                         sample.startTimeNanoseconds,
                         sample.endTimeNanoseconds,
+                        sample.profilerCounters,
                         systemEndTimes,
                         reverseGraph);
                 }
@@ -121,26 +134,27 @@ void SystemScheduler::Update(World& world, float deltaSeconds) {
         } else {
             for (std::size_t systemIndex : stage.systems) {
                 std::chrono::steady_clock::time_point systemStart;
-                if (debugTraceEnabled_) {
+                if (instrumentationEnabled) {
+                    systems_[systemIndex].system->ResetProfilerCounters();
                     systemStart = std::chrono::steady_clock::now();
                 }
                 RuntimeAccessValidator::Guard accessGuard = runtimeAccessValidationEnabled_
                     ? accessValidator_.Acquire(systems_[systemIndex].system->Name(), systems_[systemIndex].access, 0)
                     : RuntimeAccessValidator::Guard{};
                 systems_[systemIndex].system->OnUpdate(world, deltaSeconds);
-                if (debugTraceEnabled_) {
+                if (instrumentationEnabled) {
                     const std::chrono::steady_clock::time_point systemEnd = std::chrono::steady_clock::now();
                     const std::uint64_t startTimeNanoseconds = ToNanoseconds(systemStart - frameStart);
                     const std::uint64_t endTimeNanoseconds = ToNanoseconds(systemEnd - frameStart);
                     systemEndTimes[systemIndex] = endTimeNanoseconds;
-                    TraceSystemExecution(systemIndex, stageIndex, 0, startTimeNanoseconds, endTimeNanoseconds, systemEndTimes, reverseGraph);
+                    TraceSystemExecution(systemIndex, stageIndex, 0, 1, startTimeNanoseconds, endTimeNanoseconds, systems_[systemIndex].system->ProfilerCounters(), systemEndTimes, reverseGraph);
                 }
             }
         }
     }
 
-    if (debugTraceEnabled_) {
-        EndDebugTrace(ToNanoseconds(std::chrono::steady_clock::now() - frameStart));
+    if (instrumentationEnabled) {
+        EndProfilerTrace(ToNanoseconds(std::chrono::steady_clock::now() - frameStart));
     }
 }
 
@@ -189,6 +203,18 @@ bool SystemScheduler::DebugTraceEnabled() const noexcept {
 }
 
 const SystemSchedulerTrace& SystemScheduler::LastDebugTrace() const noexcept {
+    return lastTrace_;
+}
+
+void SystemScheduler::SetProfilerEnabled(bool enabled) noexcept {
+    profilerEnabled_ = enabled;
+}
+
+bool SystemScheduler::ProfilerEnabled() const noexcept {
+    return profilerEnabled_;
+}
+
+const SystemSchedulerTrace& SystemScheduler::LastProfilerTrace() const noexcept {
     return lastTrace_;
 }
 
@@ -344,20 +370,39 @@ void SystemScheduler::RebuildExecutionOrder() {
 }
 
 void SystemScheduler::BeginDebugTrace() {
+    BeginProfilerTrace();
+}
+
+void SystemScheduler::EndDebugTrace(std::uint64_t frameDurationNanoseconds) {
+    EndProfilerTrace(frameDurationNanoseconds);
+}
+
+void SystemScheduler::BeginProfilerTrace() {
     lastTrace_ = SystemSchedulerTrace{
         .frameIndex = traceFrameIndex_,
+        .frameCounters = SystemSchedulerFrameCounters{
+            .frameIndex = traceFrameIndex_,
+            .systemCount = systems_.size(),
+            .stageCount = executionStages_.size(),
+        },
     };
     lastTrace_.events.reserve(systems_.size());
+    lastTrace_.systemCounters.reserve(systems_.size());
     lastTrace_.workers.push_back(SystemSchedulerWorkerTrace{
         .workerIndex = 0,
     });
 }
 
-void SystemScheduler::EndDebugTrace(std::uint64_t frameDurationNanoseconds) {
+void SystemScheduler::EndProfilerTrace(std::uint64_t frameDurationNanoseconds) {
     lastTrace_.frameDurationNanoseconds = frameDurationNanoseconds;
+    lastTrace_.frameCounters.frameDurationNanoseconds = frameDurationNanoseconds;
+    lastTrace_.frameCounters.workerCount = lastTrace_.workers.size();
     for (SystemSchedulerWorkerTrace& worker : lastTrace_.workers) {
         const std::uint64_t busyTime = worker.busyTimeNanoseconds;
         worker.idleTimeNanoseconds = frameDurationNanoseconds > busyTime ? frameDurationNanoseconds - busyTime : 0;
+        worker.utilizationPermille = frameDurationNanoseconds > 0U
+            ? static_cast<std::uint32_t>(std::min<std::uint64_t>((busyTime * 1000U) / frameDurationNanoseconds, 1000U))
+            : 0U;
     }
     ++traceFrameIndex_;
 }
@@ -366,8 +411,10 @@ void SystemScheduler::TraceSystemExecution(
     std::size_t systemIndex,
     std::size_t stageIndex,
     std::size_t workerIndex,
+    std::uint64_t jobsCount,
     std::uint64_t startTimeNanoseconds,
     std::uint64_t endTimeNanoseconds,
+    SystemProfilerCounters profilerCounters,
     std::span<const std::uint64_t> systemEndTimes,
     const std::vector<std::vector<std::size_t>>& reverseGraph) {
     std::uint64_t dependencyReadyTime = 0;
@@ -392,17 +439,50 @@ void SystemScheduler::TraceSystemExecution(
     }
     lastTrace_.workers[workerIndex].busyTimeNanoseconds += duration;
 
-    lastTrace_.events.push_back(SystemSchedulerTraceEvent{
+    SystemSchedulerTraceEvent event{
         .systemName = std::string{ systems_[systemIndex].system->Name() },
         .systemIndex = systemIndex,
         .stageIndex = stageIndex,
         .workerIndex = workerIndex,
+        .jobsCount = jobsCount,
         .startTimeNanoseconds = startTimeNanoseconds,
         .endTimeNanoseconds = endTimeNanoseconds,
         .durationNanoseconds = duration,
         .waitTimeNanoseconds = hasBlockedDependencies && startTimeNanoseconds > dependencyReadyTime ? startTimeNanoseconds - dependencyReadyTime : 0,
+        .entitiesProcessed = profilerCounters.entitiesProcessed,
+        .bytesTouched = profilerCounters.bytesTouched,
+        .waitReason = hasBlockedDependencies ? std::string{ "dependencies" } : std::string{},
         .blockedDependencies = std::move(blockedDependencies),
-    });
+    };
+    AddSystemCounters(event);
+    lastTrace_.events.push_back(std::move(event));
+}
+
+void SystemScheduler::AddSystemCounters(const SystemSchedulerTraceEvent& event) {
+    SystemSchedulerSystemCounters* counters = nullptr;
+    for (SystemSchedulerSystemCounters& existing : lastTrace_.systemCounters) {
+        if (existing.systemIndex == event.systemIndex) {
+            counters = &existing;
+            break;
+        }
+    }
+
+    if (counters == nullptr) {
+        counters = &lastTrace_.systemCounters.emplace_back(SystemSchedulerSystemCounters{
+            .systemName = event.systemName,
+            .systemIndex = event.systemIndex,
+        });
+    }
+
+    counters->cpuTimeNanoseconds += event.durationNanoseconds;
+    counters->jobsCount += event.jobsCount;
+    counters->entitiesProcessed += event.entitiesProcessed;
+    counters->bytesTouched += event.bytesTouched;
+
+    lastTrace_.frameCounters.cpuTimeNanoseconds += event.durationNanoseconds;
+    lastTrace_.frameCounters.jobsCount += event.jobsCount;
+    lastTrace_.frameCounters.entitiesProcessed += event.entitiesProcessed;
+    lastTrace_.frameCounters.bytesTouched += event.bytesTouched;
 }
 
 bool SystemScheduler::ShouldRunStageInParallel(const ExecutionStage& stage) const noexcept {
@@ -410,6 +490,10 @@ bool SystemScheduler::ShouldRunStageInParallel(const ExecutionStage& stage) cons
         schedulingMode_ != SystemSchedulingMode::Deterministic &&
         !workerPoolConfig_.singleThreaded &&
         stage.systems.size() > 1U;
+}
+
+bool SystemScheduler::InstrumentationEnabled() const noexcept {
+    return debugTraceEnabled_ || profilerEnabled_;
 }
 
 WorkerPool& SystemScheduler::RuntimeWorkerPool() {

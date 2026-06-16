@@ -12,6 +12,7 @@ public:
 
     static void PaintFpsCounter(HDC dc, RECT rect, const EditorTheme& theme);
     static void PaintRenderStats(HDC dc, RECT rect, const EditorTheme& theme);
+    static void PaintEcsStats(HDC dc, RECT rect, const EditorTheme& theme);
     static void PaintPipelineStats(HDC dc, RECT rect, const EditorTheme& theme);
     static void PaintTooltip(HDC dc, const RECT& content, const SceneViewportToolbarRects& rects);
 };

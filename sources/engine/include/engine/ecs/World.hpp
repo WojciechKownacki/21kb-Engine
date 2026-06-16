@@ -72,6 +72,7 @@ private:
 #include "engine/ecs/world/WorldPrivateLifecycleApi.inl"
 
     [[nodiscard]] std::vector<Entity> CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components);
+    void AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityIds, std::span<const BulkComponentData> components);
     void AddComponents(Entity entity, std::span<const BulkComponentData> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
     void ValidateEntityHandle(Entity entity, std::string_view operation) const;

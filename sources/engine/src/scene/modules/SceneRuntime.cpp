@@ -31,6 +31,14 @@ std::size_t SceneRuntimeQueries::LastFixedStepCount() const noexcept {
     return SceneRuntimeService::LastFixedStepCount(scene_);
 }
 
+bool SceneRuntimeQueries::EcsProfilerEnabled() const noexcept {
+    return SceneRuntimeService::EcsProfilerEnabled(scene_);
+}
+
+const kb::ecs::SystemSchedulerTrace& SceneRuntimeQueries::LastEcsProfilerTrace() const noexcept {
+    return SceneRuntimeService::LastEcsProfilerTrace(scene_);
+}
+
 std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
 }
@@ -68,6 +76,18 @@ float SceneRuntime::FixedInterpolationAlpha() const noexcept {
 
 std::size_t SceneRuntime::LastFixedStepCount() const noexcept {
     return SceneRuntimeService::LastFixedStepCount(scene_);
+}
+
+void SceneRuntime::SetEcsProfilerEnabled(bool enabled) noexcept {
+    SceneRuntimeService::SetEcsProfilerEnabled(scene_, enabled);
+}
+
+bool SceneRuntime::EcsProfilerEnabled() const noexcept {
+    return SceneRuntimeService::EcsProfilerEnabled(scene_);
+}
+
+const kb::ecs::SystemSchedulerTrace& SceneRuntime::LastEcsProfilerTrace() const noexcept {
+    return SceneRuntimeService::LastEcsProfilerTrace(scene_);
 }
 
 std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {

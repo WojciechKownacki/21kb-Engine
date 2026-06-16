@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace kb::ecs {
@@ -28,6 +29,70 @@ static_assert(alignof(Entity) == alignof(Entity::IdType), "Native ECS query batc
 
 [[nodiscard]] bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
     return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
+}
+
+[[nodiscard]] const ComponentTypeInfo* FindComponentType(std::span<const ComponentTypeInfo> componentTypes, ComponentId componentId) noexcept {
+    for (const ComponentTypeInfo& componentType : componentTypes) {
+        if (componentType.id == componentId) {
+            return &componentType;
+        }
+    }
+    return nullptr;
+}
+
+struct ChunkKey {
+    std::size_t archetypeIndex = 0;
+    std::size_t chunkIndex = 0;
+
+    [[nodiscard]] bool operator==(const ChunkKey& other) const noexcept {
+        return archetypeIndex == other.archetypeIndex && chunkIndex == other.chunkIndex;
+    }
+};
+
+struct ChunkKeyHash {
+    [[nodiscard]] std::size_t operator()(const ChunkKey& key) const noexcept {
+        std::size_t hash = key.archetypeIndex + 0x9E3779B97F4A7C15ULL;
+        hash ^= key.chunkIndex + 0x9E3779B97F4A7C15ULL + (hash << 6U) + (hash >> 2U);
+        return hash;
+    }
+};
+
+[[nodiscard]] const ChunkedComponentSnapshot* FindSnapshotComponent(
+    const ChunkedWorldSnapshotChunk& chunk,
+    ComponentId componentId) noexcept {
+    for (const ChunkedComponentSnapshot& component : chunk.components) {
+        if (component.componentId == componentId) {
+            return &component;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool SameEntityIds(
+    const ChunkedWorldSnapshotChunk& baseline,
+    const Entity::IdType* entityIds,
+    std::size_t rowCount) noexcept {
+    if (baseline.entityIds.size() != rowCount) {
+        return false;
+    }
+    for (std::size_t index = 0; index < rowCount; ++index) {
+        if (baseline.entityIds[index] != entityIds[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool SameComponentSet(const ChunkedWorldSnapshotChunk& baseline, std::span<const NativeComponentType> types) noexcept {
+    if (baseline.components.size() != types.size()) {
+        return false;
+    }
+    for (const NativeComponentType& type : types) {
+        if (FindSnapshotComponent(baseline, type.id) == nullptr) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void AssertComponentAlignment(const void* pointer, const NativeComponentType& type) noexcept {
@@ -375,6 +440,7 @@ public:
     [[nodiscard]] const ComponentSignature& Signature() const noexcept { return signature_; }
     [[nodiscard]] std::size_t LiveEntities() const noexcept { return liveEntities_; }
     [[nodiscard]] std::size_t ChunkCount() const noexcept { return chunks_.size(); }
+    [[nodiscard]] std::size_t Capacity() const noexcept { return layout_.capacity; }
     [[nodiscard]] std::size_t UsedBytes() const noexcept { return liveEntities_ * layout_.bytesPerEntity; }
     [[nodiscard]] std::uint64_t Version() const noexcept { return version_; }
 
@@ -507,6 +573,10 @@ public:
             throw std::out_of_range("Invalid native ECS chunk index");
         }
         return chunks_[chunkIndex].rowCount;
+    }
+
+    [[nodiscard]] std::size_t ChunkUsedBytes(std::size_t chunkIndex) const {
+        return ChunkRowCount(chunkIndex) * layout_.bytesPerEntity;
     }
 
     [[nodiscard]] const void* ComponentColumnData(std::size_t chunkIndex, ComponentId componentId) const {
@@ -1018,13 +1088,227 @@ public:
         return chunkPayloadBytes_;
     }
 
-    [[nodiscard]] NativeEcsStorageStats Stats() const noexcept {
+    void CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const {
+        snapshot = {};
+        snapshot.componentTypes.assign(componentTypes.begin(), componentTypes.end());
+        snapshot.entityCount = liveEntities_;
+        snapshot.chunks.reserve(pool_.ChunksInUse());
+
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            const ArchetypeTable& table = tables_[tableIndex];
+            if (table.LiveEntities() == 0U) {
+                continue;
+            }
+
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0U) {
+                    continue;
+                }
+
+                ChunkedWorldSnapshotChunk& chunk = snapshot.chunks.emplace_back();
+                chunk.archetypeIndex = tableIndex;
+                chunk.chunkIndex = chunkIndex;
+
+                const Entity::IdType* entityIds = table.ChunkEntityIds(chunkIndex);
+                chunk.entityIds.assign(entityIds, entityIds + rowCount);
+                chunk.components.reserve(table.Types().size());
+
+                for (const NativeComponentType& type : table.Types()) {
+                    const ComponentTypeInfo* componentType = FindComponentType(componentTypes, type.id);
+                    ChunkedComponentSnapshot& component = chunk.components.emplace_back();
+                    component.componentId = type.id;
+                    component.componentName = componentType != nullptr ? componentType->name : std::string{};
+                    component.componentSize = type.size;
+                    component.version = table.ComponentVersionOrZero(type.id);
+
+                    const std::size_t byteCount = rowCount * type.size;
+                    component.data.resize(byteCount);
+                    std::memcpy(component.data.data(), table.ComponentColumnData(chunkIndex, type.id), byteCount);
+                }
+            }
+        }
+    }
+
+    void CaptureChunkedDeltaSnapshot(
+        std::span<const ComponentTypeInfo> componentTypes,
+        const ChunkedWorldSnapshot& baseline,
+        ChunkedWorldDeltaSnapshot& delta) const {
+        delta = {};
+        delta.componentTypes.assign(componentTypes.begin(), componentTypes.end());
+        delta.entityCount = liveEntities_;
+
+        std::unordered_map<ChunkKey, const ChunkedWorldSnapshotChunk*, ChunkKeyHash> baselineChunks;
+        baselineChunks.reserve(baseline.chunks.size());
+        std::unordered_set<Entity::IdType> baselineEntities;
+        baselineEntities.reserve(baseline.entityCount);
+        for (const ChunkedWorldSnapshotChunk& chunk : baseline.chunks) {
+            baselineChunks.emplace(
+                ChunkKey{ .archetypeIndex = chunk.archetypeIndex, .chunkIndex = chunk.chunkIndex },
+                &chunk);
+            for (Entity::IdType entityId : chunk.entityIds) {
+                baselineEntities.insert(entityId);
+            }
+        }
+
+        std::unordered_set<Entity::IdType> currentEntities;
+        currentEntities.reserve(liveEntities_);
+        delta.chunks.reserve(pool_.ChunksInUse());
+
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            const ArchetypeTable& table = tables_[tableIndex];
+            if (table.LiveEntities() == 0U) {
+                continue;
+            }
+
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0U) {
+                    continue;
+                }
+
+                const Entity::IdType* entityIds = table.ChunkEntityIds(chunkIndex);
+                for (std::size_t row = 0; row < rowCount; ++row) {
+                    currentEntities.insert(entityIds[row]);
+                }
+
+                const auto baselineChunk = baselineChunks.find(ChunkKey{ .archetypeIndex = tableIndex, .chunkIndex = chunkIndex });
+                const bool fullArchetype = baselineChunk == baselineChunks.end() ||
+                    !SameEntityIds(*baselineChunk->second, entityIds, rowCount) ||
+                    !SameComponentSet(*baselineChunk->second, table.Types());
+
+                ChunkedWorldDeltaSnapshotChunk chunk;
+                chunk.archetypeIndex = tableIndex;
+                chunk.chunkIndex = chunkIndex;
+                chunk.fullArchetype = fullArchetype;
+                chunk.entityIds.assign(entityIds, entityIds + rowCount);
+                chunk.components.reserve(table.Types().size());
+
+                for (const NativeComponentType& type : table.Types()) {
+                    const std::uint64_t currentVersion = table.ComponentVersionOrZero(type.id);
+                    const ChunkedComponentSnapshot* baselineComponent = baselineChunk != baselineChunks.end()
+                        ? FindSnapshotComponent(*baselineChunk->second, type.id)
+                        : nullptr;
+                    if (!fullArchetype && baselineComponent != nullptr && baselineComponent->version == currentVersion) {
+                        continue;
+                    }
+
+                    const ComponentTypeInfo* componentType = FindComponentType(componentTypes, type.id);
+                    ChunkedComponentSnapshot& component = chunk.components.emplace_back();
+                    component.componentId = type.id;
+                    component.componentName = componentType != nullptr ? componentType->name : std::string{};
+                    component.componentSize = type.size;
+                    component.version = currentVersion;
+
+                    const std::size_t byteCount = rowCount * type.size;
+                    component.data.resize(byteCount);
+                    std::memcpy(component.data.data(), table.ComponentColumnData(chunkIndex, type.id), byteCount);
+                }
+
+                if (chunk.fullArchetype || !chunk.components.empty()) {
+                    delta.chunks.push_back(std::move(chunk));
+                }
+            }
+        }
+
+        for (Entity::IdType entityId : baselineEntities) {
+            if (currentEntities.find(entityId) == currentEntities.end()) {
+                delta.destroyedEntityIds.push_back(entityId);
+            }
+        }
+        std::sort(delta.destroyedEntityIds.begin(), delta.destroyedEntityIds.end());
+    }
+
+    [[nodiscard]] bool StreamChunkedSnapshot(
+        std::span<const ComponentTypeInfo> componentTypes,
+        ChunkedWorldSnapshotChunkVisitor visitor,
+        void* context) const {
+        if (visitor == nullptr) {
+            return false;
+        }
+
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            const ArchetypeTable& table = tables_[tableIndex];
+            if (table.LiveEntities() == 0U) {
+                continue;
+            }
+
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
+                if (rowCount == 0U) {
+                    continue;
+                }
+
+                std::vector<ChunkedComponentSnapshotView> components;
+                components.reserve(table.Types().size());
+                for (const NativeComponentType& type : table.Types()) {
+                    const ComponentTypeInfo* componentType = FindComponentType(componentTypes, type.id);
+                    components.push_back(ChunkedComponentSnapshotView{
+                        .componentId = type.id,
+                        .componentName = componentType != nullptr ? std::string_view{ componentType->name } : std::string_view{},
+                        .componentSize = type.size,
+                        .version = table.ComponentVersionOrZero(type.id),
+                        .data = std::span<const std::byte>{
+                            static_cast<const std::byte*>(table.ComponentColumnData(chunkIndex, type.id)),
+                            rowCount * type.size,
+                        },
+                    });
+                }
+
+                const ChunkedWorldSnapshotChunkView chunk{
+                    .archetypeIndex = tableIndex,
+                    .chunkIndex = chunkIndex,
+                    .entityIds = std::span<const Entity::IdType>{ table.ChunkEntityIds(chunkIndex), rowCount },
+                    .components = std::span<const ChunkedComponentSnapshotView>{ components },
+                };
+                if (!visitor(chunk, context)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    [[nodiscard]] NativeEcsStorageStats Stats() const {
         NativeEcsStorageStats stats;
         stats.chunks = pool_.ChunksInUse();
         stats.archetypeCount = tables_.size();
         stats.liveEntities = liveEntities_;
-        for (const ArchetypeTable& table : tables_) {
-            stats.usedBytes += table.UsedBytes();
+        stats.archetypeCounters.reserve(tables_.size());
+
+        for (std::size_t tableIndex = 0; tableIndex < tables_.size(); ++tableIndex) {
+            const ArchetypeTable& table = tables_[tableIndex];
+
+            NativeEcsArchetypeMemoryCounters& archetype = stats.archetypeCounters.emplace_back();
+            archetype.archetypeIndex = tableIndex;
+            archetype.liveEntities = table.LiveEntities();
+            archetype.chunks = table.ChunkCount();
+            archetype.capacity = table.Capacity() * table.ChunkCount();
+            archetype.payloadBytes = table.ChunkCount() * chunkPayloadBytes_;
+            archetype.usedBytes = table.UsedBytes();
+            archetype.wastedBytes = archetype.payloadBytes - std::min(archetype.usedBytes, archetype.payloadBytes);
+            archetype.version = table.Version();
+            archetype.componentIds.reserve(table.Types().size());
+            for (const NativeComponentType& type : table.Types()) {
+                archetype.componentIds.push_back(type.id);
+            }
+
+            archetype.chunkCounters.reserve(table.ChunkCount());
+            for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
+                const std::size_t usedBytes = table.ChunkUsedBytes(chunkIndex);
+                archetype.chunkCounters.push_back(NativeEcsChunkMemoryCounters{
+                    .archetypeIndex = tableIndex,
+                    .chunkIndex = chunkIndex,
+                    .liveEntities = table.ChunkRowCount(chunkIndex),
+                    .capacity = table.Capacity(),
+                    .payloadBytes = chunkPayloadBytes_,
+                    .usedBytes = usedBytes,
+                    .wastedBytes = chunkPayloadBytes_ - std::min(usedBytes, chunkPayloadBytes_),
+                });
+            }
+
+            stats.usedBytes += archetype.usedBytes;
         }
         stats.wastedBytes = (stats.chunks * chunkPayloadBytes_) - std::min(stats.usedBytes, stats.chunks * chunkPayloadBytes_);
         return stats;
@@ -1270,6 +1554,34 @@ void NativeArchetypeStorage::CollectMutableQueryRecords(
     impl_->CollectMutableQueryRecords(componentIds, requiredComponentIds, excludedComponentIds, records);
 }
 
+void NativeArchetypeStorage::CaptureChunkedSnapshot(std::span<const ComponentTypeInfo> componentTypes, ChunkedWorldSnapshot& snapshot) const {
+    if (impl_ == nullptr) {
+        snapshot = {};
+        snapshot.componentTypes.assign(componentTypes.begin(), componentTypes.end());
+        return;
+    }
+    impl_->CaptureChunkedSnapshot(componentTypes, snapshot);
+}
+
+void NativeArchetypeStorage::CaptureChunkedDeltaSnapshot(
+    std::span<const ComponentTypeInfo> componentTypes,
+    const ChunkedWorldSnapshot& baseline,
+    ChunkedWorldDeltaSnapshot& delta) const {
+    if (impl_ == nullptr) {
+        delta = {};
+        delta.componentTypes.assign(componentTypes.begin(), componentTypes.end());
+        return;
+    }
+    impl_->CaptureChunkedDeltaSnapshot(componentTypes, baseline, delta);
+}
+
+bool NativeArchetypeStorage::StreamChunkedSnapshot(
+    std::span<const ComponentTypeInfo> componentTypes,
+    ChunkedWorldSnapshotChunkVisitor visitor,
+    void* context) const {
+    return impl_ != nullptr && impl_->StreamChunkedSnapshot(componentTypes, visitor, context);
+}
+
 std::uint64_t NativeArchetypeStorage::ArchetypeVersion(Entity entity) const {
     return impl_->ArchetypeVersion(entity);
 }
@@ -1286,7 +1598,7 @@ std::size_t NativeArchetypeStorage::ChunkPayloadBytes() const noexcept {
     return impl_ != nullptr ? impl_->ChunkPayloadBytes() : 0;
 }
 
-NativeEcsStorageStats NativeArchetypeStorage::Stats() const noexcept {
+NativeEcsStorageStats NativeArchetypeStorage::Stats() const {
     return impl_ != nullptr ? impl_->Stats() : NativeEcsStorageStats{};
 }
 

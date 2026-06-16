@@ -166,6 +166,17 @@ add_custom_target(kb_ecs_kernel_report_run
 
 if(BUILD_TESTING)
     add_test(
+        NAME kb_ecs_benchmark_smoke
+        COMMAND "$<TARGET_FILE:kb_ecs_benchmarks>"
+            --smoke
+            --output "${CMAKE_CURRENT_BINARY_DIR}/ecs_benchmark_smoke.json"
+    )
+    set_tests_properties(kb_ecs_benchmark_smoke PROPERTIES
+        LABELS "ecs;benchmark;smoke"
+        TIMEOUT 300
+    )
+
+    add_test(
         NAME kb_ecs_kernel_report_smoke
         COMMAND "$<TARGET_FILE:kb_ecs_kernel_report>"
             --output "${CMAKE_CURRENT_BINARY_DIR}/kernel-report-smoke.json"
@@ -175,6 +186,16 @@ if(BUILD_TESTING)
             --warmup 1
     )
 endif()
+
+add_custom_target(kb_ecs_benchmarks_full
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/full"
+    COMMAND "$<TARGET_FILE:kb_ecs_benchmarks>"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/full/ecs_benchmark_full.json"
+    DEPENDS kb_ecs_benchmarks
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    USES_TERMINAL
+    VERBATIM
+)
 
 function(kb_ecs_benchmarks_enable_ipo target_name)
     include(CheckIPOSupported)
