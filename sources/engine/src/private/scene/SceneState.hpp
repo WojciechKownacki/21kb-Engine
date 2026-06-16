@@ -66,6 +66,7 @@ public:
     std::vector<std::vector<SceneEntity>> transformTopologicalBatches;
     std::unordered_map<SceneEntity::IdType, bool> transformDirtyScratch;
     std::unordered_map<SceneEntity::IdType, TransformComponent> transformWorldScratch;
+    std::vector<SceneEntity> transformRenderProxyUpdateEntities;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;
     std::uint64_t nextHierarchyOrder = 1;
     kb::audio::IAudioPlaybackBackend* audioPlaybackBackend = nullptr;

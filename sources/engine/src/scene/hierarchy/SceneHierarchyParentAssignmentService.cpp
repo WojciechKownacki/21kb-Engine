@@ -25,7 +25,7 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
     const bool changed = SceneHierarchyOperations::SetParent(state.world, child, parent);
     if (changed) {
         SceneHierarchyCache::Move(state, child, oldParent, parent);
-        SceneTransformService::MarkModified(scene, child);
+        SceneTransformService::MarkParentModified(scene, child);
     }
     return changed;
 }

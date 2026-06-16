@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace kb::scene {
 
 struct Vec3 {
@@ -22,6 +24,9 @@ struct TransformComponent {
     Vec3 worldPosition{};
     Quat worldRotation{};
     Vec3 worldScale{ 1.0F, 1.0F, 1.0F };
+    std::uint64_t localVersion = 1;
+    std::uint64_t parentVersion = 0;
+    std::uint64_t worldVersion = 0;
     bool worldDirty = true;
 };
 

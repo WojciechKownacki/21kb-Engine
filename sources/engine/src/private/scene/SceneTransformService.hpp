@@ -20,6 +20,7 @@ public:
     static void Set(Scene& scene, SceneObject object, const TransformComponent& transform);
     static void Set(Scene& scene, SceneEntity entity, const TransformComponent& transform);
     static void MarkModified(Scene& scene, SceneEntity entity) noexcept;
+    static void MarkParentModified(Scene& scene, SceneEntity entity) noexcept;
     static void ForEach(const Scene& scene, ConstTransformVisitor visitor, void* context = nullptr);
     static void ForEachMutable(Scene& scene, MutableTransformVisitor visitor, void* context = nullptr);
 };

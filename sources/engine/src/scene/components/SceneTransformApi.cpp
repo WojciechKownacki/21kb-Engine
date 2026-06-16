@@ -40,4 +40,10 @@ void SceneTransformService::MarkModified(Scene& scene, SceneEntity entity) noexc
     }
 }
 
+void SceneTransformService::MarkParentModified(Scene& scene, SceneEntity entity) noexcept {
+    if (SceneEntityService::IsAlive(scene, entity)) {
+        SceneAccess::State(scene).componentStorage.Transforms().MarkParentModified(entity);
+    }
+}
+
 } // namespace kb::scene
