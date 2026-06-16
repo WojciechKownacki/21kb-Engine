@@ -1,16 +1,25 @@
 #pragma once
 
-#include "engine/ecs/World.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <cstddef>
+#include <span>
+
 namespace kb::scene {
 
-class SceneComponentRegistry;
+struct SceneTransformBatchEntry {
+    SceneEntity entity{};
+    TransformComponent* transform = nullptr;
+    TransformComponent parentTransform{};
+    bool parentDirty = false;
+    bool updated = false;
+};
 
 class SceneTransformBranchUpdater {
 public:
-    void Update(kb::ecs::World& world, const SceneComponentRegistry& components, SceneEntity entity, const TransformComponent& parentTransform, bool parentDirty) const;
+    void UpdateBatch(kb::ecs::WorkerPool* workerPool, std::span<SceneTransformBatchEntry> entries, std::size_t grainSize) const;
 };
 
 } // namespace kb::scene

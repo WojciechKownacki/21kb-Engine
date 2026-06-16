@@ -639,6 +639,7 @@ add_library(kb_engine STATIC
     src/private/scene/entities/SceneEntityNaming.hpp
     src/private/scene/entities/SceneEntityStatsService.hpp
     src/private/scene/hierarchy/SceneHierarchyOperations.hpp
+    src/private/scene/hierarchy/SceneHierarchyCache.hpp
     src/private/scene/hierarchy/SceneHierarchyChildrenService.hpp
     src/private/scene/hierarchy/SceneHierarchyParentAssignmentService.hpp
     src/private/scene/hierarchy/SceneHierarchyParenting.hpp

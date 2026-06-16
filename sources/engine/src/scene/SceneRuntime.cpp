@@ -18,8 +18,8 @@
 namespace kb::scene {
 namespace {
 
-void SynchronizeTransformHierarchy(kb::ecs::World& world, const SceneComponentRegistry& components) {
-    SceneTransformHierarchySystem{}.Update(world, components);
+void SynchronizeTransformHierarchy(SceneState& state) {
+    SceneTransformHierarchySystem{}.Update(state);
 }
 
 [[nodiscard]] Vec3 Lerp(Vec3 from, Vec3 to, float alpha) noexcept {
@@ -106,7 +106,7 @@ void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSyst
 
 void SceneRuntimeService::SynchronizeTransforms(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
-    SynchronizeTransformHierarchy(state.world, state.components);
+    SynchronizeTransformHierarchy(state);
 }
 
 void SceneRuntimeService::SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept {
@@ -148,7 +148,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
 
-    SynchronizeTransformHierarchy(state.world, state.components);
+    SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);
 
     if (fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
@@ -156,10 +156,10 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&
             state.lastFixedStepCount < fixed.maxFixedStepsPerFrame) {
-            SynchronizeTransformHierarchy(state.world, state.components);
+            SynchronizeTransformHierarchy(state);
             CaptureFixedStepStart(scene, state);
             state.sceneSystemScheduler.FixedUpdate(scene, fixed.fixedDeltaSeconds);
-            SynchronizeTransformHierarchy(state.world, state.components);
+            SynchronizeTransformHierarchy(state);
             CaptureFixedStepEnd(scene, state);
             state.fixedStepAccumulatorSeconds -= fixed.fixedDeltaSeconds;
             ++state.lastFixedStepCount;
@@ -178,7 +178,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
 
     state.systemScheduler.Update(state.world, deltaSeconds);
     const bool progressed = state.world.Progress(deltaSeconds);
-    SynchronizeTransformHierarchy(state.world, state.components);
+    SynchronizeTransformHierarchy(state);
     return progressed;
 }
 

@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/SceneTransformService.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/hierarchy/SceneHierarchyOperations.hpp"
 
 namespace kb::scene {
@@ -19,8 +20,11 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneObject 
 }
 
 bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity child, SceneEntity parent) noexcept {
-    const bool changed = SceneHierarchyOperations::SetParent(SceneAccess::State(scene).world, child, parent);
+    SceneState& state = SceneAccess::State(scene);
+    const SceneEntity oldParent = SceneHierarchyOperations::Parent(state.world, child);
+    const bool changed = SceneHierarchyOperations::SetParent(state.world, child, parent);
     if (changed) {
+        SceneHierarchyCache::Move(state, child, oldParent, parent);
         SceneTransformService::MarkModified(scene, child);
     }
     return changed;
