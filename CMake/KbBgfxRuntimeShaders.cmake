@@ -1,6 +1,6 @@
 function(_kb_ensure_bgfx_runtime_shaders_bundle_target)
-    get_property(_existing_bundle_stamp GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP)
-    if(_existing_bundle_stamp)
+    get_property(_existing_bundle_target GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_TARGET)
+    if(_existing_bundle_target)
         return()
     endif()
 
@@ -35,8 +35,14 @@ function(_kb_ensure_bgfx_runtime_shaders_bundle_target)
         COMMENT "Copy bgfx shader runtime trees"
         VERBATIM
     )
-    set_source_files_properties("${_bundle_stamp}" PROPERTIES GENERATED TRUE)
+    add_custom_target(kb_bgfx_runtime_shaders_bundle
+        DEPENDS "${_bundle_stamp}"
+    )
+    if(TARGET kb_renderer_shaders)
+        add_dependencies(kb_bgfx_runtime_shaders_bundle kb_renderer_shaders)
+    endif()
     set_property(GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP "${_bundle_stamp}")
+    set_property(GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_TARGET kb_bgfx_runtime_shaders_bundle)
 endfunction()
 
 function(kb_target_copy_bgfx_runtime_shaders target_name)
@@ -45,15 +51,9 @@ function(kb_target_copy_bgfx_runtime_shaders target_name)
     endif()
 
     _kb_ensure_bgfx_runtime_shaders_bundle_target()
-    get_property(_bundle_stamp GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_STAMP)
-    target_sources(${target_name} PRIVATE "${_bundle_stamp}")
+    get_property(_bundle_target GLOBAL PROPERTY KB_BGFX_RUNTIME_SHADERS_BUNDLE_TARGET)
     if(TARGET kb_renderer_shaders)
         add_dependencies(${target_name} kb_renderer_shaders)
     endif()
-    add_custom_command(TARGET ${target_name} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>/shaders"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "$<TARGET_FILE_DIR:${target_name}>/shaders"
-        COMMENT "Refresh bgfx shader runtime trees for ${target_name}"
-        VERBATIM
-    )
+    add_dependencies(${target_name} ${_bundle_target})
 endfunction()

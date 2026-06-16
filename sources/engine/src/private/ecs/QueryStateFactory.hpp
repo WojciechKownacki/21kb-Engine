@@ -10,6 +10,8 @@ namespace kb::ecs {
 
 class QueryState;
 class NativeArchetypeStorage;
+class MutableComponentBorrowLocks;
+class StructuralChangeValidator;
 
 class QueryStateFactory {
 public:
@@ -21,7 +23,9 @@ public:
         std::span<const ComponentId> optionalComponentIds,
         std::span<const ComponentId> excludedComponentIds,
         std::span<const ComponentId> changedComponentIds,
-        const WorldConfig& config);
+        const WorldConfig& config,
+        MutableComponentBorrowLocks* mutableBorrowLocks,
+        StructuralChangeValidator* structuralChangeValidator);
 };
 
 } // namespace kb::ecs

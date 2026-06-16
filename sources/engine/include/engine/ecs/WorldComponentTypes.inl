@@ -10,6 +10,7 @@ template <typename T>
 constexpr void World::ValidateComponentType() noexcept {
     static_assert(std::is_object_v<T>, "ECS component must be an object type");
     static_assert(std::is_trivially_copyable_v<T>, "ECS component must be trivially copyable until component lifecycle hooks are exposed");
+    static_assert(std::is_trivially_destructible_v<T>, "ECS hot storage component must be trivially destructible");
 }
 
 template <typename T>
