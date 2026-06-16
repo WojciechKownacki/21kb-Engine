@@ -9,6 +9,9 @@ TransformComponent TransformMath::Identity() noexcept {
     return TransformComponent{
         .localScale = Vec3{ 1.0F, 1.0F, 1.0F },
         .worldScale = Vec3{ 1.0F, 1.0F, 1.0F },
+        .localVersion = 0,
+        .parentVersion = 0,
+        .worldVersion = 0,
         .worldDirty = false,
     };
 }
@@ -18,6 +21,8 @@ TransformComponent TransformMath::Compose(const TransformComponent& parent, cons
     result.worldScale = Vec3Math::Multiply(parent.worldScale, local.localScale);
     result.worldRotation = QuatMath::Normalize(QuatMath::Multiply(parent.worldRotation, local.localRotation));
     result.worldPosition = Vec3Math::Add(parent.worldPosition, Vec3Math::Rotate(parent.worldRotation, Vec3Math::Multiply(parent.worldScale, local.localPosition)));
+    result.parentVersion = parent.worldVersion;
+    result.worldVersion = local.worldVersion + 1U;
     result.worldDirty = false;
     return result;
 }

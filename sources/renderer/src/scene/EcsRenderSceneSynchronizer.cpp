@@ -9,6 +9,7 @@
 #include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
@@ -212,6 +213,9 @@ void EcsRenderSceneSynchronizer::Reserve(const EcsRenderSceneSynchronizerReserve
     if (desc.transformResolvingEntries > 0U) {
         transformResolving_.reserve(desc.transformResolvingEntries);
     }
+    if (desc.transformUpdateEntities > 0U) {
+        transformUpdateEntities_.reserve(desc.transformUpdateEntities);
+    }
 }
 
 void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const {
@@ -273,6 +277,16 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     }
 }
 
+void EcsRenderSceneSynchronizer::SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    transformUpdateEntities_.clear();
+    const std::span<const kb::scene::SceneEntity> entities = scene.Runtime().TransformRenderProxyUpdateEntities();
+    transformUpdateEntities_.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        transformUpdateEntities_.push_back(entity.Id());
+    }
+    SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
+}
+
 EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexcept {
     return EcsRenderSceneSynchronizerStats{
         .meshSeenCount = static_cast<std::uint32_t>(seenMeshes_.size()),
@@ -283,8 +297,10 @@ EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexce
         .lightSeenCapacity = static_cast<std::uint32_t>(seenLights_.capacity()),
         .transformCacheCount = static_cast<std::uint32_t>(transformCache_.size()),
         .transformResolvingCount = static_cast<std::uint32_t>(transformResolving_.size()),
+        .transformUpdateEntityCount = static_cast<std::uint32_t>(transformUpdateEntities_.size()),
         .transformCacheCapacity = static_cast<std::uint32_t>(transformCache_.bucket_count()),
         .transformResolvingCapacity = static_cast<std::uint32_t>(transformResolving_.bucket_count()),
+        .transformUpdateEntityCapacity = static_cast<std::uint32_t>(transformUpdateEntities_.capacity()),
     };
 }
 

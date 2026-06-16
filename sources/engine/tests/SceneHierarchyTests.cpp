@@ -11,6 +11,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 
 #include <array>
+#include <span>
 #include <vector>
 
 namespace {
@@ -165,8 +166,12 @@ void RunTransformTopologicalBatchMassParentingTest() {
     }
 
     static_cast<void>(scene.Runtime().Update(0.016F));
-    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.x, 7.0F), "Topological transform batch did not compose child X");
-    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.y, 1.0F), "Topological transform batch did not compose child Y");
+    kb::scene::TransformComponent childSevenTransform = scene.Transforms().Get(children[7]);
+    kb::tests::Require(kb::tests::NearlyEqual(childSevenTransform.worldPosition.x, 7.0F), "Topological transform batch did not compose child X");
+    kb::tests::Require(kb::tests::NearlyEqual(childSevenTransform.worldPosition.y, 1.0F), "Topological transform batch did not compose child Y");
+    kb::tests::Require(childSevenTransform.localVersion == 1U, "Initial transform sync should not change local version");
+    kb::tests::Require(childSevenTransform.parentVersion == scene.Transforms().Get(roots[7]).worldVersion, "Transform parent version did not observe parent world version");
+    kb::tests::Require(childSevenTransform.worldVersion > 0U, "Transform world version was not initialized by world sync");
 
     kb::scene::SceneObject batchParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Batch Parent",
@@ -179,9 +184,43 @@ void RunTransformTopologicalBatchMassParentingTest() {
     }
 
     static_cast<void>(scene.Runtime().Update(0.016F));
-    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.x, 107.0F), "Mass reparent did not propagate parent dirty transform");
-    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[7]).worldPosition.y, 1.0F), "Mass reparent changed child local Y unexpectedly");
+    const std::span<const kb::scene::SceneEntity> dirtyRenderEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+    kb::tests::Require(dirtyRenderEntities.size() >= kRootCount + 1U, "Transform runtime did not cache dirty render proxy update candidates after mass reparent");
+    childSevenTransform = scene.Transforms().Get(children[7]);
+    kb::tests::Require(kb::tests::NearlyEqual(childSevenTransform.worldPosition.x, 107.0F), "Mass reparent did not propagate parent dirty transform");
+    kb::tests::Require(kb::tests::NearlyEqual(childSevenTransform.worldPosition.y, 1.0F), "Mass reparent changed child local Y unexpectedly");
+    kb::tests::Require(childSevenTransform.localVersion == 1U, "Reparent should not increment local transform version");
+    kb::tests::Require(childSevenTransform.parentVersion == scene.Transforms().Get(roots[7]).worldVersion, "Reparent did not refresh observed parent version");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(children[120]).worldPosition.x, 120.0F), "Independent subtree was dirtied by unrelated reparent");
+}
+
+void RunTransformVersioningTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Parent",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+    });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Child",
+        .parent = parent,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F } },
+    });
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const kb::scene::TransformComponent initialChild = scene.Transforms().Get(child);
+
+    kb::scene::TransformComponent parentTransform = scene.Transforms().Get(parent);
+    parentTransform.localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F };
+    scene.Transforms().Set(parent, parentTransform);
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const kb::scene::TransformComponent movedParent = scene.Transforms().Get(parent);
+    const kb::scene::TransformComponent movedChild = scene.Transforms().Get(child);
+    kb::tests::Require(movedParent.localVersion == parentTransform.localVersion + 1U, "Set should increment local transform version");
+    kb::tests::Require(movedParent.worldVersion > parentTransform.worldVersion, "Set should produce a newer world transform version");
+    kb::tests::Require(movedChild.localVersion == initialChild.localVersion, "Parent movement should not increment child local version");
+    kb::tests::Require(movedChild.parentVersion == movedParent.worldVersion, "Child parent version did not track moved parent world version");
+    kb::tests::Require(movedChild.worldVersion > initialChild.worldVersion, "Child world version did not change after parent moved");
 }
 
 void RunSceneBatchDuplicateTest() {
@@ -248,6 +287,7 @@ void RunSceneHierarchyTests() {
     RunHierarchyCreationOrderSurvivesDeletionTest();
     RunHierarchyNoOpParentingKeepsSiblingOrderTest();
     RunTransformTopologicalBatchMassParentingTest();
+    RunTransformVersioningTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
 }

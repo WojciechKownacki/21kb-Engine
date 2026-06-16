@@ -12,7 +12,7 @@ void UpdateEntry(SceneTransformBatchEntry& entry) noexcept {
         return;
     }
 
-    const bool shouldUpdate = entry.parentDirty || entry.transform->worldDirty;
+    const bool shouldUpdate = entry.parentDirty || entry.transform->worldDirty || entry.transform->parentVersion != entry.parentWorldVersion;
     if (shouldUpdate) {
         *entry.transform = TransformMath::Compose(entry.parentTransform, *entry.transform);
     }

@@ -35,6 +35,10 @@ std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(Sce
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
 }
 
+std::span<const SceneEntity> SceneRuntimeQueries::TransformRenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::TransformRenderProxyUpdateEntities(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -68,6 +72,10 @@ std::size_t SceneRuntime::LastFixedStepCount() const noexcept {
 
 std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
+}
+
+std::span<const SceneEntity> SceneRuntime::TransformRenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::TransformRenderProxyUpdateEntities(scene_);
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {

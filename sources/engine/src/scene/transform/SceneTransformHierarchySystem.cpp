@@ -7,7 +7,9 @@
 #include "scene/transform/TransformMath.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <memory>
+#include <span>
 
 namespace kb::scene {
 namespace {
@@ -53,6 +55,14 @@ void BuildTopologicalBatches(SceneState& state) {
     return transform == state.transformWorldScratch.end() ? identity : transform->second;
 }
 
+[[nodiscard]] std::uint64_t ParentWorldVersionOf(const SceneState& state, SceneEntity parent) noexcept {
+    if (!parent.IsValid()) {
+        return 0;
+    }
+    const auto transform = state.transformWorldScratch.find(parent.Id());
+    return transform == state.transformWorldScratch.end() ? 0 : transform->second.worldVersion;
+}
+
 [[nodiscard]] bool ParentDirtyOf(const SceneState& state, SceneEntity parent) noexcept {
     if (!parent.IsValid()) {
         return false;
@@ -69,6 +79,26 @@ void EnsureWorkerPool(SceneState& state) {
     }
 }
 
+void CacheRenderProxyUpdatesAfterTransforms(SceneState& state, std::span<const SceneEntity> updatedEntities) {
+    if (updatedEntities.empty()) {
+        return;
+    }
+
+    const std::size_t writeBegin = state.transformRenderProxyUpdateEntities.size();
+    state.transformRenderProxyUpdateEntities.resize(writeBegin + updatedEntities.size());
+    if (updatedEntities.size() <= kTransformBatchGrainSize) {
+        std::ranges::copy(updatedEntities, state.transformRenderProxyUpdateEntities.begin() + static_cast<std::ptrdiff_t>(writeBegin));
+        return;
+    }
+
+    EnsureWorkerPool(state);
+    state.transformWorkerPool->ParallelForChunks(updatedEntities.size(), kTransformBatchGrainSize, [&state, updatedEntities, writeBegin](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        for (std::size_t offset = 0; offset < chunk.count; ++offset) {
+            state.transformRenderProxyUpdateEntities[writeBegin + chunk.begin + offset] = updatedEntities[chunk.begin + offset];
+        }
+    });
+}
+
 } // namespace
 
 void SceneTransformHierarchySystem::Update(SceneState& state) const {
@@ -80,6 +110,8 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
     state.transformWorldScratch.reserve(state.hierarchyOrder.size());
 
     std::vector<SceneTransformBatchEntry> entries;
+    std::vector<SceneEntity> updatedEntities;
+    updatedEntities.reserve(state.hierarchyOrder.size());
     for (const std::vector<SceneEntity>& level : state.transformTopologicalBatches) {
         entries.clear();
         entries.reserve(level.size());
@@ -96,6 +128,7 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
                 .transform = transform,
                 .parentTransform = ParentTransformOf(state, parent, identity),
                 .parentDirty = ParentDirtyOf(state, parent),
+                .parentWorldVersion = ParentWorldVersionOf(state, parent),
             });
         }
 
@@ -114,10 +147,13 @@ void SceneTransformHierarchySystem::Update(SceneState& state) const {
             state.transformWorldScratch[entry.entity.Id()] = *entry.transform;
             state.transformDirtyScratch[entry.entity.Id()] = entry.updated;
             if (entry.updated) {
+                updatedEntities.push_back(entry.entity);
                 SceneComponentAccess::MarkModified(state.world.NativeHandle(), entry.entity, state.components.TransformComponentId());
             }
         }
     }
+
+    CacheRenderProxyUpdatesAfterTransforms(state, updatedEntities);
 }
 
 } // namespace kb::scene
