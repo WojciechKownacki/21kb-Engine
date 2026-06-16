@@ -3,6 +3,7 @@
 #include "engine/ecs/CommandBuffer.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabNameResolver.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
@@ -130,6 +131,10 @@ void QueuePrefabComponents(
         for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
             const kb::ecs::Entity entity = playback.Resolve(commandEntities[EntityIndex(instanceIndex, nodeIndex, nodes.size())]);
             state.hierarchyOrder[entity.Id()] = state.nextHierarchyOrder++;
+            const SceneEntity parent = nodes[nodeIndex].parentNode == ScenePrefabNodeDesc::NoParent
+                ? settings.parent.Entity()
+                : playback.Resolve(commandEntities[EntityIndex(instanceIndex, nodes[nodeIndex].parentNode, nodes.size())]);
+            SceneHierarchyCache::Add(state, entity, parent);
             const std::string name = ScenePrefabNameResolver::Resolve(nodes[nodeIndex], settings);
             if (!name.empty()) {
                 state.world.SetName(entity, name);

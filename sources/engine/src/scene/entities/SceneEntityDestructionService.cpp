@@ -4,6 +4,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 namespace kb::scene {
 
@@ -23,7 +24,8 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
     }
 
     SceneState& state = SceneAccess::State(scene);
-    state.hierarchyOrder.erase(entity.Id());
+    const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
+    SceneHierarchyCache::Remove(state, entity, parent);
     state.world.DestroyEntity(entity);
 }
 

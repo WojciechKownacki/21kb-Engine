@@ -19,12 +19,18 @@ bool SceneHierarchyParenting::SetParent(kb::ecs::World& world, SceneEntity child
     }
 
     const ecs_entity_t childId = child.Id();
-    if (const ecs_entity_t currentParent = ecs_get_parent(world.NativeHandle(), childId); currentParent != 0) {
+    const ecs_entity_t parentId = parent.IsValid() ? parent.Id() : 0;
+    const ecs_entity_t currentParent = ecs_get_parent(world.NativeHandle(), childId);
+    if (currentParent == parentId) {
+        return false;
+    }
+
+    if (currentParent != 0) {
         ecs_remove_id(world.NativeHandle(), childId, ecs_pair(EcsChildOf, currentParent));
     }
 
     if (parent.IsValid()) {
-        ecs_add_id(world.NativeHandle(), childId, ecs_pair(EcsChildOf, parent.Id()));
+        ecs_add_id(world.NativeHandle(), childId, ecs_pair(EcsChildOf, parentId));
     }
 
     return true;
