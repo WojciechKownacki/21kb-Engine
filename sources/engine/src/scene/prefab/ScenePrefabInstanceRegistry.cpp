@@ -262,7 +262,7 @@ void ScenePrefabInstanceRegistry::IndexObjects(ScenePrefabInstanceHandle handle,
 }
 
 void ScenePrefabInstanceRegistry::UnindexObjects(ScenePrefabInstanceHandle handle, std::span<const SceneObject> objects) noexcept {
-    if (!objects.empty() && objects.front().IsValid()) {
+    if (!objects.empty() && objects.front().Entity().IsValid()) {
         const auto rootIterator = rootIndex_.find(objects.front().Entity().Id());
         if (rootIterator != rootIndex_.end() && rootIterator->second == handle) {
             rootIndex_.erase(rootIterator);
@@ -271,7 +271,7 @@ void ScenePrefabInstanceRegistry::UnindexObjects(ScenePrefabInstanceHandle handl
 
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(objects.size()); ++nodeIndex) {
         const SceneObject object = objects[nodeIndex];
-        if (!object.IsValid()) {
+        if (!object.Entity().IsValid()) {
             continue;
         }
 

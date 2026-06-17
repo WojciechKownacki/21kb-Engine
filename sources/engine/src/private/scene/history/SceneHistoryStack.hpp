@@ -3,20 +3,22 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabInstanceHandle.hpp"
-#include "engine/scene/SceneObject.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace kb::scene {
 
+using SceneHistoryObjectPath = std::vector<std::uint32_t>;
+
 struct SceneHistoryPrefabInstanceSnapshot {
     ScenePrefabInstanceHandle handle;
     ScenePrefabHandle prefab;
     std::string prefabGuid;
-    SceneObject rootParent{};
+    SceneHistoryObjectPath rootParentPath;
+    std::vector<SceneHistoryObjectPath> objectPaths;
     ScenePrefab resolvedPrefab;
-    ScenePrefab currentState;
 };
 
 struct SceneHistoryEntry {
