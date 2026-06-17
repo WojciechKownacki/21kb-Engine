@@ -151,6 +151,7 @@ struct BenchmarkOptions {
     bool pinWorkerAffinity = false;
     BenchmarkValidationSelection validationSelection = BenchmarkValidationSelection::Off;
     bool debugValidationEnabled = false;
+    bool marketScaleOnly = false;
 };
 
 struct FrameStats {
@@ -868,6 +869,8 @@ private:
             options.failOnRegression = true;
         } else if (argument == "--validation") {
             options.validationSelection = ParseValidationSelection(readValue(argument), argument);
+        } else if (argument == "--market-scale") {
+            options.marketScaleOnly = true;
         } else if (argument == "--smoke") {
             options.entityCount = 10'000;
             options.hierarchyEntityCount = 4'096;
@@ -883,7 +886,7 @@ private:
             options.warmupFrames = 1;
             options.outputPath = "ecs_benchmark_smoke.json";
         } else if (argument == "--help") {
-            std::cout << "Usage: kb_ecs_benchmarks [--entities N] [--hierarchy-entities N] [--structural-changes N] [--frames N] [--warmup N] [--grain N] [--threads N] [--worker-affinity on|off] [--output path] [--save-baseline path] [--compare-baseline path] [--compare-before path --compare-after path] [--compare-output path] [--fail-on-regression percent] [--validation off|debug|both] [--smoke]\n";
+            std::cout << "Usage: kb_ecs_benchmarks [--entities N] [--hierarchy-entities N] [--structural-changes N] [--frames N] [--warmup N] [--grain N] [--threads N] [--worker-affinity on|off] [--output path] [--save-baseline path] [--compare-baseline path] [--compare-before path --compare-after path] [--compare-output path] [--fail-on-regression percent] [--validation off|debug|both] [--market-scale] [--smoke]\n";
             std::exit(0);
         } else {
             throw std::invalid_argument("Unknown argument: " + std::string{ argument });
@@ -2236,6 +2239,10 @@ template <typename Operation>
             ValidateDenseBenchmarkWorld(world, options);
             return context.checksum;
         }));
+
+    if (options.marketScaleOnly) {
+        return results;
+    }
 
     for (const std::size_t hierarchyDepth : { 8U, 32U, 128U }) {
         HierarchyBenchmarkData hierarchyData = CreateHierarchyBenchmarkData(options, hierarchyDepth);
