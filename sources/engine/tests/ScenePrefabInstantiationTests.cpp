@@ -547,6 +547,66 @@ void RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest() {
     kb::tests::Require(foundVisibilityDelta, "Registered prefab snapshot restore lost visibility override metadata");
 }
 
+void RunSceneHistoryRestoresNestedRegisteredPrefabInstanceSnapshotTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Snapshot Plain Parent",
+    });
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Nested Root",
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Nested Child",
+        .parentNode = rootNode,
+        .visibility = kb::scene::VisibilityComponent{
+            .visible = true,
+        },
+    });
+    const std::uint64_t childNodeId = prefab.TryGetNode(childNode)->stableId;
+
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("SnapshotNestedPrefab", std::move(prefab));
+    kb::scene::ScenePrefabInstantiationSettings settings;
+    settings.parent = parent;
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(prefabHandle, settings);
+    const kb::scene::ScenePrefabInstanceHandle instanceHandle = instance.Handle();
+    kb::tests::Require(instanceHandle.IsValid(), "Nested registered prefab setup did not instantiate a tracked instance");
+
+    scene.Entities().SetName(instance.ObjectAt(childNode), "Snapshot Nested Child Override");
+    scene.Components().Visibility().Set(instance.ObjectAt(childNode).Entity(), kb::scene::VisibilityComponent{ .visible = false });
+
+    kb::tests::Require(scene.History().Record("nested registered prefab snapshot"), "Nested registered prefab snapshot was not recorded");
+    scene.Entities().Destroy(parent);
+
+    kb::tests::Require(scene.History().Undo(), "Nested registered prefab snapshot restore failed");
+    kb::tests::Require(scene.Entities().Count() == 3U, "Nested registered prefab snapshot restored duplicate or missing objects");
+    kb::tests::Require(scene.Prefabs().IsInstance(instanceHandle), "Nested registered prefab instance handle was not restored");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(instanceHandle) == prefabHandle, "Nested registered prefab source handle was not restored");
+
+    const std::vector<kb::scene::SceneObject> roots = scene.Hierarchy().RootObjects();
+    kb::tests::Require(roots.size() == 1U, "Nested registered prefab snapshot restored the wrong root count");
+    const kb::scene::SceneObject restoredParent = roots.front();
+    kb::tests::Require(scene.Entities().Name(restoredParent) == "Snapshot Plain Parent", "Nested registered prefab snapshot did not restore the plain parent");
+
+    const std::vector<kb::scene::SceneObject> parentChildren = scene.Hierarchy().Children(restoredParent);
+    kb::tests::Require(parentChildren.size() == 1U, "Nested registered prefab snapshot restored the wrong parent child count");
+    const kb::scene::SceneObject restoredInstanceRoot = parentChildren.front();
+    kb::tests::Require(scene.Prefabs().RootInstance(restoredInstanceRoot) == instanceHandle, "Nested registered prefab root mapping was not restored");
+    kb::tests::Require(scene.Hierarchy().Parent(restoredInstanceRoot.Entity()) == restoredParent.Entity(), "Nested registered prefab parent relation was not restored");
+
+    const std::vector<kb::scene::SceneObject> instanceChildren = scene.Hierarchy().Children(restoredInstanceRoot);
+    kb::tests::Require(instanceChildren.size() == 1U, "Nested registered prefab snapshot restored the wrong instance child count");
+    const kb::scene::SceneObject restoredChild = instanceChildren.front();
+    std::uint32_t restoredNode = 99U;
+    std::uint64_t restoredNodeId = 0U;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(restoredChild, restoredNode, restoredNodeId) == instanceHandle, "Nested registered prefab child mapping was not restored");
+    kb::tests::Require(restoredNode == childNode && restoredNodeId == childNodeId, "Nested registered prefab child mapped to the wrong node identity");
+    kb::tests::Require(scene.Entities().Name(restoredChild) == "Snapshot Nested Child Override", "Nested registered prefab snapshot did not restore child name override");
+    kb::tests::Require(!scene.Components().Visibility().Get(restoredChild.Entity()).visible, "Nested registered prefab snapshot did not restore visibility override");
+}
+
 void RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest() {
     kb::scene::Scene scene;
 
@@ -1752,6 +1812,7 @@ void RunPrefabMappingsIgnoreDestroyedEntitiesTest() {
 
     scene.Entities().Destroy(childObject);
     kb::tests::Require(!scene.Entities().IsAlive(childObject), "Destroyed mapping child was not destroyed");
+    kb::tests::Require(scene.Prefabs().IsInstance(instance.Handle()), "Destroying a non-root prefab object should keep the instance active for missing-object overrides");
     const kb::scene::SceneObject replacement = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Destroyed Mapping Replacement" });
     scene.Entities().SetName(childObject, "Stale Prefab Object Rename");
     kb::scene::TagsComponent staleTags;
@@ -1768,6 +1829,7 @@ void RunPrefabMappingsIgnoreDestroyedEntitiesTest() {
     scene.Entities().Destroy(rootObject);
     kb::tests::Require(!scene.Entities().IsAlive(rootObject), "Destroyed mapping root was not destroyed");
     nodeIndex = 99;
+    kb::tests::Require(!scene.Prefabs().IsInstance(instance.Handle()), "Destroying a prefab root should invalidate the prefab instance handle");
     kb::tests::Require(!scene.Prefabs().RootInstance(rootObject).IsValid(), "Destroyed root still resolved as prefab root");
     kb::tests::Require(!scene.Prefabs().ContainingInstance(rootObject, nodeIndex).IsValid(), "Destroyed root still resolved to a prefab instance");
     kb::tests::Require(!scene.Prefabs().SourcePrefab(rootObject).IsValid(), "Destroyed root still resolved to a source prefab");
@@ -1786,6 +1848,7 @@ void RunScenePrefabInstantiationTests() {
     RunLargePrefabHierarchyTransformTest();
     RunRegisteredBulkPrefabInstantiationTest();
     RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest();
+    RunSceneHistoryRestoresNestedRegisteredPrefabInstanceSnapshotTest();
     RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest();
     RunRegisteredPrefabOverrideLifecycleTest();
     RunMissingPrefabInstanceObjectOverrideTest();
