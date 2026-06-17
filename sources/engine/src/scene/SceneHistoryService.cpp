@@ -10,42 +10,92 @@
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 
+#include <cstdint>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace kb::scene {
 namespace {
 
-[[nodiscard]] std::vector<SceneObject> CopyObjects(const ScenePrefabInstance& instance) {
-    return { instance.Objects().begin(), instance.Objects().end() };
+using SceneHistoryObjectPathIndex = std::unordered_map<std::uint64_t, SceneHistoryObjectPath>;
+
+void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHistoryObjectPathIndex& output) {
+    output[object.Entity().Id()] = path;
+
+    const std::vector<SceneObject> children = object.Children();
+    for (std::uint32_t childIndex = 0U; childIndex < static_cast<std::uint32_t>(children.size()); ++childIndex) {
+        SceneHistoryObjectPath childPath = path;
+        childPath.push_back(childIndex);
+        IndexObjectPath(children[childIndex], std::move(childPath), output);
+    }
+}
+
+[[nodiscard]] SceneHistoryObjectPathIndex BuildObjectPathIndex(const std::vector<SceneObject>& roots) {
+    SceneHistoryObjectPathIndex index;
+    for (std::uint32_t rootIndex = 0U; rootIndex < static_cast<std::uint32_t>(roots.size()); ++rootIndex) {
+        IndexObjectPath(roots[rootIndex], SceneHistoryObjectPath{ rootIndex }, index);
+    }
+    return index;
+}
+
+[[nodiscard]] SceneHistoryObjectPath FindObjectPath(Scene& scene, const SceneHistoryObjectPathIndex& index, SceneObject object) {
+    if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
+        return {};
+    }
+
+    const auto iterator = index.find(object.Entity().Id());
+    return iterator == index.end() ? SceneHistoryObjectPath{} : iterator->second;
+}
+
+[[nodiscard]] SceneObject ResolveObjectPath(Scene& scene, const std::vector<SceneObject>& roots, const SceneHistoryObjectPath& path) {
+    if (path.empty() || path.front() >= roots.size()) {
+        return {};
+    }
+
+    SceneObject object = roots[path.front()];
+    for (std::size_t depth = 1U; depth < path.size(); ++depth) {
+        const std::vector<SceneObject> children = SceneHierarchyService::Children(scene, object);
+        if (path[depth] >= children.size()) {
+            return {};
+        }
+        object = children[path[depth]];
+    }
+    return object;
 }
 
 [[nodiscard]] bool Capture(Scene& scene, std::string label, SceneHistoryEntry& output) {
     SceneState& state = SceneAccess::State(scene);
     std::vector<ScenePrefab> roots;
     std::vector<SceneHistoryPrefabInstanceSnapshot> prefabInstances;
+    std::vector<SceneObject> rootObjects;
     for (const SceneEntity root : SceneHierarchyService::RootEntities(scene)) {
         const SceneObject rootObject = SceneAccess::MakeObject(scene, root);
-        const ScenePrefabInstanceHandle instanceHandle = state.prefabInstances.FindRootInstance(rootObject);
-        if (instanceHandle.IsValid()) {
-            const ScenePrefabInstanceRecord* record = state.prefabInstances.Find(instanceHandle);
-            if (record == nullptr) {
-                return false;
-            }
-
-            prefabInstances.push_back(SceneHistoryPrefabInstanceSnapshot{
-                .handle = instanceHandle,
-                .prefab = record->prefab,
-                .prefabGuid = record->prefabGuid,
-                .rootParent = record->rootParent,
-                .resolvedPrefab = record->resolvedPrefab,
-                .currentState = ScenePrefabCaptureService::Capture(scene, rootObject, ScenePrefabCaptureSettings{}),
-            });
-            continue;
-        }
-
+        rootObjects.push_back(rootObject);
         roots.push_back(ScenePrefabCaptureService::Capture(scene, rootObject, ScenePrefabCaptureSettings{}));
     }
+
+    const SceneHistoryObjectPathIndex objectPaths = BuildObjectPathIndex(rootObjects);
+    for (const ScenePrefabInstanceHandle instanceHandle : state.prefabInstances.Handles()) {
+        const ScenePrefabInstanceRecord* record = state.prefabInstances.Find(instanceHandle);
+        if (record == nullptr) {
+            return false;
+        }
+
+        SceneHistoryPrefabInstanceSnapshot snapshot{
+            .handle = instanceHandle,
+            .prefab = record->prefab,
+            .prefabGuid = record->prefabGuid,
+            .rootParentPath = FindObjectPath(scene, objectPaths, record->rootParent),
+            .resolvedPrefab = record->resolvedPrefab,
+        };
+        snapshot.objectPaths.reserve(record->objects.size());
+        for (const SceneObject object : record->objects) {
+            snapshot.objectPaths.push_back(FindObjectPath(scene, objectPaths, object));
+        }
+        prefabInstances.push_back(std::move(snapshot));
+    }
+
     output = SceneHistoryEntry{
         .label = std::move(label),
         .roots = std::move(roots),
@@ -62,29 +112,33 @@ namespace {
     }
     state.prefabInstances.Clear();
 
+    std::vector<SceneObject> restoredRoots;
+    restoredRoots.reserve(entry.roots.size());
     for (const ScenePrefab& prefab : entry.roots) {
-        if (ScenePrefabInstantiationService::Instantiate(scene, prefab, ScenePrefabInstantiationSettings{}).Empty()) {
+        ScenePrefabInstance root = ScenePrefabInstantiationService::Instantiate(scene, prefab, ScenePrefabInstantiationSettings{});
+        if (root.Empty()) {
             return false;
         }
+        restoredRoots.push_back(root.RootObject());
     }
 
     for (const SceneHistoryPrefabInstanceSnapshot& snapshot : entry.prefabInstances) {
-        ScenePrefabInstantiationSettings settings;
-        if (snapshot.rootParent.IsValid() && scene.Entities().IsAlive(snapshot.rootParent)) {
-            settings.parent = snapshot.rootParent;
+        std::vector<SceneObject> objects;
+        objects.reserve(snapshot.objectPaths.size());
+        for (const SceneHistoryObjectPath& path : snapshot.objectPaths) {
+            objects.push_back(ResolveObjectPath(scene, restoredRoots, path));
         }
-
-        const ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, snapshot.currentState, settings);
-        if (instance.Empty()) {
+        if (objects.empty()) {
             return false;
         }
 
+        const SceneObject rootParent = ResolveObjectPath(scene, restoredRoots, snapshot.rootParentPath);
         if (!state.prefabInstances.Restore(
                 snapshot.handle,
                 snapshot.prefab,
                 snapshot.prefabGuid,
-                settings.parent,
-                CopyObjects(instance),
+                rootParent,
+                std::move(objects),
                 snapshot.resolvedPrefab)) {
             return false;
         }

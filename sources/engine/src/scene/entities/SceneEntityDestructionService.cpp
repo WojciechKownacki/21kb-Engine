@@ -5,6 +5,7 @@
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
 namespace kb::scene {
 
@@ -19,11 +20,17 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         return;
     }
 
+    SceneState& state = SceneAccess::State(scene);
+    const SceneObject object = SceneAccess::MakeObject(scene, entity);
+    const ScenePrefabInstanceHandle rootInstance = state.prefabInstances.FindRootInstance(object);
+    if (rootInstance.IsValid()) {
+        static_cast<void>(state.prefabInstances.Remove(rootInstance));
+    }
+
     for (const SceneEntity child : SceneHierarchyService::ChildEntities(scene, entity)) {
         DestroyEntity(scene, child);
     }
 
-    SceneState& state = SceneAccess::State(scene);
     const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
     SceneHierarchyCache::Remove(state, entity, parent);
     state.world.DestroyEntity(entity);
