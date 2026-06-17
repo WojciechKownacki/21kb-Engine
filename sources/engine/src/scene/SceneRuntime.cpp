@@ -151,6 +151,17 @@ const kb::ecs::SystemSchedulerTrace& SceneRuntimeService::LastEcsProfilerTrace(c
     return SceneAccess::State(scene).systemScheduler.LastProfilerTrace();
 }
 
+SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene) noexcept {
+    const SceneState& state = SceneAccess::State(scene);
+    return SceneRuntimeHotPathReport{
+        .transformHierarchyUsesBatchPath = true,
+        .transformHierarchyUsesKernelContract = true,
+        .transformHierarchyUsesVirtualSceneSystem = false,
+        .transformTopologicalBatchCount = state.transformTopologicalBatches.size(),
+        .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
+    };
+}
+
 std::optional<TransformComponent> SceneRuntimeService::InterpolatedTransform(const Scene& scene, SceneEntity entity) noexcept {
     const SceneState& state = SceneAccess::State(scene);
     const auto sample = state.fixedTransformSamples.find(entity.Id());

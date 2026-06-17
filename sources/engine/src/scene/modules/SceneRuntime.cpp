@@ -39,6 +39,10 @@ const kb::ecs::SystemSchedulerTrace& SceneRuntimeQueries::LastEcsProfilerTrace()
     return SceneRuntimeService::LastEcsProfilerTrace(scene_);
 }
 
+SceneRuntimeHotPathReport SceneRuntimeQueries::HotPathReport() const noexcept {
+    return SceneRuntimeService::HotPathReport(scene_);
+}
+
 std::optional<TransformComponent> SceneRuntimeQueries::InterpolatedTransform(SceneEntity entity) const noexcept {
     return SceneRuntimeService::InterpolatedTransform(scene_, entity);
 }
@@ -88,6 +92,10 @@ bool SceneRuntime::EcsProfilerEnabled() const noexcept {
 
 const kb::ecs::SystemSchedulerTrace& SceneRuntime::LastEcsProfilerTrace() const noexcept {
     return SceneRuntimeService::LastEcsProfilerTrace(scene_);
+}
+
+SceneRuntimeHotPathReport SceneRuntime::HotPathReport() const noexcept {
+    return SceneRuntimeService::HotPathReport(scene_);
 }
 
 std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntity entity) const noexcept {
