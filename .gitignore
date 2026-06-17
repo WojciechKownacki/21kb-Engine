@@ -84,6 +84,11 @@ Thumbs.db
 # =========================
 *.log
 
+# =========================
+# Local benchmark outputs
+# =========================
+/Saved/Benchmarks/
+
 # Keep vendored dependencies complete even if they contain files that look like
 # build artifacts for this repository.
 !/third_party/**
