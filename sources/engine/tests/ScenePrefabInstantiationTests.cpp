@@ -7,6 +7,7 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabPrivateScene.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
@@ -14,6 +15,7 @@
 #include "engine/scene/SceneSystem.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -477,6 +479,159 @@ void RunRegisteredBulkPrefabInstantiationTest() {
         kb::tests::Require(scene.Components().AudioSources().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio source component was not assigned");
         kb::tests::Require(scene.Components().AudioListeners().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio listener component was not assigned");
     }
+}
+
+void RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Registered Root",
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Registered Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 2.0F, 0.0F },
+        },
+        .visibility = kb::scene::VisibilityComponent{
+            .visible = true,
+        },
+    });
+    const std::uint64_t childNodeId = prefab.TryGetNode(childNode)->stableId;
+
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("SnapshotRegisteredPrefab", std::move(prefab));
+    kb::tests::Require(prefabHandle.IsValid(), "Snapshot registered prefab setup did not register prefab");
+    const kb::scene::ScenePrefabInstance instance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::ScenePrefabInstanceHandle instanceHandle = instance.Handle();
+    kb::tests::Require(instanceHandle.IsValid(), "Snapshot registered prefab setup did not instantiate a tracked instance");
+
+    kb::scene::TransformComponent changedTransform = scene.Transforms().Get(instance.ObjectAt(childNode));
+    changedTransform.localPosition = kb::scene::Vec3{ 0.0F, 9.0F, 0.0F };
+    scene.Transforms().Set(instance.ObjectAt(childNode), changedTransform);
+    scene.Entities().SetName(instance.ObjectAt(childNode), "Snapshot Registered Child Override");
+    scene.Components().Visibility().Set(instance.ObjectAt(childNode).Entity(), kb::scene::VisibilityComponent{ .visible = false });
+
+    kb::tests::Require(scene.History().Record("registered prefab snapshot"), "Registered prefab snapshot was not recorded");
+    scene.Entities().Destroy(instance.RootObject());
+
+    kb::tests::Require(scene.History().Undo(), "Registered prefab snapshot restore failed");
+    kb::tests::Require(scene.Prefabs().IsInstance(instanceHandle), "Registered prefab instance handle was not restored");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(instanceHandle) == prefabHandle, "Registered prefab source handle was not restored");
+
+    const std::vector<kb::scene::SceneObject> roots = scene.Hierarchy().RootObjects();
+    kb::tests::Require(roots.size() == 1U, "Registered prefab snapshot restored the wrong root count");
+    const kb::scene::SceneObject restoredRoot = roots.front();
+    kb::tests::Require(scene.Prefabs().RootInstance(restoredRoot) == instanceHandle, "Registered prefab root instance mapping was not restored");
+
+    const std::vector<kb::scene::SceneObject> children = scene.Hierarchy().Children(restoredRoot);
+    kb::tests::Require(children.size() == 1U, "Registered prefab snapshot restored the wrong child count");
+    const kb::scene::SceneObject restoredChild = children.front();
+    std::uint32_t restoredNode = 99U;
+    std::uint64_t restoredNodeId = 0U;
+    kb::tests::Require(scene.Prefabs().ContainingInstance(restoredChild, restoredNode, restoredNodeId) == instanceHandle, "Registered prefab child mapping was not restored");
+    kb::tests::Require(restoredNode == childNode, "Registered prefab restored child mapped to the wrong node index");
+    kb::tests::Require(restoredNodeId == childNodeId, "Registered prefab restored child mapped to the wrong stable node id");
+    kb::tests::Require(scene.Entities().Name(restoredChild) == "Snapshot Registered Child Override", "Registered prefab snapshot did not restore child name override");
+    kb::tests::Require(!scene.Components().Visibility().Get(restoredChild.Entity()).visible, "Registered prefab snapshot did not restore visibility override");
+
+    const kb::scene::ScenePrefabOverrideReport report = scene.Prefabs().Overrides(instanceHandle);
+    kb::tests::Require(!report.Empty(), "Registered prefab snapshot restore lost override reporting");
+    bool foundNameDelta = false;
+    bool foundVisibilityDelta = false;
+    for (const kb::scene::ScenePrefabPropertyOverride& property : report.properties) {
+        foundNameDelta = foundNameDelta || (property.nodeIndex == childNode && property.nodeId == childNodeId && property.propertyPath == "name" && property.value == "Snapshot Registered Child Override");
+        foundVisibilityDelta = foundVisibilityDelta || (property.nodeIndex == childNode && property.nodeId == childNodeId && property.propertyPath == "visibility.visible" && property.value == "false");
+    }
+    kb::tests::Require(foundNameDelta, "Registered prefab snapshot restore lost name override metadata");
+    kb::tests::Require(foundVisibilityDelta, "Registered prefab snapshot restore lost visibility override metadata");
+}
+
+void RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Bulk Root",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .tags = [] {
+                kb::scene::TagsComponent tags;
+                kb::scene::SetTagsText(tags, "snapshot-bulk-root");
+                return tags;
+            }(),
+        },
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Snapshot Bulk Child",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{
+                .primary = true,
+            },
+            .light = kb::scene::LightComponent{
+                .kind = kb::scene::LightKind::Point,
+                .intensity = 2.0F,
+            },
+        },
+    });
+    const std::uint64_t rootNodeId = prefab.TryGetNode(rootNode)->stableId;
+    const std::uint64_t childNodeId = prefab.TryGetNode(childNode)->stableId;
+
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("SnapshotBulkPrefab", std::move(prefab));
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, 3U);
+    kb::tests::Require(instances.size() == 3U, "Snapshot bulk prefab setup did not create all registered instances");
+
+    std::vector<kb::scene::ScenePrefabInstanceHandle> expectedHandles;
+    expectedHandles.reserve(instances.size());
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        expectedHandles.push_back(instance.Handle());
+    }
+
+    kb::tests::Require(scene.History().Record("bulk prefab snapshot"), "Bulk prefab snapshot was not recorded");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        scene.Entities().Destroy(instance.RootObject());
+    }
+    kb::tests::Require(scene.Entities().Count() == 0U, "Bulk prefab snapshot setup did not clear scene entities");
+
+    kb::tests::Require(scene.History().Undo(), "Bulk prefab snapshot restore failed");
+    kb::tests::Require(scene.Entities().Count() == instances.size() * 2U, "Bulk prefab snapshot restored the wrong entity count");
+
+    const kb::ecs::World& world = scene.Runtime().EcsWorld();
+    const std::vector<kb::ecs::ComponentId> rootArchetype{
+        world.Component<kb::scene::TransformComponent>(),
+        world.Component<kb::scene::VisibilityComponent>(),
+        world.Component<kb::scene::TagsComponent>(),
+    };
+    const std::vector<kb::ecs::ComponentId> childArchetype{
+        world.Component<kb::scene::TransformComponent>(),
+        world.Component<kb::scene::VisibilityComponent>(),
+        world.Component<kb::scene::CameraComponent>(),
+        world.Component<kb::scene::LightComponent>(),
+    };
+
+    std::size_t matchedInstances = 0U;
+    for (const kb::scene::SceneObject restoredRoot : scene.Hierarchy().RootObjects()) {
+        const kb::scene::ScenePrefabInstanceHandle restoredHandle = scene.Prefabs().RootInstance(restoredRoot);
+        kb::tests::Require(std::find(expectedHandles.begin(), expectedHandles.end(), restoredHandle) != expectedHandles.end(), "Bulk prefab snapshot restored an unexpected instance handle");
+        kb::tests::Require(scene.Prefabs().SourcePrefab(restoredHandle) == prefabHandle, "Bulk prefab snapshot restored the wrong source prefab");
+
+        std::uint32_t rootMapping = 99U;
+        std::uint64_t rootMappingId = 0U;
+        kb::tests::Require(scene.Prefabs().ContainingInstance(restoredRoot, rootMapping, rootMappingId) == restoredHandle, "Bulk prefab snapshot did not restore root node mapping");
+        kb::tests::Require(rootMapping == rootNode && rootMappingId == rootNodeId, "Bulk prefab snapshot restored the wrong root node identity");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(restoredRoot.Entity(), std::span<const kb::ecs::ComponentId>{ rootArchetype }), "Bulk prefab snapshot restored root into the wrong archetype");
+
+        const std::vector<kb::scene::SceneObject> children = scene.Hierarchy().Children(restoredRoot);
+        kb::tests::Require(children.size() == 1U, "Bulk prefab snapshot restored the wrong child count");
+        const kb::scene::SceneObject restoredChild = children.front();
+        std::uint32_t childMapping = 99U;
+        std::uint64_t childMappingId = 0U;
+        kb::tests::Require(scene.Prefabs().ContainingInstance(restoredChild, childMapping, childMappingId) == restoredHandle, "Bulk prefab snapshot did not restore child node mapping");
+        kb::tests::Require(childMapping == childNode && childMappingId == childNodeId, "Bulk prefab snapshot restored the wrong child node identity");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(restoredChild.Entity(), std::span<const kb::ecs::ComponentId>{ childArchetype }), "Bulk prefab snapshot restored child into the wrong archetype");
+        ++matchedInstances;
+    }
+    kb::tests::Require(matchedInstances == expectedHandles.size(), "Bulk prefab snapshot did not restore every registered instance");
 }
 
 void RunRegisteredPrefabOverrideLifecycleTest() {
@@ -1630,6 +1785,8 @@ void RunScenePrefabInstantiationTests() {
     RunBulkPrefabMultiArchetypeNodeOrderTest();
     RunLargePrefabHierarchyTransformTest();
     RunRegisteredBulkPrefabInstantiationTest();
+    RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest();
+    RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest();
     RunRegisteredPrefabOverrideLifecycleTest();
     RunMissingPrefabInstanceObjectOverrideTest();
     RunRegisteredPrefabFullComponentOverrideLifecycleTest();

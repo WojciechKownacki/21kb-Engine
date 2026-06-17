@@ -1,10 +1,13 @@
 #include "scene/SceneHistoryService.hpp"
 
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/ScenePrefabInstance.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabCaptureService.hpp"
+#include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 
 #include <utility>
@@ -13,26 +16,80 @@
 namespace kb::scene {
 namespace {
 
+[[nodiscard]] std::vector<SceneObject> CopyObjects(const ScenePrefabInstance& instance) {
+    return { instance.Objects().begin(), instance.Objects().end() };
+}
+
 [[nodiscard]] bool Capture(Scene& scene, std::string label, SceneHistoryEntry& output) {
+    SceneState& state = SceneAccess::State(scene);
     std::vector<ScenePrefab> roots;
+    std::vector<SceneHistoryPrefabInstanceSnapshot> prefabInstances;
     for (const SceneEntity root : SceneHierarchyService::RootEntities(scene)) {
-        roots.push_back(ScenePrefabCaptureService::Capture(scene, SceneAccess::MakeObject(scene, root), ScenePrefabCaptureSettings{}));
+        const SceneObject rootObject = SceneAccess::MakeObject(scene, root);
+        const ScenePrefabInstanceHandle instanceHandle = state.prefabInstances.FindRootInstance(rootObject);
+        if (instanceHandle.IsValid()) {
+            const ScenePrefabInstanceRecord* record = state.prefabInstances.Find(instanceHandle);
+            if (record == nullptr) {
+                return false;
+            }
+
+            prefabInstances.push_back(SceneHistoryPrefabInstanceSnapshot{
+                .handle = instanceHandle,
+                .prefab = record->prefab,
+                .prefabGuid = record->prefabGuid,
+                .rootParent = record->rootParent,
+                .resolvedPrefab = record->resolvedPrefab,
+                .currentState = ScenePrefabCaptureService::Capture(scene, rootObject, ScenePrefabCaptureSettings{}),
+            });
+            continue;
+        }
+
+        roots.push_back(ScenePrefabCaptureService::Capture(scene, rootObject, ScenePrefabCaptureSettings{}));
     }
     output = SceneHistoryEntry{
         .label = std::move(label),
         .roots = std::move(roots),
+        .prefabInstances = std::move(prefabInstances),
     };
     return true;
 }
 
-void RestoreSnapshot(Scene& scene, const SceneHistoryEntry& entry) {
+[[nodiscard]] bool RestoreSnapshot(Scene& scene, const SceneHistoryEntry& entry) {
+    SceneState& state = SceneAccess::State(scene);
     const std::vector<SceneEntity> roots = SceneHierarchyService::RootEntities(scene);
     for (const SceneEntity root : roots) {
         SceneEntityService::DestroyEntity(scene, root);
     }
+    state.prefabInstances.Clear();
+
     for (const ScenePrefab& prefab : entry.roots) {
-        static_cast<void>(ScenePrefabInstantiationService::Instantiate(scene, prefab, ScenePrefabInstantiationSettings{}));
+        if (ScenePrefabInstantiationService::Instantiate(scene, prefab, ScenePrefabInstantiationSettings{}).Empty()) {
+            return false;
+        }
     }
+
+    for (const SceneHistoryPrefabInstanceSnapshot& snapshot : entry.prefabInstances) {
+        ScenePrefabInstantiationSettings settings;
+        if (snapshot.rootParent.IsValid() && scene.Entities().IsAlive(snapshot.rootParent)) {
+            settings.parent = snapshot.rootParent;
+        }
+
+        const ScenePrefabInstance instance = ScenePrefabInstantiationService::Instantiate(scene, snapshot.currentState, settings);
+        if (instance.Empty()) {
+            return false;
+        }
+
+        if (!state.prefabInstances.Restore(
+                snapshot.handle,
+                snapshot.prefab,
+                snapshot.prefabGuid,
+                settings.parent,
+                CopyObjects(instance),
+                snapshot.resolvedPrefab)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -67,7 +124,9 @@ bool SceneHistoryService::Undo(Scene& scene) {
         return false;
     }
     SceneHistoryEntry previous = state.undoHistory.Pop();
-    RestoreSnapshot(scene, previous);
+    if (!RestoreSnapshot(scene, previous)) {
+        return false;
+    }
     state.redoHistory.Push(std::move(current));
     return true;
 }
@@ -83,7 +142,9 @@ bool SceneHistoryService::Redo(Scene& scene) {
         return false;
     }
     SceneHistoryEntry next = state.redoHistory.Pop();
-    RestoreSnapshot(scene, next);
+    if (!RestoreSnapshot(scene, next)) {
+        return false;
+    }
     state.undoHistory.Push(std::move(current));
     return true;
 }

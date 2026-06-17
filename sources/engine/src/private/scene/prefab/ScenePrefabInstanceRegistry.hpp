@@ -27,6 +27,13 @@ struct ScenePrefabInstanceRecord {
 class ScenePrefabInstanceRegistry {
 public:
     [[nodiscard]] ScenePrefabInstanceHandle Register(ScenePrefabHandle prefab, std::string prefabGuid, SceneObject rootParent, std::vector<SceneObject> objects, ScenePrefab resolvedPrefab);
+    [[nodiscard]] bool Restore(
+        ScenePrefabInstanceHandle handle,
+        ScenePrefabHandle prefab,
+        std::string prefabGuid,
+        SceneObject rootParent,
+        std::vector<SceneObject> objects,
+        ScenePrefab resolvedPrefab);
     [[nodiscard]] std::vector<ScenePrefabInstanceHandle> RegisterMany(
         ScenePrefabHandle prefab,
         std::string_view prefabGuid,

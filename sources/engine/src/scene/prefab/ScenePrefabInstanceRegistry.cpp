@@ -28,6 +28,36 @@ ScenePrefabInstanceHandle ScenePrefabInstanceRegistry::Register(ScenePrefabHandl
     return handle;
 }
 
+bool ScenePrefabInstanceRegistry::Restore(
+    ScenePrefabInstanceHandle handle,
+    ScenePrefabHandle prefab,
+    std::string prefabGuid,
+    SceneObject rootParent,
+    std::vector<SceneObject> objects,
+    ScenePrefab resolvedPrefab) {
+    if (!handle.IsValid() || !prefab.IsValid() || objects.empty()) {
+        return false;
+    }
+
+    static_cast<void>(Remove(handle));
+    auto [iterator, inserted] = records_.emplace(
+        handle.id_,
+        ScenePrefabInstanceRecord{
+            .prefab = prefab,
+            .prefabGuid = std::move(prefabGuid),
+            .rootParent = rootParent,
+            .objects = std::move(objects),
+            .resolvedPrefab = std::move(resolvedPrefab),
+        });
+    if (!inserted) {
+        return false;
+    }
+
+    nextId_ = std::max(nextId_, handle.id_ + 1U);
+    IndexRecord(handle, iterator->second);
+    return true;
+}
+
 std::vector<ScenePrefabInstanceHandle> ScenePrefabInstanceRegistry::RegisterMany(
     ScenePrefabHandle prefab,
     std::string_view prefabGuid,

@@ -27,6 +27,14 @@ struct SceneRuntimeFixedStepSettings {
     std::size_t maxFixedStepsPerFrame = 8U;
 };
 
+struct SceneRuntimeHotPathReport {
+    bool transformHierarchyUsesBatchPath = false;
+    bool transformHierarchyUsesKernelContract = false;
+    bool transformHierarchyUsesVirtualSceneSystem = true;
+    std::size_t transformTopologicalBatchCount = 0U;
+    std::size_t transformRenderProxyUpdateCount = 0U;
+};
+
 class SceneRuntimeQueries {
 public:
     explicit SceneRuntimeQueries(const Scene& scene) noexcept;
@@ -38,6 +46,7 @@ public:
     [[nodiscard]] std::size_t LastFixedStepCount() const noexcept;
     [[nodiscard]] bool EcsProfilerEnabled() const noexcept;
     [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
+    [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
 
@@ -59,6 +68,7 @@ public:
     void SetEcsProfilerEnabled(bool enabled) noexcept;
     [[nodiscard]] bool EcsProfilerEnabled() const noexcept;
     [[nodiscard]] const kb::ecs::SystemSchedulerTrace& LastEcsProfilerTrace() const noexcept;
+    [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
     [[nodiscard]] bool Update(float deltaSeconds);
