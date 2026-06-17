@@ -185,6 +185,36 @@ void RunSceneRuntimeFixedInterpolationTest() {
     kb::tests::Require(kb::tests::NearlyEqual(interpolated->localPosition.x, 5.0F), "Interpolated transform should blend previous and current fixed samples");
 }
 
+void RunSceneRuntimeTransformHotPathReportTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Path Parent",
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 3.0F, 0.0F, 0.0F },
+        },
+    });
+    kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Path Child",
+        .parent = parent,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 4.0F, 0.0F, 0.0F },
+        },
+    });
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    const kb::scene::TransformComponent childTransform = scene.Transforms().Get(child);
+    kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 7.0F), "Scene transform hot path did not update hierarchy without a virtual scene system");
+
+    const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+    kb::tests::Require(report.transformHierarchyUsesBatchPath, "Scene transform hot path should report the batch path");
+    kb::tests::Require(report.transformHierarchyUsesKernelContract, "Scene transform hot path should report the kernel contract path");
+    kb::tests::Require(!report.transformHierarchyUsesVirtualSceneSystem, "Scene transform hot path should not report virtual SceneSystem execution");
+    kb::tests::Require(report.transformTopologicalBatchCount >= 2U, "Scene transform hot path should expose topological batches");
+    kb::tests::Require(report.transformRenderProxyUpdateCount >= 2U, "Scene transform hot path should expose render-proxy update batching");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -193,6 +223,7 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
     RunSceneRuntimeFixedStepTest();
     RunSceneRuntimeFixedInterpolationTest();
+    RunSceneRuntimeTransformHotPathReportTest();
 }
 
 } // namespace kb::tests

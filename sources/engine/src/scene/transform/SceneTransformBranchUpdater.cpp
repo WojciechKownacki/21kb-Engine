@@ -20,12 +20,36 @@ void UpdateEntry(SceneTransformBatchEntry& entry) noexcept {
 }
 
 void UpdateEntries(std::span<SceneTransformBatchEntry> entries) noexcept {
-    for (SceneTransformBatchEntry& entry : entries) {
-        UpdateEntry(entry);
-    }
+    SceneTransformKernelBatch batch{ entries };
+    SceneTransformHierarchyKernel{}(batch);
 }
 
 } // namespace
+
+SceneTransformKernelBatch::SceneTransformKernelBatch(std::span<SceneTransformBatchEntry> entries) noexcept
+    : entries_(entries) {}
+
+std::size_t SceneTransformKernelBatch::Count() const noexcept {
+    return entries_.size();
+}
+
+bool SceneTransformKernelBatch::Empty() const noexcept {
+    return entries_.empty();
+}
+
+SceneTransformBatchEntry& SceneTransformKernelBatch::EntryAt(std::size_t index) const noexcept {
+    return entries_[index];
+}
+
+std::span<SceneTransformBatchEntry> SceneTransformKernelBatch::Entries() const noexcept {
+    return entries_;
+}
+
+void SceneTransformHierarchyKernel::operator()(SceneTransformKernelBatch& batch) const noexcept {
+    for (SceneTransformBatchEntry& entry : batch.Entries()) {
+        UpdateEntry(entry);
+    }
+}
 
 void SceneTransformBranchUpdater::UpdateBatch(kb::ecs::WorkerPool* workerPool, std::span<SceneTransformBatchEntry> entries, std::size_t grainSize) const {
     if (entries.empty()) {
