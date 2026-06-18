@@ -4,19 +4,23 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 
+#include <span>
+
 namespace kb::scene {
 
 SceneObject ScenePrefabInstanceTopology::ExpectedParent(const ScenePrefabNodeDesc& node, const ScenePrefabInstanceRecord& instance) noexcept {
     if (node.parentNode == ScenePrefabNodeDesc::NoParent) {
         return instance.rootParent;
     }
-    return node.parentNode < instance.objects.size() ? instance.objects[node.parentNode] : SceneObject{};
+    const std::span<const SceneObject> objects = instance.Objects();
+    return node.parentNode < objects.size() ? objects[node.parentNode] : SceneObject{};
 }
 
 ScenePrefabTrackedEntitySet ScenePrefabInstanceTopology::TrackedEntities(const ScenePrefabInstanceRecord& instance) {
     ScenePrefabTrackedEntitySet trackedEntities;
-    trackedEntities.reserve(instance.objects.size());
-    for (const SceneObject object : instance.objects) {
+    const std::span<const SceneObject> objects = instance.Objects();
+    trackedEntities.reserve(objects.size());
+    for (const SceneObject object : objects) {
         if (object.IsValid()) {
             trackedEntities.insert(object.Entity().Id());
         }
@@ -25,7 +29,7 @@ ScenePrefabTrackedEntitySet ScenePrefabInstanceTopology::TrackedEntities(const S
 }
 
 bool ScenePrefabInstanceTopology::AllTrackedObjectsAlive(Scene& scene, const ScenePrefabInstanceRecord& instance) {
-    for (const SceneObject object : instance.objects) {
+    for (const SceneObject object : instance.Objects()) {
         if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
             return false;
         }
@@ -47,7 +51,7 @@ bool ScenePrefabInstanceTopology::HasUntrackedChild(Scene& scene, SceneObject ob
 }
 
 void ScenePrefabInstanceTopology::DestroyUntrackedChildren(Scene& scene, const ScenePrefabInstanceRecord& instance, const ScenePrefabTrackedEntitySet& trackedEntities) {
-    for (const SceneObject object : instance.objects) {
+    for (const SceneObject object : instance.Objects()) {
         if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
             continue;
         }

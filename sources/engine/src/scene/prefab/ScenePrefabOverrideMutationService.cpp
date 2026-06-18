@@ -40,6 +40,15 @@ bool ScenePrefabOverrideMutationService::Apply(Scene& scene, ScenePrefabInstance
     return ScenePrefabTemplateOverrideService::ApplyAll(scene, state.prefabs, *instance, *record);
 }
 
+bool ScenePrefabOverrideMutationService::Apply(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles) {
+    for (const ScenePrefabInstanceHandle handle : handles) {
+        if (!Apply(scene, handle)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ScenePrefabOverrideMutationService::RevertProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath) {
     return ScenePrefabOverridePropertyMutationService::Revert(scene, handle, nodeIndex, propertyPath);
 }

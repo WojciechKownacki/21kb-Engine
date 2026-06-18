@@ -1,36 +1,44 @@
 #include "engine/scene/SceneInputActivation.hpp"
 
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/ecs/Query.hpp"
 #include "engine/scene/InputComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
-#include "scene/components/SceneComponentIterationAccess.hpp"
 
-#include <flecs.h>
-
-#include <cstdint>
+#include <cstddef>
 
 namespace kb::scene {
+
+namespace {
+
+void ApplyInputMappingBatch(const kb::ecs::QueryBatch<InputComponent>& batch, void* rawContext) {
+    auto* input = static_cast<kb::input::InputSubsystem*>(rawContext);
+    const InputComponent* components = batch.Components<0>();
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        const InputComponent& component = components[index];
+        if (component.enabled && component.mappingContextAssetId != 0U) {
+            static_cast<void>(input->AddMappingContext(component.mappingContextAssetId, component.priority));
+        }
+    }
+}
+
+} // namespace
 
 void SceneInputActivation::Apply(Scene& scene) {
     SceneState& state = SceneAccess::State(scene);
     kb::input::InputSubsystem& input = scene.Input();
     input.ClearMappingContexts();
 
-    ecs_iter_t it = ecs_each_id(state.world.NativeHandle(), state.components.InputComponentId());
-    while (ecs_each_next(&it)) {
-        const auto* components = SceneComponentIterationAccess::Field<InputComponent>(it, 0);
-        if (components == nullptr) {
-            continue;
-        }
-        for (std::int32_t index = 0; index < it.count; ++index) {
-            const InputComponent& component = components[index];
-            if (component.enabled && component.mappingContextAssetId != 0U) {
-                static_cast<void>(input.AddMappingContext(component.mappingContextAssetId, component.priority));
-            }
-        }
+    kb::ecs::Query<InputComponent> query = state.world.CreateQuery<InputComponent>();
+    if (!query.IsValid()) {
+        return;
     }
+
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    query.ForEachBatch(settings, ApplyInputMappingBatch, &input);
 }
 
 void SceneInputActivation::Clear(Scene& scene) {

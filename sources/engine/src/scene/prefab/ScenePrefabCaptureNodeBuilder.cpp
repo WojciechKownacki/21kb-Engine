@@ -25,7 +25,7 @@ void ApplyNestedPrefabMetadata(Scene& scene, SceneObject object, ScenePrefabNode
     }
 
     node.nestedPrefabGuid = prefabRecord->guid;
-    const ScenePrefab& baseline = instance->resolvedPrefab.Empty() ? prefabRecord->prefab : instance->resolvedPrefab;
+    const ScenePrefab& baseline = instance->BaselineOr(prefabRecord->prefab);
     node.nestedPrefabOverrides = ScenePrefabOverrideDetector::Detect(scene, baseline, *instance).properties;
 }
 

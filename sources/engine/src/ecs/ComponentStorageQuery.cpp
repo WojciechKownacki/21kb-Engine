@@ -12,11 +12,21 @@ bool ComponentStorageQuery::Has(const ecs_world_t* world, Entity entity, Compone
 }
 
 const void* ComponentStorageQuery::TryGet(const ecs_world_t* world, Entity entity, ComponentId componentId) noexcept {
-    return Has(world, entity, componentId) ? ecs_get_id(world, FlecsEntityId(entity), componentId) : nullptr;
+    if (world == nullptr || !entity.IsValid() || componentId == 0) {
+        return nullptr;
+    }
+
+    const ecs_entity_t flecsEntity = FlecsEntityId(entity);
+    return ecs_is_alive(world, flecsEntity) ? ecs_get_id(world, flecsEntity, componentId) : nullptr;
 }
 
 void* ComponentStorageQuery::TryGetMutable(ecs_world_t* world, Entity entity, ComponentId componentId) noexcept {
-    return Has(world, entity, componentId) ? ecs_get_mut_id(world, FlecsEntityId(entity), componentId) : nullptr;
+    if (world == nullptr || !entity.IsValid() || componentId == 0) {
+        return nullptr;
+    }
+
+    const ecs_entity_t flecsEntity = FlecsEntityId(entity);
+    return ecs_is_alive(world, flecsEntity) ? ecs_get_mut_id(world, flecsEntity, componentId) : nullptr;
 }
 
 } // namespace kb::ecs

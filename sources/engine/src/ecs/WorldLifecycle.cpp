@@ -22,6 +22,7 @@ World::World(WorldConfig config)
     if (world_ == nullptr) {
         throw std::runtime_error("Failed to initialize ECS world");
     }
+    queryPlanCache_.reserve(config_.reserveQueryCache);
 }
 
 World::~World() {
@@ -34,7 +35,9 @@ World::World(World&& other) noexcept
     , registries_(std::move(other.registries_))
     , nativeStorage_(std::move(other.nativeStorage_))
     , mutableComponentBorrowLocks_(std::move(other.mutableComponentBorrowLocks_))
-    , structuralChangeValidator_(std::move(other.structuralChangeValidator_)) {}
+    , structuralChangeValidator_(std::move(other.structuralChangeValidator_))
+    , telemetryCounters_(other.telemetryCounters_)
+    , queryPlanCache_(std::move(other.queryPlanCache_)) {}
 
 World& World::operator=(World&& other) noexcept {
     if (this != &other) {
@@ -45,6 +48,8 @@ World& World::operator=(World&& other) noexcept {
         nativeStorage_ = std::move(other.nativeStorage_);
         mutableComponentBorrowLocks_ = std::move(other.mutableComponentBorrowLocks_);
         structuralChangeValidator_ = std::move(other.structuralChangeValidator_);
+        telemetryCounters_ = other.telemetryCounters_;
+        queryPlanCache_ = std::move(other.queryPlanCache_);
     }
     return *this;
 }
@@ -60,6 +65,7 @@ void World::Reset() noexcept {
     if (mutableComponentBorrowLocks_ != nullptr) {
         mutableComponentBorrowLocks_->Clear();
     }
+    queryPlanCache_.clear();
     structuralChangeValidator_.reset();
     nativeStorage_.reset();
 }

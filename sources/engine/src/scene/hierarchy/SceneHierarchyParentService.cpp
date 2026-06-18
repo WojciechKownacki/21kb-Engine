@@ -3,7 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
-#include "scene/hierarchy/SceneHierarchyOperations.hpp"
+#include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 namespace kb::scene {
 
@@ -17,7 +17,11 @@ SceneObject SceneHierarchyParentService::Parent(Scene& scene, SceneObject object
 }
 
 SceneEntity SceneHierarchyParentService::Parent(const Scene& scene, SceneEntity entity) noexcept {
-    return SceneHierarchyOperations::Parent(SceneAccess::State(scene).world, entity);
+    const SceneState& state = SceneAccess::State(scene);
+    if (!state.world.IsAlive(entity)) {
+        return {};
+    }
+    return SceneHierarchyCache::Parent(state, entity);
 }
 
 } // namespace kb::scene

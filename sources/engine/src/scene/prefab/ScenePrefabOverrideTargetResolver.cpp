@@ -4,10 +4,13 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "scene/SceneState.hpp"
 
+#include <span>
+
 namespace kb::scene {
 
 const ScenePrefab* ScenePrefabOverrideTargetResolver::ResolveReadPrefab(const SceneState& state, const ScenePrefabInstanceRecord& instance) noexcept {
-    return instance.resolvedPrefab.Empty() ? state.prefabs.Find(instance.prefab) : &instance.resolvedPrefab;
+    const ScenePrefab* resolved = instance.ResolvedPrefab();
+    return resolved == nullptr ? state.prefabs.Find(instance.prefab) : resolved;
 }
 
 ScenePrefabOverrideInstanceTarget ScenePrefabOverrideTargetResolver::ResolveMutablePrefab(SceneState& state, ScenePrefabInstanceHandle handle) noexcept {
@@ -22,11 +25,12 @@ ScenePrefabOverrideInstanceTarget ScenePrefabOverrideTargetResolver::ResolveMuta
 
 ScenePrefabOverrideNodeTarget ScenePrefabOverrideTargetResolver::ResolveNode(Scene& scene, ScenePrefab& prefab, ScenePrefabInstanceRecord& instance, std::uint32_t nodeIndex) {
     ScenePrefabNodeDesc* node = prefab.TryGetMutableNode(nodeIndex);
-    if (node == nullptr || nodeIndex >= instance.objects.size()) {
+    const std::span<const SceneObject> objects = instance.Objects();
+    if (node == nullptr || nodeIndex >= objects.size()) {
         return {};
     }
 
-    const SceneObject object = instance.objects[nodeIndex];
+    const SceneObject object = objects[nodeIndex];
     if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
         return {};
     }

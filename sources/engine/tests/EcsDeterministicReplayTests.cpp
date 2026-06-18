@@ -33,21 +33,21 @@ public:
     }
 
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
-        struct Context {
-            kb::ecs::World* world = nullptr;
-            float deltaSeconds = 0.0F;
-        } context{ .world = &world, .deltaSeconds = deltaSeconds };
-
-        world.ForEachMutable<EcsPosition>(
-            [](kb::ecs::Entity entity, EcsPosition& position, void* userData) {
-                const auto* updateContext = static_cast<const Context*>(userData);
-                const EcsVelocity* velocity = updateContext->world->TryGet<EcsVelocity>(entity);
-                if (velocity != nullptr) {
-                    position.x += velocity->x * updateContext->deltaSeconds;
-                    position.y += velocity->y * updateContext->deltaSeconds;
-                }
+        kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+        query.ForEachMutableBatchKernel(
+            kb::ecs::QueryExecutionSettings{
+                .iterationOrder = kb::ecs::QueryIterationOrder::Deterministic,
+                .policy = kb::ecs::QueryExecutionPolicy::Deterministic,
+                .reductionMode = kb::ecs::QueryReductionMode::Deterministic,
             },
-            &context);
+            [deltaSeconds](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+                EcsPosition* positions = batch.Components<0>();
+                const EcsVelocity* velocities = batch.Components<1>();
+                for (std::size_t row = 0; row < batch.Count(); ++row) {
+                    positions[row].x += velocities[row].x * deltaSeconds;
+                    positions[row].y += velocities[row].y * deltaSeconds;
+                }
+            });
     }
 };
 
@@ -66,12 +66,20 @@ public:
 
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
         static_cast<void>(deltaSeconds);
-        world.ForEachMutable<EcsVelocity>(
-            [](kb::ecs::Entity, EcsVelocity& velocity, void*) {
-                velocity.x *= 0.875F;
-                velocity.y *= 0.875F;
+        kb::ecs::Query<EcsVelocity> query = world.CreateQuery<EcsVelocity>();
+        query.ForEachMutableBatchKernel(
+            kb::ecs::QueryExecutionSettings{
+                .iterationOrder = kb::ecs::QueryIterationOrder::Deterministic,
+                .policy = kb::ecs::QueryExecutionPolicy::Deterministic,
+                .reductionMode = kb::ecs::QueryReductionMode::Deterministic,
             },
-            nullptr);
+            [](kb::ecs::MutableQueryBatch<EcsVelocity>& batch) {
+                EcsVelocity* velocities = batch.Components<0>();
+                for (std::size_t row = 0; row < batch.Count(); ++row) {
+                    velocities[row].x *= 0.875F;
+                    velocities[row].y *= 0.875F;
+                }
+            });
     }
 };
 
@@ -90,12 +98,20 @@ public:
 
     void OnUpdate(kb::ecs::World& world, float deltaSeconds) override {
         static_cast<void>(deltaSeconds);
-        world.ForEachMutable<EcsPosition>(
-            [](kb::ecs::Entity, EcsPosition& position, void*) {
-                position.x += 0.25F;
-                position.y -= 0.125F;
+        kb::ecs::Query<EcsPosition> query = world.CreateQuery<EcsPosition>();
+        query.ForEachMutableBatchKernel(
+            kb::ecs::QueryExecutionSettings{
+                .iterationOrder = kb::ecs::QueryIterationOrder::Deterministic,
+                .policy = kb::ecs::QueryExecutionPolicy::Deterministic,
+                .reductionMode = kb::ecs::QueryReductionMode::Deterministic,
             },
-            nullptr);
+            [](kb::ecs::MutableQueryBatch<EcsPosition>& batch) {
+                EcsPosition* positions = batch.Components<0>();
+                for (std::size_t row = 0; row < batch.Count(); ++row) {
+                    positions[row].x += 0.25F;
+                    positions[row].y -= 0.125F;
+                }
+            });
     }
 };
 

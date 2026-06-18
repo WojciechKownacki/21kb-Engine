@@ -23,6 +23,10 @@ SceneRuntimeFixedStepSettings SceneRuntimeQueries::FixedStepSettings() const noe
     return SceneRuntimeService::FixedStepSettings(scene_);
 }
 
+SceneTransformPropagationBudget SceneRuntimeQueries::TransformPropagationBudget() const noexcept {
+    return SceneRuntimeService::TransformPropagationBudget(scene_);
+}
+
 float SceneRuntimeQueries::FixedInterpolationAlpha() const noexcept {
     return SceneRuntimeService::FixedInterpolationAlpha(scene_);
 }
@@ -70,8 +74,16 @@ void SceneRuntime::SetFixedStepSettings(SceneRuntimeFixedStepSettings settings) 
     SceneRuntimeService::SetFixedStepSettings(scene_, settings);
 }
 
+void SceneRuntime::SetTransformPropagationBudget(SceneTransformPropagationBudget budget) noexcept {
+    SceneRuntimeService::SetTransformPropagationBudget(scene_, budget);
+}
+
 SceneRuntimeFixedStepSettings SceneRuntime::FixedStepSettings() const noexcept {
     return SceneRuntimeService::FixedStepSettings(scene_);
+}
+
+SceneTransformPropagationBudget SceneRuntime::TransformPropagationBudget() const noexcept {
+    return SceneRuntimeService::TransformPropagationBudget(scene_);
 }
 
 float SceneRuntime::FixedInterpolationAlpha() const noexcept {

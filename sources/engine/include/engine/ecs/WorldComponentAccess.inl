@@ -15,6 +15,34 @@ ComponentId World::RegisterComponent(std::string_view name) {
 }
 
 template <typename T>
+World::BulkComponentView World::MakeBulkComponentView(std::span<const T> components) noexcept {
+    ValidateComponentType<T>();
+    return BulkComponentView{
+        .registerComponent = +[](World& world) -> ComponentId {
+            return world.RegisterComponent<T>();
+        },
+        .componentSize = sizeof(T),
+        .componentCount = components.size(),
+        .sourceCount = components.size(),
+        .data = components.data(),
+    };
+}
+
+template <typename T>
+World::BulkComponentView World::MakeBulkComponentBroadcastView(const T& component) noexcept {
+    ValidateComponentType<T>();
+    return BulkComponentView{
+        .registerComponent = +[](World& world) -> ComponentId {
+            return world.RegisterComponent<T>();
+        },
+        .componentSize = sizeof(T),
+        .componentCount = 0,
+        .sourceCount = 1U,
+        .data = &component,
+    };
+}
+
+template <typename T>
 ComponentId World::Component() const noexcept {
     ValidateComponentType<T>();
     return FindComponent(std::type_index{ typeid(T) });
@@ -38,6 +66,25 @@ template <typename T>
 void World::Set(Entity entity, const T& component) {
     const ComponentId componentId = RegisterComponent<T>();
     SetComponent(entity, componentId, sizeof(T), &component);
+}
+
+template <typename T>
+void World::SetMany(std::span<const Entity> entities, std::span<const T> components) {
+    ValidateComponentType<T>();
+    if (entities.empty()) {
+        return;
+    }
+    if (entities.size() != components.size()) {
+        throw std::invalid_argument("ECS bulk component set requires matching entity and component counts");
+    }
+    const ComponentId componentId = RegisterComponent<T>();
+    SetComponentColumn(entities, BulkComponentData{
+        .componentId = componentId,
+        .componentSize = sizeof(T),
+        .componentCount = components.size(),
+        .sourceCount = components.size(),
+        .data = components.data(),
+    });
 }
 
 template <typename T>

@@ -5,7 +5,6 @@
 #include <cstdint>
 
 namespace kb::ecs {
-
 void ComponentStoragePairIteration::ForEachPair(
     ecs_world_t* world,
     ComponentId firstComponentId,
@@ -18,27 +17,39 @@ void ComponentStoragePairIteration::ForEachPair(
         return;
     }
 
-    ecs_iter_t it = ecs_each_id(world, firstComponentId);
-    while (ecs_each_next(&it)) {
+    if (firstComponentId == secondComponentId) {
+        return;
+    }
+
+    ecs_query_desc_t desc{};
+    desc.terms[0].id = firstComponentId;
+    desc.terms[1].id = secondComponentId;
+    desc.cache_kind = EcsQueryCacheAuto;
+    ecs_query_t* query = ecs_query_init(world, &desc);
+    if (query == nullptr) {
+        return;
+    }
+
+    ecs_iter_t it = ecs_query_iter(world, query);
+    while (ecs_query_next(&it)) {
         const void* firstComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(firstComponentSize), 0);
-        if (firstComponents == nullptr) {
+        const void* secondComponents = ecs_field_w_size(&it, static_cast<ecs_size_t>(secondComponentSize), 1);
+        if (firstComponents == nullptr || secondComponents == nullptr) {
             continue;
         }
 
         const auto* firstBytes = static_cast<const std::uint8_t*>(firstComponents);
+        const auto* secondBytes = static_cast<const std::uint8_t*>(secondComponents);
         for (int32_t i = 0; i < it.count; ++i) {
-            const void* secondComponent = ecs_get_id(world, it.entities[i], secondComponentId);
-            if (secondComponent == nullptr) {
-                continue;
-            }
-
             visitor(
                 Entity{ it.entities[i] },
                 firstBytes + static_cast<std::size_t>(i) * firstComponentSize,
-                secondComponent,
+                secondBytes + static_cast<std::size_t>(i) * secondComponentSize,
                 context);
         }
     }
+
+    ecs_query_fini(query);
 }
 
 } // namespace kb::ecs

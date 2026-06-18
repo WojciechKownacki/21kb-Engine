@@ -23,6 +23,7 @@ add_library(kb_engine STATIC
     include/engine/project/ProjectDescriptorReader.hpp
     include/engine/project/ProjectDescriptorWriter.hpp
     include/engine/project/ProjectManager.hpp
+    include/engine/ecs/ChunkSizeAutoTuner.hpp
     include/engine/ecs/ChunkSizeProfile.hpp
     include/engine/ecs/CommandBuffer.hpp
     include/engine/ecs/ComponentEvent.hpp
@@ -64,6 +65,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/WorldComponentTypes.inl
     include/engine/ecs/WorldConfig.hpp
     include/engine/ecs/WorldConfigPresets.hpp
+    include/engine/ecs/WorldProfile.hpp
     include/engine/ecs/WorldEditorInspection.hpp
     include/engine/ecs/WorldEvents.inl
     include/engine/ecs/WorldInspection.hpp
@@ -1005,6 +1007,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_engine_tests
         PRIVATE
             kb_engine
+            flecs::flecs_static
     )
 
     add_dependencies(kb_engine_tests kb_native_script_test_plugin)

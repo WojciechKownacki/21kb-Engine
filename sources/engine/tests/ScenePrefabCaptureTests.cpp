@@ -18,6 +18,18 @@
 
 namespace {
 
+void TracePrefabCaptureTest(const char* name) {
+#if defined(_MSC_VER)
+    std::size_t length = 0;
+    getenv_s(&length, nullptr, 0, "KB_TEST_TRACE");
+    if (length > 0U) {
+#else
+    if (std::getenv("KB_TEST_TRACE") != nullptr) {
+#endif
+        std::cerr << name << '\n';
+    }
+}
+
 void RunPrefabCaptureTest() {
     kb::scene::Scene source;
 
@@ -378,11 +390,15 @@ void RunNestedPrefabAssetRoundTripTest() {
 namespace kb::tests {
 
 void RunScenePrefabCaptureTests() {
-    RunPrefabCaptureTest();
-    RunPrefabAssetRoundTripTest();
-    RunPrefabCreateAssetRegistersSourceInstanceTest();
-    RunPrefabVariantAssetRoundTripTest();
-    RunNestedPrefabAssetRoundTripTest();
+    const auto run = [](const char* name, void (*test)()) {
+        TracePrefabCaptureTest(name);
+        test();
+    };
+    run("RunPrefabCaptureTest", RunPrefabCaptureTest);
+    run("RunPrefabAssetRoundTripTest", RunPrefabAssetRoundTripTest);
+    run("RunPrefabCreateAssetRegistersSourceInstanceTest", RunPrefabCreateAssetRegistersSourceInstanceTest);
+    run("RunPrefabVariantAssetRoundTripTest", RunPrefabVariantAssetRoundTripTest);
+    run("RunNestedPrefabAssetRoundTripTest", RunNestedPrefabAssetRoundTripTest);
 }
 
 } // namespace kb::tests

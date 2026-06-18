@@ -5,32 +5,32 @@
 
 namespace kb::scene {
 
-SceneAudioListenerComponentStore::SceneAudioListenerComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneAudioListenerComponentStore::SceneAudioListenerComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 bool SceneAudioListenerComponentStore::Has(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, componentId_);
+    return SceneComponentStorageAccess::Has<AudioListenerComponent>(world_, entity);
 }
 
 const AudioListenerComponent* SceneAudioListenerComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<AudioListenerComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<AudioListenerComponent>(world_, entity);
 }
 
 AudioListenerComponent* SceneAudioListenerComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<AudioListenerComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<AudioListenerComponent>(world_, entity);
 }
 
 void SceneAudioListenerComponentStore::Set(SceneEntity entity, const AudioListenerComponent& audioListener) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, audioListener);
+    SceneComponentStorageAccess::Set<AudioListenerComponent>(world_, entity, audioListener);
 }
 
 void SceneAudioListenerComponentStore::Remove(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, componentId_);
+    SceneComponentStorageAccess::Remove<AudioListenerComponent>(world_, entity);
 }
 
 void SceneAudioListenerComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<AudioListenerComponent>(world_, entity);
 }
 
 } // namespace kb::scene
