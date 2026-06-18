@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,33 @@ enum class ScenePrefabUnpackMode {
     Complete,
 };
 
+struct ScenePrefabInstantiationStats {
+    std::size_t requestedInstances = 0;
+    std::size_t instantiatedInstances = 0;
+    std::size_t nodesPerInstance = 0;
+    std::size_t entitiesCreated = 0;
+    std::size_t prefabArchetypesTouched = 0;
+    std::size_t bulkCreateCommands = 0;
+    std::size_t componentSetCommands = 0;
+    std::size_t parentCommands = 0;
+    std::size_t componentBytesCopied = 0;
+    std::size_t componentSourceBytesRead = 0;
+    std::size_t chunksAllocatedDelta = 0;
+    std::size_t chunksReusedDelta = 0;
+    std::size_t registeredInstanceCount = 0;
+    std::uint64_t entityCreateNanoseconds = 0;
+    std::uint64_t commandBuildNanoseconds = 0;
+    std::uint64_t commandPlaybackNanoseconds = 0;
+    std::uint64_t commandPlaybackCreateNanoseconds = 0;
+    std::uint64_t commandPlaybackApplyNanoseconds = 0;
+    std::uint64_t commandPlaybackParentNanoseconds = 0;
+    std::uint64_t commandPlaybackDestroyNanoseconds = 0;
+    std::uint64_t hierarchyRecordNanoseconds = 0;
+    std::uint64_t nameAssignmentNanoseconds = 0;
+    std::uint64_t registryResolveNanoseconds = 0;
+    std::uint64_t historyRecordNanoseconds = 0;
+};
+
 class ScenePrefabs {
 public:
     explicit ScenePrefabs(Scene& scene) noexcept;
@@ -47,6 +75,8 @@ public:
     [[nodiscard]] ScenePrefabInstance Instantiate(const ScenePrefab& prefab, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(const ScenePrefab& prefab, std::size_t count);
     [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(const ScenePrefab& prefab, std::size_t count);
+    [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] ScenePrefabHandle Register(std::string name, ScenePrefab prefab);
     [[nodiscard]] ScenePrefabHandle RegisterVariant(std::string name, ScenePrefabHandle basePrefab, std::vector<ScenePrefabPropertyOverride> overrides);
     [[nodiscard]] ScenePrefabHandle CaptureRegistered(SceneObject root, std::string name);
@@ -63,6 +93,9 @@ public:
     [[nodiscard]] ScenePrefabInstance Instantiate(ScenePrefabHandle handle, const ScenePrefabInstantiationSettings& settings);
     [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(ScenePrefabHandle handle, std::size_t count);
     [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateMany(ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(ScenePrefabHandle handle, std::size_t count);
+    [[nodiscard]] ScenePrefabInstantiationStats InstantiateBatch(ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings);
+    [[nodiscard]] ScenePrefabInstantiationStats LastInstantiationStats() const noexcept;
     [[nodiscard]] bool Save(ScenePrefabHandle handle, const std::filesystem::path& path) const;
     [[nodiscard]] ScenePrefabHandle Load(const std::filesystem::path& path);
     [[nodiscard]] bool Unload(ScenePrefabHandle handle) noexcept;
@@ -88,6 +121,7 @@ public:
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle);
+    [[nodiscard]] bool ApplyOverrides(std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle, const std::filesystem::path& assetPath);
     [[nodiscard]] bool RevertOverride(ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string propertyPath);
     [[nodiscard]] bool ApplyOverride(ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string propertyPath);

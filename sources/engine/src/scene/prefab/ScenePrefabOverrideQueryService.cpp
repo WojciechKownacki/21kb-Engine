@@ -10,7 +10,7 @@ namespace kb::scene {
 
 bool ScenePrefabOverrideQueryService::IsInstance(Scene& scene, ScenePrefabInstanceHandle handle) noexcept {
     const ScenePrefabInstanceRecord* instance = SceneAccess::State(scene).prefabInstances.Find(handle);
-    return instance != nullptr && !instance->objects.empty() && instance->objects.front().IsValid();
+    return instance != nullptr && !instance->Objects().empty() && instance->Objects().front().IsValid();
 }
 
 ScenePrefabOverrideReport ScenePrefabOverrideQueryService::Overrides(Scene& scene, ScenePrefabInstanceHandle handle) {

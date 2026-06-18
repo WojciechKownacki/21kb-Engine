@@ -14,8 +14,16 @@ void ComponentSnapshotCapture::Capture(ecs_world_t* world, const ComponentTypeIn
         return;
     }
 
-    ecs_iter_t iterator = ecs_each_id(world, componentType.id);
-    while (ecs_each_next(&iterator)) {
+    ecs_query_desc_t desc{};
+    desc.terms[0].id = componentType.id;
+    desc.cache_kind = EcsQueryCacheAuto;
+    ecs_query_t* query = ecs_query_init(world, &desc);
+    if (query == nullptr) {
+        return;
+    }
+
+    ecs_iter_t iterator = ecs_query_iter(world, query);
+    while (ecs_query_next(&iterator)) {
         const void* components = ecs_field_w_size(&iterator, static_cast<ecs_size_t>(componentType.size), 0);
         if (components == nullptr) {
             continue;
@@ -31,6 +39,8 @@ void ComponentSnapshotCapture::Capture(ecs_world_t* world, const ComponentTypeIn
             std::memcpy(componentSnapshot.data.data(), bytes + (static_cast<std::size_t>(row) * componentType.size), componentType.size);
         }
     }
+
+    ecs_query_fini(query);
 }
 
 } // namespace kb::ecs

@@ -7,24 +7,46 @@
 namespace kb::scene {
 namespace {
 
-void UpdateEntry(SceneTransformBatchEntry& entry) noexcept {
-    if (entry.transform == nullptr) {
-        return;
-    }
-
-    const bool shouldUpdate = entry.parentDirty || entry.transform->worldDirty || entry.transform->parentVersion != entry.parentWorldVersion;
-    if (shouldUpdate) {
-        *entry.transform = TransformMath::Compose(entry.parentTransform, *entry.transform);
-    }
-    entry.updated = shouldUpdate;
-}
-
 void UpdateEntries(std::span<SceneTransformBatchEntry> entries) noexcept {
     SceneTransformKernelBatch batch{ entries };
     SceneTransformHierarchyKernel{}(batch);
 }
 
 } // namespace
+
+void UpdateSceneTransformBatchEntry(SceneTransformBatchEntry& entry) noexcept {
+    if (entry.transform == nullptr) {
+        return;
+    }
+
+    const bool shouldUpdate = entry.parentDirty || entry.transform->worldDirty || entry.transform->parentVersion != entry.parentWorldVersion;
+    if (shouldUpdate) {
+        if (entry.hasParent) {
+            if (TransformMath::CanUseTranslatedParentFastPath(entry.parentTransform)) {
+                *entry.transform = TransformMath::ComposeTranslatedParent(entry.parentTransform, *entry.transform);
+                entry.translatedParentFastPath = true;
+            } else if (TransformMath::CanUseUnrotatedParentFastPath(entry.parentTransform)) {
+                *entry.transform = TransformMath::ComposeUnrotatedParent(entry.parentTransform, *entry.transform);
+                entry.unrotatedParentFastPath = true;
+            } else if (TransformMath::CanUseUnitScaleParentFastPath(entry.parentTransform)) {
+                *entry.transform = TransformMath::ComposeUnitScaleParent(entry.parentTransform, *entry.transform);
+                entry.unitScaleParentFastPath = true;
+            } else if (TransformMath::CanUseUniformScaleParentFastPath(entry.parentTransform)) {
+                *entry.transform = TransformMath::ComposeUniformScaleParent(entry.parentTransform, *entry.transform);
+                entry.uniformScaleParentFastPath = true;
+            } else if (TransformMath::CanUseStaticLocalRotationFastPath(*entry.transform)) {
+                *entry.transform = TransformMath::ComposeStaticLocalRotationParent(entry.parentTransform, *entry.transform);
+                entry.staticLocalRotationFastPath = true;
+            } else {
+                *entry.transform = TransformMath::Compose(entry.parentTransform, *entry.transform);
+            }
+        } else {
+            *entry.transform = TransformMath::ComposeRoot(*entry.transform);
+            entry.rootFastPath = true;
+        }
+    }
+    entry.updated = shouldUpdate;
+}
 
 SceneTransformKernelBatch::SceneTransformKernelBatch(std::span<SceneTransformBatchEntry> entries) noexcept
     : entries_(entries) {}
@@ -47,7 +69,7 @@ std::span<SceneTransformBatchEntry> SceneTransformKernelBatch::Entries() const n
 
 void SceneTransformHierarchyKernel::operator()(SceneTransformKernelBatch& batch) const noexcept {
     for (SceneTransformBatchEntry& entry : batch.Entries()) {
-        UpdateEntry(entry);
+        UpdateSceneTransformBatchEntry(entry);
     }
 }
 

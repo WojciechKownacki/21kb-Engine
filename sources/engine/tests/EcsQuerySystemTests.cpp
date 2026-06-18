@@ -62,7 +62,10 @@ private:
 class ParallelProbeQuerySystem final : public kb::ecs::QuerySystem<EcsPosition, EcsVelocity> {
 public:
     ParallelProbeQuerySystem(std::atomic<int>& running, std::atomic<int>& maxRunning, std::atomic<int>& batches)
-        : QuerySystem(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 16 })
+        : QuerySystem(kb::ecs::QueryExecutionSettings{
+              .maxBatchSize = 16,
+              .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+          })
         , running_(running)
         , maxRunning_(maxRunning)
         , batches_(batches) {}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/WorldConfig.hpp"
 #include "engine/scene/SceneMode.hpp"
 
 #include <cstdint>
@@ -46,6 +47,7 @@ class SceneTransforms;
 class Scene {
 public:
     Scene();
+    explicit Scene(kb::ecs::WorldConfig worldConfig);
     explicit Scene(SceneMode mode);
     // Construct with an explicit project descriptor so the engine module host can
     // honour its enabled/disabled module set. The default constructor delegates here
@@ -55,6 +57,11 @@ public:
     explicit Scene(
         kb::project::ProjectDescriptor descriptor,
         std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
+        SceneMode mode = SceneMode::Runtime);
+    explicit Scene(
+        kb::project::ProjectDescriptor descriptor,
+        std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
+        kb::ecs::WorldConfig worldConfig,
         SceneMode mode = SceneMode::Runtime);
     ~Scene();
 

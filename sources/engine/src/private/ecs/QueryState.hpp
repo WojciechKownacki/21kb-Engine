@@ -18,6 +18,7 @@ class MutableComponentBorrowLocks;
 class QueryPlan;
 class QueryBatchExecutionScratch;
 class StructuralChangeValidator;
+struct WorldTelemetryCounters;
 
 class QueryState {
 public:
@@ -26,7 +27,8 @@ public:
         std::shared_ptr<QueryPlan> plan,
         std::size_t defaultExecutionGrainSize,
         MutableComponentBorrowLocks* mutableBorrowLocks,
-        StructuralChangeValidator* structuralChangeValidator);
+        StructuralChangeValidator* structuralChangeValidator,
+        WorldTelemetryCounters* telemetryCounters);
     ~QueryState() = default;
 
     QueryState(const QueryState&) = delete;
@@ -70,6 +72,7 @@ private:
     std::shared_ptr<QueryPlan> plan_;
     MutableComponentBorrowLocks* mutableBorrowLocks_ = nullptr;
     StructuralChangeValidator* structuralChangeValidator_ = nullptr;
+    WorldTelemetryCounters* telemetryCounters_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
     mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
 };

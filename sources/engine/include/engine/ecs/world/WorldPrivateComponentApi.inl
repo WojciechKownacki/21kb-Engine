@@ -11,6 +11,7 @@ template <typename T>
 [[nodiscard]] ComponentId FindComponent(std::type_index type) const noexcept;
 [[nodiscard]] const ComponentReflection* RegisterComponentReflection(ComponentId componentId, std::string_view name, std::size_t size, std::initializer_list<ComponentFieldDesc> fields);
 void SetComponent(Entity entity, ComponentId componentId, std::size_t size, const void* component);
+void SetComponentColumn(std::span<const Entity> entities, const BulkComponentData& component);
 [[nodiscard]] bool HasComponent(Entity entity, ComponentId componentId) const;
 [[nodiscard]] const void* TryGetComponent(Entity entity, ComponentId componentId) const;
 [[nodiscard]] void* TryGetMutableComponent(Entity entity, ComponentId componentId);

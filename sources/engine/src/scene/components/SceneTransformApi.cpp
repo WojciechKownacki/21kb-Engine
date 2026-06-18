@@ -3,7 +3,22 @@
 #include "scene/SceneState.hpp"
 #include "scene/SceneTransformService.hpp"
 
+#include <algorithm>
+
 namespace kb::scene {
+namespace {
+
+void EnqueueTransformDirtyFrontier(SceneState& state, SceneEntity entity) noexcept {
+    try {
+        if (std::ranges::find(state.transformDirtyFrontierEntities, entity) == state.transformDirtyFrontierEntities.end()) {
+            state.transformDirtyFrontierEntities.push_back(entity);
+        }
+    } catch (...) {
+        state.transformDirtyFrontierEntities.clear();
+    }
+}
+
+} // namespace
 
 TransformComponent SceneTransformService::Get(const Scene& scene, SceneObject object) {
     return SceneEntityService::IsAlive(scene, object) ? Get(scene, object.Entity()) : TransformComponent{};
@@ -30,19 +45,25 @@ void SceneTransformService::Set(Scene& scene, SceneObject object, const Transfor
 
 void SceneTransformService::Set(Scene& scene, SceneEntity entity, const TransformComponent& transform) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Transforms().Set(entity, transform);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Transforms().Set(entity, transform);
+        EnqueueTransformDirtyFrontier(state, entity);
     }
 }
 
 void SceneTransformService::MarkModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Transforms().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Transforms().MarkModified(entity);
+        EnqueueTransformDirtyFrontier(state, entity);
     }
 }
 
 void SceneTransformService::MarkParentModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Transforms().MarkParentModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Transforms().MarkParentModified(entity);
+        EnqueueTransformDirtyFrontier(state, entity);
     }
 }
 

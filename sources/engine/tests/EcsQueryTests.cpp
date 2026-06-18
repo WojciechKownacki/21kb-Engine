@@ -2,18 +2,29 @@
 #include "EcsTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/QueryExecutionScratch.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/ecs/World.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <initializer_list>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace {
+
+struct alignas(32) EcsAlignedQueryPayload {
+    std::array<float, 8U> values{};
+};
+
+[[nodiscard]] bool IsAlignedAddress(const void* pointer, std::size_t alignment) noexcept {
+    return pointer != nullptr && alignment != 0U && (reinterpret_cast<std::uintptr_t>(pointer) % alignment) == 0U;
+}
 
 void CountMovingBatches(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
     auto* counters = static_cast<EcsBatchCounters*>(context);
@@ -80,6 +91,26 @@ struct ParallelQueryCounters {
     std::atomic<std::size_t> batches = 0;
     std::atomic<std::size_t> maxBatch = 0;
     std::atomic<int> sumX = 0;
+    std::atomic<std::uint32_t> workerMask = 0;
+};
+
+struct ReductionQueryCounters {
+    std::size_t visited = 0;
+    std::size_t batches = 0;
+    std::size_t maxBatch = 0;
+    bool workerContextActive = false;
+};
+
+struct QueryReductionScratchSlot {
+    std::size_t visited = 0;
+    std::size_t batches = 0;
+    std::size_t maxBatch = 0;
+    int sumX = 0;
+    std::uint32_t workerMask = 0;
+};
+
+struct QueryReductionScratchContext {
+    kb::ecs::QueryReductionScratch<QueryReductionScratchSlot>* scratch = nullptr;
 };
 
 void TrackMaxBatch(std::atomic<std::size_t>& target, std::size_t value) noexcept {
@@ -90,8 +121,15 @@ void TrackMaxBatch(std::atomic<std::size_t>& target, std::size_t value) noexcept
 
 void CountMovingBatchesParallel(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
     auto* counters = static_cast<ParallelQueryCounters*>(context);
+    const kb::ecs::QueryWorkerContext workerContext = kb::ecs::CurrentQueryWorkerContext();
+    kb::tests::Require(workerContext.active, "Parallel ECS batch query did not expose worker context");
+    kb::tests::Require(workerContext.workerIndex < workerContext.workerCount, "Parallel ECS batch query exposed an invalid worker index");
+    if (workerContext.workerIndex < 32U) {
+        counters->workerMask.fetch_or(1U << workerContext.workerIndex, std::memory_order_acq_rel);
+    }
     counters->batches.fetch_add(1U, std::memory_order_acq_rel);
     TrackMaxBatch(counters->maxBatch, batch.Count());
+    std::this_thread::sleep_for(std::chrono::microseconds{ 50 });
 
     const EcsPosition* positions = batch.Components<0>();
     const EcsVelocity* velocities = batch.Components<1>();
@@ -103,6 +141,81 @@ void CountMovingBatchesParallel(const kb::ecs::QueryBatch<EcsPosition, EcsVeloci
 
     counters->visited.fetch_add(batch.Count(), std::memory_order_acq_rel);
     counters->sumX.fetch_add(sum, std::memory_order_acq_rel);
+}
+
+void CountMovingBatchesReductionMode(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+    auto* counters = static_cast<ReductionQueryCounters*>(context);
+    const kb::ecs::QueryWorkerContext workerContext = kb::ecs::CurrentQueryWorkerContext();
+    counters->workerContextActive = counters->workerContextActive || workerContext.active;
+    ++counters->batches;
+    counters->maxBatch = std::max(counters->maxBatch, batch.Count());
+
+    const EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        kb::tests::Require(batch.EntityAt(index).IsValid(), "Reduction-mode ECS batch query returned invalid entity");
+        kb::tests::Require(positions[index].x + velocities[index].x == 3.0F, "Reduction-mode ECS batch query returned invalid component data");
+        ++counters->visited;
+    }
+}
+
+void CountMovingBatchesReductionScratch(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+    auto* reductionContext = static_cast<QueryReductionScratchContext*>(context);
+    kb::tests::Require(reductionContext != nullptr && reductionContext->scratch != nullptr, "ECS query reduction scratch context is missing");
+
+    const kb::ecs::QueryWorkerContext workerContext = kb::ecs::CurrentQueryWorkerContext();
+    kb::tests::Require(workerContext.active, "Per-worker ECS query reduction did not expose worker context");
+    kb::tests::Require(workerContext.workerIndex < reductionContext->scratch->SlotCount(), "Per-worker ECS query reduction selected an invalid slot");
+
+    QueryReductionScratchSlot& slot = reductionContext->scratch->SlotForCurrentWorker();
+    if (workerContext.workerIndex < 32U) {
+        slot.workerMask |= 1U << workerContext.workerIndex;
+    }
+    ++slot.batches;
+    slot.maxBatch = std::max(slot.maxBatch, batch.Count());
+    std::this_thread::sleep_for(std::chrono::microseconds{ 50 });
+
+    const EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        kb::tests::Require(batch.EntityAt(index).IsValid(), "Per-worker ECS query reduction returned invalid entity");
+        slot.sumX += static_cast<int>(positions[index].x + velocities[index].x);
+    }
+    slot.visited += batch.Count();
+}
+
+void IntegrateMovingBatchesParallel(kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+    auto* counters = static_cast<ParallelQueryCounters*>(context);
+    const kb::ecs::QueryWorkerContext workerContext = kb::ecs::CurrentQueryWorkerContext();
+    kb::tests::Require(workerContext.active, "Parallel mutable ECS batch query did not expose worker context");
+    kb::tests::Require(workerContext.workerIndex < workerContext.workerCount, "Parallel mutable ECS batch query exposed an invalid worker index");
+    if (workerContext.workerIndex < 32U) {
+        counters->workerMask.fetch_or(1U << workerContext.workerIndex, std::memory_order_acq_rel);
+    }
+    counters->batches.fetch_add(1U, std::memory_order_acq_rel);
+    TrackMaxBatch(counters->maxBatch, batch.Count());
+    std::this_thread::sleep_for(std::chrono::microseconds{ 50 });
+
+    EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    int sum = 0;
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        kb::tests::Require(batch.EntityAt(index).IsValid(), "Parallel mutable ECS batch query returned invalid entity");
+        positions[index].x += velocities[index].x;
+        sum += static_cast<int>(positions[index].x);
+    }
+
+    counters->visited.fetch_add(batch.Count(), std::memory_order_acq_rel);
+    counters->sumX.fetch_add(sum, std::memory_order_acq_rel);
+}
+
+[[nodiscard]] std::size_t CountSetBits(std::uint32_t value) noexcept {
+    std::size_t count = 0;
+    while (value != 0U) {
+        value &= value - 1U;
+        ++count;
+    }
+    return count;
 }
 
 MovingQuerySnapshot CollectMovingSnapshot(kb::ecs::Query<EcsPosition, EcsVelocity>& query) {
@@ -121,6 +234,53 @@ MovingQuerySnapshot CollectMovingSnapshot(kb::ecs::Query<EcsPosition, EcsVelocit
                                      snapshot.sumX += positions[index].x + velocities[index].x;
                                  }
                              });
+    std::sort(snapshot.entityIds.begin(), snapshot.entityIds.end());
+    return snapshot;
+}
+
+MovingQuerySnapshot CollectFilteredMovingSnapshot(kb::ecs::Query<EcsPosition, EcsVelocity>& query) {
+    MovingQuerySnapshot snapshot;
+    query.ForEachMutableBatchKernel(kb::ecs::QueryExecutionSettings{
+                                        .maxBatchSize = 7,
+                                        .iterationOrder = kb::ecs::QueryIterationOrder::Deterministic,
+                                    },
+                                    [&snapshot](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+                                        EcsPosition* positions = batch.Components<0>();
+                                        const EcsVelocity* velocities = batch.Components<1>();
+                                        for (std::size_t index = 0; index < batch.Count(); ++index) {
+                                            const kb::ecs::Entity entity = batch.EntityAt(index);
+                                            kb::tests::Require(entity.IsValid(), "Filtered mutable ECS query returned an invalid entity");
+                                            positions[index].x += 1.0F;
+                                            snapshot.entityIds.push_back(entity.Id());
+                                            snapshot.sumX += positions[index].x + velocities[index].x;
+                                        }
+                                    });
+    std::sort(snapshot.entityIds.begin(), snapshot.entityIds.end());
+    return snapshot;
+}
+
+MovingQuerySnapshot BuildFilteredMovingReference(
+    kb::ecs::World& world,
+    std::span<const kb::ecs::Entity> entities,
+    std::uint32_t round) {
+    MovingQuerySnapshot snapshot;
+    for (kb::ecs::Entity entity : entities) {
+        if (!world.IsAlive(entity) || !world.Has<EcsPosition>(entity) || !world.Has<EcsVelocity>(entity) || !world.Has<EcsQueryMarker>(entity)
+            || world.Has<EcsDisabled>(entity)) {
+            continue;
+        }
+
+        EcsPosition* position = world.TryGetMutable<EcsPosition>(entity);
+        const EcsVelocity* velocity = world.TryGet<EcsVelocity>(entity);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "Filtered ECS reference found an incomplete matching entity");
+        position->x += 1.0F;
+        snapshot.entityIds.push_back(entity.Id());
+        snapshot.sumX += position->x + velocity->x;
+    }
+
+    if ((round % 5U) == 0U) {
+        std::reverse(snapshot.entityIds.begin(), snapshot.entityIds.end());
+    }
     std::sort(snapshot.entityIds.begin(), snapshot.entityIds.end());
     return snapshot;
 }
@@ -177,6 +337,144 @@ void RunTypedEcsQueryBatchTest() {
     kb::tests::Require(kb::tests::NearlyEqual(counters.sumX, 1800.0F), "Typed ECS batch query saw invalid component data");
 }
 
+void RunTypedEcsQueryBatchPointerContractTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 11,
+    });
+
+    constexpr int kPlainEntities = 48;
+    constexpr int kMarkedEntities = 25;
+    for (int index = 0; index < kPlainEntities + kMarkedEntities; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = static_cast<float>(index + 100) });
+        world.Set(entity, EcsVelocity{ .x = static_cast<float>(index * 2), .y = static_cast<float>(index + 200) });
+        if (index >= kPlainEntities) {
+            world.Set(entity, EcsQueryMarker{ .value = index });
+        }
+    }
+
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+    std::size_t readBatches = 0;
+    std::size_t readRows = 0;
+    query.ForEachBatchKernel(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 11 },
+        [&world, &readBatches, &readRows](const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch) {
+            ++readBatches;
+            const EcsPosition* positions = batch.Components<0>();
+            const EcsVelocity* velocities = batch.Components<1>();
+            kb::tests::Require(batch.Count() == 0U || (positions != nullptr && velocities != nullptr), "ECS query batch returned null component columns");
+
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                const kb::ecs::Entity entity = batch.EntityAt(row);
+                const EcsPosition* positionRef = world.TryGet<EcsPosition>(entity);
+                const EcsVelocity* velocityRef = world.TryGet<EcsVelocity>(entity);
+                kb::tests::Require(positionRef == positions + row, "ECS query batch position pointer does not match EntityAt row");
+                kb::tests::Require(velocityRef == velocities + row, "ECS query batch velocity pointer does not match EntityAt row");
+                kb::tests::Require(kb::tests::NearlyEqual(positions[row].x * 2.0F, velocities[row].x), "ECS query batch component columns lost row alignment");
+                ++readRows;
+            }
+        });
+
+    kb::tests::Require(readRows == static_cast<std::size_t>(kPlainEntities + kMarkedEntities), "ECS query batch pointer contract did not visit every row");
+    kb::tests::Require(readBatches >= 7U, "ECS query batch pointer contract did not exercise split batches");
+
+    std::vector<kb::ecs::Entity> mutatedEntities;
+    std::vector<float> expectedPositionX;
+    std::vector<float> expectedVelocityX;
+    query.ForEachMutableBatchKernel(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 11 },
+        [&mutatedEntities, &expectedPositionX, &expectedVelocityX](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch) {
+            EcsPosition* positions = batch.Components<0>();
+            EcsVelocity* velocities = batch.Components<1>();
+            kb::tests::Require(batch.Count() == 0U || (positions != nullptr && velocities != nullptr), "Mutable ECS query batch returned null component columns");
+
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                positions[row].x += 1000.0F + static_cast<float>(row);
+                velocities[row].x = -velocities[row].x;
+                mutatedEntities.push_back(batch.EntityAt(row));
+                expectedPositionX.push_back(positions[row].x);
+                expectedVelocityX.push_back(velocities[row].x);
+            }
+        });
+
+    kb::tests::Require(mutatedEntities.size() == readRows, "Mutable ECS query batch pointer contract did not visit every row");
+    for (std::size_t index = 0; index < mutatedEntities.size(); ++index) {
+        const EcsPosition* position = world.TryGet<EcsPosition>(mutatedEntities[index]);
+        const EcsVelocity* velocity = world.TryGet<EcsVelocity>(mutatedEntities[index]);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "Mutable ECS query batch pointer contract lost a component");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, expectedPositionX[index]), "Mutable ECS query batch write did not persist position data");
+        kb::tests::Require(kb::tests::NearlyEqual(velocity->x, expectedVelocityX[index]), "Mutable ECS query batch write did not persist velocity data");
+    }
+}
+
+void RunTypedEcsQueryBatchAlignmentContractTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 7,
+    });
+
+    constexpr int kEntityCount = 65;
+    for (int index = 0; index < kEntityCount; ++index) {
+        EcsAlignedQueryPayload payload{};
+        payload.values[0] = static_cast<float>(index);
+        payload.values[7] = static_cast<float>(index + 700);
+
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = static_cast<float>(index + 100) });
+        world.Set(entity, payload);
+    }
+
+    kb::ecs::Query<EcsPosition, EcsAlignedQueryPayload> query = world.CreateQuery<EcsPosition, EcsAlignedQueryPayload>();
+
+    std::size_t readRows = 0;
+    query.ForEachBatchKernel(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 7 },
+        [&readRows](const kb::ecs::QueryBatch<EcsPosition, EcsAlignedQueryPayload>& batch) {
+            const EcsPosition* positions = batch.Components<0>();
+            const EcsAlignedQueryPayload* payloads = batch.Components<1>();
+            kb::tests::Require(batch.Count() == 0U || IsAlignedAddress(positions, alignof(EcsPosition)), "ECS query batch returned an unaligned position column");
+            kb::tests::Require(batch.Count() == 0U || IsAlignedAddress(payloads, alignof(EcsAlignedQueryPayload)), "ECS query batch returned an unaligned wide component column");
+
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                kb::tests::Require(IsAlignedAddress(positions + row, alignof(EcsPosition)), "ECS query batch returned an unaligned position row");
+                kb::tests::Require(IsAlignedAddress(payloads + row, alignof(EcsAlignedQueryPayload)), "ECS query batch returned an unaligned wide component row");
+                kb::tests::Require(kb::tests::NearlyEqual(payloads[row].values[0], positions[row].x), "ECS query batch alignment test lost row pairing");
+                ++readRows;
+            }
+        });
+    kb::tests::Require(readRows == static_cast<std::size_t>(kEntityCount), "ECS query batch alignment test did not visit every row");
+
+    std::size_t writtenRows = 0;
+    query.ForEachMutableBatchKernel(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 7 },
+        [&writtenRows](kb::ecs::MutableQueryBatch<EcsPosition, EcsAlignedQueryPayload>& batch) {
+            EcsPosition* positions = batch.Components<0>();
+            EcsAlignedQueryPayload* payloads = batch.Components<1>();
+            kb::tests::Require(batch.Count() == 0U || IsAlignedAddress(positions, alignof(EcsPosition)), "Mutable ECS query batch returned an unaligned position column");
+            kb::tests::Require(batch.Count() == 0U || IsAlignedAddress(payloads, alignof(EcsAlignedQueryPayload)), "Mutable ECS query batch returned an unaligned wide component column");
+
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                kb::tests::Require(IsAlignedAddress(positions + row, alignof(EcsPosition)), "Mutable ECS query batch returned an unaligned position row");
+                kb::tests::Require(IsAlignedAddress(payloads + row, alignof(EcsAlignedQueryPayload)), "Mutable ECS query batch returned an unaligned wide component row");
+                payloads[row].values[1] = positions[row].x + 10.0F;
+                ++writtenRows;
+            }
+        });
+    kb::tests::Require(writtenRows == static_cast<std::size_t>(kEntityCount), "Mutable ECS query batch alignment test did not visit every row");
+
+    std::size_t verifiedRows = 0;
+    query.ForEachBatchKernel(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 7 },
+        [&verifiedRows](const kb::ecs::QueryBatch<EcsPosition, EcsAlignedQueryPayload>& batch) {
+            const EcsPosition* positions = batch.Components<0>();
+            const EcsAlignedQueryPayload* payloads = batch.Components<1>();
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                kb::tests::Require(kb::tests::NearlyEqual(payloads[row].values[1], positions[row].x + 10.0F), "Mutable ECS query batch alignment write did not persist");
+                ++verifiedRows;
+            }
+        });
+    kb::tests::Require(verifiedRows == static_cast<std::size_t>(kEntityCount), "ECS query batch alignment verification did not visit every row");
+}
+
 void RunTypedEcsQueryBatchWorkStealingTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 32,
@@ -195,6 +493,7 @@ void RunTypedEcsQueryBatchWorkStealingTest() {
         kb::ecs::QueryExecutionSettings{
             .maxBatchSize = 32,
             .iterationOrder = kb::ecs::QueryIterationOrder::ChunkOrder,
+            .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
             .workerPool = &pool,
         },
         &CountMovingBatchesParallel,
@@ -204,6 +503,190 @@ void RunTypedEcsQueryBatchWorkStealingTest() {
     kb::tests::Require(counters.batches.load(std::memory_order_acquire) >= 16U, "Parallel ECS batch query did not split work into batches");
     kb::tests::Require(counters.maxBatch.load(std::memory_order_acquire) <= 32U, "Parallel ECS batch query exceeded configured batch size");
     kb::tests::Require(counters.sumX.load(std::memory_order_acquire) == 1536, "Parallel ECS batch query read invalid component data");
+    kb::tests::Require(CountSetBits(counters.workerMask.load(std::memory_order_acquire)) >= 2U, "Parallel ECS batch query did not use multiple workers");
+}
+
+void RunTypedEcsMutableQueryBatchWorkStealingTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 64,
+    });
+    for (int index = 0; index < 4096; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+
+    ParallelQueryCounters counters;
+    query.ForEachMutableBatch(
+        kb::ecs::QueryExecutionSettings{
+            .maxBatchSize = 64,
+            .iterationOrder = kb::ecs::QueryIterationOrder::ChunkOrder,
+            .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+            .workerPool = &pool,
+        },
+        &IntegrateMovingBatchesParallel,
+        &counters);
+
+    kb::tests::Require(counters.visited.load(std::memory_order_acquire) == 4096U, "Parallel mutable ECS batch query did not visit all entities");
+    kb::tests::Require(counters.batches.load(std::memory_order_acquire) >= 64U, "Parallel mutable ECS batch query did not split work into batches");
+    kb::tests::Require(counters.maxBatch.load(std::memory_order_acquire) <= 64U, "Parallel mutable ECS batch query exceeded configured batch size");
+    kb::tests::Require(counters.sumX.load(std::memory_order_acquire) == 12288, "Parallel mutable ECS batch query wrote invalid component data");
+    kb::tests::Require(CountSetBits(counters.workerMask.load(std::memory_order_acquire)) >= 2U, "Parallel mutable ECS batch query did not use multiple workers");
+}
+
+void RunTypedEcsQueryExecutionPolicyBatchShapeTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 32,
+    });
+    for (int index = 0; index < 512; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+
+    ParallelQueryCounters chunkCounters;
+    query.ForEachBatch(
+        kb::ecs::QueryExecutionSettings{
+            .maxBatchSize = 32,
+            .policy = kb::ecs::QueryExecutionPolicy::ParallelChunks,
+            .workerPool = &pool,
+        },
+        &CountMovingBatchesParallel,
+        &chunkCounters);
+
+    ParallelQueryCounters rangeCounters;
+    query.ForEachBatch(
+        kb::ecs::QueryExecutionSettings{
+            .maxBatchSize = 32,
+            .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+            .workerPool = &pool,
+        },
+        &CountMovingBatchesParallel,
+        &rangeCounters);
+
+    kb::tests::Require(chunkCounters.visited.load(std::memory_order_acquire) == 512U, "Parallel chunk ECS query did not visit all entities");
+    kb::tests::Require(rangeCounters.visited.load(std::memory_order_acquire) == 512U, "Parallel range ECS query did not visit all entities");
+    kb::tests::Require(chunkCounters.batches.load(std::memory_order_acquire) == 1U, "Parallel chunk ECS query did not keep the storage chunk intact");
+    kb::tests::Require(chunkCounters.maxBatch.load(std::memory_order_acquire) == 512U, "Parallel chunk ECS query did not dispatch the full storage chunk");
+    kb::tests::Require(rangeCounters.batches.load(std::memory_order_acquire) >= 16U, "Parallel range ECS query did not split work into ranges");
+    kb::tests::Require(rangeCounters.maxBatch.load(std::memory_order_acquire) <= 32U, "Parallel range ECS query exceeded configured range size");
+}
+
+void RunTypedEcsQueryDeterministicReductionModeTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 32,
+    });
+    for (int index = 0; index < 512; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+
+    ReductionQueryCounters counters;
+    query.ForEachBatch(
+        kb::ecs::QueryExecutionSettings{
+            .maxBatchSize = 32,
+            .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+            .reductionMode = kb::ecs::QueryReductionMode::Deterministic,
+            .workerPool = &pool,
+        },
+        &CountMovingBatchesReductionMode,
+        &counters);
+
+    kb::tests::Require(counters.visited == 512U, "Deterministic reduction ECS query did not visit all entities");
+    kb::tests::Require(counters.batches == 16U, "Deterministic reduction ECS query ignored the deterministic batch size");
+    kb::tests::Require(counters.maxBatch == 32U, "Deterministic reduction ECS query exceeded configured batch size");
+    kb::tests::Require(!counters.workerContextActive, "Deterministic reduction ECS query executed through worker fan-out");
+}
+
+void RunTypedEcsQueryPerWorkerReductionScratchTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 32,
+    });
+    for (int index = 0; index < 4096; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    const kb::ecs::QueryExecutionSettings settings{
+        .maxBatchSize = 32,
+        .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+        .reductionMode = kb::ecs::QueryReductionMode::PerWorker,
+        .workerPool = &pool,
+    };
+    kb::ecs::QueryReductionScratch<QueryReductionScratchSlot> scratch;
+    scratch.ResetForSettings(settings);
+    kb::tests::Require(scratch.SlotCount() == 2U, "Per-worker ECS query reduction scratch did not size to worker count");
+
+    QueryReductionScratchContext context{ .scratch = &scratch };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+    query.ForEachBatch(settings, &CountMovingBatchesReductionScratch, &context);
+
+    const QueryReductionScratchSlot totals = scratch.Reduce(QueryReductionScratchSlot{}, [](QueryReductionScratchSlot& accumulator, const QueryReductionScratchSlot& slot) {
+        accumulator.visited += slot.visited;
+        accumulator.batches += slot.batches;
+        accumulator.maxBatch = std::max(accumulator.maxBatch, slot.maxBatch);
+        accumulator.sumX += slot.sumX;
+        accumulator.workerMask |= slot.workerMask;
+    });
+
+    kb::tests::Require(totals.visited == 4096U, "Per-worker ECS query reduction did not visit all entities");
+    kb::tests::Require(totals.sumX == 12288, "Per-worker ECS query reduction produced an invalid sum");
+    kb::tests::Require(totals.batches >= 128U, "Per-worker ECS query reduction did not split the workload");
+    kb::tests::Require(totals.maxBatch <= 32U, "Per-worker ECS query reduction exceeded configured batch size");
+    kb::tests::Require(CountSetBits(totals.workerMask) >= 2U, "Per-worker ECS query reduction did not use multiple worker slots");
+}
+
+void RunTypedEcsQueryPerWorkerReductionScratchHonorsWorkerOverrideTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 16,
+    });
+    for (int index = 0; index < 1024; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = 1.0F, .y = 0.0F });
+        world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+    const kb::ecs::QueryExecutionSettings settings{
+        .maxBatchSize = 16,
+        .policy = kb::ecs::QueryExecutionPolicy::ParallelRanges,
+        .reductionMode = kb::ecs::QueryReductionMode::PerWorker,
+        .workerCountOverride = 2,
+        .workerPool = &pool,
+    };
+    kb::ecs::QueryReductionScratch<QueryReductionScratchSlot> scratch;
+    scratch.ResetForSettings(settings);
+    kb::tests::Require(scratch.SlotCount() == 2U, "Per-worker ECS query reduction scratch ignored worker override");
+
+    QueryReductionScratchContext context{ .scratch = &scratch };
+    kb::ecs::Query<EcsPosition, EcsVelocity> query = world.CreateQuery<EcsPosition, EcsVelocity>();
+    query.ForEachBatch(settings, &CountMovingBatchesReductionScratch, &context);
+
+    const QueryReductionScratchSlot totals = scratch.Reduce(QueryReductionScratchSlot{}, [](QueryReductionScratchSlot& accumulator, const QueryReductionScratchSlot& slot) {
+        accumulator.visited += slot.visited;
+        accumulator.batches += slot.batches;
+        accumulator.maxBatch = std::max(accumulator.maxBatch, slot.maxBatch);
+        accumulator.sumX += slot.sumX;
+        accumulator.workerMask |= slot.workerMask;
+    });
+
+    kb::tests::Require(totals.visited == 1024U, "Worker-capped ECS query reduction did not visit all entities");
+    kb::tests::Require(totals.sumX == 3072, "Worker-capped ECS query reduction produced an invalid sum");
+    kb::tests::Require(totals.maxBatch <= 16U, "Worker-capped ECS query reduction exceeded configured batch size");
+    kb::tests::Require((totals.workerMask & ~0b11U) == 0U, "Worker-capped ECS query reduction used a slot outside the override");
+    kb::tests::Require(CountSetBits(totals.workerMask) == 2U, "Worker-capped ECS query reduction did not use both allowed worker slots");
 }
 
 void RunTypedEcsMutableQueryBatchTest() {
@@ -250,6 +733,95 @@ void RunTypedEcsMutableQueryBatchTest() {
     changedQuery.ForEach(&CountPositions, &changedAfterMutable);
     kb::tests::Require(changedAfterMutable.visited == 10, "Mutable ECS batch query did not mark written components as changed");
     kb::tests::Require(kb::tests::NearlyEqual(changedAfterMutable.sumX, 85.0F), "Mutable ECS batch query did not persist component writes");
+}
+
+void RunTypedEcsMutableQueryBatchMatchesReferenceTest() {
+    kb::ecs::World batchWorld(kb::ecs::WorldConfig{
+        .executionGrainSize = 7,
+    });
+    kb::ecs::World referenceWorld(kb::ecs::WorldConfig{
+        .executionGrainSize = 7,
+    });
+
+    std::vector<kb::ecs::Entity> batchEntities;
+    std::vector<kb::ecs::Entity> referenceEntities;
+    batchEntities.reserve(128);
+    referenceEntities.reserve(128);
+    for (int index = 0; index < 128; ++index) {
+        const EcsPosition position{
+            .x = static_cast<float>(index),
+            .y = static_cast<float>(index % 11),
+        };
+        const EcsVelocity velocity{
+            .x = static_cast<float>((index % 5) + 1),
+            .y = static_cast<float>((index % 7) - 3),
+        };
+
+        const kb::ecs::Entity batchEntity = batchWorld.CreateEntity();
+        const kb::ecs::Entity referenceEntity = referenceWorld.CreateEntity();
+        batchEntities.push_back(batchEntity);
+        referenceEntities.push_back(referenceEntity);
+
+        batchWorld.Set(batchEntity, position);
+        referenceWorld.Set(referenceEntity, position);
+        if ((index % 5) != 0) {
+            batchWorld.Set(batchEntity, velocity);
+            referenceWorld.Set(referenceEntity, velocity);
+        }
+        if ((index % 3) == 0) {
+            batchWorld.Set(batchEntity, EcsQueryMarker{ .value = index });
+            referenceWorld.Set(referenceEntity, EcsQueryMarker{ .value = index });
+        }
+        if ((index % 8) == 0) {
+            batchWorld.Set(batchEntity, EcsDisabled{ .value = 1 });
+            referenceWorld.Set(referenceEntity, EcsDisabled{ .value = 1 });
+        }
+    }
+
+    EcsBatchCounters batchCounters;
+    kb::ecs::Query<EcsPosition, EcsVelocity> batchQuery = batchWorld.CreateQuery<EcsPosition, EcsVelocity>();
+    batchQuery.ForEachMutableBatch(
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 7 },
+        [](kb::ecs::MutableQueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+            auto* counters = static_cast<EcsBatchCounters*>(context);
+            ++counters->batches;
+            counters->maxBatch = std::max(counters->maxBatch, batch.Count());
+
+            EcsPosition* positions = batch.Components<0>();
+            const EcsVelocity* velocities = batch.Components<1>();
+            for (std::size_t row = 0; row < batch.Count(); ++row) {
+                kb::tests::Require(batch.EntityAt(row).IsValid(), "Mutable ECS batch reference test returned an invalid entity");
+                positions[row].x = (positions[row].x * 1.5F) + velocities[row].x;
+                positions[row].y += velocities[row].y * 0.25F;
+                ++counters->visited;
+            }
+        },
+        &batchCounters);
+
+    int referenceVisited = 0;
+    for (kb::ecs::Entity entity : referenceEntities) {
+        if (!referenceWorld.Has<EcsVelocity>(entity)) {
+            continue;
+        }
+        EcsPosition* position = referenceWorld.TryGetMutable<EcsPosition>(entity);
+        const EcsVelocity* velocity = referenceWorld.TryGet<EcsVelocity>(entity);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "Mutable ECS reference path found an incomplete entity");
+        position->x = (position->x * 1.5F) + velocity->x;
+        position->y += velocity->y * 0.25F;
+        ++referenceVisited;
+    }
+
+    kb::tests::Require(batchCounters.visited == referenceVisited, "Mutable ECS batch query visited a different entity count than the reference path");
+    kb::tests::Require(batchCounters.batches >= 15, "Mutable ECS batch reference test did not split the workload into small batches");
+    kb::tests::Require(batchCounters.maxBatch <= 7, "Mutable ECS batch reference test exceeded configured batch size");
+
+    for (std::size_t index = 0; index < batchEntities.size(); ++index) {
+        const EcsPosition* batchPosition = batchWorld.TryGet<EcsPosition>(batchEntities[index]);
+        const EcsPosition* referencePosition = referenceWorld.TryGet<EcsPosition>(referenceEntities[index]);
+        kb::tests::Require(batchPosition != nullptr && referencePosition != nullptr, "Mutable ECS batch reference comparison lost a position component");
+        kb::tests::Require(kb::tests::NearlyEqual(batchPosition->x, referencePosition->x), "Mutable ECS batch query diverged from reference position x");
+        kb::tests::Require(kb::tests::NearlyEqual(batchPosition->y, referencePosition->y), "Mutable ECS batch query diverged from reference position y");
+    }
 }
 
 #if !defined(NDEBUG)
@@ -560,6 +1132,123 @@ void RunTypedEcsQueryStructuralChangeConsistencyTest() {
         "Fresh ECS query did not match existing query after structural changes");
 }
 
+void RunTypedEcsQueryCacheChurnStressTest() {
+    kb::ecs::World cachedWorld(kb::ecs::WorldConfig{
+        .executionGrainSize = 7,
+    });
+    kb::ecs::World referenceWorld(kb::ecs::WorldConfig{
+        .executionGrainSize = 7,
+    });
+
+    const kb::ecs::ComponentId cachedMarkerId = cachedWorld.RegisterComponent<EcsQueryMarker>();
+    const kb::ecs::ComponentId cachedDisabledId = cachedWorld.RegisterComponent<EcsDisabled>();
+
+    std::vector<kb::ecs::Entity> cachedEntities;
+    std::vector<kb::ecs::Entity> referenceEntities;
+    cachedEntities.reserve(96);
+    referenceEntities.reserve(96);
+    for (int index = 0; index < 64; ++index) {
+        const kb::ecs::Entity cached = cachedWorld.CreateEntity();
+        const kb::ecs::Entity reference = referenceWorld.CreateEntity();
+        cachedEntities.push_back(cached);
+        referenceEntities.push_back(reference);
+
+        const EcsPosition position{ .x = static_cast<float>(index), .y = 0.0F };
+        const EcsVelocity velocity{ .x = static_cast<float>((index % 5) + 1), .y = 0.0F };
+        cachedWorld.Set(cached, position);
+        referenceWorld.Set(reference, position);
+        if ((index % 3) != 0) {
+            cachedWorld.Set(cached, velocity);
+            referenceWorld.Set(reference, velocity);
+        }
+        if ((index % 2) == 0) {
+            cachedWorld.Set(cached, EcsQueryMarker{ .value = 1 });
+            referenceWorld.Set(reference, EcsQueryMarker{ .value = 1 });
+        }
+        if ((index % 7) == 0) {
+            cachedWorld.Set(cached, EcsDisabled{ .value = 1 });
+            referenceWorld.Set(reference, EcsDisabled{ .value = 1 });
+        }
+    }
+
+    kb::ecs::QueryFilter cachedFilter;
+    cachedFilter.Require(cachedMarkerId).Exclude(cachedDisabledId);
+    kb::ecs::Query<EcsPosition, EcsVelocity> cachedQuery = cachedWorld.CreateQuery<EcsPosition, EcsVelocity>(cachedFilter);
+
+    auto applyChurn = [](kb::ecs::World& world, std::vector<kb::ecs::Entity>& entities, std::uint32_t round) {
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            const kb::ecs::Entity entity = entities[index];
+            if (!world.IsAlive(entity)) {
+                continue;
+            }
+            if (((index + round) % 4U) == 0U) {
+                if (world.Has<EcsQueryMarker>(entity)) {
+                    world.Remove<EcsQueryMarker>(entity);
+                } else {
+                    world.Set(entity, EcsQueryMarker{ .value = static_cast<int>(round + 1U) });
+                }
+            }
+            if (((index * 3U + round) % 9U) == 0U) {
+                if (world.Has<EcsDisabled>(entity)) {
+                    world.Remove<EcsDisabled>(entity);
+                } else {
+                    world.Set(entity, EcsDisabled{ .value = 1 });
+                }
+            }
+            if (((index + round) % 6U) == 0U) {
+                if (world.Has<EcsVelocity>(entity)) {
+                    world.Remove<EcsVelocity>(entity);
+                } else {
+                    world.Set(entity, EcsVelocity{ .x = static_cast<float>((round % 5U) + 1U), .y = 0.0F });
+                }
+            }
+            if (((index + round) % 17U) == 0U) {
+                world.Set(entity, EcsPosition{ .x = static_cast<float>(round + index), .y = 0.0F });
+            }
+        }
+
+        if ((round % 3U) == 0U && !entities.empty()) {
+            const std::size_t victimIndex = round % entities.size();
+            if (world.IsAlive(entities[victimIndex])) {
+                world.DestroyEntity(entities[victimIndex]);
+            }
+        }
+
+        if ((round % 2U) == 0U) {
+            const kb::ecs::Entity entity = world.CreateEntity();
+            world.Set(entity, EcsPosition{ .x = static_cast<float>(1000U + round), .y = 0.0F });
+            world.Set(entity, EcsVelocity{ .x = static_cast<float>((round % 7U) + 1U), .y = 0.0F });
+            if ((round % 4U) != 0U) {
+                world.Set(entity, EcsQueryMarker{ .value = 1 });
+            }
+            if ((round % 8U) == 0U) {
+                world.Set(entity, EcsDisabled{ .value = 1 });
+            }
+            entities.push_back(entity);
+        }
+    };
+
+    for (std::uint32_t round = 0; round < 24U; ++round) {
+        applyChurn(cachedWorld, cachedEntities, round);
+        applyChurn(referenceWorld, referenceEntities, round);
+
+        MovingQuerySnapshot cachedSnapshot = CollectFilteredMovingSnapshot(cachedQuery);
+        MovingQuerySnapshot referenceSnapshot = BuildFilteredMovingReference(referenceWorld, referenceEntities, round);
+        kb::tests::Require(cachedSnapshot.entityIds.size() == referenceSnapshot.entityIds.size(), "Cached ECS query returned a stale entity count after churn");
+        kb::tests::Require(kb::tests::NearlyEqual(cachedSnapshot.sumX, referenceSnapshot.sumX), "Cached ECS query returned stale mutable component values after churn");
+
+        kb::ecs::QueryFilter freshFilter;
+        freshFilter.Require(cachedMarkerId).Exclude(cachedDisabledId);
+        kb::ecs::Query<EcsPosition, EcsVelocity> freshQuery = cachedWorld.CreateQuery<EcsPosition, EcsVelocity>(freshFilter);
+        MovingQuerySnapshot freshSnapshot = CollectMovingSnapshot(freshQuery);
+        kb::tests::Require(freshSnapshot.entityIds == cachedSnapshot.entityIds, "Fresh cached ECS query disagreed with the long-lived query after churn");
+    }
+
+    const kb::ecs::WorldTelemetrySnapshot telemetry = cachedWorld.TelemetrySnapshot();
+    kb::tests::Require(telemetry.queryCacheHits >= 24U, "ECS query plan cache was not reused during churn stress");
+    kb::tests::Require(telemetry.queryCacheMisses >= 1U, "ECS query churn stress did not record the initial query cache miss");
+}
+
 void RunTypedEcsQueryStructuralChangeValidationTest() {
     kb::ecs::World world(kb::ecs::WorldConfig{
         .executionGrainSize = 4,
@@ -746,8 +1435,16 @@ namespace kb::tests {
 void RunEcsQueryTests() {
     RunTypedEcsQueryRowBatchAdapterTest();
     RunTypedEcsQueryBatchTest();
+    RunTypedEcsQueryBatchPointerContractTest();
+    RunTypedEcsQueryBatchAlignmentContractTest();
     RunTypedEcsQueryBatchWorkStealingTest();
+    RunTypedEcsMutableQueryBatchWorkStealingTest();
+    RunTypedEcsQueryExecutionPolicyBatchShapeTest();
+    RunTypedEcsQueryDeterministicReductionModeTest();
+    RunTypedEcsQueryPerWorkerReductionScratchTest();
+    RunTypedEcsQueryPerWorkerReductionScratchHonorsWorkerOverrideTest();
     RunTypedEcsMutableQueryBatchTest();
+    RunTypedEcsMutableQueryBatchMatchesReferenceTest();
 #if !defined(NDEBUG)
     RunTypedEcsMutableQueryBorrowLockTest();
     RunTypedEcsParallelMutableQueryBorrowConflictTest();
@@ -757,6 +1454,7 @@ void RunEcsQueryTests() {
     RunTypedEcsQueryIterationOrderPolicyTest();
     RunTypedEcsQueryRepeatedPlanConsistencyTest();
     RunTypedEcsQueryStructuralChangeConsistencyTest();
+    RunTypedEcsQueryCacheChurnStressTest();
     RunTypedEcsQueryStructuralChangeValidationTest();
     RunTypedEcsQueryComponentFilterTest();
     RunTypedEcsQueryChangeFilterTest();

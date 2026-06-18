@@ -118,7 +118,6 @@ constexpr std::array KnownExtensions{
     ExtensionCategory{ ".gd", AssetImportCategory::Script },
     ExtensionCategory{ ".native", AssetImportCategory::Script },
     ExtensionCategory{ ".kbgraph", AssetImportCategory::Script },
-    ExtensionCategory{ ".unity", AssetImportCategory::Scene },
     ExtensionCategory{ ".umap", AssetImportCategory::Scene },
     ExtensionCategory{ ".21kbscene", AssetImportCategory::Scene },
     ExtensionCategory{ ".tscn", AssetImportCategory::Scene },

@@ -96,6 +96,7 @@ struct EcsSimdProbeKernel {
     int* sse2Batches = nullptr;
     int* avx2Batches = nullptr;
     int* avx512Batches = nullptr;
+    int* neonBatches = nullptr;
 
     void operator()(kb::ecs::KernelBatch<EcsSimdKernelContract>& batch) const {
         ++(*scalarBatches);
@@ -115,6 +116,11 @@ struct EcsSimdProbeKernel {
     void operator()(kb::ecs::KernelBatch<EcsSimdKernelContract>& batch, kb::ecs::KernelAvx512Tag) const {
         ++(*avx512Batches);
         AddProbeMovement(batch, 8.0F);
+    }
+
+    void operator()(kb::ecs::KernelBatch<EcsSimdKernelContract>& batch, kb::ecs::KernelNeonTag) const {
+        ++(*neonBatches);
+        AddProbeMovement(batch, 3.0F);
     }
 };
 
@@ -733,6 +739,7 @@ void RunEcsKernelSse2AndAvx2DispatchTest() {
         int sse2Batches = 0;
         int avx2Batches = 0;
         int avx512Batches = 0;
+        int neonBatches = 0;
         kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
         auto compiled = kb::ecs::CompileKernelQuery<EcsSimdKernelContract>(
             std::move(query),
@@ -743,6 +750,7 @@ void RunEcsKernelSse2AndAvx2DispatchTest() {
                 .sse2Batches = &sse2Batches,
                 .avx2Batches = &avx2Batches,
                 .avx512Batches = &avx512Batches,
+                .neonBatches = &neonBatches,
             },
             kb::ecs::BindKernelAssets(),
             constants);
@@ -751,11 +759,11 @@ void RunEcsKernelSse2AndAvx2DispatchTest() {
         kb::ecs::KernelQuery<EcsSimdKernelContract> verifyQuery = world.CreateQuery<EcsVelocity, EcsPosition>();
         if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Sse2)) {
             kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Sse2, "ECS kernel did not resolve the requested SSE2 backend");
-            kb::tests::Require(sse2Batches == 2 && scalarBatches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not dispatch through the SSE2 overload");
+            kb::tests::Require(sse2Batches == 2 && scalarBatches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS kernel did not dispatch through the SSE2 overload");
             kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 48.0F), "ECS SSE2 kernel path did not process all rows");
         } else {
             kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Scalar, "ECS kernel did not resolve SSE2 to scalar on unsupported hardware");
-            kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not fall back to scalar when SSE2 was unavailable");
+            kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS kernel did not fall back to scalar when SSE2 was unavailable");
             kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 24.0F), "ECS scalar fallback for SSE2 did not process all rows");
         }
     }
@@ -770,6 +778,7 @@ void RunEcsKernelSse2AndAvx2DispatchTest() {
         int sse2Batches = 0;
         int avx2Batches = 0;
         int avx512Batches = 0;
+        int neonBatches = 0;
         kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
         kb::ecs::ExecuteKernelAvx2<EcsSimdKernelContract>(
             query,
@@ -779,17 +788,58 @@ void RunEcsKernelSse2AndAvx2DispatchTest() {
                 .sse2Batches = &sse2Batches,
                 .avx2Batches = &avx2Batches,
                 .avx512Batches = &avx512Batches,
+                .neonBatches = &neonBatches,
             },
             kb::ecs::BindKernelAssets(),
             constants);
 
         if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Avx2)) {
-            kb::tests::Require(avx2Batches == 2 && scalarBatches == 0 && sse2Batches == 0 && avx512Batches == 0, "ECS kernel did not dispatch through the AVX2 overload");
+            kb::tests::Require(avx2Batches == 2 && scalarBatches == 0 && sse2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS kernel did not dispatch through the AVX2 overload");
             kb::tests::Require(kb::tests::NearlyEqual(SumPositions(query), 96.0F), "ECS AVX2 kernel path did not process all rows");
         } else {
-            kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not fall back to scalar when AVX2 was unavailable");
+            kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS kernel did not fall back to scalar when AVX2 was unavailable");
             kb::tests::Require(kb::tests::NearlyEqual(SumPositions(query), 24.0F), "ECS scalar fallback for AVX2 did not process all rows");
         }
+    }
+}
+
+void RunEcsKernelNeonDispatchTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 4,
+    });
+    PopulateSimdProbeWorld(world, 8);
+
+    int scalarBatches = 0;
+    int sse2Batches = 0;
+    int avx2Batches = 0;
+    int avx512Batches = 0;
+    int neonBatches = 0;
+    const kb::ecs::KernelNoConstants constants{};
+    kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
+    auto compiled = kb::ecs::CompileKernelQuery<EcsSimdKernelContract>(
+        std::move(query),
+        kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 },
+        kb::ecs::KernelBackendPreference::Neon,
+        EcsSimdProbeKernel{
+            .scalarBatches = &scalarBatches,
+            .sse2Batches = &sse2Batches,
+            .avx2Batches = &avx2Batches,
+            .avx512Batches = &avx512Batches,
+            .neonBatches = &neonBatches,
+        },
+        kb::ecs::BindKernelAssets(),
+        constants);
+
+    compiled.Execute();
+    kb::ecs::KernelQuery<EcsSimdKernelContract> verifyQuery = world.CreateQuery<EcsVelocity, EcsPosition>();
+    if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Neon)) {
+        kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Neon, "ECS kernel did not resolve the requested NEON backend");
+        kb::tests::Require(neonBatches == 2 && scalarBatches == 0 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not dispatch through the NEON overload");
+        kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 72.0F), "ECS NEON kernel path did not process all rows");
+    } else {
+        kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Scalar, "ECS kernel did not resolve NEON to scalar on unsupported hardware");
+        kb::tests::Require(scalarBatches == 2 && neonBatches == 0 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not fall back to scalar when NEON was unavailable");
+        kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 24.0F), "ECS scalar fallback for NEON did not process all rows");
     }
 }
 
@@ -803,6 +853,7 @@ void RunEcsKernelAvx512DispatchTest() {
     int sse2Batches = 0;
     int avx2Batches = 0;
     int avx512Batches = 0;
+    int neonBatches = 0;
     const kb::ecs::KernelNoConstants constants{};
     kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
     auto compiled = kb::ecs::CompileKernelQuery<EcsSimdKernelContract>(
@@ -814,6 +865,7 @@ void RunEcsKernelAvx512DispatchTest() {
             .sse2Batches = &sse2Batches,
             .avx2Batches = &avx2Batches,
             .avx512Batches = &avx512Batches,
+            .neonBatches = &neonBatches,
         },
         kb::ecs::BindKernelAssets(),
         constants);
@@ -822,11 +874,11 @@ void RunEcsKernelAvx512DispatchTest() {
     kb::ecs::KernelQuery<EcsSimdKernelContract> verifyQuery = world.CreateQuery<EcsVelocity, EcsPosition>();
     if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Avx512)) {
         kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Avx512, "ECS kernel did not resolve the requested AVX-512 backend");
-        kb::tests::Require(avx512Batches == 2 && scalarBatches == 0 && sse2Batches == 0 && avx2Batches == 0, "ECS kernel did not dispatch through the AVX-512 overload");
+        kb::tests::Require(avx512Batches == 2 && scalarBatches == 0 && sse2Batches == 0 && avx2Batches == 0 && neonBatches == 0, "ECS kernel did not dispatch through the AVX-512 overload");
         kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 192.0F), "ECS AVX-512 kernel path did not process all rows");
     } else {
         kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Scalar, "ECS kernel did not resolve AVX-512 to scalar on unsupported hardware");
-        kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS kernel did not fall back to scalar when AVX-512 was unavailable");
+        kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS kernel did not fall back to scalar when AVX-512 was unavailable");
         kb::tests::Require(kb::tests::NearlyEqual(SumPositions(verifyQuery), 24.0F), "ECS scalar fallback for AVX-512 did not process all rows");
     }
 }
@@ -841,6 +893,7 @@ void RunEcsCompiledKernelBackendPreferenceUpdateTest() {
     int sse2Batches = 0;
     int avx2Batches = 0;
     int avx512Batches = 0;
+    int neonBatches = 0;
     const kb::ecs::KernelNoConstants constants{};
     kb::ecs::KernelQuery<EcsSimdKernelContract> query = world.CreateQuery<EcsVelocity, EcsPosition>();
     auto compiled = kb::ecs::CompileKernelQuery<EcsSimdKernelContract>(
@@ -852,13 +905,14 @@ void RunEcsCompiledKernelBackendPreferenceUpdateTest() {
             .sse2Batches = &sse2Batches,
             .avx2Batches = &avx2Batches,
             .avx512Batches = &avx512Batches,
+            .neonBatches = &neonBatches,
         },
         kb::ecs::BindKernelAssets(),
         constants);
 
     kb::tests::Require(compiled.ResolvedBackend() == kb::ecs::KernelBackend::Scalar, "ECS compiled kernel did not cache the scalar backend");
     compiled.Execute();
-    kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS compiled kernel did not execute the cached scalar backend");
+    kb::tests::Require(scalarBatches == 2 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS compiled kernel did not execute the cached scalar backend");
 
     compiled.SetBackendPreference(kb::ecs::KernelBackendPreference::Sse2);
     const kb::ecs::KernelBackend expectedBackend = kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Sse2)
@@ -868,9 +922,9 @@ void RunEcsCompiledKernelBackendPreferenceUpdateTest() {
 
     compiled.Execute();
     if (expectedBackend == kb::ecs::KernelBackend::Sse2) {
-        kb::tests::Require(scalarBatches == 2 && sse2Batches == 2 && avx2Batches == 0 && avx512Batches == 0, "ECS compiled kernel did not execute the refreshed SSE2 backend");
+        kb::tests::Require(scalarBatches == 2 && sse2Batches == 2 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS compiled kernel did not execute the refreshed SSE2 backend");
     } else {
-        kb::tests::Require(scalarBatches == 4 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0, "ECS compiled kernel did not execute the refreshed scalar fallback backend");
+        kb::tests::Require(scalarBatches == 4 && sse2Batches == 0 && avx2Batches == 0 && avx512Batches == 0 && neonBatches == 0, "ECS compiled kernel did not execute the refreshed scalar fallback backend");
     }
 }
 
@@ -1121,12 +1175,14 @@ void RunEcsKernelVectorMathBitDeterminismTest() {
 
     const std::array<std::uint32_t, kCount * 2U> reference = ReferenceMovementBits(positions, velocities);
     kb::tests::Require(VectorMovementBits<kb::ecs::KernelScalarTag>(positions, velocities) == reference, "ECS scalar vector math was not bit-for-bit with reference movement");
+    kb::tests::Require(VectorMovementBits<kb::ecs::KernelNeonTag>(positions, velocities) == reference, "ECS NEON-width vector math was not bit-for-bit deterministic");
     kb::tests::Require(VectorMovementBits<kb::ecs::KernelSse2Tag>(positions, velocities) == reference, "ECS SSE2-width vector math was not bit-for-bit deterministic");
     kb::tests::Require(VectorMovementBits<kb::ecs::KernelAvx2Tag>(positions, velocities) == reference, "ECS AVX2-width vector math was not bit-for-bit deterministic");
     kb::tests::Require(VectorMovementBits<kb::ecs::KernelAvx512Tag>(positions, velocities) == reference, "ECS AVX-512-width vector math was not bit-for-bit deterministic");
 }
 
 void RunEcsKernelScalarSimdCompatibilityTest() {
+    RunKernelScalarSimdCompatibilityCase<kb::ecs::KernelNeonTag>("ECS NEON kernel compatibility output diverged from scalar");
     RunKernelScalarSimdCompatibilityCase<kb::ecs::KernelSse2Tag>("ECS SSE2 kernel compatibility output diverged from scalar");
     RunKernelScalarSimdCompatibilityCase<kb::ecs::KernelAvx2Tag>("ECS AVX2 kernel compatibility output diverged from scalar");
     RunKernelScalarSimdCompatibilityCase<kb::ecs::KernelAvx512Tag>("ECS AVX-512 kernel compatibility output diverged from scalar");
@@ -1169,9 +1225,43 @@ void RunKernelVectorMathUnalignedFallbackCase() {
 
 void RunEcsKernelVectorMathUnalignedFallbackTest() {
     RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelScalarTag>();
+    RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelNeonTag>();
     RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelSse2Tag>();
     RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelAvx2Tag>();
     RunKernelVectorMathUnalignedFallbackCase<kb::ecs::KernelAvx512Tag>();
+}
+
+void RunEcsKernelBackendReportNamesTest() {
+    kb::tests::Require(kb::ecs::KernelBackendName(kb::ecs::KernelBackend::Scalar) == "scalar", "ECS kernel backend report name changed for scalar");
+    kb::tests::Require(kb::ecs::KernelBackendName(kb::ecs::KernelBackend::Neon) == "neon", "ECS kernel backend report name changed for NEON");
+    kb::tests::Require(kb::ecs::KernelBackendName(kb::ecs::KernelBackend::Sse2) == "sse2", "ECS kernel backend report name changed for SSE2");
+    kb::tests::Require(kb::ecs::KernelBackendName(kb::ecs::KernelBackend::Avx2) == "avx2", "ECS kernel backend report name changed for AVX2");
+    kb::tests::Require(kb::ecs::KernelBackendName(kb::ecs::KernelBackend::Avx512) == "avx512", "ECS kernel backend report name changed for AVX-512");
+    kb::tests::Require(kb::ecs::KernelBackendPreferenceName(kb::ecs::KernelBackendPreference::Auto) == "auto", "ECS kernel backend preference report name changed for auto");
+    kb::tests::Require(kb::ecs::KernelBackendPreferenceName(kb::ecs::KernelBackendPreference::Neon) == "neon", "ECS kernel backend preference report name changed for NEON");
+}
+
+void RunEcsPreferredKernelBackendReportTest() {
+    const kb::ecs::KernelBackend preferred = kb::ecs::PreferredKernelBackend();
+    kb::tests::Require(kb::ecs::IsKernelBackendSupported(preferred), "ECS preferred kernel backend selected an unsupported path");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(kb::ecs::KernelBackend::Scalar) == 1U, "ECS scalar lane count report changed");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(kb::ecs::KernelBackend::Neon) == 4U, "ECS NEON lane count report changed");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(kb::ecs::KernelBackend::Sse2) == 4U, "ECS SSE2 lane count report changed");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(kb::ecs::KernelBackend::Avx2) == 8U, "ECS AVX2 lane count report changed");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(kb::ecs::KernelBackend::Avx512) == 16U, "ECS AVX-512 lane count report changed");
+    kb::tests::Require(kb::ecs::KernelBackendFloatLaneCount(preferred) >= 1U, "ECS preferred backend reported an invalid lane count");
+
+    kb::ecs::KernelBackend expected = kb::ecs::KernelBackend::Scalar;
+    if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Neon)) {
+        expected = kb::ecs::KernelBackend::Neon;
+    } else if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Avx512)) {
+        expected = kb::ecs::KernelBackend::Avx512;
+    } else if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Avx2)) {
+        expected = kb::ecs::KernelBackend::Avx2;
+    } else if (kb::ecs::IsKernelBackendSupported(kb::ecs::KernelBackend::Sse2)) {
+        expected = kb::ecs::KernelBackend::Sse2;
+    }
+    kb::tests::Require(preferred == expected, "ECS preferred kernel backend priority changed unexpectedly");
 }
 
 } // namespace
@@ -1182,6 +1272,7 @@ void RunEcsKernelTests() {
     RunEcsKernelContractScalarExecutionTest();
     RunEcsKernelRequestedSimdFallsBackToScalarTest();
     RunEcsKernelSse2AndAvx2DispatchTest();
+    RunEcsKernelNeonDispatchTest();
     RunEcsKernelAvx512DispatchTest();
     RunEcsCompiledKernelBackendPreferenceUpdateTest();
     RunEcsCompiledKernelQueryExecutionTest();
@@ -1193,6 +1284,8 @@ void RunEcsKernelTests() {
     RunEcsKernelVectorMathBitDeterminismTest();
     RunEcsKernelScalarSimdCompatibilityTest();
     RunEcsKernelVectorMathUnalignedFallbackTest();
+    RunEcsKernelBackendReportNamesTest();
+    RunEcsPreferredKernelBackendReportTest();
 }
 
 } // namespace kb::tests
