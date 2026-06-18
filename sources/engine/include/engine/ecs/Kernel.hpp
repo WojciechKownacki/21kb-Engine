@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -27,6 +28,7 @@ struct KernelNoConstants {};
 
 enum class KernelBackend {
     Scalar,
+    Neon,
     Sse2,
     Avx2,
     Avx512,
@@ -35,14 +37,54 @@ enum class KernelBackend {
 enum class KernelBackendPreference {
     Auto,
     Scalar,
+    Neon,
     Sse2,
     Avx2,
     Avx512,
 };
 
+[[nodiscard]] constexpr std::string_view KernelBackendName(KernelBackend backend) noexcept {
+    switch (backend) {
+    case KernelBackend::Scalar:
+        return "scalar";
+    case KernelBackend::Neon:
+        return "neon";
+    case KernelBackend::Sse2:
+        return "sse2";
+    case KernelBackend::Avx2:
+        return "avx2";
+    case KernelBackend::Avx512:
+        return "avx512";
+    }
+    return "scalar";
+}
+
+[[nodiscard]] constexpr std::string_view KernelBackendPreferenceName(KernelBackendPreference preference) noexcept {
+    switch (preference) {
+    case KernelBackendPreference::Auto:
+        return "auto";
+    case KernelBackendPreference::Scalar:
+        return "scalar";
+    case KernelBackendPreference::Neon:
+        return "neon";
+    case KernelBackendPreference::Sse2:
+        return "sse2";
+    case KernelBackendPreference::Avx2:
+        return "avx2";
+    case KernelBackendPreference::Avx512:
+        return "avx512";
+    }
+    return "auto";
+}
+
 struct KernelScalarTag {
     static constexpr KernelBackend Backend = KernelBackend::Scalar;
     static constexpr std::size_t FloatLaneCount = 1;
+};
+
+struct KernelNeonTag {
+    static constexpr KernelBackend Backend = KernelBackend::Neon;
+    static constexpr std::size_t FloatLaneCount = 4;
 };
 
 struct KernelSse2Tag {
@@ -212,6 +254,14 @@ namespace detail {
 #endif
 }
 
+[[nodiscard]] inline bool CpuSupportsNeon() noexcept {
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64) || defined(__aarch64__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 template <typename T, typename... Types>
 inline constexpr bool ContainsType = (std::is_same_v<T, Types> || ...);
 
@@ -237,6 +287,9 @@ inline constexpr bool CanInvokeKernelScalar =
     std::is_invocable_v<Kernel&, Batch&> || std::is_invocable_v<Kernel&, Batch&, KernelScalarTag>;
 
 template <typename Kernel, typename Batch>
+inline constexpr bool CanInvokeKernelNeon = std::is_invocable_v<Kernel&, Batch&, KernelNeonTag>;
+
+template <typename Kernel, typename Batch>
 inline constexpr bool CanInvokeKernelSse2 = std::is_invocable_v<Kernel&, Batch&, KernelSse2Tag>;
 
 template <typename Kernel, typename Batch>
@@ -259,6 +312,10 @@ template <typename Kernel, typename Batch>
     if (preference == KernelBackendPreference::Scalar) {
         return KernelBackend::Scalar;
     }
+    if ((preference == KernelBackendPreference::Neon || preference == KernelBackendPreference::Auto)
+        && CanInvokeKernelNeon<Kernel, Batch> && CpuSupportsNeon()) {
+        return KernelBackend::Neon;
+    }
     if ((preference == KernelBackendPreference::Avx512 || preference == KernelBackendPreference::Auto)
         && CanInvokeKernelAvx512<Kernel, Batch> && CpuSupportsAvx512()) {
         return KernelBackend::Avx512;
@@ -279,6 +336,12 @@ void InvokeKernelWithBackend(Kernel& kernel, Batch& batch, KernelBackend backend
     static_assert(CanInvokeKernelScalar<Kernel, Batch>, "ECS kernels must provide a scalar KernelBatch fallback");
 
     switch (backend) {
+    case KernelBackend::Neon:
+        if constexpr (CanInvokeKernelNeon<Kernel, Batch>) {
+            std::invoke(kernel, batch, KernelNeonTag{});
+            return;
+        }
+        break;
     case KernelBackend::Avx512:
         if constexpr (CanInvokeKernelAvx512<Kernel, Batch>) {
             std::invoke(kernel, batch, KernelAvx512Tag{});
@@ -306,6 +369,8 @@ void InvokeKernelWithBackend(Kernel& kernel, Batch& batch, KernelBackend backend
 
 template <typename T>
 void AssertKernelComponentColumnAligned(const T* components, std::size_t count) noexcept {
+    static_cast<void>(components);
+    static_cast<void>(count);
     assert((count == 0U || components != nullptr) && "ECS kernel component column is null for a non-empty batch");
     assert((count == 0U || (reinterpret_cast<std::uintptr_t>(components) % alignof(T)) == 0U) && "ECS kernel component column is not aligned for its component type");
 }
@@ -316,6 +381,8 @@ void AssertKernelComponentColumnAligned(const T* components, std::size_t count) 
     switch (backend) {
     case KernelBackend::Scalar:
         return true;
+    case KernelBackend::Neon:
+        return detail::CpuSupportsNeon();
     case KernelBackend::Sse2:
         return detail::CpuSupportsSse2();
     case KernelBackend::Avx2:
@@ -324,6 +391,38 @@ void AssertKernelComponentColumnAligned(const T* components, std::size_t count) 
         return detail::CpuSupportsAvx512();
     }
     return false;
+}
+
+[[nodiscard]] constexpr std::size_t KernelBackendFloatLaneCount(KernelBackend backend) noexcept {
+    switch (backend) {
+    case KernelBackend::Scalar:
+        return KernelScalarTag::FloatLaneCount;
+    case KernelBackend::Neon:
+        return KernelNeonTag::FloatLaneCount;
+    case KernelBackend::Sse2:
+        return KernelSse2Tag::FloatLaneCount;
+    case KernelBackend::Avx2:
+        return KernelAvx2Tag::FloatLaneCount;
+    case KernelBackend::Avx512:
+        return KernelAvx512Tag::FloatLaneCount;
+    }
+    return KernelScalarTag::FloatLaneCount;
+}
+
+[[nodiscard]] inline KernelBackend PreferredKernelBackend() noexcept {
+    if (IsKernelBackendSupported(KernelBackend::Neon)) {
+        return KernelBackend::Neon;
+    }
+    if (IsKernelBackendSupported(KernelBackend::Avx512)) {
+        return KernelBackend::Avx512;
+    }
+    if (IsKernelBackendSupported(KernelBackend::Avx2)) {
+        return KernelBackend::Avx2;
+    }
+    if (IsKernelBackendSupported(KernelBackend::Sse2)) {
+        return KernelBackend::Sse2;
+    }
+    return KernelBackend::Scalar;
 }
 
 template <typename... InputTypes, typename... OutputTypes, typename... AssetTypes, typename ConstantsType>
@@ -1105,6 +1204,40 @@ void ExecuteKernel(
     const KernelAssetBindings<Contract>& assets,
     const KernelConstants<Contract>& constants) {
     ExecuteKernel<Contract>(query, QueryExecutionSettings{}, std::forward<Kernel>(kernel), assets, constants);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelNeon(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants,
+    QueryBatchExecutionScratch& scratch) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Neon,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants,
+        scratch);
+}
+
+template <typename Contract, typename Kernel>
+void ExecuteKernelNeon(
+    KernelQuery<Contract>& query,
+    QueryExecutionSettings settings,
+    Kernel&& kernel,
+    const KernelAssetBindings<Contract>& assets,
+    const KernelConstants<Contract>& constants) {
+    ExecuteKernel<Contract>(
+        query,
+        settings,
+        KernelBackendPreference::Neon,
+        std::forward<Kernel>(kernel),
+        assets,
+        constants);
 }
 
 template <typename Contract, typename Kernel>

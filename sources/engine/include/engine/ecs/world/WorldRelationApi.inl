@@ -41,6 +41,8 @@ void RemoveRelation(Entity entity, RelationId relation, Entity target);
 [[nodiscard]] Entity RelationTarget(Entity entity, RelationId relation, int index = 0) const;
 
 void SetParent(Entity child, Entity parent);
+void SetParents(std::span<const Entity> children, std::span<const Entity> parents);
 void ClearParent(Entity child);
+void ClearParents(std::span<const Entity> children);
 [[nodiscard]] Entity Parent(Entity child) const;
 [[nodiscard]] std::vector<Entity> Children(Entity parent) const;

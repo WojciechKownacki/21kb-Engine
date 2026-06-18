@@ -19,6 +19,11 @@ struct KernelFloatLaneAlignment {
 };
 
 template <>
+struct KernelFloatLaneAlignment<KernelNeonTag> {
+    static constexpr std::size_t Value = 16U;
+};
+
+template <>
 struct KernelFloatLaneAlignment<KernelSse2Tag> {
     static constexpr std::size_t Value = 16U;
 };

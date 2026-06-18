@@ -3,6 +3,7 @@
 #include "engine/scene/ScenePrefabInstanceHandle.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace kb::scene {
@@ -15,6 +16,7 @@ public:
 
     [[nodiscard]] static bool Revert(Scene& scene, ScenePrefabInstanceHandle handle);
     [[nodiscard]] static bool Apply(Scene& scene, ScenePrefabInstanceHandle handle);
+    [[nodiscard]] static bool Apply(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] static bool RevertProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath);
     [[nodiscard]] static bool ApplyProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath);
 };

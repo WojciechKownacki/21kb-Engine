@@ -22,4 +22,16 @@ private:
     IdType id_ = 0;
 };
 
+inline constexpr Entity::IdType kGeneratedEntityIndexBase = 1'000'000;
+inline constexpr std::uint32_t kInvalidGeneratedEntityIndex = UINT32_MAX;
+
+[[nodiscard]] constexpr std::uint32_t GeneratedEntityIndex(Entity entity) noexcept {
+    const Entity::IdType packedIndex = entity.Id() & 0xFFFFFFFFULL;
+    return packedIndex < kGeneratedEntityIndexBase ? kInvalidGeneratedEntityIndex : static_cast<std::uint32_t>(packedIndex - kGeneratedEntityIndexBase);
+}
+
+[[nodiscard]] constexpr bool HasGeneratedEntityIndex(Entity entity) noexcept {
+    return GeneratedEntityIndex(entity) != kInvalidGeneratedEntityIndex;
+}
+
 } // namespace kb::ecs

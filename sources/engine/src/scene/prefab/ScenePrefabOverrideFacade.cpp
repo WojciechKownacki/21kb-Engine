@@ -20,6 +20,10 @@ bool ScenePrefabOverrideFacade::Apply(Scene& scene, ScenePrefabInstanceHandle ha
     return ScenePrefabOverrideService::Apply(scene, handle);
 }
 
+bool ScenePrefabOverrideFacade::Apply(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles) {
+    return ScenePrefabOverrideService::Apply(scene, handles);
+}
+
 bool ScenePrefabOverrideFacade::ApplyAndSave(Scene& scene, ScenePrefabInstanceHandle handle, const std::filesystem::path& assetPath) {
     return ScenePrefabOverrideService::ApplyAndSave(scene, handle, assetPath);
 }

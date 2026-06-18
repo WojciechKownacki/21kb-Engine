@@ -7,18 +7,130 @@
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/StructuralChangeValidator.hpp"
 #include "engine/ecs/WorkerPool.hpp"
+#include "engine/ecs/WorldTelemetry.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <utility>
 
 namespace kb::ecs {
 namespace {
 
+thread_local QueryWorkerContext tCurrentQueryWorkerContext{};
+
+class ScopedQueryWorkerContext {
+public:
+    explicit ScopedQueryWorkerContext(WorkerContext workerContext) noexcept
+        : previous_(tCurrentQueryWorkerContext) {
+        tCurrentQueryWorkerContext = QueryWorkerContext{
+            .workerIndex = workerContext.workerIndex,
+            .workerCount = workerContext.workerCount,
+            .active = true,
+        };
+    }
+
+    ~ScopedQueryWorkerContext() {
+        tCurrentQueryWorkerContext = previous_;
+    }
+
+    ScopedQueryWorkerContext(const ScopedQueryWorkerContext&) = delete;
+    ScopedQueryWorkerContext& operator=(const ScopedQueryWorkerContext&) = delete;
+
+private:
+    QueryWorkerContext previous_{};
+};
+
 [[nodiscard]] std::size_t ResolveBatchSize(QueryExecutionSettings settings, std::size_t defaultExecutionGrainSize) noexcept {
     const std::size_t resolved = settings.maxBatchSize == 0 ? defaultExecutionGrainSize : settings.maxBatchSize;
     return resolved == 0 ? kDefaultQueryExecutionGrainSize : resolved;
+}
+
+[[nodiscard]] bool IsDeterministicExecution(QueryExecutionSettings settings) noexcept {
+    return settings.iterationOrder == QueryIterationOrder::Deterministic
+        || settings.policy == QueryExecutionPolicy::Deterministic
+        || settings.reductionMode == QueryReductionMode::Deterministic;
+}
+
+[[nodiscard]] bool CanExecuteInParallel(QueryExecutionSettings settings) noexcept {
+    return settings.workerPool != nullptr
+        && !IsDeterministicExecution(settings)
+        && settings.policy != QueryExecutionPolicy::SingleThread;
+}
+
+[[nodiscard]] bool ShouldSplitParallelRanges(QueryExecutionSettings settings) noexcept {
+    return settings.policy == QueryExecutionPolicy::ParallelRanges || settings.policy == QueryExecutionPolicy::SIMDPreferred;
+}
+
+[[nodiscard]] std::size_t ResolveQueryWorkerCount(QueryExecutionSettings settings) noexcept {
+    if (settings.workerPool == nullptr) {
+        return 1U;
+    }
+    const std::size_t poolWorkerCount = settings.workerPool->WorkerCount();
+    return settings.workerCountOverride == 0U
+        ? poolWorkerCount
+        : std::min(poolWorkerCount, settings.workerCountOverride);
+}
+
+[[nodiscard]] bool ShouldRecordQueryTelemetry(const WorldTelemetryCounters* counters, QueryExecutionSettings settings) noexcept {
+    return counters != nullptr && settings.telemetryEnabled;
+}
+
+[[nodiscard]] std::chrono::steady_clock::time_point BeginQueryTelemetryTiming(
+    const WorldTelemetryCounters* counters,
+    QueryExecutionSettings settings) noexcept {
+    return ShouldRecordQueryTelemetry(counters, settings) ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+}
+
+[[nodiscard]] std::uint64_t EndQueryTelemetryTiming(
+    const WorldTelemetryCounters* counters,
+    QueryExecutionSettings settings,
+    std::chrono::steady_clock::time_point startedAt) noexcept {
+    if (!ShouldRecordQueryTelemetry(counters, settings)) {
+        return 0;
+    }
+
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - startedAt).count());
+}
+
+void RecordQueryExecutionTelemetry(
+    WorldTelemetryCounters* counters,
+    QueryExecutionSettings settings,
+    std::size_t entityCount,
+    std::uint64_t bytesTouched,
+    std::uint64_t elapsedNanoseconds,
+    std::size_t batchCount,
+    std::size_t parallelWorkItems) noexcept {
+    if (!ShouldRecordQueryTelemetry(counters, settings)) {
+        return;
+    }
+
+    ++counters->queryExecutions;
+    counters->queryBatches += batchCount;
+    counters->queryEntitiesVisited += entityCount;
+    counters->queryBytesTouched += bytesTouched;
+    counters->queryElapsedNanoseconds += elapsedNanoseconds;
+    if (settings.workerPool == nullptr || parallelWorkItems == 0U) {
+        return;
+    }
+
+    const std::size_t workerCount = ResolveQueryWorkerCount(settings);
+    if (workerCount == 0U) {
+        return;
+    }
+    ++counters->queryParallelExecutions;
+    counters->queryWorkerSlots += workerCount;
+    counters->queryWorkerActiveSlots += std::min(workerCount, parallelWorkItems);
+}
+
+[[nodiscard]] std::size_t QueryBytesPerEntity(std::span<const std::size_t> componentSizes) noexcept {
+    std::size_t bytesPerEntity = 0;
+    for (std::size_t componentSize : componentSizes) {
+        bytesPerEntity += componentSize;
+    }
+    return bytesPerEntity;
 }
 
 void DispatchReadOnlyRecordBatch(
@@ -36,6 +148,31 @@ void DispatchReadOnlyRecordBatch(
     }
 
     QueryTableBatchDispatcher::Dispatch(
+        record.entityIds + offset,
+        count,
+        componentSizes,
+        batchComponents,
+        count,
+        prefetchDistance,
+        visitor,
+        context);
+}
+
+void DispatchMutableRecordBatch(
+    const MutableQueryTableDispatchRecord& record,
+    std::span<const std::size_t> componentSizes,
+    std::size_t offset,
+    std::size_t count,
+    std::size_t prefetchDistance,
+    QueryRawMutableBatchVisitor visitor,
+    void* context) {
+    MutableQueryComponentPointerBlock batchComponents{};
+    for (std::size_t field = 0; field < componentSizes.size(); ++field) {
+        auto* bytes = static_cast<std::uint8_t*>(record.fieldComponents[field]);
+        batchComponents[field] = bytes + offset * componentSizes[field];
+    }
+
+    QueryTableBatchDispatcher::DispatchMutable(
         record.entityIds + offset,
         count,
         componentSizes,
@@ -87,16 +224,22 @@ void DispatchMutableBorrowedBatch(
 
 } // namespace
 
+QueryWorkerContext CurrentQueryWorkerContext() noexcept {
+    return tCurrentQueryWorkerContext;
+}
+
 QueryState::QueryState(
     NativeArchetypeStorage* nativeStorage,
     std::shared_ptr<QueryPlan> plan,
     std::size_t defaultExecutionGrainSize,
     MutableComponentBorrowLocks* mutableBorrowLocks,
-    StructuralChangeValidator* structuralChangeValidator)
+    StructuralChangeValidator* structuralChangeValidator,
+    WorldTelemetryCounters* telemetryCounters)
     : nativeStorage_(nativeStorage)
     , plan_(std::move(plan))
     , mutableBorrowLocks_(mutableBorrowLocks)
     , structuralChangeValidator_(structuralChangeValidator)
+    , telemetryCounters_(telemetryCounters)
     , defaultExecutionGrainSize_(defaultExecutionGrainSize == 0 ? kDefaultQueryExecutionGrainSize : defaultExecutionGrainSize) {}
 
 bool QueryState::IsValid() const noexcept {
@@ -205,7 +348,7 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
         plan_->ExcludedComponentIds(),
         scratch.records_);
 
-    if (settings.iterationOrder == QueryIterationOrder::Deterministic) {
+    if (IsDeterministicExecution(settings)) {
         std::sort(scratch.records_.begin(), scratch.records_.end(), [](const QueryTableDispatchRecord& left, const QueryTableDispatchRecord& right) {
             if (left.nativeArchetypeIndex != right.nativeArchetypeIndex) {
                 return left.nativeArchetypeIndex < right.nativeArchetypeIndex;
@@ -218,17 +361,23 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
     }
 
     const std::size_t maxBatchSize = ResolveBatchSize(settings, defaultExecutionGrainSize_);
-    if (settings.workerPool != nullptr && settings.iterationOrder != QueryIterationOrder::Deterministic) {
+    const bool splitParallelRanges = ShouldSplitParallelRanges(settings);
+    const std::size_t telemetryBytesPerEntity = QueryBytesPerEntity(plan_->ComponentSizes());
+    const auto telemetryStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
+    if (CanExecuteInParallel(settings)) {
+        const std::size_t queryWorkerCount = ResolveQueryWorkerCount(settings);
         scratch.workItems_.clear();
         scratch.chunks_.clear();
+        std::size_t telemetryEntityCount = 0;
         for (std::size_t recordIndex = 0; recordIndex < scratch.records_.size(); ++recordIndex) {
             const QueryTableDispatchRecord& record = scratch.records_[recordIndex];
             if (plan_->HasChangeFilters() && !RecordChanged(record)) {
                 CommitRecordVersions(record);
                 continue;
             }
-            for (std::size_t offset = 0; offset < record.entityCount; offset += maxBatchSize) {
-                const std::size_t count = std::min(maxBatchSize, record.entityCount - offset);
+            const std::size_t parallelStep = splitParallelRanges ? maxBatchSize : record.entityCount;
+            for (std::size_t offset = 0; offset < record.entityCount; offset += parallelStep) {
+                const std::size_t count = std::min(parallelStep, record.entityCount - offset);
                 const std::size_t workIndex = scratch.workItems_.size();
                 scratch.workItems_.push_back(QueryBatchWorkItem{
                     .recordIndex = recordIndex,
@@ -239,25 +388,39 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
                     .index = workIndex,
                     .begin = offset,
                     .count = count,
-                    .preferredWorkerIndex = recordIndex,
+                    .preferredWorkerIndex = workIndex,
+                    .workerCountLimit = queryWorkerCount,
                 });
+                telemetryEntityCount += count;
             }
             CommitRecordVersions(record);
         }
-
-        auto chunkJob = [&records = scratch.records_, componentSizes = plan_->ComponentSizes(), &workItems = scratch.workItems_, visitor, context, prefetchDistance = settings.prefetchDistance](WorkerContext, const WorkerPoolChunk& chunk) {
+        auto chunkJob = [&records = scratch.records_, componentSizes = plan_->ComponentSizes(), &workItems = scratch.workItems_, visitor, context, prefetchDistance = settings.prefetchDistance](WorkerContext workerContext, const WorkerPoolChunk& chunk) {
+            const ScopedQueryWorkerContext scopedWorker{ workerContext };
             const QueryBatchWorkItem& item = workItems[chunk.index];
             DispatchReadOnlyRecordBatch(records[item.recordIndex], componentSizes, item.offset, item.count, prefetchDistance, visitor, context);
         };
         settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
+        RecordQueryExecutionTelemetry(
+            telemetryCounters_,
+            settings,
+            telemetryEntityCount,
+            static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
+            EndQueryTelemetryTiming(telemetryCounters_, settings, telemetryStartedAt),
+            scratch.workItems_.size(),
+            scratch.workItems_.size());
         return;
     }
 
+    std::size_t telemetryEntityCount = 0;
+    std::size_t telemetryBatchCount = 0;
     for (const QueryTableDispatchRecord& record : scratch.records_) {
         if (plan_->HasChangeFilters() && !RecordChanged(record)) {
             CommitRecordVersions(record);
             continue;
         }
+        telemetryEntityCount += record.entityCount;
+        telemetryBatchCount += (record.entityCount + maxBatchSize - 1U) / maxBatchSize;
         QueryTableBatchDispatcher::Dispatch(
             record.entityIds,
             record.entityCount,
@@ -269,6 +432,14 @@ void QueryState::ForEachBatch(QueryExecutionSettings settings, QueryRawBatchVisi
             context);
         CommitRecordVersions(record);
     }
+    RecordQueryExecutionTelemetry(
+        telemetryCounters_,
+        settings,
+        telemetryEntityCount,
+        static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
+        EndQueryTelemetryTiming(telemetryCounters_, settings, telemetryStartedAt),
+        telemetryBatchCount,
+        0);
 }
 
 void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMutableBatchVisitor visitor, void* context) const {
@@ -294,7 +465,7 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         plan_->ExcludedComponentIds(),
         scratch.mutableRecords_);
 
-    if (settings.iterationOrder == QueryIterationOrder::Deterministic) {
+    if (IsDeterministicExecution(settings)) {
         std::sort(scratch.mutableRecords_.begin(), scratch.mutableRecords_.end(), [](const MutableQueryTableDispatchRecord& left, const MutableQueryTableDispatchRecord& right) {
             if (left.nativeArchetypeIndex != right.nativeArchetypeIndex) {
                 return left.nativeArchetypeIndex < right.nativeArchetypeIndex;
@@ -307,6 +478,9 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
     }
 
     const std::size_t maxBatchSize = ResolveBatchSize(settings, defaultExecutionGrainSize_);
+    const bool splitParallelRanges = ShouldSplitParallelRanges(settings);
+    const std::size_t telemetryBytesPerEntity = QueryBytesPerEntity(plan_->ComponentSizes());
+    const auto telemetryStartedAt = BeginQueryTelemetryTiming(telemetryCounters_, settings);
 #if !defined(NDEBUG)
     MutableBorrowDispatchContext borrowContext{
         .locks = mutableBorrowLocks_,
@@ -321,11 +495,70 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
     QueryRawMutableBatchVisitor dispatchVisitor = visitor;
     void* dispatchContext = context;
 #endif
+    if (CanExecuteInParallel(settings)) {
+        const std::size_t queryWorkerCount = ResolveQueryWorkerCount(settings);
+        scratch.workItems_.clear();
+        scratch.chunks_.clear();
+        std::size_t telemetryEntityCount = 0;
+        for (std::size_t recordIndex = 0; recordIndex < scratch.mutableRecords_.size(); ++recordIndex) {
+            const MutableQueryTableDispatchRecord& record = scratch.mutableRecords_[recordIndex];
+            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
+                CommitRecordVersions(record);
+                continue;
+            }
+            const std::size_t parallelStep = splitParallelRanges ? maxBatchSize : record.entityCount;
+            for (std::size_t offset = 0; offset < record.entityCount; offset += parallelStep) {
+                const std::size_t count = std::min(parallelStep, record.entityCount - offset);
+                const std::size_t workIndex = scratch.workItems_.size();
+                scratch.workItems_.push_back(QueryBatchWorkItem{
+                    .recordIndex = recordIndex,
+                    .offset = offset,
+                    .count = count,
+                });
+                scratch.chunks_.push_back(WorkerPoolChunk{
+                    .index = workIndex,
+                    .begin = offset,
+                    .count = count,
+                    .preferredWorkerIndex = workIndex,
+                    .workerCountLimit = queryWorkerCount,
+                });
+                telemetryEntityCount += count;
+            }
+        }
+        auto chunkJob = [&records = scratch.mutableRecords_, componentSizes = plan_->ComponentSizes(), &workItems = scratch.workItems_, dispatchVisitor, dispatchContext, prefetchDistance = settings.prefetchDistance](WorkerContext workerContext, const WorkerPoolChunk& chunk) {
+            const ScopedQueryWorkerContext scopedWorker{ workerContext };
+            const QueryBatchWorkItem& item = workItems[chunk.index];
+            DispatchMutableRecordBatch(records[item.recordIndex], componentSizes, item.offset, item.count, prefetchDistance, dispatchVisitor, dispatchContext);
+        };
+        settings.workerPool->ParallelForChunks(scratch.chunks_, chunkJob);
+
+        for (const MutableQueryTableDispatchRecord& record : scratch.mutableRecords_) {
+            if (plan_->HasChangeFilters() && !RecordChanged(record)) {
+                continue;
+            }
+            nativeStorage_->MarkArchetypeComponentsModified(record.nativeArchetypeIndex, plan_->ComponentIds());
+            CommitRecordVersions(record);
+        }
+        RecordQueryExecutionTelemetry(
+            telemetryCounters_,
+            settings,
+            telemetryEntityCount,
+            static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
+            EndQueryTelemetryTiming(telemetryCounters_, settings, telemetryStartedAt),
+            scratch.workItems_.size(),
+            scratch.workItems_.size());
+        return;
+    }
+
+    std::size_t telemetryEntityCount = 0;
+    std::size_t telemetryBatchCount = 0;
     for (const MutableQueryTableDispatchRecord& record : scratch.mutableRecords_) {
         if (plan_->HasChangeFilters() && !RecordChanged(record)) {
             CommitRecordVersions(record);
             continue;
         }
+        telemetryEntityCount += record.entityCount;
+        telemetryBatchCount += (record.entityCount + maxBatchSize - 1U) / maxBatchSize;
         QueryTableBatchDispatcher::DispatchMutable(
             record.entityIds,
             record.entityCount,
@@ -338,6 +571,14 @@ void QueryState::ForEachMutableBatch(QueryExecutionSettings settings, QueryRawMu
         nativeStorage_->MarkArchetypeComponentsModified(record.nativeArchetypeIndex, plan_->ComponentIds());
         CommitRecordVersions(record);
     }
+    RecordQueryExecutionTelemetry(
+        telemetryCounters_,
+        settings,
+        telemetryEntityCount,
+        static_cast<std::uint64_t>(telemetryEntityCount) * telemetryBytesPerEntity,
+        EndQueryTelemetryTiming(telemetryCounters_, settings, telemetryStartedAt),
+        telemetryBatchCount,
+        0);
 }
 
 bool QueryState::RecordChanged(const QueryTableDispatchRecord& record) const {

@@ -5,32 +5,32 @@
 
 namespace kb::scene {
 
-SceneTagsComponentStore::SceneTagsComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneTagsComponentStore::SceneTagsComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 bool SceneTagsComponentStore::Has(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, componentId_);
+    return SceneComponentStorageAccess::Has<TagsComponent>(world_, entity);
 }
 
 const TagsComponent* SceneTagsComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<TagsComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<TagsComponent>(world_, entity);
 }
 
 TagsComponent* SceneTagsComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<TagsComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<TagsComponent>(world_, entity);
 }
 
 void SceneTagsComponentStore::Set(SceneEntity entity, const TagsComponent& tags) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, tags);
+    SceneComponentStorageAccess::Set<TagsComponent>(world_, entity, tags);
 }
 
 void SceneTagsComponentStore::Remove(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, componentId_);
+    SceneComponentStorageAccess::Remove<TagsComponent>(world_, entity);
 }
 
 void SceneTagsComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<TagsComponent>(world_, entity);
 }
 
 } // namespace kb::scene

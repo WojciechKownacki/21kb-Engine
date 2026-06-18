@@ -4,7 +4,7 @@
 
 namespace kb::scene {
 
-SceneComponentStorage::SceneComponentStorage(ecs_world_t* world, const SceneComponentRegistry& components) noexcept
+SceneComponentStorage::SceneComponentStorage(kb::ecs::World& world, const SceneComponentRegistry& components) noexcept
     : transforms_(world, components.TransformComponentId())
     , visibility_(world, components.VisibilityComponentId())
     , behaviours_(world, components.BehaviourComponentId())

@@ -35,6 +35,7 @@ struct WorkerPoolBatch {
     std::size_t begin = 0;
     std::size_t count = 0;
     std::size_t preferredWorkerIndex = kAnyWorkerPoolWorker;
+    std::size_t workerCountLimit = 0;
 };
 
 using WorkerPoolBatchCallback = void (*)(WorkerContext, const WorkerPoolBatch&, void*);
@@ -44,6 +45,7 @@ struct WorkerPoolChunk {
     std::size_t begin = 0;
     std::size_t count = 0;
     std::size_t preferredWorkerIndex = kAnyWorkerPoolWorker;
+    std::size_t workerCountLimit = 0;
 };
 
 using WorkerPoolChunkCallback = void (*)(WorkerContext, const WorkerPoolChunk&, void*);

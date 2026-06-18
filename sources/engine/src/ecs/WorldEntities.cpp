@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -34,13 +35,31 @@ void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<co
     }
 
     std::array<void*, FLECS_ID_DESC_MAX> componentData{};
+    std::vector<std::vector<std::byte>> expandedComponentData;
+    expandedComponentData.reserve(components.size());
     ecs_bulk_desc_t descriptor{};
     descriptor.entities = entityIds.data();
     descriptor.count = static_cast<int32_t>(entityIds.size());
     descriptor.data = componentData.data();
     for (std::size_t index = 0; index < components.size(); ++index) {
-        descriptor.ids[index] = components[index].componentId;
-        componentData[index] = const_cast<void*>(components[index].data);
+        const BulkComponentData& component = components[index];
+        descriptor.ids[index] = component.componentId;
+
+        const std::size_t sourceCount = component.sourceCount == 0U ? entities.size() : component.sourceCount;
+        if (sourceCount == entities.size()) {
+            componentData[index] = const_cast<void*>(component.data);
+            continue;
+        }
+
+        std::vector<std::byte>& expanded = expandedComponentData.emplace_back();
+        expanded.resize(entities.size() * component.componentSize);
+        const auto* source = static_cast<const std::byte*>(component.data);
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
+            const std::size_t sourceIndex = entityIndex % sourceCount;
+            const std::byte* row = source + (sourceIndex * component.componentSize);
+            std::copy(row, row + component.componentSize, expanded.data() + (entityIndex * component.componentSize));
+        }
+        componentData[index] = expanded.data();
     }
 
     if (ecs_bulk_init(world_, &descriptor) == nullptr) {
@@ -68,6 +87,7 @@ Entity World::CreateEntity() {
     if (registries_ != nullptr) {
         registries_->Entities().Add(entity);
     }
+    RecordStructuralChange();
     return entity;
 }
 
@@ -80,7 +100,65 @@ Entity World::CreateEntity(std::string_view name) {
     return entity;
 }
 
-std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components) {
+std::vector<Entity> World::CreateEntities(std::size_t count, std::span<const BulkComponentView> components) {
+    std::vector<BulkComponentData> componentData;
+    componentData.reserve(components.size());
+    for (const BulkComponentView& component : components) {
+        if (component.registerComponent == nullptr || component.componentSize == 0) {
+            throw std::invalid_argument("ECS bulk create component view is incomplete");
+        }
+        const std::size_t sourceCount = component.sourceCount == 0U ? component.componentCount : component.sourceCount;
+        const std::size_t componentCount = component.componentCount == 0U && sourceCount == 1U ? count : component.componentCount;
+        if (componentCount != count || sourceCount == 0U || sourceCount > count || (count % sourceCount) != 0U) {
+            throw std::invalid_argument("ECS bulk create component counts must match entity count");
+        }
+        if (count != 0 && component.data == nullptr) {
+            throw std::invalid_argument("ECS bulk create component payload is null");
+        }
+        if (component.componentSize != 0 && sourceCount > std::numeric_limits<std::size_t>::max() / component.componentSize) {
+            throw std::length_error("ECS bulk create component payload exceeds addressable size");
+        }
+        componentData.push_back(BulkComponentData{
+            .componentId = component.registerComponent(*this),
+            .componentSize = component.componentSize,
+            .componentCount = componentCount,
+            .sourceCount = sourceCount,
+            .data = component.data,
+        });
+    }
+    return CreateEntitiesWithComponents(count, std::span<const BulkComponentData>{ componentData }, true);
+}
+
+std::vector<Entity> World::CreateEntitiesNativeOnly(std::size_t count, std::span<const BulkComponentView> components) {
+    std::vector<BulkComponentData> componentData;
+    componentData.reserve(components.size());
+    for (const BulkComponentView& component : components) {
+        if (component.registerComponent == nullptr || component.componentSize == 0) {
+            throw std::invalid_argument("ECS bulk create component view is incomplete");
+        }
+        const std::size_t sourceCount = component.sourceCount == 0U ? component.componentCount : component.sourceCount;
+        const std::size_t componentCount = component.componentCount == 0U && sourceCount == 1U ? count : component.componentCount;
+        if (componentCount != count || sourceCount == 0U || sourceCount > count || (count % sourceCount) != 0U) {
+            throw std::invalid_argument("ECS bulk create component counts must match entity count");
+        }
+        if (count != 0 && component.data == nullptr) {
+            throw std::invalid_argument("ECS bulk create component payload is null");
+        }
+        if (component.componentSize != 0 && sourceCount > std::numeric_limits<std::size_t>::max() / component.componentSize) {
+            throw std::length_error("ECS bulk create component payload exceeds addressable size");
+        }
+        componentData.push_back(BulkComponentData{
+            .componentId = component.registerComponent(*this),
+            .componentSize = component.componentSize,
+            .componentCount = componentCount,
+            .sourceCount = sourceCount,
+            .data = component.data,
+        });
+    }
+    return CreateEntitiesWithComponents(count, std::span<const BulkComponentData>{ componentData }, false);
+}
+
+std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend) {
     if (count == 0) {
         return {};
     }
@@ -94,6 +172,13 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
     for (const BulkComponentData& component : components) {
         if (component.componentId == 0 || component.componentSize == 0 || component.data == nullptr) {
             throw std::invalid_argument("ECS bulk create received invalid component data");
+        }
+        const std::size_t sourceCount = component.sourceCount == 0U ? count : component.sourceCount;
+        if (component.componentCount != 0U && component.componentCount != count) {
+            throw std::invalid_argument("ECS bulk create component count does not match entity count");
+        }
+        if (sourceCount == 0U || sourceCount > count || (count % sourceCount) != 0U) {
+            throw std::invalid_argument("ECS bulk create component source count must divide entity count");
         }
         if (std::find(componentIds.begin(), componentIds.end(), component.componentId) != componentIds.end()) {
             throw std::invalid_argument("ECS bulk create received duplicate component data");
@@ -114,22 +199,22 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
     try {
         const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
         entities = nativeStorage_->CreateEntities(count, nativeComponents);
-        BulkInitFlecsEntities(entities, components);
-        for (Entity entity : entities) {
-            if (registries_ != nullptr) {
-                registries_->Entities().Add(entity);
-            }
+        if (mirrorBackend) {
+            BulkInitFlecsEntities(entities, components);
+        }
+        if (registries_ != nullptr) {
+            registries_->Entities().AddMany(entities);
         }
     } catch (...) {
+        if (registries_ != nullptr) {
+            registries_->Entities().RemoveMany(entities);
+        }
         for (Entity entity : entities) {
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
             if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
-            }
-            if (registries_ != nullptr) {
-                registries_->Entities().Remove(entity);
             }
         }
         throw;
@@ -188,21 +273,19 @@ void World::AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityId
         const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
         nativeStorage_->AdoptEntities(adoptedEntities, nativeComponents);
         BulkInitFlecsEntities(adoptedEntities, components);
-        for (Entity entity : adoptedEntities) {
-            if (registries_ != nullptr) {
-                registries_->Entities().Add(entity);
-            }
+        if (registries_ != nullptr) {
+            registries_->Entities().AddMany(adoptedEntities);
         }
     } catch (...) {
+        if (registries_ != nullptr) {
+            registries_->Entities().RemoveMany(adoptedEntities);
+        }
         for (Entity entity : adoptedEntities) {
             if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
                 nativeStorage_->DestroyEntity(entity);
             }
             if (world_ != nullptr && ecs_is_alive(world_, FlecsEntityId(entity))) {
                 ecs_delete(world_, FlecsEntityId(entity));
-            }
-            if (registries_ != nullptr) {
-                registries_->Entities().Remove(entity);
             }
         }
         throw;
@@ -229,6 +312,9 @@ void World::DestroyEntity(Entity entity) {
 
 void World::SetName(Entity entity, std::string_view name) {
     ValidateEntityHandle(entity, "SetName");
+    if (!BackendEntityAlive(entity)) {
+        return;
+    }
 
     const std::string ownedName{ name };
     ecs_set_name(world_, FlecsEntityId(entity), ownedName.empty() ? nullptr : ownedName.c_str());
@@ -245,6 +331,9 @@ Entity World::ResolveAliveEntity(Entity::IdType entityIdWithoutGeneration) const
 std::string World::Name(Entity entity) const {
     ValidateEntityHandle(entity, "Name");
 
+    if (world_ == nullptr || !ecs_is_alive(world_, FlecsEntityId(entity))) {
+        return {};
+    }
     if (const char* name = ecs_get_name(world_, FlecsEntityId(entity)); name != nullptr) {
         return std::string{ name };
     }

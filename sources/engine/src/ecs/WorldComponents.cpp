@@ -2,6 +2,7 @@
 
 #include "engine/ecs/MutableComponentBorrowLocks.hpp"
 #include "ecs/ComponentRegistry.hpp"
+#include "ecs/FlecsEntityIds.hpp"
 #include "ecs/world/WorldComponentIterator.hpp"
 #include "ecs/world/WorldComponentMutator.hpp"
 #include "ecs/world/WorldComponentReader.hpp"
@@ -77,7 +78,8 @@ std::vector<NativeBulkComponentColumn> World::MakeNativeBulkComponentColumns(std
         nativeComponents.push_back(NativeBulkComponentColumn{
             .type = nativeComponent.type,
             .data = component.data,
-            .stride = component.componentSize,
+            .stride = component.sourceCount == 1U ? 0U : component.componentSize,
+            .sourceCount = component.sourceCount,
         });
     }
     return nativeComponents;
@@ -238,14 +240,59 @@ void World::SetComponent(Entity entity, ComponentId componentId, std::size_t siz
     if (IsAlive(entity) && !HasComponent(entity, componentId)) {
         ValidateStructuralChangeAllowed("SetComponent");
     }
-    ecs_table_t* previousArchetype = EntityArchetype(entity);
+    const bool backendAlive = BackendEntityAlive(entity);
+    ecs_table_t* previousArchetype = backendAlive ? EntityArchetype(entity) : nullptr;
     SetNativeComponent(entity, BulkComponentData{
         .componentId = componentId,
         .componentSize = size,
         .data = component,
     });
-    WorldComponentMutator::Set(world_, entity, componentId, size, component);
-    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
+    if (backendAlive && config_.mirrorNativeComponentChangesToBackend) {
+        WorldComponentMutator::Set(world_, entity, componentId, size, component);
+    }
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, backendAlive ? EntityArchetype(entity) : nullptr);
+}
+
+void World::SetComponentColumn(std::span<const Entity> entities, const BulkComponentData& component) {
+    if (entities.empty()) {
+        return;
+    }
+    if (component.componentId == 0 || component.componentSize == 0 || component.data == nullptr) {
+        throw std::invalid_argument("ECS bulk component set received invalid component data");
+    }
+    if (component.sourceCount != entities.size()) {
+        throw std::invalid_argument("ECS bulk component set requires one component value per entity");
+    }
+
+    bool structuralChange = false;
+    for (Entity entity : entities) {
+        ValidateEntityHandle(entity, "SetComponentColumn");
+        if (IsAlive(entity) && !HasComponent(entity, component.componentId)) {
+            ValidateStructuralChangeAllowed("SetComponentColumn");
+            structuralChange = true;
+        }
+    }
+
+    AddNativeComponents(entities, std::span<const BulkComponentData>{ &component, 1U });
+
+    if (config_.mirrorNativeComponentChangesToBackend) {
+        const auto* componentBytes = static_cast<const std::uint8_t*>(component.data);
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            const Entity entity = entities[index];
+            if (BackendEntityAlive(entity)) {
+                WorldComponentMutator::Set(
+                    world_,
+                    entity,
+                    component.componentId,
+                    component.componentSize,
+                    componentBytes + (index * component.componentSize));
+            }
+        }
+    }
+
+    if (structuralChange) {
+        RecordStructuralChange(entities.size());
+    }
 }
 
 void World::AddComponents(Entity entity, std::span<const BulkComponentData> components) {
@@ -254,7 +301,8 @@ void World::AddComponents(Entity entity, std::span<const BulkComponentData> comp
     }
     ValidateEntityHandle(entity, "AddComponents");
 
-    ecs_table_t* previousArchetype = EntityArchetype(entity);
+    const bool backendAlive = BackendEntityAlive(entity);
+    ecs_table_t* previousArchetype = backendAlive ? EntityArchetype(entity) : nullptr;
     bool hasMissingComponent = false;
 
     std::vector<ComponentId> validatedComponentIds;
@@ -285,11 +333,13 @@ void World::AddComponents(Entity entity, std::span<const BulkComponentData> comp
     }
 
     AddNativeComponents(entity, components);
-    for (const BulkComponentData& component : components) {
-        WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, component.data);
+    if (backendAlive) {
+        for (const BulkComponentData& component : components) {
+            WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, component.data);
+        }
     }
 
-    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, backendAlive ? EntityArchetype(entity) : nullptr);
 }
 
 void World::AddComponents(std::span<const Entity> entities, std::span<const BulkComponentData> components) {
@@ -332,6 +382,9 @@ void World::AddComponents(std::span<const Entity> entities, std::span<const Bulk
     AddNativeComponents(entities, components);
     for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
         const Entity entity = entities[entityIndex];
+        if (!BackendEntityAlive(entity)) {
+            continue;
+        }
         for (const BulkComponentData& component : components) {
             const auto* bytes = static_cast<const std::uint8_t*>(component.data);
             WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, bytes + (entityIndex * component.componentSize));
@@ -366,13 +419,16 @@ void World::RemoveComponents(Entity entity, std::span<const ComponentId> compone
         ValidateStructuralChangeAllowed("RemoveComponents");
     }
 
-    ecs_table_t* previousArchetype = EntityArchetype(entity);
+    const bool backendAlive = BackendEntityAlive(entity);
+    ecs_table_t* previousArchetype = backendAlive ? EntityArchetype(entity) : nullptr;
 
     RemoveNativeComponents(entity, requestedIds);
-    for (ComponentId componentId : requestedIds) {
-        WorldComponentMutator::Remove(world_, entity, componentId);
+    if (backendAlive) {
+        for (ComponentId componentId : requestedIds) {
+            WorldComponentMutator::Remove(world_, entity, componentId);
+        }
     }
-    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, backendAlive ? EntityArchetype(entity) : nullptr);
 }
 
 void World::RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
@@ -405,6 +461,9 @@ void World::RemoveComponents(std::span<const Entity> entities, std::span<const C
 
     RemoveNativeComponents(entities, requestedIds);
     for (Entity entity : entities) {
+        if (!BackendEntityAlive(entity)) {
+            continue;
+        }
         for (ComponentId componentId : requestedIds) {
             WorldComponentMutator::Remove(world_, entity, componentId);
         }
@@ -416,7 +475,7 @@ bool World::HasComponent(Entity entity, ComponentId componentId) const {
     ValidateEntityHandle(entity, "HasComponent");
     return nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)
         ? nativeStorage_->HasComponent(entity, componentId)
-        : WorldComponentReader::Has(world_, entity, componentId);
+        : BackendEntityAlive(entity) && WorldComponentReader::Has(world_, entity, componentId);
 }
 
 const void* World::TryGetComponent(Entity entity, ComponentId componentId) const {
@@ -424,7 +483,7 @@ const void* World::TryGetComponent(Entity entity, ComponentId componentId) const
     if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
         return nativeStorage_->ComponentData(entity, componentId);
     }
-    return WorldComponentReader::TryGet(world_, entity, componentId);
+    return BackendEntityAlive(entity) ? WorldComponentReader::TryGet(world_, entity, componentId) : nullptr;
 }
 
 void* World::TryGetMutableComponent(Entity entity, ComponentId componentId) {
@@ -432,7 +491,7 @@ void* World::TryGetMutableComponent(Entity entity, ComponentId componentId) {
     if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
         return nativeStorage_->MutableComponentData(entity, componentId);
     }
-    return WorldComponentReader::TryGetMutable(world_, entity, componentId);
+    return BackendEntityAlive(entity) ? WorldComponentReader::TryGetMutable(world_, entity, componentId) : nullptr;
 }
 
 void World::RemoveComponent(Entity entity, ComponentId componentId) {
@@ -440,17 +499,29 @@ void World::RemoveComponent(Entity entity, ComponentId componentId) {
     if (HasComponent(entity, componentId)) {
         ValidateStructuralChangeAllowed("RemoveComponent");
     }
-    ecs_table_t* previousArchetype = EntityArchetype(entity);
-    WorldComponentMutator::Remove(world_, entity, componentId);
+    const bool backendAlive = BackendEntityAlive(entity);
+    ecs_table_t* previousArchetype = backendAlive ? EntityArchetype(entity) : nullptr;
+    if (backendAlive) {
+        WorldComponentMutator::Remove(world_, entity, componentId);
+    }
     RemoveNativeComponents(entity, std::span<const ComponentId>{ &componentId, 1U });
-    InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
+    InvalidateQueryPlansForArchetypeChange(previousArchetype, backendAlive ? EntityArchetype(entity) : nullptr);
 }
 
 void World::MarkComponentModified(Entity entity, ComponentId componentId) {
     ValidateEntityHandle(entity, "MarkComponentModified");
-    WorldComponentMutator::MarkModified(world_, entity, componentId);
     if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity) && nativeStorage_->HasComponent(entity, componentId)) {
+        if (config_.mirrorNativeComponentChangesToBackend && BackendEntityAlive(entity) && WorldComponentReader::Has(world_, entity, componentId)) {
+            const ComponentTypeInfo* componentInfo = registries_ == nullptr ? nullptr : registries_->Components().FindInfo(componentId);
+            if (componentInfo != nullptr) {
+                WorldComponentMutator::Set(world_, entity, componentId, componentInfo->size, nativeStorage_->ComponentData(entity, componentId));
+            }
+        }
         nativeStorage_->MarkComponentModified(entity, componentId);
+        return;
+    }
+    if (BackendEntityAlive(entity)) {
+        WorldComponentMutator::MarkModified(world_, entity, componentId);
     }
 }
 
@@ -465,6 +536,7 @@ void World::ForEachComponent(ComponentId componentId, std::size_t componentSize,
     }
 
     std::vector<QueryTableDispatchRecord> records;
+    records.reserve(nativeStorage_->ChunkCount());
     const std::array componentIds{ componentId };
     nativeStorage_->CollectQueryRecords(componentIds, {}, {}, records);
     for (const QueryTableDispatchRecord& record : records) {
@@ -479,6 +551,7 @@ void World::ForEachMutableComponent(ComponentId componentId, std::size_t compone
     if (visitor == nullptr) {
         return;
     }
+    ++telemetryCounters_.compatMutableIterations;
     [[maybe_unused]] StructuralChangeValidator::Guard iterationGuard = EnterIteration();
     if (nativeStorage_ == nullptr) {
         WorldComponentIterator::ForEachMutable(world_, componentId, componentSize, visitor, context);
@@ -486,9 +559,11 @@ void World::ForEachMutableComponent(ComponentId componentId, std::size_t compone
     }
 
     std::vector<MutableQueryTableDispatchRecord> records;
+    records.reserve(nativeStorage_->ChunkCount());
     const std::array componentIds{ componentId };
     nativeStorage_->CollectMutableQueryRecords(componentIds, {}, {}, records);
     for (const MutableQueryTableDispatchRecord& record : records) {
+        telemetryCounters_.compatMutableEntitiesVisited += record.entityCount;
         auto* componentBytes = static_cast<std::uint8_t*>(record.fieldComponents[0]);
 #if !defined(NDEBUG)
         const MutableComponentBorrowRange borrowRange{
@@ -525,6 +600,7 @@ void World::ForEachComponents(
     }
 
     std::vector<QueryTableDispatchRecord> records;
+    records.reserve(nativeStorage_->ChunkCount());
     const std::array componentIds{ firstComponentId, secondComponentId };
     nativeStorage_->CollectQueryRecords(componentIds, {}, {}, records);
     for (const QueryTableDispatchRecord& record : records) {

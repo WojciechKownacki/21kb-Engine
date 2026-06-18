@@ -1,31 +1,46 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
-#include "ecs/world/WorldInternalAccess.hpp"
-#include "scene/components/SceneComponentIterationAccess.hpp"
+#include "engine/ecs/Query.hpp"
 
-#include <flecs.h>
+#include <cstddef>
 
 namespace kb::scene {
 
+namespace {
+
+struct BehaviourIterationContext {
+    BehaviourVisitor visitor = nullptr;
+    void* userContext = nullptr;
+};
+
+void VisitBehaviourBatch(const kb::ecs::QueryBatch<BehaviourComponent>& batch, void* rawContext) {
+    const auto* callbackContext = static_cast<const BehaviourIterationContext*>(rawContext);
+    const BehaviourComponent* behaviours = batch.Components<0>();
+    for (std::size_t index = 0; index < batch.Count(); ++index) {
+        const SceneEntity entity = batch.EntityAt(index);
+        if (entity.IsValid()) {
+            callbackContext->visitor(entity, behaviours[index], callbackContext->userContext);
+        }
+    }
+}
+
+} // namespace
+
 void SceneComponentIteration::ForEachBehaviour(const kb::ecs::World& world, std::uint64_t behaviourComponentId, BehaviourVisitor visitor, void* context) {
+    static_cast<void>(behaviourComponentId);
     if (visitor == nullptr) {
         return;
     }
 
-    ecs_iter_t it = ecs_each_id(world.NativeHandle(), behaviourComponentId);
-    while (ecs_each_next(&it)) {
-        const auto* behaviours = SceneComponentIterationAccess::Field<BehaviourComponent>(it, 0);
-        if (behaviours == nullptr) {
-            continue;
-        }
-
-        for (int32_t i = 0; i < it.count; ++i) {
-            const SceneEntity entity = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, it.entities[i]);
-            if (entity.IsValid()) {
-                visitor(entity, behaviours[i], context);
-            }
-        }
+    kb::ecs::Query<BehaviourComponent> query = const_cast<kb::ecs::World&>(world).CreateQuery<BehaviourComponent>();
+    if (!query.IsValid()) {
+        return;
     }
+
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    BehaviourIterationContext callbackContext{ .visitor = visitor, .userContext = context };
+    query.ForEachBatch(settings, VisitBehaviourBatch, &callbackContext);
 }
 
 } // namespace kb::scene

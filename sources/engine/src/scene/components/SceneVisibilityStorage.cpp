@@ -5,24 +5,24 @@
 
 namespace kb::scene {
 
-SceneVisibilityComponentStore::SceneVisibilityComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneVisibilityComponentStore::SceneVisibilityComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 const VisibilityComponent* SceneVisibilityComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<VisibilityComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<VisibilityComponent>(world_, entity);
 }
 
 VisibilityComponent* SceneVisibilityComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<VisibilityComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<VisibilityComponent>(world_, entity);
 }
 
 void SceneVisibilityComponentStore::Set(SceneEntity entity, const VisibilityComponent& visibility) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, visibility);
+    SceneComponentStorageAccess::Set<VisibilityComponent>(world_, entity, visibility);
 }
 
 void SceneVisibilityComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<VisibilityComponent>(world_, entity);
 }
 
 } // namespace kb::scene

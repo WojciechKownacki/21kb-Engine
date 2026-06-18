@@ -1,4 +1,5 @@
 [[nodiscard]] EntityInspection InspectEntity(Entity entity) const;
+[[nodiscard]] std::vector<WorldArchetypeInspection> InspectArchetypes() const;
 [[nodiscard]] bool CaptureEditorWorld(EditorWorldInspection& output) const;
 [[nodiscard]] WorldSnapshot CaptureSnapshot() const;
 [[nodiscard]] ChunkedWorldSnapshot CaptureChunkedSnapshot() const;

@@ -388,6 +388,118 @@ void RunChunkedWorldSnapshotBinaryRoundTripTest() {
     }
 }
 
+void RunChunkedWorldSnapshotAfterBulkMigrationRoundTripTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+
+    kb::ecs::World source{ config };
+    RegisterSnapshotDeltaTestReflection(source);
+
+    constexpr std::size_t entityCount = 96;
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<EcsPosition> positions;
+    std::vector<EcsVelocity> velocities;
+    std::vector<EcsQueryMarker> markers;
+    entities.reserve(entityCount);
+    positions.reserve(entityCount);
+    velocities.reserve(entityCount);
+    markers.reserve(entityCount);
+    for (std::size_t index = 0; index < entityCount; ++index) {
+        const kb::ecs::Entity entity = source.CreateEntity();
+        entities.push_back(entity);
+        positions.push_back(EcsPosition{ .x = static_cast<float>(index + 10U), .y = static_cast<float>(index + 20U) });
+        velocities.push_back(EcsVelocity{ .x = static_cast<float>(index + 30U), .y = static_cast<float>(index + 40U) });
+        markers.push_back(EcsQueryMarker{ .value = static_cast<int>(index + 50U) });
+        source.Set(entity, positions.back());
+        source.Set(entity, velocities.back());
+        source.Set(entity, markers.back());
+    }
+
+    std::vector<kb::ecs::Entity> removeVelocityEntities;
+    removeVelocityEntities.reserve(entityCount / 2U);
+    std::vector<bool> velocityRemoved(entityCount, false);
+    std::vector<bool> destroyed(entityCount, false);
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        if ((index % 2U) == 0U) {
+            removeVelocityEntities.push_back(entities[index]);
+            velocityRemoved[index] = true;
+        }
+    }
+
+    kb::ecs::CommandBuffer removeBuffer;
+    removeBuffer.Worker(0).Remove<EcsVelocity>(std::span<const kb::ecs::Entity>{ removeVelocityEntities });
+    static_cast<void>(removeBuffer.Playback(source));
+
+    for (std::size_t index = 5U; index < entities.size(); index += 17U) {
+        source.DestroyEntity(entities[index]);
+        destroyed[index] = true;
+    }
+
+    const kb::ecs::ChunkedWorldSnapshot snapshot = source.CaptureChunkedSnapshot();
+    std::size_t expectedLiveEntities = 0;
+    for (bool wasDestroyed : destroyed) {
+        if (!wasDestroyed) {
+            ++expectedLiveEntities;
+        }
+    }
+    kb::tests::Require(snapshot.entityCount == expectedLiveEntities, "ECS migrated chunked snapshot captured an invalid entity count");
+
+    bool sawRetainedArchetype = false;
+    bool sawFullArchetype = false;
+    const kb::ecs::ComponentId positionId = source.Component<EcsPosition>();
+    const kb::ecs::ComponentId velocityId = source.Component<EcsVelocity>();
+    const kb::ecs::ComponentId markerId = source.Component<EcsQueryMarker>();
+    for (const kb::ecs::ChunkedWorldSnapshotChunk& chunk : snapshot.chunks) {
+        const bool hasPosition = FindChunkComponent(chunk, positionId) != nullptr;
+        const bool hasVelocity = FindChunkComponent(chunk, velocityId) != nullptr;
+        const bool hasMarker = FindChunkComponent(chunk, markerId) != nullptr;
+        kb::tests::Require(hasPosition && hasMarker, "ECS migrated chunked snapshot missed retained component columns");
+        sawRetainedArchetype = sawRetainedArchetype || !hasVelocity;
+        sawFullArchetype = sawFullArchetype || hasVelocity;
+    }
+    kb::tests::Require(sawRetainedArchetype && sawFullArchetype, "ECS migrated chunked snapshot did not preserve distinct archetypes");
+
+    kb::ecs::World restored{ config };
+    RegisterSnapshotDeltaTestReflectionReversed(restored);
+    StreamRestoreContext restore{
+        .chunks = &snapshot.chunks,
+    };
+    const kb::ecs::ChunkedWorldSnapshotHeader header{
+        .componentTypes = snapshot.componentTypes,
+        .entityCount = snapshot.entityCount,
+    };
+    kb::tests::Require(
+        restored.RestoreChunkedSnapshotStream(header, &ReadStreamChunk, &restore),
+        "ECS migrated chunked snapshot restore failed");
+
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const kb::ecs::Entity entity = entities[index];
+        if (destroyed[index]) {
+            kb::tests::Require(!restored.IsAlive(entity), "ECS migrated chunked snapshot restored a destroyed entity");
+            continue;
+        }
+
+        kb::tests::Require(restored.IsAlive(entity), "ECS migrated chunked snapshot missed a live entity");
+        const EcsPosition* position = restored.TryGet<EcsPosition>(entity);
+        const EcsQueryMarker* marker = restored.TryGet<EcsQueryMarker>(entity);
+        kb::tests::Require(position != nullptr && marker != nullptr, "ECS migrated chunked snapshot missed retained components");
+        kb::tests::Require(
+            kb::tests::NearlyEqual(position->x, positions[index].x) && kb::tests::NearlyEqual(position->y, positions[index].y),
+            "ECS migrated chunked snapshot restored invalid position");
+        kb::tests::Require(marker->value == markers[index].value, "ECS migrated chunked snapshot restored invalid marker");
+
+        const EcsVelocity* velocity = restored.TryGet<EcsVelocity>(entity);
+        if (velocityRemoved[index]) {
+            kb::tests::Require(velocity == nullptr, "ECS migrated chunked snapshot restored a removed velocity");
+        } else {
+            kb::tests::Require(velocity != nullptr, "ECS migrated chunked snapshot missed an untouched velocity");
+            kb::tests::Require(
+                kb::tests::NearlyEqual(velocity->x, velocities[index].x) && kb::tests::NearlyEqual(velocity->y, velocities[index].y),
+                "ECS migrated chunked snapshot restored invalid velocity");
+        }
+    }
+}
+
 void RunChunkedWorldDeltaSnapshotApplyTest() {
     kb::ecs::WorldConfig config;
     config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
@@ -547,6 +659,7 @@ void RunEcsSnapshotTests() {
     RunChunkedWorldSnapshotTest();
     RunChunkedWorldSnapshotStreamRoundTripTest();
     RunChunkedWorldSnapshotBinaryRoundTripTest();
+    RunChunkedWorldSnapshotAfterBulkMigrationRoundTripTest();
     RunChunkedWorldDeltaSnapshotApplyTest();
     RunChunkedWorldDeltaSnapshotAfterBulkComponentWriteTest();
 }

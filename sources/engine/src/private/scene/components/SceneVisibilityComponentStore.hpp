@@ -5,13 +5,13 @@
 
 #include <cstdint>
 
-struct ecs_world_t;
+namespace kb::ecs { class World; }
 
 namespace kb::scene {
 
 class SceneVisibilityComponentStore {
 public:
-    SceneVisibilityComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept;
+    SceneVisibilityComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept;
 
     [[nodiscard]] const VisibilityComponent* TryGet(SceneEntity entity) const noexcept;
     [[nodiscard]] VisibilityComponent* TryGet(SceneEntity entity) noexcept;
@@ -19,7 +19,7 @@ public:
     void MarkModified(SceneEntity entity) noexcept;
 
 private:
-    ecs_world_t* world_ = nullptr;
+    kb::ecs::World* world_ = nullptr;
     std::uint64_t componentId_ = 0;
 };
 

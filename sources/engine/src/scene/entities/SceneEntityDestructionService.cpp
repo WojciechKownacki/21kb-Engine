@@ -4,6 +4,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
@@ -33,6 +34,7 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
 
     const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
     SceneHierarchyCache::Remove(state, entity, parent);
+    SceneEntityNaming::ClearName(state, entity);
     state.world.DestroyEntity(entity);
 }
 

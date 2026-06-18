@@ -10,7 +10,9 @@
 #include "scene/prefab/ScenePrefabRecord.hpp"
 
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -58,18 +60,19 @@ void CollectSubtreeEntities(Scene& scene, SceneEntity entity, std::unordered_set
     }
 
     std::unordered_set<SceneEntity::IdType> subtree;
-    if (!record->objects.empty()) {
-        CollectSubtreeEntities(scene, record->objects.front().Entity(), subtree);
+    const std::span<const SceneObject> objects = record->Objects();
+    if (!objects.empty()) {
+        CollectSubtreeEntities(scene, objects.front().Entity(), subtree);
     }
 
     bool removed = false;
     const std::vector<ScenePrefabInstanceHandle> handles = state.prefabInstances.Handles();
     for (const ScenePrefabInstanceHandle candidate : handles) {
         const ScenePrefabInstanceRecord* candidateRecord = state.prefabInstances.Find(candidate);
-        if (candidateRecord == nullptr || candidateRecord->objects.empty()) {
+        if (candidateRecord == nullptr || candidateRecord->Objects().empty()) {
             continue;
         }
-        if (candidate == handle || subtree.contains(candidateRecord->objects.front().Entity().Id())) {
+        if (candidate == handle || subtree.contains(candidateRecord->Objects().front().Entity().Id())) {
             removed = state.prefabInstances.Remove(candidate) || removed;
         }
     }
@@ -165,14 +168,17 @@ bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle
     if (instance == nullptr || source == nullptr) {
         return false;
     }
-    if (!instance->prefabGuid.empty() && instance->prefabGuid != source->guid) {
+    const std::string_view currentGuid = instance->PrefabGuid();
+    if (!currentGuid.empty() && currentGuid != std::string_view{ source->guid }) {
         return false;
     }
 
     const ScenePrefabHandle previousPrefab = instance->prefab;
-    const std::string previousGuid = instance->prefabGuid;
-    const ScenePrefab previousResolvedPrefab = instance->resolvedPrefab;
-    const std::vector<SceneObject> oldObjects = instance->objects;
+    const std::string previousGuid{ currentGuid };
+    const ScenePrefab* previousResolved = instance->ResolvedPrefab();
+    const ScenePrefab previousResolvedPrefab = previousResolved == nullptr ? ScenePrefab{} : *previousResolved;
+    const std::span<const SceneObject> currentObjects = instance->Objects();
+    const std::vector<SceneObject> oldObjects{ currentObjects.begin(), currentObjects.end() };
 
     if (!state.prefabInstances.UpdateSource(handle, sourcePrefab, source->guid)) {
         return false;
@@ -191,7 +197,7 @@ bool ScenePrefabs::Reconnect(ScenePrefabInstanceHandle handle, ScenePrefabHandle
     static_cast<void>(state.prefabInstances.UpdateSource(handle, previousPrefab, previousGuid));
     instance = state.prefabInstances.FindMutable(handle);
     if (instance != nullptr) {
-        instance->resolvedPrefab = previousResolvedPrefab;
+        instance->SetResolvedPrefab(previousResolvedPrefab);
     }
     return false;
 }

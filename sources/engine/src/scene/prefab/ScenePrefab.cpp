@@ -1,6 +1,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 
 #include <algorithm>
+#include <memory>
 
 namespace kb::scene {
 namespace {
@@ -83,14 +84,21 @@ void ScenePrefab::Clear() noexcept {
 }
 
 ScenePrefabInstance::ScenePrefabInstance(std::vector<SceneObject> objects) noexcept
-    : objects_(std::move(objects)) {}
+    : sharedObjects_(std::make_shared<std::vector<SceneObject>>(std::move(objects))) {}
+
+ScenePrefabInstance::ScenePrefabInstance(std::shared_ptr<const std::vector<SceneObject>> objects) noexcept
+    : sharedObjects_(std::move(objects)) {}
 
 ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::vector<SceneObject> objects) noexcept
     : handle_(handle)
-    , objects_(std::move(objects)) {}
+    , sharedObjects_(std::make_shared<std::vector<SceneObject>>(std::move(objects))) {}
+
+ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::shared_ptr<const std::vector<SceneObject>> objects) noexcept
+    : handle_(handle)
+    , sharedObjects_(std::move(objects)) {}
 
 bool ScenePrefabInstance::Empty() const noexcept {
-    return objects_.empty();
+    return ActiveObjects().empty();
 }
 
 ScenePrefabInstanceHandle ScenePrefabInstance::Handle() const noexcept {
@@ -98,19 +106,48 @@ ScenePrefabInstanceHandle ScenePrefabInstance::Handle() const noexcept {
 }
 
 std::size_t ScenePrefabInstance::ObjectCount() const noexcept {
-    return objects_.size();
+    return ActiveObjects().size();
 }
 
 std::span<const SceneObject> ScenePrefabInstance::Objects() const noexcept {
-    return objects_;
+    return ActiveObjects();
+}
+
+std::vector<SceneObject> ScenePrefabInstance::TakeObjects() noexcept {
+    if (sharedObjects_ != nullptr) {
+        std::vector<SceneObject> objects{ sharedObjects_->begin(), sharedObjects_->end() };
+        sharedObjects_.reset();
+        return objects;
+    }
+    return std::move(objects_);
 }
 
 SceneObject ScenePrefabInstance::ObjectAt(std::uint32_t nodeIndex) const noexcept {
-    return nodeIndex < objects_.size() ? objects_[nodeIndex] : SceneObject{};
+    const std::span<const SceneObject> objects = ActiveObjects();
+    return nodeIndex < objects.size() ? objects[nodeIndex] : SceneObject{};
 }
 
 SceneObject ScenePrefabInstance::RootObject() const noexcept {
-    return objects_.empty() ? SceneObject{} : objects_.front();
+    const std::span<const SceneObject> objects = ActiveObjects();
+    return objects.empty() ? SceneObject{} : objects.front();
+}
+
+std::shared_ptr<const std::vector<SceneObject>> ScenePrefabInstance::SharedObjects() const {
+    if (sharedObjects_ != nullptr) {
+        return sharedObjects_;
+    }
+    return std::make_shared<std::vector<SceneObject>>(objects_);
+}
+
+void ScenePrefabInstance::AssignHandle(ScenePrefabInstanceHandle handle) noexcept {
+    handle_ = handle;
+}
+
+std::span<const SceneObject> ScenePrefabInstance::ActiveObjects() const noexcept {
+    if (sharedObjects_ != nullptr) {
+        return std::span<const SceneObject>{ *sharedObjects_ };
+    }
+    return std::span<const SceneObject>{ objects_ };
 }
 
 } // namespace kb::scene

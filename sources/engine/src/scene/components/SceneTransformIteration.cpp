@@ -1,52 +1,79 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
-#include "ecs/world/WorldInternalAccess.hpp"
-#include "scene/components/SceneComponentIterationAccess.hpp"
+#include "engine/ecs/Query.hpp"
 
-#include <flecs.h>
+#include <cstddef>
 
 namespace kb::scene {
 
-void SceneComponentIteration::ForEachTransform(const kb::ecs::World& world, std::uint64_t transformComponentId, ConstTransformVisitor visitor, void* context) {
-    if (visitor == nullptr) {
-        return;
-    }
+namespace {
 
-    ecs_iter_t it = ecs_each_id(world.NativeHandle(), transformComponentId);
-    while (ecs_each_next(&it)) {
-        const auto* transforms = SceneComponentIterationAccess::Field<TransformComponent>(it, 0);
-        if (transforms == nullptr) {
-            continue;
-        }
+struct ConstTransformIterationContext {
+    ConstTransformVisitor visitor = nullptr;
+    void* userContext = nullptr;
+};
 
-        for (int32_t i = 0; i < it.count; ++i) {
-            const SceneEntity entity = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, it.entities[i]);
-            if (entity.IsValid()) {
-                visitor(entity, transforms[i], context);
-            }
+struct MutableTransformIterationContext {
+    MutableTransformVisitor visitor = nullptr;
+    void* userContext = nullptr;
+};
+
+void VisitTransformBatch(const kb::ecs::QueryBatch<TransformComponent>& batch, void* rawContext) {
+    const auto* callbackContext = static_cast<const ConstTransformIterationContext*>(rawContext);
+    const TransformComponent* transforms = batch.Components<0>();
+    for (std::size_t row = 0; row < batch.Count(); ++row) {
+        const SceneEntity entity = batch.EntityAt(row);
+        if (entity.IsValid()) {
+            callbackContext->visitor(entity, transforms[row], callbackContext->userContext);
         }
     }
 }
 
-void SceneComponentIteration::ForEachMutableTransform(kb::ecs::World& world, std::uint64_t transformComponentId, MutableTransformVisitor visitor, void* context) {
+void VisitMutableTransformBatch(kb::ecs::MutableQueryBatch<TransformComponent>& batch, void* rawContext) {
+    const auto* callbackContext = static_cast<const MutableTransformIterationContext*>(rawContext);
+    TransformComponent* transforms = batch.Components<0>();
+    for (std::size_t row = 0; row < batch.Count(); ++row) {
+        const SceneEntity entity = batch.EntityAt(row);
+        if (entity.IsValid()) {
+            callbackContext->visitor(entity, transforms[row], callbackContext->userContext);
+        }
+    }
+}
+
+} // namespace
+
+void SceneComponentIteration::ForEachTransform(const kb::ecs::World& world, std::uint64_t transformComponentId, ConstTransformVisitor visitor, void* context) {
+    static_cast<void>(transformComponentId);
     if (visitor == nullptr) {
         return;
     }
 
-    ecs_iter_t it = ecs_each_id(world.NativeHandle(), transformComponentId);
-    while (ecs_each_next(&it)) {
-        auto* transforms = SceneComponentIterationAccess::MutableField<TransformComponent>(it, 0);
-        if (transforms == nullptr) {
-            continue;
-        }
-
-        for (int32_t i = 0; i < it.count; ++i) {
-            const SceneEntity entity = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, it.entities[i]);
-            if (entity.IsValid()) {
-                visitor(entity, transforms[i], context);
-            }
-        }
+    kb::ecs::Query<TransformComponent> query = const_cast<kb::ecs::World&>(world).CreateQuery<TransformComponent>();
+    if (!query.IsValid()) {
+        return;
     }
+
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    ConstTransformIterationContext callbackContext{ .visitor = visitor, .userContext = context };
+    query.ForEachBatch(settings, VisitTransformBatch, &callbackContext);
+}
+
+void SceneComponentIteration::ForEachMutableTransform(kb::ecs::World& world, std::uint64_t transformComponentId, MutableTransformVisitor visitor, void* context) {
+    static_cast<void>(transformComponentId);
+    if (visitor == nullptr) {
+        return;
+    }
+
+    kb::ecs::Query<TransformComponent> query = world.CreateQuery<TransformComponent>();
+    if (!query.IsValid()) {
+        return;
+    }
+
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    MutableTransformIterationContext callbackContext{ .visitor = visitor, .userContext = context };
+    query.ForEachMutableBatch(settings, VisitMutableTransformBatch, &callbackContext);
 }
 
 } // namespace kb::scene

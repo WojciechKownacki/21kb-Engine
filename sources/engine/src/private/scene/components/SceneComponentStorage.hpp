@@ -16,7 +16,11 @@
 #include "scene/components/SceneTransformComponentStore.hpp"
 #include "scene/components/SceneVisibilityComponentStore.hpp"
 
-struct ecs_world_t;
+namespace kb::ecs {
+
+class World;
+
+} // namespace kb::ecs
 
 namespace kb::scene {
 
@@ -24,7 +28,7 @@ class SceneComponentRegistry;
 
 class SceneComponentStorage {
 public:
-    SceneComponentStorage(ecs_world_t* world, const SceneComponentRegistry& components) noexcept;
+    SceneComponentStorage(kb::ecs::World& world, const SceneComponentRegistry& components) noexcept;
 
     void SetDefaults(SceneEntity entity, const TransformComponent& transform, const VisibilityComponent& visibility);
 

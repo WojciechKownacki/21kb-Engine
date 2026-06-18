@@ -18,8 +18,9 @@ namespace kb::scene {
 namespace {
 
 [[nodiscard]] std::uint32_t FindTrackedObjectIndex(const ScenePrefabInstanceRecord& instance, SceneObject object) noexcept {
-    for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(instance.objects.size()); ++index) {
-        if (instance.objects[index].Entity() == object.Entity()) {
+    const std::span<const SceneObject> objects = instance.Objects();
+    for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(objects.size()); ++index) {
+        if (objects[index].Entity() == object.Entity()) {
             return index;
         }
     }
@@ -64,25 +65,26 @@ void AppendNode(
 } // namespace
 
 bool ScenePrefabOverrideApplier::Apply(Scene& scene, ScenePrefab& prefab, ScenePrefabInstanceRecord& instance) {
-    if (prefab.NodeCount() != instance.objects.size()) {
+    const std::span<const SceneObject> objects = instance.Objects();
+    if (prefab.NodeCount() != objects.size()) {
         return false;
     }
 
     ScenePrefab updated;
     std::vector<SceneObject> updatedObjects;
-    updated.Reserve(instance.objects.size());
-    updatedObjects.reserve(instance.objects.size());
+    updated.Reserve(objects.size());
+    updatedObjects.reserve(objects.size());
 
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
     for (std::uint32_t index = 0; index < static_cast<std::uint32_t>(nodes.size()); ++index) {
         if (nodes[index].parentNode == ScenePrefabNodeDesc::NoParent) {
-            if (index >= instance.objects.size() || !instance.objects[index].IsValid() || !scene.Entities().IsAlive(instance.objects[index])) {
+            if (index >= objects.size() || !objects[index].IsValid() || !scene.Entities().IsAlive(objects[index])) {
                 return false;
             }
-            AppendNode(scene, instance.objects[index], ScenePrefabNodeDesc::NoParent, prefab, instance, updated, updatedObjects);
+            AppendNode(scene, objects[index], ScenePrefabNodeDesc::NoParent, prefab, instance, updated, updatedObjects);
         }
     }
-    for (const SceneObject object : instance.objects) {
+    for (const SceneObject object : objects) {
         if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
             continue;
         }
@@ -96,7 +98,7 @@ bool ScenePrefabOverrideApplier::Apply(Scene& scene, ScenePrefab& prefab, SceneP
     }
 
     prefab = std::move(updated);
-    instance.objects = std::move(updatedObjects);
+    instance.SetObjects(std::move(updatedObjects));
     return true;
 }
 

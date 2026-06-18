@@ -23,6 +23,10 @@ void SynchronizeTransformHierarchy(SceneState& state) {
     SceneTransformHierarchySystem{}.Update(state);
 }
 
+[[nodiscard]] std::size_t HierarchyTrackedSlotCount(const SceneState& state) noexcept {
+    return std::max(state.hierarchyOrder.size(), state.denseHierarchyOrder.size());
+}
+
 [[nodiscard]] Vec3 Lerp(Vec3 from, Vec3 to, float alpha) noexcept {
     return Vec3{
         from.x + (to.x - from.x) * alpha,
@@ -131,6 +135,18 @@ SceneRuntimeFixedStepSettings SceneRuntimeService::FixedStepSettings(const Scene
     return SceneAccess::State(scene).fixedStepSettings;
 }
 
+void SceneRuntimeService::SetTransformPropagationBudget(Scene& scene, SceneTransformPropagationBudget budget) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    state.transformPropagationBudget = budget;
+    state.transformPropagationCursorVersion = 0U;
+    state.transformPropagationCursorLevel = 0U;
+    state.transformPropagationCursorOffset = 0U;
+}
+
+SceneTransformPropagationBudget SceneRuntimeService::TransformPropagationBudget(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).transformPropagationBudget;
+}
+
 float SceneRuntimeService::FixedInterpolationAlpha(const Scene& scene) noexcept {
     return SceneAccess::State(scene).fixedInterpolationAlpha;
 }
@@ -158,7 +174,41 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .transformHierarchyUsesKernelContract = true,
         .transformHierarchyUsesVirtualSceneSystem = false,
         .transformTopologicalBatchCount = state.transformTopologicalBatches.size(),
+        .transformTopologicalBatchBuildCount = state.transformTopologicalBatchBuildCount,
         .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
+        .transformHierarchyInspectedCount = state.lastTransformHierarchyInspectedCount,
+        .transformHierarchyUpdatedCount = state.lastTransformHierarchyUpdatedCount,
+        .transformHierarchyRootFastPathCount = state.lastTransformHierarchyRootFastPathCount,
+        .transformHierarchyTranslatedParentFastPathCount = state.lastTransformHierarchyTranslatedParentFastPathCount,
+        .transformHierarchyUnrotatedParentFastPathCount = state.lastTransformHierarchyUnrotatedParentFastPathCount,
+        .transformHierarchyUnitScaleParentFastPathCount = state.lastTransformHierarchyUnitScaleParentFastPathCount,
+        .transformHierarchyUniformScaleParentFastPathCount = state.lastTransformHierarchyUniformScaleParentFastPathCount,
+        .transformHierarchyStaticLocalRotationFastPathCount = state.lastTransformHierarchyStaticLocalRotationFastPathCount,
+        .transformHierarchySparseFlushCount = state.lastTransformHierarchySparseFlushCount,
+        .transformHierarchyDirtyListFlushCount = state.lastTransformHierarchyDirtyListFlushCount,
+        .transformHierarchyDirtyListFlushEntityCount = state.lastTransformHierarchyDirtyListFlushEntityCount,
+        .transformHierarchyBatchFlushCount = state.lastTransformHierarchyBatchFlushCount,
+        .transformHierarchyFlushedEntityCount = state.lastTransformHierarchyFlushedEntityCount,
+        .transformHierarchyDirtyFrontierCount = state.lastTransformHierarchyDirtyFrontierCount,
+        .transformHierarchyParallelBatchCount = state.lastTransformHierarchyParallelBatchCount,
+        .transformHierarchyParallelChunkCount = state.lastTransformHierarchyParallelChunkCount,
+        .transformHierarchyParallelEntityCount = state.lastTransformHierarchyParallelEntityCount,
+        .transformHierarchyWorkerCount = state.lastTransformHierarchyWorkerCount,
+        .transformHierarchyParallelFlushCount = state.lastTransformHierarchyParallelFlushCount,
+        .transformHierarchyParallelFlushChunkCount = state.lastTransformHierarchyParallelFlushChunkCount,
+        .transformHierarchyParallelFlushEntityCount = state.lastTransformHierarchyParallelFlushEntityCount,
+        .transformHierarchyParallelFlushWorkerCount = state.lastTransformHierarchyParallelFlushWorkerCount,
+        .transformHierarchyCacheBuildNanoseconds = state.lastTransformHierarchyCacheBuildNanoseconds,
+        .transformHierarchyEntryBuildNanoseconds = state.lastTransformHierarchyEntryBuildNanoseconds,
+        .transformHierarchyKernelApplyNanoseconds = state.lastTransformHierarchyKernelApplyNanoseconds,
+        .transformHierarchyFrontierAppendNanoseconds = state.lastTransformHierarchyFrontierAppendNanoseconds,
+        .transformHierarchyPropagateNanoseconds = state.lastTransformHierarchyPropagateNanoseconds,
+        .transformHierarchyFlushWriteNanoseconds = state.lastTransformHierarchyFlushWriteNanoseconds,
+        .transformHierarchyBackendMarkNanoseconds = state.lastTransformHierarchyBackendMarkNanoseconds,
+        .transformHierarchyUpdateNanoseconds = state.lastTransformHierarchyUpdateNanoseconds,
+        .transformHierarchyFlushNanoseconds = state.lastTransformHierarchyFlushNanoseconds,
+        .transformHierarchyBudgetLimit = state.transformPropagationBudget.maxInspectedEntitiesPerSync,
+        .transformHierarchyBudgetExhausted = state.lastTransformHierarchyBudgetExhausted,
     };
 }
 
@@ -191,7 +241,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
     state.transformRenderProxyUpdateEntities.clear();
-    state.transformRenderProxyUpdateEntities.reserve(state.hierarchyOrder.size());
+    state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
 
     SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);

@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+struct ecs_query_t;
+
 namespace kb::scene {
 
 class SceneComponentIteration {
@@ -21,10 +23,29 @@ public:
     static void ForEachTransform(const kb::ecs::World& world, std::uint64_t transformComponentId, ConstTransformVisitor visitor, void* context);
     static void ForEachMutableTransform(kb::ecs::World& world, std::uint64_t transformComponentId, MutableTransformVisitor visitor, void* context);
     static void ForEachBehaviour(const kb::ecs::World& world, std::uint64_t behaviourComponentId, BehaviourVisitor visitor, void* context);
-    static void ForEachCamera(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t cameraComponentId, CameraVisitor visitor, void* context);
-    static void ForEachMeshRenderer(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t meshRendererComponentId, MeshRendererVisitor visitor, void* context);
-    static void ForEachVisibleMeshRenderer(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t visibilityComponentId, std::uint64_t meshRendererComponentId, MeshRendererVisitor visitor, void* context);
-    static void ForEachLight(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t lightComponentId, LightVisitor visitor, void* context);
+    static void ForEachCamera(
+        const kb::ecs::World& world,
+        std::uint64_t transformComponentId,
+        std::uint64_t cameraComponentId,
+        ecs_query_t*& cachedQuery,
+        CameraVisitor visitor,
+        void* context);
+    static void ForEachMeshRenderer(const kb::ecs::World& world, std::uint64_t transformComponentId, std::uint64_t meshRendererComponentId, ecs_query_t*& cachedQuery, MeshRendererVisitor visitor, void* context);
+    static void ForEachVisibleMeshRenderer(
+        const kb::ecs::World& world,
+        std::uint64_t transformComponentId,
+        std::uint64_t visibilityComponentId,
+        std::uint64_t meshRendererComponentId,
+        ecs_query_t*& cachedQuery,
+        MeshRendererVisitor visitor,
+        void* context);
+    static void ForEachLight(
+        const kb::ecs::World& world,
+        std::uint64_t transformComponentId,
+        std::uint64_t lightComponentId,
+        ecs_query_t*& cachedQuery,
+        LightVisitor visitor,
+        void* context);
 };
 
 } // namespace kb::scene

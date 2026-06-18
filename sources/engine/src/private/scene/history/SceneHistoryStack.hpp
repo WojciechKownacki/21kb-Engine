@@ -18,6 +18,7 @@ struct SceneHistoryPrefabInstanceSnapshot {
     std::string prefabGuid;
     SceneHistoryObjectPath rootParentPath;
     std::vector<SceneHistoryObjectPath> objectPaths;
+    std::vector<std::uint64_t> nodeIds;
     ScenePrefab resolvedPrefab;
 };
 

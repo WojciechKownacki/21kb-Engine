@@ -11,7 +11,8 @@ namespace kb::scene {
 
 bool ScenePrefabOverrideReverter::Revert(Scene& scene, const ScenePrefab& prefab, ScenePrefabInstanceRecord& instance) {
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
-    if (nodes.size() != instance.objects.size()) {
+    const std::span<const SceneObject> objects = instance.Objects();
+    if (nodes.size() != objects.size()) {
         return false;
     }
 
@@ -22,7 +23,7 @@ bool ScenePrefabOverrideReverter::Revert(Scene& scene, const ScenePrefab& prefab
     const ScenePrefabTrackedEntitySet trackedEntities = ScenePrefabInstanceTopology::TrackedEntities(instance);
     ScenePrefabInstanceTopology::DestroyUntrackedChildren(scene, instance, trackedEntities);
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
-        ScenePrefabNodeStateWriter::Write(scene, instance.objects[nodeIndex], ScenePrefabInstanceTopology::ExpectedParent(nodes[nodeIndex], instance), nodes[nodeIndex]);
+        ScenePrefabNodeStateWriter::Write(scene, objects[nodeIndex], ScenePrefabInstanceTopology::ExpectedParent(nodes[nodeIndex], instance), nodes[nodeIndex]);
     }
     return true;
 }

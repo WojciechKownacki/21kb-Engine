@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabInstanceFacade.hpp"
 
+#include "engine/scene/ScenePrefabs.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 #include "scene/prefab/ScenePrefabRegisteredInstantiationService.hpp"
 
@@ -19,6 +20,14 @@ std::vector<ScenePrefabInstance> ScenePrefabInstanceFacade::InstantiateMany(Scen
 
 std::vector<ScenePrefabInstance> ScenePrefabInstanceFacade::InstantiateMany(Scene& scene, ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings) {
     return ScenePrefabRegisteredInstantiationService::InstantiateMany(scene, handle, count, settings);
+}
+
+ScenePrefabInstantiationStats ScenePrefabInstanceFacade::InstantiateBatch(Scene& scene, const ScenePrefab& prefab, std::size_t count, const ScenePrefabInstantiationSettings& settings) {
+    return ScenePrefabInstantiationService::InstantiateBatch(scene, prefab, count, settings);
+}
+
+ScenePrefabInstantiationStats ScenePrefabInstanceFacade::InstantiateBatch(Scene& scene, ScenePrefabHandle handle, std::size_t count, const ScenePrefabInstantiationSettings& settings) {
+    return ScenePrefabRegisteredInstantiationService::InstantiateBatch(scene, handle, count, settings);
 }
 
 } // namespace kb::scene

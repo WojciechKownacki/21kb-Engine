@@ -343,7 +343,7 @@ void RunScriptEditorSuite(Report& report) {
     report.Check(EditorScriptAssetGateway::ReadSource(path) == edited, "Edited source round-trips on disk");
 }
 
-// Proves the Unity-style Inspector script attach flow at the model level:
+// Proves the Inspector script attach flow at the model level:
 // scripts attach as components, toggle, and remove through the component path.
 void RunScriptAttachSuite(Report& report) {
     EditorSceneContext context;
