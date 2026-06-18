@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -29,6 +30,7 @@ struct NativeBulkComponentColumn {
     NativeComponentType type{};
     const void* data = nullptr;
     std::size_t stride = 0;
+    std::size_t sourceCount = 0;
 };
 
 struct NativeEcsChunkMemoryCounters {
@@ -56,11 +58,41 @@ struct NativeEcsArchetypeMemoryCounters {
 
 struct NativeEcsStorageStats {
     std::size_t chunks = 0;
+    std::size_t capacity = 0;
+    std::size_t sparseChunks = 0;
+    std::size_t tailSparseChunks = 0;
+    std::size_t fragmentedChunks = 0;
+    std::size_t emptyChunks = 0;
+    std::size_t chunkPoolAllocated = 0;
+    std::size_t chunkPoolInUse = 0;
+    std::size_t chunkPoolFree = 0;
+    std::size_t chunkPoolAcquireCount = 0;
+    std::size_t chunkPoolReuseCount = 0;
+    std::size_t chunkPoolReleaseCount = 0;
+    std::size_t chunkPoolTrimCount = 0;
     std::size_t usedBytes = 0;
     std::size_t wastedBytes = 0;
     std::size_t archetypeCount = 0;
     std::size_t liveEntities = 0;
     std::vector<NativeEcsArchetypeMemoryCounters> archetypeCounters;
+};
+
+struct NativeEcsMaintenanceBudget {
+    std::size_t maxFreeChunksToKeep = std::numeric_limits<std::size_t>::max();
+    std::size_t maxChunksToRelease = std::numeric_limits<std::size_t>::max();
+};
+
+struct NativeEcsMaintenanceStats {
+    std::size_t freeChunksBefore = 0;
+    std::size_t freeChunksAfter = 0;
+    std::size_t chunkPoolAllocatedBefore = 0;
+    std::size_t chunkPoolAllocatedAfter = 0;
+    std::size_t chunksReleasedToSystem = 0;
+    std::size_t fragmentedChunksBefore = 0;
+    std::size_t fragmentedChunksAfter = 0;
+    std::size_t emptyChunksBefore = 0;
+    std::size_t emptyChunksAfter = 0;
+    bool budgetExhausted = false;
 };
 
 struct NativeArchetypeMatch {
@@ -125,8 +157,10 @@ public:
     [[nodiscard]] std::uint64_t ArchetypeVersion(Entity entity) const;
     [[nodiscard]] std::uint64_t ComponentVersion(Entity entity, ComponentId componentId) const;
     [[nodiscard]] std::uint64_t ArchetypeComponentVersion(std::size_t archetypeIndex, ComponentId componentId) const;
+    [[nodiscard]] std::size_t ChunkCount() const noexcept;
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept;
     [[nodiscard]] NativeEcsStorageStats Stats() const;
+    [[nodiscard]] NativeEcsMaintenanceStats MaintainChunks(NativeEcsMaintenanceBudget budget);
 
 private:
     class Impl;

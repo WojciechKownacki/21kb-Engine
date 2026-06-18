@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <span>
+#include <unordered_set>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -51,17 +52,84 @@ private:
 
 class CommandBufferPlaybackResult {
 public:
+    struct Stats {
+        std::size_t structuralCommands = 0;
+        std::size_t createCommands = 0;
+        std::size_t bulkCreateCommands = 0;
+        std::size_t destroyCommands = 0;
+        std::size_t componentSetCommands = 0;
+        std::size_t componentRemoveCommands = 0;
+        std::size_t parentCommands = 0;
+        std::size_t componentBytesCopied = 0;
+        std::uint64_t createPhaseNanoseconds = 0;
+        std::uint64_t applyPhaseNanoseconds = 0;
+        std::uint64_t parentApplyNanoseconds = 0;
+        std::uint64_t destroyPhaseNanoseconds = 0;
+    };
+
     [[nodiscard]] Entity Resolve(CommandEntity entity) const;
     [[nodiscard]] std::size_t CreatedCount() const noexcept;
     [[nodiscard]] bool WasDestroyed(CommandEntity entity) const;
     [[nodiscard]] bool WasDestroyed(Entity entity) const noexcept;
     [[nodiscard]] std::size_t DestroyedCount() const noexcept;
+    [[nodiscard]] const Stats& PlaybackStats() const noexcept;
 
 private:
     std::vector<std::vector<Entity>> createdEntities_;
     std::vector<Entity> destroyedEntities_;
+    Stats stats_;
 
     friend class CommandBuffer;
+};
+
+struct CommandBufferPlaybackBudget {
+    std::size_t maxStructuralCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxCreateCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxBulkCreateCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxDestroyCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxComponentSetCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxComponentRemoveCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxParentCommands = std::numeric_limits<std::size_t>::max();
+    std::size_t maxComponentBytesCopied = std::numeric_limits<std::size_t>::max();
+};
+
+class CommandBufferPlaybackState {
+public:
+    [[nodiscard]] bool Started() const noexcept;
+    [[nodiscard]] bool Complete() const noexcept;
+    [[nodiscard]] const CommandBufferPlaybackResult& Result() const noexcept;
+    void Reset() noexcept;
+
+private:
+    enum class Phase : std::uint8_t {
+        NotStarted,
+        Create,
+        Apply,
+        Destroy,
+        Complete,
+    };
+
+    CommandBufferPlaybackResult result_;
+    std::unordered_set<Entity::IdType> playbackCreatedIds_;
+    std::unordered_set<Entity::IdType> destroyedIds_;
+    std::vector<Entity> scratchEntities_;
+    std::vector<Entity> scratchParentEntities_;
+    std::vector<World::BulkComponentData> scratchComponentData_;
+    std::vector<ComponentId> scratchComponentIds_;
+    std::size_t workerIndex_ = 0;
+    std::size_t commandIndex_ = 0;
+    std::size_t commandElementIndex_ = 0;
+    std::size_t destroyIndex_ = 0;
+    Phase phase_ = Phase::NotStarted;
+
+    friend class CommandBuffer;
+};
+
+struct CommandBufferPlaybackSlice {
+    CommandBufferPlaybackResult::Stats stats;
+    std::size_t destroyedEntitiesApplied = 0;
+    bool madeProgress = false;
+    bool complete = false;
 };
 
 class CommandBuffer {
@@ -72,6 +140,7 @@ public:
         RegisterComponentFn registerComponent = nullptr;
         std::size_t componentSize = 0;
         std::size_t componentCount = 0;
+        std::size_t sourceCount = 0;
         const void* data = nullptr;
     };
 
@@ -82,12 +151,15 @@ public:
         [[nodiscard]] CommandEntity CreateEntity(std::string_view name = {});
         [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::size_t count);
         [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::size_t count, std::span<const BulkComponentView> components);
+        [[nodiscard]] std::vector<CommandEntity> CreateEntitiesBorrowed(std::size_t count, std::span<const BulkComponentView> components);
 
         template <typename... Components>
         [[nodiscard]] std::vector<CommandEntity> CreateEntities(std::span<const Components>... components);
 
         void DestroyEntity(CommandEntity entity);
         void DestroyEntity(Entity entity);
+        void DestroyEntities(std::span<const CommandEntity> entities);
+        void DestroyEntities(std::span<const Entity> entities);
 
         template <typename T>
         void Set(CommandEntity entity, const T& component);
@@ -116,6 +188,7 @@ public:
         void SetParent(CommandEntity child, CommandEntity parent);
         void SetParent(Entity child, Entity parent);
         void SetParents(std::span<const CommandEntity> children, std::span<const CommandEntity> parents);
+        void SetParentsForNewEntitiesKnownAcyclic(std::span<const CommandEntity> children, std::span<const CommandEntity> parents);
         void SetParents(std::span<const Entity> children, std::span<const Entity> parents);
         void ClearParent(CommandEntity child);
         void ClearParent(Entity child);
@@ -141,7 +214,11 @@ public:
     template <typename T>
     [[nodiscard]] static BulkComponentView MakeBulkComponentView(std::span<const T> components) noexcept;
 
+    [[nodiscard]] CommandBufferPlaybackResult::Stats EstimatePlaybackStats() const;
+    [[nodiscard]] bool FitsPlaybackBudget(const CommandBufferPlaybackBudget& budget) const;
     CommandBufferPlaybackResult Playback(World& world);
+    CommandBufferPlaybackResult Playback(World& world, const CommandBufferPlaybackBudget& budget);
+    CommandBufferPlaybackSlice PlaybackSlice(World& world, const CommandBufferPlaybackBudget& budget, CommandBufferPlaybackState& state);
     void Clear() noexcept;
 
 private:
@@ -149,6 +226,7 @@ private:
         CreateEntity,
         CreateEntities,
         DestroyEntity,
+        DestroyEntities,
         SetComponent,
         RemoveComponent,
         SetComponents,
@@ -174,7 +252,10 @@ private:
     struct BulkComponentCommand {
         RegisterComponentFn registerComponent = nullptr;
         std::size_t componentSize = 0;
+        std::size_t sourceCount = 0;
         std::vector<std::byte> bytes;
+        const void* borrowedData = nullptr;
+        std::size_t borrowedCount = 0;
     };
 
     struct BulkRemoveComponentCommand {
@@ -189,6 +270,7 @@ private:
         std::vector<CommandEntity> parents;
         std::string name;
         std::size_t count = 0;
+        bool parentBatchKnownAcyclicForNewEntities = false;
         ComponentCommand component;
         std::vector<BulkComponentCommand> bulkComponents;
         std::vector<BulkRemoveComponentCommand> bulkRemoveComponents;
@@ -204,6 +286,8 @@ private:
     [[nodiscard]] CommandEntity AllocateDeferredEntity(std::size_t workerIndex);
     [[nodiscard]] std::vector<CommandEntity> AllocateDeferredEntities(std::size_t workerIndex, std::size_t count);
     [[nodiscard]] static Entity ResolveForPlayback(CommandEntity entity, const CommandBufferPlaybackResult& result);
+    [[nodiscard]] static CommandBufferPlaybackResult::Stats EstimateCommandStats(const Command& command);
+    [[nodiscard]] static bool IsCreateCommand(CommandKind kind) noexcept;
 
     template <typename T>
     static void ApplySetComponent(World& world, CommandEntity entity, std::span<const std::byte> bytes, const CommandBufferPlaybackResult& result);
@@ -404,6 +488,7 @@ void CommandBuffer::AppendBulkComponent(Command& command, std::span<const T> com
     BulkComponentCommand component;
     component.registerComponent = &CommandBuffer::RegisterBulkComponent<T>;
     component.componentSize = sizeof(T);
+    component.sourceCount = components.size();
     component.bytes.resize(sizeof(T) * components.size());
     const auto* source = reinterpret_cast<const std::byte*>(components.data());
     std::copy(source, source + component.bytes.size(), component.bytes.begin());
@@ -427,6 +512,7 @@ CommandBuffer::BulkComponentView CommandBuffer::MakeBulkComponentView(std::span<
         .registerComponent = &CommandBuffer::RegisterBulkComponent<T>,
         .componentSize = sizeof(T),
         .componentCount = components.size(),
+        .sourceCount = components.size(),
         .data = components.data(),
     };
 }

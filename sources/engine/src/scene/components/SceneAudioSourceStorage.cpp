@@ -5,32 +5,32 @@
 
 namespace kb::scene {
 
-SceneAudioSourceComponentStore::SceneAudioSourceComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneAudioSourceComponentStore::SceneAudioSourceComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 bool SceneAudioSourceComponentStore::Has(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, componentId_);
+    return SceneComponentStorageAccess::Has<AudioSourceComponent>(world_, entity);
 }
 
 const AudioSourceComponent* SceneAudioSourceComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<AudioSourceComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<AudioSourceComponent>(world_, entity);
 }
 
 AudioSourceComponent* SceneAudioSourceComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<AudioSourceComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<AudioSourceComponent>(world_, entity);
 }
 
 void SceneAudioSourceComponentStore::Set(SceneEntity entity, const AudioSourceComponent& audioSource) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, audioSource);
+    SceneComponentStorageAccess::Set<AudioSourceComponent>(world_, entity, audioSource);
 }
 
 void SceneAudioSourceComponentStore::Remove(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, componentId_);
+    SceneComponentStorageAccess::Remove<AudioSourceComponent>(world_, entity);
 }
 
 void SceneAudioSourceComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<AudioSourceComponent>(world_, entity);
 }
 
 } // namespace kb::scene

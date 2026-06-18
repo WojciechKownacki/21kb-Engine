@@ -1,26 +1,40 @@
 #include "scene/transform/SceneTransformRootCollector.hpp"
 
-#include "ecs/world/WorldInternalAccess.hpp"
+#include "ecs/FlecsEntityIds.hpp"
+#include "engine/ecs/Query.hpp"
+#include "engine/scene/TransformComponent.hpp"
 
 #include <flecs.h>
+
+#include <cstddef>
 
 namespace kb::scene {
 
 std::vector<SceneEntity> SceneTransformRootCollector::Collect(const kb::ecs::World& world, std::uint64_t transformComponentId) const {
+    static_cast<void>(transformComponentId);
     std::vector<SceneEntity> roots;
-    ecs_iter_t it = ecs_each_id(world.NativeHandle(), transformComponentId);
+    kb::ecs::Query<TransformComponent> query = const_cast<kb::ecs::World&>(world).CreateQuery<TransformComponent>();
+    if (!query.IsValid()) {
+        return roots;
+    }
 
-    while (ecs_each_next(&it)) {
-        roots.reserve(roots.size() + static_cast<std::size_t>(it.count));
-        for (int32_t i = 0; i < it.count; ++i) {
-            const ecs_entity_t entity = it.entities[i];
-            if (ecs_get_parent(world.NativeHandle(), entity) == 0) {
-                if (const SceneEntity resolved = kb::ecs::WorldInternalAccess::ResolveAliveEntity(world, entity); resolved.IsValid()) {
-                    roots.push_back(resolved);
-                }
+    struct Context {
+        const kb::ecs::World* world = nullptr;
+        std::vector<SceneEntity>* roots = nullptr;
+    } context{ .world = &world, .roots = &roots };
+
+    kb::ecs::QueryExecutionSettings settings;
+    settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
+    query.ForEachBatch(settings, [](const kb::ecs::QueryBatch<TransformComponent>& batch, void* rawContext) {
+        const auto* callbackContext = static_cast<const Context*>(rawContext);
+        callbackContext->roots->reserve(callbackContext->roots->size() + batch.Count());
+        for (std::size_t index = 0; index < batch.Count(); ++index) {
+            const SceneEntity entity = batch.EntityAt(index);
+            if (entity.IsValid() && ecs_get_parent(callbackContext->world->NativeHandle(), kb::ecs::FlecsEntityId(entity)) == 0) {
+                callbackContext->roots->push_back(entity);
             }
         }
-    }
+    }, &context);
 
     return roots;
 }

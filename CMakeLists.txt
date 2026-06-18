@@ -147,7 +147,6 @@ if(NOT TARGET kb_lua)
 endif()
 
 add_subdirectory(sources/engine engine)
-add_subdirectory(sources/benchmarks/ecs ecs_benchmarks)
 add_subdirectory(sources/plugins/physics_jolt physics_jolt)
 add_subdirectory(sources/plugins/audio_miniaudio audio_miniaudio)
 add_subdirectory(sources/plugins/basic_lighting basic_lighting)

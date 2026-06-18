@@ -30,6 +30,18 @@
 
 namespace {
 
+void TracePrefabTest(const char* name) {
+#if defined(_MSC_VER)
+    std::size_t length = 0;
+    getenv_s(&length, nullptr, 0, "KB_TEST_TRACE");
+    if (length > 0U) {
+#else
+    if (std::getenv("KB_TEST_TRACE") != nullptr) {
+#endif
+        std::cerr << name << '\n';
+    }
+}
+
 class PrivateSceneRejectedSystem final : public kb::scene::SceneSystem {};
 
 class PrivateSceneRejectedEcsSystem final : public kb::ecs::System {
@@ -261,6 +273,36 @@ void RunRegisteredPrefabInstantiationTest() {
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 3.0F), "Registered prefab child world Y was not rebuilt");
 }
 
+void RunRegisteredPrefabBatchInstantiationTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Registered Batch Root" });
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Registered Batch Child",
+        .parentNode = rootNode,
+    }));
+
+    const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("RegisteredBatchPrefab", std::move(prefab));
+    kb::tests::Require(handle.IsValid(), "Registered prefab batch setup failed to register a prefab");
+
+    kb::scene::ScenePrefabInstantiationSettings settings;
+    settings.assignNames = false;
+    const kb::scene::ScenePrefabInstantiationStats stats = scene.Prefabs().InstantiateBatch(handle, 4, settings);
+
+    kb::tests::Require(stats.requestedInstances == 4, "Registered prefab batch recorded invalid requested count");
+    kb::tests::Require(stats.instantiatedInstances == 4, "Registered prefab batch recorded invalid instantiated count");
+    kb::tests::Require(stats.entitiesCreated == 8, "Registered prefab batch created an unexpected entity count");
+    kb::tests::Require(stats.registeredInstanceCount == 0, "Registered prefab batch should not track instance records");
+    kb::tests::Require(stats.entityCreateNanoseconds > 0, "Registered prefab batch did not report entity create time");
+    kb::tests::Require(stats.hierarchyRecordNanoseconds > 0, "Registered prefab batch did not report hierarchy record time");
+    kb::tests::Require(stats.nameAssignmentNanoseconds == 0, "Registered prefab batch reported disabled name assignment time");
+    kb::tests::Require(stats.registryResolveNanoseconds > 0, "Registered prefab batch did not report registry resolve time");
+    kb::tests::Require(stats.historyRecordNanoseconds == 0, "Registered prefab batch should not report instance record time");
+    kb::tests::Require(scene.Entities().Count() == 8, "Registered prefab batch did not create scene entities");
+    kb::tests::Require(scene.Hierarchy().RootEntities().size() == 4, "Registered prefab batch did not expose scene hierarchy roots");
+}
+
 void RunBulkPrefabInstantiationTest() {
     kb::scene::Scene scene;
     kb::scene::SceneObject externalParent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -311,10 +353,33 @@ void RunBulkPrefabInstantiationTest() {
         kb::scene::ScenePrefabInstantiationSettings{
             .parent = externalParent,
             .namePrefix = "Bulk/",
+            .syncWorldHierarchy = true,
         });
 
     kb::tests::Require(instances.size() == 3, "Bulk prefab instantiation did not return every requested instance");
     kb::tests::Require(scene.Entities().Count() == 7, "Bulk prefab instantiation created an unexpected entity count");
+    const kb::scene::ScenePrefabInstantiationStats spawnStats = scene.Prefabs().LastInstantiationStats();
+    kb::tests::Require(spawnStats.requestedInstances == 3, "Bulk prefab stats recorded invalid requested instance count");
+    kb::tests::Require(spawnStats.instantiatedInstances == 3, "Bulk prefab stats recorded invalid instantiated instance count");
+    kb::tests::Require(spawnStats.nodesPerInstance == 2, "Bulk prefab stats recorded invalid node count");
+    kb::tests::Require(spawnStats.entitiesCreated == 6, "Bulk prefab stats recorded invalid entity create count");
+    kb::tests::Require(spawnStats.prefabArchetypesTouched == 2, "Bulk prefab stats recorded invalid archetype count");
+    kb::tests::Require(spawnStats.bulkCreateCommands == 2, "Bulk prefab stats recorded invalid batch create command count");
+    kb::tests::Require(spawnStats.parentCommands == 6, "Bulk prefab stats recorded invalid parent command count");
+    kb::tests::Require(spawnStats.componentBytesCopied > 0, "Bulk prefab stats did not report copied component bytes");
+    kb::tests::Require(spawnStats.componentSourceBytesRead > 0, "Backend-synced bulk prefab stats did not report source component bytes");
+    kb::tests::Require(spawnStats.componentSourceBytesRead < spawnStats.componentBytesCopied, "Backend-synced bulk prefab pattern telemetry did not reduce source component bytes");
+    kb::tests::Require(spawnStats.registeredInstanceCount == 0, "Loose bulk prefab stats reported registered instances");
+    kb::tests::Require(spawnStats.entityCreateNanoseconds > 0, "Loose bulk prefab stats did not report entity create time");
+    kb::tests::Require(spawnStats.commandBuildNanoseconds > 0, "Loose bulk prefab stats did not report command build time");
+    kb::tests::Require(spawnStats.commandPlaybackNanoseconds > 0, "Loose bulk prefab stats did not report command playback time");
+    kb::tests::Require(spawnStats.commandPlaybackCreateNanoseconds > 0, "Loose bulk prefab stats did not report command playback create time");
+    kb::tests::Require(spawnStats.commandPlaybackApplyNanoseconds > 0, "Loose bulk prefab stats did not report command playback apply time");
+    kb::tests::Require(spawnStats.commandPlaybackParentNanoseconds > 0, "Loose bulk prefab stats did not report command playback parent time");
+    kb::tests::Require(spawnStats.hierarchyRecordNanoseconds > 0, "Loose bulk prefab stats did not report hierarchy record time");
+    kb::tests::Require(spawnStats.nameAssignmentNanoseconds > 0, "Loose named bulk prefab stats did not report name assignment time");
+    kb::tests::Require(spawnStats.registryResolveNanoseconds == 0, "Loose bulk prefab stats reported registry resolve time");
+    kb::tests::Require(spawnStats.historyRecordNanoseconds == 0, "Loose bulk prefab stats reported instance record time");
     const kb::ecs::World& world = scene.Runtime().EcsWorld();
     kb::tests::Require(world.NativeStorageStats().liveEntities == scene.Entities().Count(), "Bulk prefab spawn created objects outside the native ECS entity model");
     const std::vector<kb::ecs::ComponentId> rootArchetype{
@@ -334,6 +399,7 @@ void RunBulkPrefabInstantiationTest() {
         kb::tests::Require(!instance.Handle().IsValid(), "Loose bulk prefab instance should not be tracked");
         kb::tests::Require(scene.Entities().IsAlive(instance.ObjectAt(rootNode)) && scene.Entities().IsAlive(instance.ObjectAt(childNode)), "Bulk prefab returned a non-live ECS entity object");
         kb::tests::Require(scene.Entities().Name(instance.ObjectAt(rootNode)) == "Bulk/Bulk Root", "Bulk prefab root name was not assigned");
+        kb::tests::Require(world.Name(instance.ObjectAt(rootNode).Entity()).empty(), "Bulk prefab fast name path synchronized a repeated name to the backend");
         kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(rootNode).Entity()) == externalParent.Entity(), "Bulk prefab root parent was not assigned");
         kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Bulk prefab child parent was not assigned");
         kb::tests::Require(scene.Components().MeshRenderers().Has(instance.ObjectAt(rootNode).Entity()), "Bulk prefab mesh component was not assigned");
@@ -348,6 +414,107 @@ void RunBulkPrefabInstantiationTest() {
     const kb::scene::TransformComponent childTransform = scene.Transforms().Get(instances.front().ObjectAt(childNode));
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.x, 11.0F), "Bulk prefab world transform did not include external parent X");
     kb::tests::Require(kb::tests::NearlyEqual(childTransform.worldPosition.y, 2.0F), "Bulk prefab world transform did not include prefab parent Y");
+}
+
+void RunBulkPrefabSceneHierarchyOnlyInstantiationTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Scene Hierarchy Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Scene Hierarchy Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 2.0F, 0.0F },
+        },
+        .visibility = kb::scene::VisibilityComponent{
+            .visible = true,
+        },
+    });
+
+    kb::scene::ScenePrefabInstantiationSettings settings;
+    settings.assignNames = true;
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefab, 4, settings);
+
+    kb::tests::Require(instances.size() == 4, "Scene-hierarchy-only prefab spawn did not return every requested instance");
+    const kb::scene::ScenePrefabInstantiationStats spawnStats = scene.Prefabs().LastInstantiationStats();
+    kb::tests::Require(spawnStats.parentCommands == 0, "Scene-hierarchy-only prefab spawn queued backend parent commands");
+    kb::tests::Require(spawnStats.entitiesCreated == 8, "Scene-hierarchy-only prefab spawn created an unexpected entity count");
+    kb::tests::Require(spawnStats.componentBytesCopied > 0, "Scene-hierarchy-only prefab spawn did not report logical component bytes");
+    kb::tests::Require(spawnStats.componentSourceBytesRead > 0, "Scene-hierarchy-only prefab spawn did not report source component bytes");
+    kb::tests::Require(spawnStats.componentSourceBytesRead < spawnStats.componentBytesCopied, "Scene-hierarchy-only prefab pattern telemetry did not reduce source component bytes");
+    kb::tests::Require(spawnStats.entityCreateNanoseconds > 0, "Scene-hierarchy-only prefab spawn did not report entity create time");
+    kb::tests::Require(spawnStats.commandBuildNanoseconds == 0, "Scene-hierarchy-only prefab spawn reported command build time");
+    kb::tests::Require(spawnStats.commandPlaybackNanoseconds == 0, "Scene-hierarchy-only prefab spawn reported command playback time");
+    kb::tests::Require(spawnStats.commandPlaybackParentNanoseconds == 0, "Scene-hierarchy-only prefab spawn reported command parent playback time");
+    kb::tests::Require(spawnStats.hierarchyRecordNanoseconds > 0, "Scene-hierarchy-only prefab spawn did not report hierarchy record time");
+    kb::tests::Require(spawnStats.nameAssignmentNanoseconds > 0, "Scene-hierarchy-only named prefab spawn did not report name assignment time");
+
+    const kb::ecs::World& world = scene.Runtime().EcsWorld();
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        const kb::scene::SceneObject root = instance.ObjectAt(rootNode);
+        const kb::scene::SceneObject child = instance.ObjectAt(childNode);
+        kb::tests::Require(scene.Hierarchy().Parent(child.Entity()) == root.Entity(), "Scene hierarchy cache did not expose the prefab child parent");
+        kb::tests::Require(scene.Hierarchy().ChildEntities(root.Entity()).size() == 1U, "Scene hierarchy cache did not expose the prefab child");
+        kb::tests::Require(!world.Parent(child.Entity()).IsValid(), "Scene-hierarchy-only prefab spawn synchronized a backend parent relation");
+        kb::tests::Require(scene.Entities().Name(root) == "Scene Hierarchy Root", "Scene-hierarchy-only prefab spawn did not expose cached root name");
+        kb::tests::Require(scene.Entities().Name(child) == "Scene Hierarchy Child", "Scene-hierarchy-only prefab spawn did not expose cached child name");
+        kb::tests::Require(world.Name(root.Entity()).empty(), "Scene-hierarchy-only prefab spawn synchronized a backend root name");
+        kb::tests::Require(world.Name(child.Entity()).empty(), "Scene-hierarchy-only prefab spawn synchronized a backend child name");
+    }
+
+    const kb::scene::SceneObject mutableChild = instances.front().ObjectAt(childNode);
+    kb::scene::TransformComponent transform = scene.Transforms().Get(mutableChild);
+    transform.localPosition.y = 7.0F;
+    scene.Transforms().Set(mutableChild, transform);
+    scene.Entities().SetName(mutableChild, "Scene Hierarchy Child Edited");
+    scene.Components().Visibility().Set(mutableChild.Entity(), kb::scene::VisibilityComponent{ .visible = false });
+
+    kb::tests::Require(scene.Entities().Name(mutableChild) == "Scene Hierarchy Child Edited", "Scene-hierarchy-only prefab edit did not update cached child name");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(mutableChild).localPosition.y, 7.0F), "Scene-hierarchy-only prefab edit did not update native child transform");
+    const kb::scene::VisibilityComponent* editedVisibility = scene.Components().Visibility().TryGet(mutableChild.Entity());
+    kb::tests::Require(editedVisibility != nullptr && !editedVisibility->visible, "Scene-hierarchy-only prefab edit did not update native visibility");
+    kb::tests::Require(world.Name(mutableChild.Entity()).empty(), "Scene-hierarchy-only prefab edit synchronized a backend child name");
+}
+
+void RunBulkPrefabBatchStatsOnlyInstantiationTest() {
+    kb::scene::Scene scene;
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Batch Stats Root" });
+    static_cast<void>(prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Batch Stats Child",
+        .parentNode = rootNode,
+    }));
+
+    kb::scene::ScenePrefabInstantiationSettings settings;
+    settings.assignNames = false;
+    const kb::scene::ScenePrefabInstantiationStats stats = scene.Prefabs().InstantiateBatch(prefab, 5, settings);
+
+    kb::tests::Require(stats.requestedInstances == 5, "Batch stats-only prefab spawn recorded invalid requested count");
+    kb::tests::Require(stats.instantiatedInstances == 5, "Batch stats-only prefab spawn recorded invalid instantiated count");
+    kb::tests::Require(stats.entitiesCreated == 10, "Batch stats-only prefab spawn recorded invalid entity count");
+    kb::tests::Require(stats.parentCommands == 0, "Batch stats-only prefab spawn queued backend hierarchy commands");
+    kb::tests::Require(stats.entityCreateNanoseconds > 0, "Batch stats-only prefab spawn did not report entity create time");
+    kb::tests::Require(stats.hierarchyRecordNanoseconds > 0, "Batch stats-only prefab spawn did not report hierarchy record time");
+    kb::tests::Require(stats.nameAssignmentNanoseconds == 0, "Batch stats-only prefab spawn reported disabled name assignment time");
+    kb::tests::Require(scene.Prefabs().LastInstantiationStats().entitiesCreated == stats.entitiesCreated, "Batch stats-only prefab spawn did not update last stats");
+    kb::tests::Require(scene.Entities().Count() == 10, "Batch stats-only prefab spawn created an unexpected scene entity count");
+
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    kb::tests::Require(roots.size() == 5, "Batch stats-only prefab spawn did not expose scene hierarchy roots");
+    std::vector<kb::scene::SceneEntity> firstRootChildren;
+    for (const kb::scene::SceneEntity root : roots) {
+        const std::vector<kb::scene::SceneEntity> children = scene.Hierarchy().ChildEntities(root);
+        kb::tests::Require(children.size() == 1U, "Batch stats-only prefab spawn did not expose scene hierarchy children");
+        kb::tests::Require(scene.Hierarchy().Parent(children.front()) == root, "Batch stats-only prefab spawn did not expose child parent");
+        if (firstRootChildren.empty()) {
+            firstRootChildren = children;
+        }
+    }
+    kb::tests::Require(roots.size() >= 2U && !firstRootChildren.empty(), "Batch stats-only prefab spawn reparent setup failed");
+    kb::tests::Require(scene.Hierarchy().SetParent(firstRootChildren.front(), roots[1]), "Batch stats-only prefab spawn dense hierarchy reparent failed");
+    kb::tests::Require(scene.Hierarchy().Parent(firstRootChildren.front()) == roots[1], "Batch stats-only prefab spawn dense hierarchy parent cache did not update");
+    kb::tests::Require(scene.Hierarchy().ChildEntities(roots[0]).empty(), "Batch stats-only prefab spawn dense hierarchy did not remove old child link");
+    kb::tests::Require(scene.Hierarchy().ChildEntities(roots[1]).size() == 2U, "Batch stats-only prefab spawn dense hierarchy did not append new child link");
 }
 
 void RunBulkPrefabMultiArchetypeNodeOrderTest() {
@@ -466,8 +633,26 @@ void RunRegisteredBulkPrefabInstantiationTest() {
     });
     const kb::scene::ScenePrefabHandle handle = scene.Prefabs().Register("RegisteredBulkPrefab", std::move(prefab));
 
-    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(handle, 4);
+    kb::scene::ScenePrefabInstantiationSettings settings;
+    settings.syncWorldHierarchy = true;
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(handle, 4, settings);
     kb::tests::Require(instances.size() == 4, "Registered bulk prefab instantiation did not return every requested instance");
+    const kb::scene::ScenePrefabInstantiationStats spawnStats = scene.Prefabs().LastInstantiationStats();
+    kb::tests::Require(spawnStats.requestedInstances == 4, "Registered bulk prefab stats recorded invalid requested instance count");
+    kb::tests::Require(spawnStats.instantiatedInstances == 4, "Registered bulk prefab stats recorded invalid instantiated instance count");
+    kb::tests::Require(spawnStats.nodesPerInstance == 2, "Registered bulk prefab stats recorded invalid node count");
+    kb::tests::Require(spawnStats.entitiesCreated == 8, "Registered bulk prefab stats recorded invalid entity create count");
+    kb::tests::Require(spawnStats.prefabArchetypesTouched == 2, "Registered bulk prefab stats recorded invalid archetype count");
+    kb::tests::Require(spawnStats.bulkCreateCommands == 2, "Registered bulk prefab stats recorded invalid batch create command count");
+    kb::tests::Require(spawnStats.parentCommands == 4, "Registered bulk prefab stats recorded invalid parent command count");
+    kb::tests::Require(spawnStats.componentBytesCopied > 0, "Registered bulk prefab stats did not report copied component bytes");
+    kb::tests::Require(spawnStats.registeredInstanceCount == 4, "Registered bulk prefab stats recorded invalid registered instance count");
+    kb::tests::Require(spawnStats.entityCreateNanoseconds > 0, "Registered bulk prefab stats did not report entity create time");
+    kb::tests::Require(spawnStats.commandPlaybackParentNanoseconds > 0, "Registered bulk prefab stats did not report command parent playback time");
+    kb::tests::Require(spawnStats.hierarchyRecordNanoseconds > 0, "Registered bulk prefab stats did not report hierarchy record time");
+    kb::tests::Require(spawnStats.nameAssignmentNanoseconds > 0, "Registered named bulk prefab stats did not report name assignment time");
+    kb::tests::Require(spawnStats.registryResolveNanoseconds > 0, "Registered bulk prefab stats did not report registry resolve time");
+    kb::tests::Require(spawnStats.historyRecordNanoseconds > 0, "Registered bulk prefab stats did not report instance record time");
     for (const kb::scene::ScenePrefabInstance& instance : instances) {
         kb::tests::Require(instance.Handle().IsValid(), "Registered bulk prefab instance was not tracked");
         kb::tests::Require(scene.Prefabs().RootInstance(instance.ObjectAt(rootNode)) == instance.Handle(), "Registered bulk prefab root was not tracked");
@@ -479,6 +664,33 @@ void RunRegisteredBulkPrefabInstantiationTest() {
         kb::tests::Require(scene.Components().AudioSources().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio source component was not assigned");
         kb::tests::Require(scene.Components().AudioListeners().Has(instance.ObjectAt(childNode).Entity()), "Registered bulk prefab audio listener component was not assigned");
     }
+}
+
+void RunRegisteredBulkPrefabReconnectKeepsSourceIdentityTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab sourcePrefab;
+    const std::uint32_t sourceRootNode = sourcePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Source Identity Root" });
+    const std::uint32_t sourceChildNode = sourcePrefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Source Identity Child",
+        .parentNode = sourceRootNode,
+    });
+    const kb::scene::ScenePrefabHandle sourceHandle = scene.Prefabs().Register("SourceIdentityPrefab", std::move(sourcePrefab));
+    kb::tests::Require(sourceHandle.IsValid(), "Registered bulk source identity setup did not register the source prefab");
+
+    kb::scene::ScenePrefab wrongPrefab;
+    static_cast<void>(wrongPrefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Wrong Source Root" }));
+    const kb::scene::ScenePrefabHandle wrongHandle = scene.Prefabs().Register("WrongSourceIdentityPrefab", std::move(wrongPrefab));
+    kb::tests::Require(wrongHandle.IsValid(), "Registered bulk source identity setup did not register the wrong source prefab");
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(sourceHandle, 3U);
+    kb::tests::Require(instances.size() == 3U, "Registered bulk source identity setup did not instantiate the full batch");
+
+    const kb::scene::ScenePrefabInstance& instance = instances.front();
+    kb::tests::Require(!scene.Prefabs().Reconnect(instance.Handle(), wrongHandle), "Registered bulk instance accepted a different source identity");
+    kb::tests::Require(scene.Prefabs().SourcePrefab(instance.Handle()) == sourceHandle, "Rejected source reconnect changed the instance source handle");
+    kb::tests::Require(scene.Prefabs().RootInstance(instance.ObjectAt(sourceRootNode)) == instance.Handle(), "Rejected source reconnect changed the root mapping");
+    kb::tests::Require(scene.Entities().Name(instance.ObjectAt(sourceChildNode)) == "Source Identity Child", "Rejected source reconnect changed child data");
 }
 
 void RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest() {
@@ -694,6 +906,60 @@ void RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest() {
     kb::tests::Require(matchedInstances == expectedHandles.size(), "Bulk prefab snapshot did not restore every registered instance");
 }
 
+void RunSceneHistoryRestoresBulkPrefabResolvedBaselineTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "History Bulk Baseline Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "History Bulk Baseline Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("HistoryBulkResolvedBaselinePrefab", std::move(prefab));
+    kb::tests::Require(prefabHandle.IsValid(), "History bulk baseline setup did not register prefab");
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, 3U);
+    kb::tests::Require(instances.size() == 3U, "History bulk baseline setup did not instantiate the batch");
+
+    kb::scene::TransformComponent localOverride = scene.Transforms().Get(instances[1U].ObjectAt(childNode));
+    localOverride.localPosition = kb::scene::Vec3{ 0.0F, 42.0F, 0.0F };
+    scene.Transforms().Set(instances[1U].ObjectAt(childNode), localOverride);
+
+    kb::tests::Require(scene.History().Record("bulk resolved baseline"), "History bulk baseline snapshot was not recorded");
+
+    kb::scene::ScenePrefabPrivateScene privateScene = scene.Prefabs().OpenPrivateScene(prefabHandle);
+    kb::tests::Require(privateScene.IsValid(), "History bulk baseline private scene did not open");
+    privateScene.EditScene().Entities().SetName(privateScene.ObjectAt(childNode), "History Bulk Baseline Child Updated");
+    kb::tests::Require(privateScene.Apply(), "History bulk baseline private scene apply failed");
+    kb::tests::Require(scene.Entities().Name(instances.front().ObjectAt(childNode)) == "History Bulk Baseline Child Updated", "History bulk baseline apply did not refresh inherited instance data");
+
+    kb::tests::Require(scene.History().Undo(), "History bulk baseline undo failed");
+
+    auto findRestoredRoot = [&scene](kb::scene::ScenePrefabInstanceHandle handle) {
+        for (const kb::scene::SceneObject root : scene.Hierarchy().RootObjects()) {
+            if (scene.Prefabs().RootInstance(root) == handle) {
+                return root;
+            }
+        }
+        return kb::scene::SceneObject{};
+    };
+
+    const kb::scene::SceneObject restoredRoot = findRestoredRoot(instances[1U].Handle());
+    kb::tests::Require(restoredRoot.IsValid(), "History bulk baseline undo did not restore the tracked instance root");
+    const std::vector<kb::scene::SceneObject> restoredChildren = scene.Hierarchy().Children(restoredRoot);
+    kb::tests::Require(restoredChildren.size() == 1U, "History bulk baseline undo restored an invalid child count");
+    const kb::scene::SceneObject restoredChild = restoredChildren.front();
+    kb::tests::Require(scene.Entities().Name(restoredChild) == "History Bulk Baseline Child", "History bulk baseline undo did not restore original child data");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(restoredChild).localPosition.y, 42.0F), "History bulk baseline undo lost the local transform override");
+
+    kb::tests::Require(scene.Prefabs().RefreshInstances(prefabHandle) == instances.size(), "History bulk baseline refresh did not process every restored batch instance");
+    kb::tests::Require(scene.Entities().Name(restoredChild) == "History Bulk Baseline Child Updated", "History bulk baseline refresh treated inherited source data as a local override");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(restoredChild).localPosition.y, 42.0F), "History bulk baseline refresh lost the local transform override");
+}
+
 void RunRegisteredPrefabOverrideLifecycleTest() {
     kb::scene::Scene scene;
 
@@ -790,6 +1056,44 @@ void RunRegisteredPrefabOverrideLifecycleTest() {
         foundAppliedExtraChild = foundAppliedExtraChild || scene.Entities().Name(object) == "Applied Extra Child";
     }
     kb::tests::Require(foundAppliedExtraChild, "Prefab override apply did not add the new child to the prefab baseline");
+}
+
+void RunRegisteredPrefabBatchApplyOverridesTest() {
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{ .name = "Batch Apply Root" });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Batch Apply Child",
+        .parentNode = rootNode,
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 0.0F, 1.0F, 0.0F },
+        },
+    });
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("BatchApplyPrefab", std::move(prefab));
+
+    const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, 4U);
+    kb::tests::Require(instances.size() == 4U, "Prefab batch apply setup did not instantiate all instances");
+
+    std::vector<kb::scene::ScenePrefabInstanceHandle> handles;
+    handles.reserve(instances.size());
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        handles.push_back(instance.Handle());
+        scene.Entities().SetName(instance.ObjectAt(childNode), "Batch Applied Child");
+        kb::scene::TransformComponent transform = scene.Transforms().Get(instance.ObjectAt(childNode));
+        transform.localPosition.y = 9.0F;
+        scene.Transforms().Set(instance.ObjectAt(childNode), transform);
+    }
+
+    kb::tests::Require(scene.Prefabs().ApplyOverrides(std::span<const kb::scene::ScenePrefabInstanceHandle>{ handles }), "Prefab batch apply rejected valid handles");
+    for (const kb::scene::ScenePrefabInstance& instance : instances) {
+        kb::tests::Require(scene.Prefabs().Overrides(instance.Handle()).Empty(), "Prefab batch apply left instance overrides dirty");
+    }
+
+    const kb::scene::ScenePrefabInstance futureInstance = scene.Prefabs().Instantiate(prefabHandle);
+    kb::tests::Require(scene.Entities().Name(futureInstance.ObjectAt(childNode)) == "Batch Applied Child", "Prefab batch apply did not update future instance name");
+    const kb::scene::TransformComponent futureTransform = scene.Transforms().Get(futureInstance.ObjectAt(childNode));
+    kb::tests::Require(kb::tests::NearlyEqual(futureTransform.localPosition.y, 9.0F), "Prefab batch apply did not update future instance transform");
 }
 
 void RunMissingPrefabInstanceObjectOverrideTest() {
@@ -1835,46 +2139,164 @@ void RunPrefabMappingsIgnoreDestroyedEntitiesTest() {
     kb::tests::Require(!scene.Prefabs().SourcePrefab(rootObject).IsValid(), "Destroyed root still resolved to a source prefab");
 }
 
+void RunRegisteredBulkPrefabSpawnDestroyChurnTest() {
+    constexpr std::size_t kRounds = 5;
+    constexpr std::size_t kInstancesPerRound = 48;
+
+    kb::scene::Scene scene;
+
+    kb::scene::ScenePrefab prefab;
+    const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Churn Root",
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 17,
+                .materialAssetId = 23,
+            },
+        },
+    });
+    const std::uint32_t childNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Churn Child",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .camera = kb::scene::CameraComponent{
+                .primary = false,
+            },
+        },
+    });
+    const std::uint32_t lightNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Churn Light",
+        .parentNode = childNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .light = kb::scene::LightComponent{
+                .kind = kb::scene::LightKind::Point,
+                .intensity = 3.0F,
+            },
+        },
+    });
+    const std::uint32_t taggedNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
+        .name = "Churn Tagged",
+        .parentNode = rootNode,
+        .components = kb::scene::ScenePrefabNodeComponents{
+            .tags = [] {
+                kb::scene::TagsComponent tags;
+                kb::scene::SetTagsText(tags, "churn");
+                return tags;
+            }(),
+        },
+    });
+    const std::size_t nodesPerInstance = prefab.Nodes().size();
+    const kb::scene::ScenePrefabHandle prefabHandle = scene.Prefabs().Register("RegisteredBulkChurnPrefab", std::move(prefab));
+
+    std::vector<kb::scene::ScenePrefabInstanceHandle> staleHandles;
+    std::vector<kb::scene::SceneObject> staleObjects;
+    staleHandles.reserve(kRounds * kInstancesPerRound);
+    staleObjects.reserve(kRounds * kInstancesPerRound * nodesPerInstance);
+
+    for (std::size_t round = 0; round < kRounds; ++round) {
+        const std::vector<kb::scene::ScenePrefabInstance> instances = scene.Prefabs().InstantiateMany(prefabHandle, kInstancesPerRound);
+        const kb::scene::ScenePrefabInstantiationStats spawnStats = scene.Prefabs().LastInstantiationStats();
+        kb::tests::Require(instances.size() == kInstancesPerRound, "Prefab churn spawn did not return every requested instance");
+        kb::tests::Require(spawnStats.requestedInstances == kInstancesPerRound, "Prefab churn stats recorded invalid request count");
+        kb::tests::Require(spawnStats.instantiatedInstances == kInstancesPerRound, "Prefab churn stats recorded invalid instance count");
+        kb::tests::Require(spawnStats.nodesPerInstance == nodesPerInstance, "Prefab churn stats recorded invalid node count");
+        kb::tests::Require(spawnStats.entitiesCreated == kInstancesPerRound * nodesPerInstance, "Prefab churn stats recorded invalid entity count");
+        kb::tests::Require(spawnStats.registeredInstanceCount == kInstancesPerRound, "Prefab churn stats recorded invalid registered instance count");
+        kb::tests::Require(scene.Entities().Count() == kInstancesPerRound * nodesPerInstance, "Prefab churn left unexpected live scene entities after spawn");
+        kb::tests::Require(scene.Runtime().EcsWorld().NativeStorageStats().liveEntities == scene.Entities().Count(), "Prefab churn scene count diverged from native storage after spawn");
+
+        std::vector<kb::scene::SceneObject> roots;
+        roots.reserve(instances.size());
+        for (const kb::scene::ScenePrefabInstance& instance : instances) {
+            kb::tests::Require(instance.Handle().IsValid(), "Prefab churn returned an untracked registered instance");
+            kb::tests::Require(scene.Prefabs().IsInstance(instance.Handle()), "Prefab churn registered handle did not resolve");
+            kb::tests::Require(scene.Prefabs().RootInstance(instance.RootObject()) == instance.Handle(), "Prefab churn root mapping did not resolve");
+            kb::tests::Require(scene.Prefabs().SourcePrefab(instance.RootObject()) == prefabHandle, "Prefab churn root source prefab did not resolve");
+            kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(childNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Prefab churn child hierarchy was not linked");
+            kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(lightNode).Entity()) == instance.ObjectAt(childNode).Entity(), "Prefab churn grandchild hierarchy was not linked");
+            kb::tests::Require(scene.Hierarchy().Parent(instance.ObjectAt(taggedNode).Entity()) == instance.ObjectAt(rootNode).Entity(), "Prefab churn sibling hierarchy was not linked");
+            roots.push_back(instance.RootObject());
+            staleHandles.push_back(instance.Handle());
+            staleObjects.insert(staleObjects.end(), instance.Objects().begin(), instance.Objects().end());
+        }
+
+        scene.Entities().Destroy(std::span<const kb::scene::SceneObject>{ roots });
+        kb::tests::Require(scene.Entities().Count() == 0, "Prefab churn root destroy did not remove every instance object");
+        kb::tests::Require(scene.Runtime().EcsWorld().NativeStorageStats().liveEntities == 0, "Prefab churn root destroy left native storage entities alive");
+        for (const kb::scene::ScenePrefabInstanceHandle handle : staleHandles) {
+            kb::tests::Require(!scene.Prefabs().IsInstance(handle), "Prefab churn kept a destroyed instance handle alive");
+        }
+        for (const kb::scene::SceneObject object : staleObjects) {
+            std::uint32_t nodeIndex = 99;
+            kb::tests::Require(!scene.Entities().IsAlive(object), "Prefab churn stale object stayed alive after root destroy");
+            kb::tests::Require(!scene.Prefabs().RootInstance(object).IsValid(), "Prefab churn stale object still resolved as a root instance");
+            kb::tests::Require(!scene.Prefabs().ContainingInstance(object, nodeIndex).IsValid(), "Prefab churn stale object still resolved as an instance member");
+            kb::tests::Require(!scene.Prefabs().SourcePrefab(object).IsValid(), "Prefab churn stale object still resolved to a source prefab");
+        }
+    }
+
+    const std::vector<kb::scene::ScenePrefabInstance> finalInstances = scene.Prefabs().InstantiateMany(prefabHandle, kInstancesPerRound);
+    kb::tests::Require(finalInstances.size() == kInstancesPerRound, "Prefab churn final spawn did not return every requested instance");
+    kb::tests::Require(scene.Entities().Count() == kInstancesPerRound * nodesPerInstance, "Prefab churn final spawn created an unexpected live entity count");
+    for (const kb::scene::ScenePrefabInstance& instance : finalInstances) {
+        kb::tests::Require(instance.Handle().IsValid(), "Prefab churn final spawn returned an untracked registered instance");
+        kb::tests::Require(scene.Prefabs().IsInstance(instance.Handle()), "Prefab churn final handle did not resolve");
+        kb::tests::Require(scene.Prefabs().RootInstance(instance.RootObject()) == instance.Handle(), "Prefab churn final root mapping did not resolve");
+        kb::tests::Require(scene.Prefabs().SourcePrefab(instance.RootObject()) == prefabHandle, "Prefab churn final source prefab did not resolve");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunScenePrefabInstantiationTests() {
-    RunPrefabInstantiationTest();
-    RunInvalidPrefabInstantiationTest();
-    RunRegisteredPrefabInstantiationTest();
-    RunBulkPrefabInstantiationTest();
-    RunBulkPrefabMultiArchetypeNodeOrderTest();
-    RunLargePrefabHierarchyTransformTest();
-    RunRegisteredBulkPrefabInstantiationTest();
-    RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest();
-    RunSceneHistoryRestoresNestedRegisteredPrefabInstanceSnapshotTest();
-    RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest();
-    RunRegisteredPrefabOverrideLifecycleTest();
-    RunMissingPrefabInstanceObjectOverrideTest();
-    RunRegisteredPrefabFullComponentOverrideLifecycleTest();
-    RunPrefabApplyRejectsDetachedTrackedChildTest();
-    RunPrefabVariantInstantiationTest();
-    RunPrefabVariantApplyUpdatesVariantOnlyTest();
-    RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest();
-    RunPrefabConnectionMetadataAndUnpackTest();
-    RunPrefabStaleHandleProtectionTest();
-    RunPrefabMissingSourceUnloadUnpackReconnectTest();
-    RunPrefabUnpackNestedVariantModesTest();
-    RunPrefabApplyRefreshesExistingInstancesTest();
-    RunPrefabApplyAddedChildRefreshesExistingInstancesTest();
-    RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest();
-    RunPrefabRefreshLargeInstanceSetTest();
-    RunPrefabApplyOverrideToAssetTest();
-    RunPrefabAssetLoadMigratesMissingNodeStableIdsTest();
-    RunNestedPrefabCompositionTest();
-    RunNestedPrefabCaptureAndRefreshTest();
-    RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest();
-    RunPrefabStableNodeIdentityOverridesTest();
-    RunPrefabRemovedNodeOverrideDoesNotFallbackToIndexTest();
-    RunNestedPrefabOverrideSurvivesInnerReorderTest();
-    RunPrefabClearDoesNotReuseStaleHandlesTest();
-    RunPrefabMappingsIgnoreDestroyedEntitiesTest();
+    const auto run = [](const char* name, void (*test)()) {
+        TracePrefabTest(name);
+        test();
+    };
+    run("RunPrefabInstantiationTest", RunPrefabInstantiationTest);
+    run("RunInvalidPrefabInstantiationTest", RunInvalidPrefabInstantiationTest);
+    run("RunRegisteredPrefabInstantiationTest", RunRegisteredPrefabInstantiationTest);
+    run("RunRegisteredPrefabBatchInstantiationTest", RunRegisteredPrefabBatchInstantiationTest);
+    run("RunBulkPrefabInstantiationTest", RunBulkPrefabInstantiationTest);
+    run("RunBulkPrefabSceneHierarchyOnlyInstantiationTest", RunBulkPrefabSceneHierarchyOnlyInstantiationTest);
+    run("RunBulkPrefabBatchStatsOnlyInstantiationTest", RunBulkPrefabBatchStatsOnlyInstantiationTest);
+    run("RunBulkPrefabMultiArchetypeNodeOrderTest", RunBulkPrefabMultiArchetypeNodeOrderTest);
+    run("RunLargePrefabHierarchyTransformTest", RunLargePrefabHierarchyTransformTest);
+    run("RunRegisteredBulkPrefabInstantiationTest", RunRegisteredBulkPrefabInstantiationTest);
+    run("RunRegisteredBulkPrefabReconnectKeepsSourceIdentityTest", RunRegisteredBulkPrefabReconnectKeepsSourceIdentityTest);
+    run("RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest", RunSceneHistoryRestoresRegisteredPrefabInstanceSnapshotTest);
+    run("RunSceneHistoryRestoresNestedRegisteredPrefabInstanceSnapshotTest", RunSceneHistoryRestoresNestedRegisteredPrefabInstanceSnapshotTest);
+    run("RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest", RunSceneHistoryRestoresBulkPrefabArchetypesAndNodeMappingsTest);
+    run("RunSceneHistoryRestoresBulkPrefabResolvedBaselineTest", RunSceneHistoryRestoresBulkPrefabResolvedBaselineTest);
+    run("RunRegisteredPrefabOverrideLifecycleTest", RunRegisteredPrefabOverrideLifecycleTest);
+    run("RunRegisteredPrefabBatchApplyOverridesTest", RunRegisteredPrefabBatchApplyOverridesTest);
+    run("RunMissingPrefabInstanceObjectOverrideTest", RunMissingPrefabInstanceObjectOverrideTest);
+    run("RunRegisteredPrefabFullComponentOverrideLifecycleTest", RunRegisteredPrefabFullComponentOverrideLifecycleTest);
+    run("RunPrefabApplyRejectsDetachedTrackedChildTest", RunPrefabApplyRejectsDetachedTrackedChildTest);
+    run("RunPrefabVariantInstantiationTest", RunPrefabVariantInstantiationTest);
+    run("RunPrefabVariantApplyUpdatesVariantOnlyTest", RunPrefabVariantApplyUpdatesVariantOnlyTest);
+    run("RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest", RunPrefabBaseApplyRefreshesVariantInstancesPreservingLocalOverridesTest);
+    run("RunPrefabConnectionMetadataAndUnpackTest", RunPrefabConnectionMetadataAndUnpackTest);
+    run("RunPrefabStaleHandleProtectionTest", RunPrefabStaleHandleProtectionTest);
+    run("RunPrefabMissingSourceUnloadUnpackReconnectTest", RunPrefabMissingSourceUnloadUnpackReconnectTest);
+    run("RunPrefabUnpackNestedVariantModesTest", RunPrefabUnpackNestedVariantModesTest);
+    run("RunPrefabApplyRefreshesExistingInstancesTest", RunPrefabApplyRefreshesExistingInstancesTest);
+    run("RunPrefabApplyAddedChildRefreshesExistingInstancesTest", RunPrefabApplyAddedChildRefreshesExistingInstancesTest);
+    run("RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest", RunPrefabAddedRemovedMissingNodesStableAfterRefreshAndSaveTest);
+    run("RunPrefabRefreshLargeInstanceSetTest", RunPrefabRefreshLargeInstanceSetTest);
+    run("RunPrefabApplyOverrideToAssetTest", RunPrefabApplyOverrideToAssetTest);
+    run("RunPrefabAssetLoadMigratesMissingNodeStableIdsTest", RunPrefabAssetLoadMigratesMissingNodeStableIdsTest);
+    run("RunNestedPrefabCompositionTest", RunNestedPrefabCompositionTest);
+    run("RunNestedPrefabCaptureAndRefreshTest", RunNestedPrefabCaptureAndRefreshTest);
+    run("RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest", RunPrefabPrivateSceneApplyPreservesMainSceneOverridesTest);
+    run("RunPrefabStableNodeIdentityOverridesTest", RunPrefabStableNodeIdentityOverridesTest);
+    run("RunPrefabRemovedNodeOverrideDoesNotFallbackToIndexTest", RunPrefabRemovedNodeOverrideDoesNotFallbackToIndexTest);
+    run("RunNestedPrefabOverrideSurvivesInnerReorderTest", RunNestedPrefabOverrideSurvivesInnerReorderTest);
+    run("RunPrefabClearDoesNotReuseStaleHandlesTest", RunPrefabClearDoesNotReuseStaleHandlesTest);
+    run("RunPrefabMappingsIgnoreDestroyedEntitiesTest", RunPrefabMappingsIgnoreDestroyedEntitiesTest);
+    run("RunRegisteredBulkPrefabSpawnDestroyChurnTest", RunRegisteredBulkPrefabSpawnDestroyChurnTest);
 }
 
 } // namespace kb::tests

@@ -327,6 +327,7 @@ public:
             remainingWork_ = jobs.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
+            activeWorkerLimit_ = config_.workerCount;
             workMode_ = WorkMode::Jobs;
             batchActive_ = true;
         }
@@ -378,10 +379,11 @@ public:
             batches_ = batches.data();
             batchCallback_ = callback;
             batchCallbackContext_ = context;
+            activeWorkerLimit_ = ResolveBatchWorkerLimit(batches);
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
                 const WorkerPoolBatch& batch = batches[batchIndex];
-                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % config_.workerCount : batch.preferredWorkerIndex % config_.workerCount;
+                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
                 workerBatchQueues_[owner].push_back(batchIndex);
             }
 
@@ -439,10 +441,11 @@ public:
             chunks_ = chunks.data();
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
+            activeWorkerLimit_ = ResolveChunkWorkerLimit(chunks);
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
                 const WorkerPoolChunk& chunk = chunks[chunkIndex];
-                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % config_.workerCount : chunk.preferredWorkerIndex % config_.workerCount;
+                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
                 workerBatchQueues_[owner].push_back(chunkIndex);
             }
 
@@ -502,6 +505,7 @@ public:
             remainingWork_ = ownedJobs_.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
+            activeWorkerLimit_ = config_.workerCount;
             activeCompletion_ = completion;
             workMode_ = WorkMode::Jobs;
             batchActive_ = true;
@@ -540,10 +544,11 @@ public:
             batches_ = ownedBatches_.data();
             batchCallback_ = callback;
             batchCallbackContext_ = context;
+            activeWorkerLimit_ = ResolveBatchWorkerLimit(ownedBatches_);
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t batchIndex = 0; batchIndex < ownedBatches_.size(); ++batchIndex) {
                 const WorkerPoolBatch& batch = ownedBatches_[batchIndex];
-                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % config_.workerCount : batch.preferredWorkerIndex % config_.workerCount;
+                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
                 workerBatchQueues_[owner].push_back(batchIndex);
             }
 
@@ -588,10 +593,11 @@ public:
             chunks_ = ownedChunks_.data();
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
+            activeWorkerLimit_ = ResolveChunkWorkerLimit(ownedChunks_);
             workerBatchQueues_.assign(config_.workerCount, {});
             for (std::size_t chunkIndex = 0; chunkIndex < ownedChunks_.size(); ++chunkIndex) {
                 const WorkerPoolChunk& chunk = ownedChunks_[chunkIndex];
-                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % config_.workerCount : chunk.preferredWorkerIndex % config_.workerCount;
+                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
                 workerBatchQueues_[owner].push_back(chunkIndex);
             }
 
@@ -638,6 +644,33 @@ private:
         }
     }
 
+    std::size_t ResolveWorkerLimit(std::size_t requestedWorkerLimit) const noexcept {
+        if (requestedWorkerLimit == 0U) {
+            return config_.workerCount;
+        }
+        return std::clamp<std::size_t>(requestedWorkerLimit, 1U, config_.workerCount);
+    }
+
+    std::size_t ResolveBatchWorkerLimit(std::span<const WorkerPoolBatch> batches) const noexcept {
+        std::size_t workerLimit = 0;
+        for (const WorkerPoolBatch& batch : batches) {
+            if (batch.workerCountLimit != 0U) {
+                workerLimit = workerLimit == 0U ? batch.workerCountLimit : std::min(workerLimit, batch.workerCountLimit);
+            }
+        }
+        return ResolveWorkerLimit(workerLimit);
+    }
+
+    std::size_t ResolveChunkWorkerLimit(std::span<const WorkerPoolChunk> chunks) const noexcept {
+        std::size_t workerLimit = 0;
+        for (const WorkerPoolChunk& chunk : chunks) {
+            if (chunk.workerCountLimit != 0U) {
+                workerLimit = workerLimit == 0U ? chunk.workerCountLimit : std::min(workerLimit, chunk.workerCountLimit);
+            }
+        }
+        return ResolveWorkerLimit(workerLimit);
+    }
+
     static void RunJobsInline(std::span<const WorkerPoolJob> jobs) {
         std::exception_ptr firstException;
         const WorkerContext context{
@@ -652,6 +685,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -672,6 +706,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -692,6 +727,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -713,6 +749,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -735,6 +772,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -757,6 +795,7 @@ private:
                 if (firstException == nullptr) {
                     firstException = std::current_exception();
                 }
+                break;
             }
         }
 
@@ -782,11 +821,6 @@ private:
             startupComplete_.notify_one();
         }
 
-        const WorkerContext context{
-            .workerIndex = workerIndex,
-            .workerCount = config_.workerCount,
-        };
-
         while (true) {
             const WorkerPoolJob* job = nullptr;
             WorkerPoolBatchCallback batchCallback = nullptr;
@@ -796,6 +830,7 @@ private:
             WorkerPoolBatch batch;
             WorkerPoolChunk chunk;
             WorkMode mode = WorkMode::None;
+            std::size_t workerCount = config_.workerCount;
             {
                 std::unique_lock lock{ mutex_ };
                 batchAvailable_.wait(lock, [this, workerIndex] {
@@ -807,6 +842,7 @@ private:
                 }
 
                 mode = workMode_;
+                workerCount = activeWorkerLimit_;
                 if (mode == WorkMode::Jobs) {
                     job = &jobs_[nextJob_];
                     ++nextJob_;
@@ -823,6 +859,11 @@ private:
                 }
             }
 
+            const WorkerContext context{
+                .workerIndex = workerIndex,
+                .workerCount = workerCount,
+            };
+
             try {
                 if (mode == WorkMode::Jobs) {
                     job->callback(context, job->context);
@@ -835,6 +876,7 @@ private:
                 std::lock_guard lock{ mutex_ };
                 if (firstJobException_ == nullptr) {
                     firstJobException_ = std::current_exception();
+                    CancelPendingWorkLocked();
                 }
             }
 
@@ -856,6 +898,9 @@ private:
         if (!batchActive_) {
             return false;
         }
+        if (workerIndex >= activeWorkerLimit_) {
+            return false;
+        }
         if (workMode_ == WorkMode::Jobs) {
             return nextJob_ < jobCount_;
         }
@@ -865,7 +910,7 @@ private:
         if (workerIndex < workerBatchQueues_.size() && !workerBatchQueues_[workerIndex].empty()) {
             return true;
         }
-        for (std::size_t index = 0; index < workerBatchQueues_.size(); ++index) {
+        for (std::size_t index = 0; index < activeWorkerLimit_; ++index) {
             if (index != workerIndex && !workerBatchQueues_[index].empty()) {
                 return true;
             }
@@ -899,8 +944,8 @@ private:
             return batchIndex;
         }
 
-        for (std::size_t offset = 1; offset <= workerBatchQueues_.size(); ++offset) {
-            const std::size_t victimIndex = (workerIndex + offset) % workerBatchQueues_.size();
+        for (std::size_t offset = 1; offset <= activeWorkerLimit_; ++offset) {
+            const std::size_t victimIndex = (workerIndex + offset) % activeWorkerLimit_;
             auto& victimQueue = workerBatchQueues_[victimIndex];
             if (!victimQueue.empty()) {
                 const std::size_t batchIndex = victimQueue.back();
@@ -910,6 +955,22 @@ private:
         }
 
         throw std::logic_error("ECS worker pool attempted to take a missing batch");
+    }
+
+    void CancelPendingWorkLocked() noexcept {
+        std::size_t pendingWork = 0;
+        if (workMode_ == WorkMode::Jobs) {
+            pendingWork = jobCount_ > nextJob_ ? jobCount_ - nextJob_ : 0U;
+            nextJob_ = jobCount_;
+        } else if (workMode_ == WorkMode::Batches || workMode_ == WorkMode::Chunks) {
+            for (auto& queue : workerBatchQueues_) {
+                pendingWork += queue.size();
+                queue.clear();
+            }
+        }
+
+        remainingWork_ = pendingWork > remainingWork_ ? 0U : remainingWork_ - pendingWork;
+        batchAvailable_.notify_all();
     }
 
     void ClearActiveWorkLocked() noexcept {
@@ -922,6 +983,7 @@ private:
         batchCallbackContext_ = nullptr;
         chunkCallback_ = nullptr;
         chunkCallbackContext_ = nullptr;
+        activeWorkerLimit_ = config_.workerCount;
         ownedJobs_.clear();
         ownedBatches_.clear();
         ownedChunks_.clear();
@@ -965,6 +1027,7 @@ private:
     std::vector<WorkerPoolBatch> ownedBatches_;
     std::vector<WorkerPoolChunk> ownedChunks_;
     std::vector<std::deque<std::size_t>> workerBatchQueues_;
+    std::size_t activeWorkerLimit_ = 1;
     std::size_t remainingWork_ = 0;
     std::size_t startupRemaining_ = 0;
     std::exception_ptr startupException_;

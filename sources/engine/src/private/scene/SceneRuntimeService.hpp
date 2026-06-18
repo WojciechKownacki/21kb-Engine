@@ -24,7 +24,9 @@ public:
     static void AddSceneSystem(Scene& scene, std::unique_ptr<SceneSystem> system);
     static void SynchronizeTransforms(Scene& scene);
     static void SetFixedStepSettings(Scene& scene, SceneRuntimeFixedStepSettings settings) noexcept;
+    static void SetTransformPropagationBudget(Scene& scene, SceneTransformPropagationBudget budget) noexcept;
     [[nodiscard]] static SceneRuntimeFixedStepSettings FixedStepSettings(const Scene& scene) noexcept;
+    [[nodiscard]] static SceneTransformPropagationBudget TransformPropagationBudget(const Scene& scene) noexcept;
     [[nodiscard]] static float FixedInterpolationAlpha(const Scene& scene) noexcept;
     [[nodiscard]] static std::size_t LastFixedStepCount(const Scene& scene) noexcept;
     static void SetEcsProfilerEnabled(Scene& scene, bool enabled) noexcept;

@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -72,6 +73,29 @@ void RunWorkerPoolPropagatesJobExceptionTest() {
     kb::tests::Require(propagated, "ECS worker pool did not propagate job exceptions");
 }
 
+void RunWorkerPoolCancelsPendingJobsAfterExceptionTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    std::atomic<bool> pendingJobRan = false;
+
+    std::vector<kb::ecs::WorkerPoolJob> jobs;
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {
+        throw std::invalid_argument("worker failure");
+    } });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void* userContext) {
+        static_cast<std::atomic<bool>*>(userContext)->store(true, std::memory_order_release);
+    }, .context = &pendingJobRan });
+
+    bool propagated = false;
+    try {
+        pool.Run(jobs);
+    } catch (const std::invalid_argument&) {
+        propagated = true;
+    }
+
+    kb::tests::Require(propagated, "ECS worker pool did not propagate the first job exception");
+    kb::tests::Require(!pendingJobRan.load(std::memory_order_acquire), "ECS worker pool executed pending jobs after the first exception");
+}
+
 void RunWorkerPoolStealsPreferredBatchesTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
 
@@ -107,6 +131,34 @@ void RunWorkerPoolStealsPreferredBatchesTest() {
 
     kb::tests::Require(stolen.load(std::memory_order_acquire) > 0, "ECS worker pool did not steal preferred query batches");
     kb::tests::Require(processed.load(std::memory_order_acquire) == 64U, "ECS worker pool did not process every query batch row");
+}
+
+void RunWorkerPoolBatchesHonorWorkerCountLimitTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    std::vector<kb::ecs::WorkerPoolBatch> batches;
+    for (std::size_t index = 0; index < 16; ++index) {
+        batches.push_back(kb::ecs::WorkerPoolBatch{
+            .index = index,
+            .begin = index,
+            .count = 1,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 2,
+        });
+    }
+
+    std::atomic<std::size_t> visited = 0;
+    std::atomic<std::uint32_t> workerMask = 0;
+
+    pool.RunBatches(batches, [&visited, &workerMask](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch&) {
+        kb::tests::Require(context.workerCount == 2U, "ECS worker pool batch dispatch ignored worker count limit");
+        kb::tests::Require(context.workerIndex < 2U, "ECS worker pool batch dispatch used a worker outside the dispatch limit");
+        workerMask.fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        visited.fetch_add(1U, std::memory_order_acq_rel);
+    });
+
+    kb::tests::Require(visited.load(std::memory_order_acquire) == batches.size(), "ECS worker pool limited batch dispatch did not visit every batch");
+    kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b11U) == 0U, "ECS worker pool limited batch dispatch used a forbidden worker slot");
 }
 
 void RunWorkerPoolParallelForChunksPartitionsRangeTest() {
@@ -149,6 +201,85 @@ void RunWorkerPoolParallelForChunksPreservesChunkMetadataTest() {
 
     kb::tests::Require(indexSum.load(std::memory_order_acquire) == 30U, "ECS parallel-for did not preserve caller chunk indexes");
     kb::tests::Require(visited.load(std::memory_order_acquire) == 7U, "ECS parallel-for did not process caller chunk counts");
+}
+
+void RunWorkerPoolChunksHonorWorkerCountLimitTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    std::vector<kb::ecs::WorkerPoolChunk> chunks;
+    for (std::size_t index = 0; index < 16; ++index) {
+        chunks.push_back(kb::ecs::WorkerPoolChunk{
+            .index = index,
+            .begin = index,
+            .count = 1,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 2,
+        });
+    }
+
+    std::atomic<std::size_t> visited = 0;
+    std::atomic<std::uint32_t> workerMask = 0;
+
+    pool.ParallelForChunks(chunks, [&visited, &workerMask](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk&) {
+        kb::tests::Require(context.workerCount == 2U, "ECS worker pool chunk dispatch ignored worker count limit");
+        kb::tests::Require(context.workerIndex < 2U, "ECS worker pool chunk dispatch used a worker outside the dispatch limit");
+        workerMask.fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        visited.fetch_add(1U, std::memory_order_acq_rel);
+    });
+
+    kb::tests::Require(visited.load(std::memory_order_acquire) == chunks.size(), "ECS worker pool limited chunk dispatch did not visit every chunk");
+    kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b11U) == 0U, "ECS worker pool limited chunk dispatch used a forbidden worker slot");
+}
+
+void RunWorkerPoolSubmittedWorkHonorsWorkerCountLimitTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    std::vector<kb::ecs::WorkerPoolBatch> batches;
+    std::vector<kb::ecs::WorkerPoolChunk> chunks;
+    for (std::size_t index = 0; index < 16; ++index) {
+        batches.push_back(kb::ecs::WorkerPoolBatch{
+            .index = index,
+            .begin = index,
+            .count = 1,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 2,
+        });
+        chunks.push_back(kb::ecs::WorkerPoolChunk{
+            .index = index,
+            .begin = index,
+            .count = 1,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 2,
+        });
+    }
+
+    std::atomic<std::size_t> visitedBatches = 0;
+    std::atomic<std::size_t> visitedChunks = 0;
+    std::atomic<std::uint32_t> workerMask = 0;
+
+    std::pair<std::atomic<std::size_t>*, std::atomic<std::uint32_t>*> batchContext{ &visitedBatches, &workerMask };
+    kb::ecs::JobHandle batchHandle = pool.SubmitBatches(std::move(batches), +[](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch&, void* userContext) {
+        auto& counters = *static_cast<std::pair<std::atomic<std::size_t>*, std::atomic<std::uint32_t>*>*>(userContext);
+        kb::tests::Require(context.workerCount == 2U, "ECS submitted batch dispatch ignored worker count limit");
+        kb::tests::Require(context.workerIndex < 2U, "ECS submitted batch dispatch used a worker outside the dispatch limit");
+        counters.second->fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        counters.first->fetch_add(1U, std::memory_order_acq_rel);
+    }, &batchContext);
+    batchHandle.Wait();
+
+    std::pair<std::atomic<std::size_t>*, std::atomic<std::uint32_t>*> chunkContext{ &visitedChunks, &workerMask };
+    kb::ecs::JobHandle chunkHandle = pool.SubmitParallelForChunks(std::move(chunks), +[](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk&, void* userContext) {
+        auto& counters = *static_cast<std::pair<std::atomic<std::size_t>*, std::atomic<std::uint32_t>*>*>(userContext);
+        kb::tests::Require(context.workerCount == 2U, "ECS submitted chunk dispatch ignored worker count limit");
+        kb::tests::Require(context.workerIndex < 2U, "ECS submitted chunk dispatch used a worker outside the dispatch limit");
+        counters.second->fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        counters.first->fetch_add(1U, std::memory_order_acq_rel);
+    }, &chunkContext);
+    chunkHandle.Wait();
+
+    kb::tests::Require(visitedBatches.load(std::memory_order_acquire) == 16U, "ECS submitted limited batch dispatch did not visit every batch");
+    kb::tests::Require(visitedChunks.load(std::memory_order_acquire) == 16U, "ECS submitted limited chunk dispatch did not visit every chunk");
+    kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b11U) == 0U, "ECS submitted limited dispatch used a forbidden worker slot");
 }
 
 void RunWorkerPoolSynchronousHotPathAcceptsMoveOnlyJobsTest() {
@@ -234,6 +365,67 @@ void RunWorkerPoolJobFenceWaitsForChunkJobsTest() {
     kb::tests::Require(visited.load(std::memory_order_acquire) == 19U, "ECS job fence returned before chunk work completed");
 }
 
+void RunWorkerPoolJobFenceWaitsForAllHandlesBeforeRethrowTest() {
+    kb::ecs::WorkerPool failingPool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    kb::ecs::WorkerPool slowPool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    std::atomic<bool> slowJobCompleted = false;
+
+    std::vector<kb::ecs::WorkerPoolJob> failingJobs;
+    failingJobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {
+        throw std::invalid_argument("fence failure");
+    } });
+
+    std::vector<kb::ecs::WorkerPoolJob> slowJobs;
+    slowJobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void* userContext) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{ 50 });
+        static_cast<std::atomic<bool>*>(userContext)->store(true, std::memory_order_release);
+    }, .context = &slowJobCompleted });
+
+    kb::ecs::JobFence fence;
+    fence.Add(failingPool.Submit(std::move(failingJobs)));
+    fence.Add(slowPool.Submit(std::move(slowJobs)));
+
+    bool propagated = false;
+    try {
+        fence.Wait();
+    } catch (const std::invalid_argument&) {
+        propagated = true;
+    }
+
+    kb::tests::Require(propagated, "ECS job fence did not propagate the first failed handle");
+    kb::tests::Require(slowJobCompleted.load(std::memory_order_acquire), "ECS job fence rethrew before waiting for every handle");
+    kb::tests::Require(fence.IsReady(), "ECS failed job fence did not report ready after every handle completed");
+}
+
+void RunWorkerPoolCancelsPendingChunksAfterExceptionTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
+    std::atomic<std::size_t> visited = 0;
+
+    std::vector<kb::ecs::WorkerPoolChunk> chunks{
+        kb::ecs::WorkerPoolChunk{ .index = 0, .begin = 0, .count = 1, .preferredWorkerIndex = 0 },
+        kb::ecs::WorkerPoolChunk{ .index = 1, .begin = 1, .count = 1, .preferredWorkerIndex = 0 },
+    };
+
+    kb::ecs::JobHandle handle = pool.SubmitParallelForChunks(std::move(chunks), +[](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk, void* userContext) {
+        auto& counter = *static_cast<std::atomic<std::size_t>*>(userContext);
+        if (chunk.index == 0U) {
+            throw std::invalid_argument("chunk failure");
+        }
+        counter.fetch_add(1U, std::memory_order_acq_rel);
+    }, &visited);
+
+    bool propagated = false;
+    try {
+        handle.Wait();
+    } catch (const std::invalid_argument&) {
+        propagated = true;
+    }
+
+    kb::tests::Require(propagated, "ECS worker pool did not propagate the first chunk exception");
+    kb::tests::Require(visited.load(std::memory_order_acquire) == 0U, "ECS worker pool executed pending chunks after the first exception");
+    kb::tests::Require(handle.IsReady(), "ECS failed chunk handle did not report completion");
+}
+
 void RunWorkerPoolSingleThreadModeRunsJobsInlineTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4, .singleThreaded = true } };
 
@@ -286,6 +478,28 @@ void RunWorkerPoolSingleThreadSubmitCompletesHandleTest() {
     }
 
     kb::tests::Require(propagated, "ECS single-thread job handle did not propagate submitted job exceptions");
+}
+
+void RunWorkerPoolSingleThreadCancelsPendingWorkAfterExceptionTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .singleThreaded = true } };
+    std::atomic<bool> pendingJobRan = false;
+    std::vector<kb::ecs::WorkerPoolJob> jobs;
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void*) {
+        throw std::invalid_argument("single-thread failure");
+    } });
+    jobs.push_back(kb::ecs::WorkerPoolJob{ .callback = +[](kb::ecs::WorkerContext, void* userContext) {
+        static_cast<std::atomic<bool>*>(userContext)->store(true, std::memory_order_release);
+    }, .context = &pendingJobRan });
+
+    bool propagated = false;
+    try {
+        pool.Run(jobs);
+    } catch (const std::invalid_argument&) {
+        propagated = true;
+    }
+
+    kb::tests::Require(propagated, "ECS single-thread worker pool did not propagate the first exception");
+    kb::tests::Require(!pendingJobRan.load(std::memory_order_acquire), "ECS single-thread worker pool executed pending work after the first exception");
 }
 
 void RunWorkerPoolStopCancelsSubmittedHandleTest() {
@@ -350,15 +564,22 @@ namespace kb::tests {
 void RunEcsWorkerPoolTests() {
     RunWorkerPoolExecutesConcurrentJobsTest();
     RunWorkerPoolPropagatesJobExceptionTest();
+    RunWorkerPoolCancelsPendingJobsAfterExceptionTest();
     RunWorkerPoolStealsPreferredBatchesTest();
+    RunWorkerPoolBatchesHonorWorkerCountLimitTest();
     RunWorkerPoolParallelForChunksPartitionsRangeTest();
     RunWorkerPoolParallelForChunksPreservesChunkMetadataTest();
+    RunWorkerPoolChunksHonorWorkerCountLimitTest();
+    RunWorkerPoolSubmittedWorkHonorsWorkerCountLimitTest();
     RunWorkerPoolSynchronousHotPathAcceptsMoveOnlyJobsTest();
     RunWorkerPoolJobHandleWaitsForSubmittedJobsTest();
     RunWorkerPoolJobHandlePropagatesSubmittedExceptionTest();
     RunWorkerPoolJobFenceWaitsForChunkJobsTest();
+    RunWorkerPoolJobFenceWaitsForAllHandlesBeforeRethrowTest();
+    RunWorkerPoolCancelsPendingChunksAfterExceptionTest();
     RunWorkerPoolSingleThreadModeRunsJobsInlineTest();
     RunWorkerPoolSingleThreadSubmitCompletesHandleTest();
+    RunWorkerPoolSingleThreadCancelsPendingWorkAfterExceptionTest();
     RunWorkerPoolStopCancelsSubmittedHandleTest();
 }
 

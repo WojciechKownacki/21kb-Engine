@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 
 #include <utility>
@@ -23,8 +24,11 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene) {
 
 SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDesc desc) {
     SceneState& state = SceneAccess::State(scene);
-    kb::ecs::Entity entity = desc.name.empty() ? state.world.CreateEntity() : state.world.CreateEntity(desc.name);
-    state.hierarchyOrder[entity.Id()] = state.nextHierarchyOrder++;
+    kb::ecs::Entity entity = state.world.CreateEntity();
+    if (!desc.name.empty()) {
+        SceneEntityNaming::SetName(state, entity, desc.name);
+    }
+    SceneHierarchyCache::AssignOrder(state, entity);
     SceneHierarchyCache::AddRoot(state, entity);
     state.componentStorage.SetDefaults(entity, desc.transform, desc.visibility);
 

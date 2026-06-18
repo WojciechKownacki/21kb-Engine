@@ -7,6 +7,7 @@
 #include "scene/prefab/ScenePrefabOverrideDetector.hpp"
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 
+#include <span>
 #include <utility>
 
 namespace kb::scene {
@@ -18,7 +19,7 @@ namespace {
         return false;
     }
 
-    instance.resolvedPrefab = ScenePrefabNestedResolver::Resolve(registry, *refreshed);
+    instance.SetResolvedPrefab(ScenePrefabNestedResolver::Resolve(registry, *refreshed));
     return true;
 }
 
@@ -43,8 +44,14 @@ bool ScenePrefabVariantOverrideService::ApplyProperty(Scene& scene, ScenePrefabR
     if (!ScenePrefabAppliedPropertyBuilder::Build(scene, nodeIndex, object, propertyPath, property)) {
         return false;
     }
-    if (const ScenePrefabNodeDesc* node = instance.resolvedPrefab.TryGetNode(nodeIndex); node != nullptr) {
+    const ScenePrefab* resolvedPrefab = instance.ResolvedPrefab();
+    if (const ScenePrefabNodeDesc* node = resolvedPrefab == nullptr ? nullptr : resolvedPrefab->TryGetNode(nodeIndex); node != nullptr) {
         property.nodeId = node->stableId;
+    } else {
+        const std::span<const std::uint64_t> nodeIds = instance.NodeIds();
+        if (nodeIndex < nodeIds.size()) {
+            property.nodeId = nodeIds[nodeIndex];
+        }
     }
     if (!registry.UpsertVariantOverride(instance.prefab, std::move(property))) {
         return false;

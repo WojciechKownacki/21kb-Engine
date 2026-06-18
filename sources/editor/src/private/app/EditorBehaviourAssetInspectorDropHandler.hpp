@@ -17,7 +17,7 @@ namespace kb::editor {
 #if defined(_WIN32)
 
 // Drops a behaviour (script) asset onto the Inspector to attach it to the entity
-// currently shown there (Unity-style "drag a script into the inspector").
+// currently shown there.
 class EditorBehaviourAssetInspectorDropHandler {
 public:
     EditorBehaviourAssetInspectorDropHandler() = delete;

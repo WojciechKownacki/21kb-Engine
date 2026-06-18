@@ -5,32 +5,32 @@
 
 namespace kb::scene {
 
-SceneRigidbodyComponentStore::SceneRigidbodyComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneRigidbodyComponentStore::SceneRigidbodyComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 bool SceneRigidbodyComponentStore::Has(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, componentId_);
+    return SceneComponentStorageAccess::Has<RigidbodyComponent>(world_, entity);
 }
 
 const RigidbodyComponent* SceneRigidbodyComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<RigidbodyComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<RigidbodyComponent>(world_, entity);
 }
 
 RigidbodyComponent* SceneRigidbodyComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<RigidbodyComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<RigidbodyComponent>(world_, entity);
 }
 
 void SceneRigidbodyComponentStore::Set(SceneEntity entity, const RigidbodyComponent& rigidbody) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, rigidbody);
+    SceneComponentStorageAccess::Set<RigidbodyComponent>(world_, entity, rigidbody);
 }
 
 void SceneRigidbodyComponentStore::Remove(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, componentId_);
+    SceneComponentStorageAccess::Remove<RigidbodyComponent>(world_, entity);
 }
 
 void SceneRigidbodyComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<RigidbodyComponent>(world_, entity);
 }
 
 } // namespace kb::scene

@@ -11,6 +11,7 @@
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -82,15 +83,19 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
             return false;
         }
 
+        const ScenePrefab* resolvedPrefab = record->ResolvedPrefab();
+        const std::span<const std::uint64_t> nodeIds = record->NodeIds();
         SceneHistoryPrefabInstanceSnapshot snapshot{
             .handle = instanceHandle,
             .prefab = record->prefab,
-            .prefabGuid = record->prefabGuid,
+            .prefabGuid = std::string{ record->PrefabGuid() },
             .rootParentPath = FindObjectPath(scene, objectPaths, record->rootParent),
-            .resolvedPrefab = record->resolvedPrefab,
+            .nodeIds = std::vector<std::uint64_t>{ nodeIds.begin(), nodeIds.end() },
+            .resolvedPrefab = resolvedPrefab == nullptr ? ScenePrefab{} : *resolvedPrefab,
         };
-        snapshot.objectPaths.reserve(record->objects.size());
-        for (const SceneObject object : record->objects) {
+        const std::span<const SceneObject> objects = record->Objects();
+        snapshot.objectPaths.reserve(objects.size());
+        for (const SceneObject object : objects) {
             snapshot.objectPaths.push_back(FindObjectPath(scene, objectPaths, object));
         }
         prefabInstances.push_back(std::move(snapshot));
@@ -139,7 +144,8 @@ void IndexObjectPath(SceneObject object, SceneHistoryObjectPath path, SceneHisto
                 snapshot.prefabGuid,
                 rootParent,
                 std::move(objects),
-                snapshot.resolvedPrefab)) {
+                snapshot.resolvedPrefab,
+                std::span<const std::uint64_t>{ snapshot.nodeIds })) {
             return false;
         }
     }

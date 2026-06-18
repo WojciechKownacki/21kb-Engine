@@ -5,32 +5,32 @@
 
 namespace kb::scene {
 
-SceneBehaviourComponentStore::SceneBehaviourComponentStore(ecs_world_t* world, std::uint64_t componentId) noexcept
-    : world_(world)
+SceneBehaviourComponentStore::SceneBehaviourComponentStore(kb::ecs::World& world, std::uint64_t componentId) noexcept
+    : world_(&world)
     , componentId_(componentId) {}
 
 bool SceneBehaviourComponentStore::Has(SceneEntity entity) const noexcept {
-    return SceneComponentAccess::Has(world_, entity, componentId_);
+    return SceneComponentStorageAccess::Has<BehaviourComponent>(world_, entity);
 }
 
 const BehaviourComponent* SceneBehaviourComponentStore::TryGet(SceneEntity entity) const noexcept {
-    return SceneComponentStorageAccess::TryGet<BehaviourComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGet<BehaviourComponent>(world_, entity);
 }
 
 BehaviourComponent* SceneBehaviourComponentStore::TryGet(SceneEntity entity) noexcept {
-    return SceneComponentStorageAccess::TryGetMutable<BehaviourComponent>(world_, entity, componentId_);
+    return SceneComponentStorageAccess::TryGetMutable<BehaviourComponent>(world_, entity);
 }
 
 void SceneBehaviourComponentStore::Set(SceneEntity entity, const BehaviourComponent& behaviour) {
-    SceneComponentStorageAccess::Set(world_, entity, componentId_, behaviour);
+    SceneComponentStorageAccess::Set<BehaviourComponent>(world_, entity, behaviour);
 }
 
 void SceneBehaviourComponentStore::Remove(SceneEntity entity) noexcept {
-    SceneComponentAccess::Remove(world_, entity, componentId_);
+    SceneComponentStorageAccess::Remove<BehaviourComponent>(world_, entity);
 }
 
 void SceneBehaviourComponentStore::MarkModified(SceneEntity entity) noexcept {
-    SceneComponentAccess::MarkModified(world_, entity, componentId_);
+    SceneComponentStorageAccess::MarkModified<BehaviourComponent>(world_, entity);
 }
 
 } // namespace kb::scene

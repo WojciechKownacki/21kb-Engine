@@ -26,6 +26,9 @@ template <typename T>
 void Set(Entity entity, const T& component);
 
 template <typename T>
+void SetMany(std::span<const Entity> entities, std::span<const T> components);
+
+template <typename T>
 [[nodiscard]] bool Has(Entity entity) const;
 
 template <typename T>
@@ -43,6 +46,9 @@ void MarkModified(Entity entity);
 template <typename T>
 void ForEach(ConstComponentVisitor<T> visitor, void* context) const;
 
+// Compatibility/debug iteration for single-component tools and tests. Production
+// multi-component systems should use Query<T...> batch iteration to stay on the
+// chunk hot path.
 template <typename T>
 void ForEachMutable(MutableComponentVisitor<T> visitor, void* context);
 

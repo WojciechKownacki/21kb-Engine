@@ -12,7 +12,7 @@ std::string SceneEntityNameService::Name(const Scene& scene, SceneObject object)
 }
 
 std::string SceneEntityNameService::Name(const Scene& scene, SceneEntity entity) {
-    return SceneEntityService::IsAlive(scene, entity) ? SceneEntityNaming::Name(SceneAccess::State(scene).world, entity) : std::string{};
+    return SceneEntityService::IsAlive(scene, entity) ? SceneEntityNaming::Name(SceneAccess::State(scene), entity) : std::string{};
 }
 
 void SceneEntityNameService::SetName(Scene& scene, SceneObject object, std::string_view name) {
@@ -23,7 +23,7 @@ void SceneEntityNameService::SetName(Scene& scene, SceneObject object, std::stri
 
 void SceneEntityNameService::SetName(Scene& scene, SceneEntity entity, std::string_view name) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneEntityNaming::SetName(SceneAccess::State(scene).world, entity, name);
+        SceneEntityNaming::SetName(SceneAccess::State(scene), entity, name);
     }
 }
 

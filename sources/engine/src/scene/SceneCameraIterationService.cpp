@@ -7,7 +7,13 @@ namespace kb::scene {
 
 void SceneIterationService::ForEachCamera(const Scene& scene, CameraVisitor visitor, void* context) {
     const SceneState& state = SceneAccess::State(scene);
-    SceneComponentIteration::ForEachCamera(state.world, state.components.TransformComponentId(), state.components.CameraComponentId(), visitor, context);
+    SceneComponentIteration::ForEachCamera(
+        state.world,
+        state.components.TransformComponentId(),
+        state.components.CameraComponentId(),
+        state.cameraIterationQuery,
+        visitor,
+        context);
 }
 
 } // namespace kb::scene

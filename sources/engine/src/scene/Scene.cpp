@@ -30,6 +30,9 @@ std::atomic<std::uint64_t> g_nextSceneId{ 1U };
 Scene::Scene()
     : Scene(kb::project::ProjectDescriptor{}) {}
 
+Scene::Scene(kb::ecs::WorldConfig worldConfig)
+    : Scene(kb::project::ProjectDescriptor{}, {}, worldConfig) {}
+
 Scene::Scene(SceneMode mode)
     : Scene(kb::project::ProjectDescriptor{}, mode) {}
 
@@ -43,7 +46,14 @@ Scene::Scene(
     kb::project::ProjectDescriptor descriptor,
     std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
     SceneMode mode)
-    : state_(std::make_unique<SceneState>())
+    : Scene(std::move(descriptor), std::move(staticModules), kb::ecs::WorldConfig{}, mode) {}
+
+Scene::Scene(
+    kb::project::ProjectDescriptor descriptor,
+    std::vector<std::unique_ptr<kb::modules::IEngineModule>> staticModules,
+    kb::ecs::WorldConfig worldConfig,
+    SceneMode mode)
+    : state_(std::make_unique<SceneState>(worldConfig))
     , id_(g_nextSceneId.fetch_add(1U, std::memory_order_relaxed)) {
     state_->mode = mode;
 

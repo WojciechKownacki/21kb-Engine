@@ -7,7 +7,13 @@ namespace kb::scene {
 
 void SceneIterationService::ForEachMeshRenderer(const Scene& scene, MeshRendererVisitor visitor, void* context) {
     const SceneState& state = SceneAccess::State(scene);
-    SceneComponentIteration::ForEachMeshRenderer(state.world, state.components.TransformComponentId(), state.components.MeshRendererComponentId(), visitor, context);
+    SceneComponentIteration::ForEachMeshRenderer(
+        state.world,
+        state.components.TransformComponentId(),
+        state.components.MeshRendererComponentId(),
+        state.meshRendererIterationQuery,
+        visitor,
+        context);
 }
 
 void SceneIterationService::ForEachVisibleMeshRenderer(const Scene& scene, MeshRendererVisitor visitor, void* context) {
@@ -17,6 +23,7 @@ void SceneIterationService::ForEachVisibleMeshRenderer(const Scene& scene, MeshR
         state.components.TransformComponentId(),
         state.components.VisibilityComponentId(),
         state.components.MeshRendererComponentId(),
+        state.visibleMeshRendererIterationQuery,
         visitor,
         context);
 }

@@ -20,6 +20,28 @@ void RelationStorage::Add(ecs_world_t* world, Entity entity, RelationId relation
     }
 }
 
+std::size_t RelationStorage::AddKnownAlivePairs(
+    ecs_world_t* world,
+    std::span<const Entity> entities,
+    RelationId relation,
+    std::span<const Entity> targets) noexcept {
+    if (world == nullptr || relation == 0 || entities.size() != targets.size()) {
+        return 0U;
+    }
+
+    std::size_t added = 0;
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const Entity entity = entities[index];
+        const Entity target = targets[index];
+        if (!entity.IsValid() || !target.IsValid() || entity == target) {
+            continue;
+        }
+        ecs_add_pair(world, FlecsEntityId(entity), relation, PairTarget(target));
+        ++added;
+    }
+    return added;
+}
+
 bool RelationStorage::Has(const ecs_world_t* world, Entity entity, RelationId relation, Entity target) noexcept {
     return world != nullptr && entity.IsValid() && target.IsValid() && relation != 0 && ecs_is_alive(world, FlecsEntityId(entity)) &&
            ecs_has_pair(world, FlecsEntityId(entity), relation, PairTarget(target));

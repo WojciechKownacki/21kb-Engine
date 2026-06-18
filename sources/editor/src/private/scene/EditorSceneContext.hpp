@@ -242,7 +242,7 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
 
-    // Unity-style script (behaviour) authoring from the Inspector.
+    // Inspector-driven script behaviour authoring.
     [[nodiscard]] bool HasEntityScript(kb::scene::SceneEntity entity) const;
     [[nodiscard]] std::string EntityScriptName(kb::scene::SceneEntity entity) const;
     [[nodiscard]] bool EntityScriptEnabled(kb::scene::SceneEntity entity) const;

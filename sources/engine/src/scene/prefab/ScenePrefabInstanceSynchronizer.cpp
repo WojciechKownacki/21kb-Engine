@@ -50,12 +50,14 @@ namespace {
 
 [[nodiscard]] bool ApplyStoredProperty(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& baseline, const ScenePrefabPropertyOverride& property) {
     const std::uint32_t nodeIndex = baseline.ResolveNodeIndex(property);
-    if (nodeIndex == ScenePrefabNodeDesc::NoParent || nodeIndex >= instance.objects.size()) {
+    const std::span<const SceneObject> readObjects = instance.Objects();
+    if (nodeIndex == ScenePrefabNodeDesc::NoParent || nodeIndex >= readObjects.size()) {
         return true;
     }
     if (property.propertyPath == "object") {
         if (property.value == "missing") {
-            SceneObject& object = instance.objects[nodeIndex];
+            std::vector<SceneObject>& mutableObjects = instance.MutableObjects();
+            SceneObject& object = mutableObjects[nodeIndex];
             if (object.IsValid() && scene.Entities().IsAlive(object)) {
                 scene.Entities().Destroy(object);
             }
@@ -67,7 +69,7 @@ namespace {
         return true;
     }
 
-    SceneObject object = instance.objects[nodeIndex];
+    SceneObject object = readObjects[nodeIndex];
     if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
         return false;
     }
@@ -127,7 +129,8 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
 }
 
 [[nodiscard]] bool RebuildTrackedObjects(Scene& scene, ScenePrefabInstanceRecord& instance, const ScenePrefab& previousBaseline, const ScenePrefab& nextBaseline) {
-    const std::vector<SceneObject> oldObjects = instance.objects;
+    const std::span<const SceneObject> currentObjects = instance.Objects();
+    const std::vector<SceneObject> oldObjects{ currentObjects.begin(), currentObjects.end() };
     const std::unordered_map<std::uint64_t, SceneObject> stableObjects = BuildStableObjectMap(previousBaseline, oldObjects);
     const std::span<const ScenePrefabNodeDesc> nodes = nextBaseline.Nodes();
     std::vector<SceneObject> rebuiltObjects;
@@ -156,7 +159,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     }
 
     DestroyRemovedObjects(scene, oldObjects, rebuiltObjects);
-    instance.objects = std::move(rebuiltObjects);
+    instance.SetObjects(std::move(rebuiltObjects));
     return true;
 }
 
@@ -169,7 +172,8 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
             continue;
         }
 
-        const std::vector<SceneObject> oldObjects = instance->objects;
+        const std::span<const SceneObject> currentObjects = instance->Objects();
+        const std::vector<SceneObject> oldObjects{ currentObjects.begin(), currentObjects.end() };
         if (ScenePrefabInstanceSynchronizer::RefreshInstance(scene, registry, *instance)) {
             ++refreshedCount;
         }
@@ -207,7 +211,7 @@ bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabR
         return false;
     }
 
-    const ScenePrefab previousBaseline = instance.resolvedPrefab.Empty() ? record->prefab : instance.resolvedPrefab;
+    const ScenePrefab previousBaseline = instance.BaselineOr(record->prefab);
     if (!ScenePrefabValidator::IsValid(previousBaseline)) {
         return false;
     }
@@ -222,7 +226,7 @@ bool ScenePrefabInstanceSynchronizer::RefreshInstance(Scene& scene, ScenePrefabR
         return false;
     }
 
-    instance.resolvedPrefab = nextBaseline;
+    instance.SetResolvedPrefab(nextBaseline);
     return ApplyStoredProperties(scene, instance, nextBaseline, preservedOverrides);
 }
 

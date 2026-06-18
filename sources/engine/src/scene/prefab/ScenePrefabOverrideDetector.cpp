@@ -13,9 +13,10 @@ namespace kb::scene {
 ScenePrefabOverrideReport ScenePrefabOverrideDetector::Detect(Scene& scene, const ScenePrefab& prefab, const ScenePrefabInstanceRecord& instance) {
     ScenePrefabOverrideReport report;
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
+    const std::span<const SceneObject> objects = instance.Objects();
     const ScenePrefabTrackedEntitySet trackedEntities = ScenePrefabInstanceTopology::TrackedEntities(instance);
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
-        const SceneObject object = nodeIndex < instance.objects.size() ? instance.objects[nodeIndex] : SceneObject{};
+        const SceneObject object = nodeIndex < objects.size() ? objects[nodeIndex] : SceneObject{};
         const SceneObject expectedParent = ScenePrefabInstanceTopology::ExpectedParent(nodes[nodeIndex], instance);
         ScenePrefabOverrideFlag flags = ScenePrefabNodeComparator::Compare(scene, object, expectedParent, nodes[nodeIndex]);
         if (ScenePrefabInstanceTopology::HasUntrackedChild(scene, object, trackedEntities)) {

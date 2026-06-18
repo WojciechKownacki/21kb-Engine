@@ -42,19 +42,19 @@ using Draw = ProjectFilesPanelDrawing;
         return text;
     }
 
-    constexpr std::string_view dots = "...";
-    if (!FitsText(dc, dots, width)) {
+    constexpr std::string_view ellipsis = "...";
+    if (!FitsText(dc, ellipsis, width)) {
         return {};
     }
 
     while (!text.empty()) {
         text.pop_back();
-        std::string candidate = text + std::string{ dots };
+        std::string candidate = text + std::string{ ellipsis };
         if (FitsText(dc, candidate, width)) {
             return candidate;
         }
     }
-    return std::string{ dots };
+    return std::string{ ellipsis };
 }
 
 [[nodiscard]] std::size_t MaxPrefixThatFits(HDC dc, std::string_view text, int width) {

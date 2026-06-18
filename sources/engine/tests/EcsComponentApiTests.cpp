@@ -5,6 +5,7 @@
 #include "engine/ecs/ComponentReflectionMacros.hpp"
 #include "engine/ecs/World.hpp"
 
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -13,6 +14,12 @@ namespace {
 
 struct EcsLifetimeValidationTag {};
 struct EcsLifetimeValidationRelation {};
+struct EcsChurnMass {
+    float value = 0.0F;
+};
+struct EcsChurnPayload {
+    int value = 0;
+};
 
 void CountPositions(kb::ecs::Entity entity, const EcsPosition& position, void* context) {
     static_cast<void>(entity);
@@ -35,6 +42,26 @@ void CountMovingPositions(kb::ecs::Entity entity, const EcsPosition& position, c
     auto* counters = static_cast<EcsIterationCounters*>(context);
     ++counters->visited;
     counters->sumX += position.x + velocity.x;
+}
+
+void CountMovingBatches(const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch, void* context) {
+    auto* counters = static_cast<EcsIterationCounters*>(context);
+    const EcsPosition* positions = batch.Components<0>();
+    const EcsVelocity* velocities = batch.Components<1>();
+    for (std::size_t row = 0; row < batch.Count(); ++row) {
+        ++counters->visited;
+        counters->sumX += positions[row].x + velocities[row].x;
+    }
+}
+
+void CountMassBatches(const kb::ecs::QueryBatch<EcsPosition, EcsChurnMass>& batch, void* context) {
+    auto* counters = static_cast<EcsIterationCounters*>(context);
+    const EcsPosition* positions = batch.Components<0>();
+    const EcsChurnMass* masses = batch.Components<1>();
+    for (std::size_t row = 0; row < batch.Count(); ++row) {
+        ++counters->visited;
+        counters->sumX += positions[row].x + masses[row].value;
+    }
 }
 
 template <typename Fn>
@@ -77,9 +104,12 @@ void RunTypedEcsComponentApiTest() {
     position = world.TryGet<EcsPosition>(entity);
     kb::tests::Require(position != nullptr && kb::tests::NearlyEqual(position->x, 9.0F) && kb::tests::NearlyEqual(position->y, 2.0F), "Typed ECS mutable iteration did not update component data");
 
+    const kb::ecs::Entity stationaryEntity = world.CreateEntity("Stationary");
+    world.Set(stationaryEntity, EcsPosition{ .x = 100.0F, .y = 200.0F });
+
     EcsIterationCounters queryCounters;
     world.ForEach<EcsPosition, EcsVelocity>(&CountMovingPositions, &queryCounters);
-    kb::tests::Require(queryCounters.visited == 1, "Typed ECS two-component query did not visit matching entity");
+    kb::tests::Require(queryCounters.visited == 1, "Typed ECS two-component query did not filter the partial archetype");
     kb::tests::Require(kb::tests::NearlyEqual(queryCounters.sumX, 13.0F), "Typed ECS two-component query saw invalid component data");
 
     kb::ecs::Query<EcsPosition, EcsVelocity> movingQuery = world.CreateQuery<EcsPosition, EcsVelocity>();
@@ -185,6 +215,9 @@ void RunTypedEcsEntityAndComponentLifetimeValidationTest() {
 struct StressEntityState {
     kb::ecs::Entity entity;
     bool hasVelocity = false;
+    bool hasMass = false;
+    bool hasMarker = false;
+    bool hasPayload = false;
     float positionX = 0.0F;
 };
 
@@ -260,6 +293,162 @@ void RunTypedEcsRandomStructuralStressTest() {
     }
 }
 
+void RunTypedEcsArchetypeChurnStressTest() {
+    kb::ecs::World world(kb::ecs::WorldConfig{
+        .executionGrainSize = 5,
+    });
+
+    std::vector<StressEntityState> alive;
+    alive.reserve(192);
+    std::uint32_t randomState = 0xA21CB17U;
+
+    auto createEntity = [&world, &alive](float positionX, std::uint32_t mask) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = positionX, .y = 0.0F });
+        StressEntityState state{
+            .entity = entity,
+            .positionX = positionX,
+        };
+        if ((mask & 0x1U) != 0U) {
+            world.Set(entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+            state.hasVelocity = true;
+        }
+        if ((mask & 0x2U) != 0U) {
+            world.Set(entity, EcsChurnMass{ .value = 4.0F });
+            state.hasMass = true;
+        }
+        if ((mask & 0x4U) != 0U) {
+            world.Set(entity, EcsQueryMarker{ .value = static_cast<int>(mask) });
+            state.hasMarker = true;
+        }
+        if ((mask & 0x8U) != 0U) {
+            world.Set(entity, EcsChurnPayload{ .value = static_cast<int>(mask * 3U) });
+            state.hasPayload = true;
+        }
+        alive.push_back(state);
+    };
+
+    for (int index = 0; index < 96; ++index) {
+        createEntity(static_cast<float>(index), static_cast<std::uint32_t>(index) & 0xFU);
+    }
+
+    kb::ecs::Query<EcsPosition, EcsVelocity> movingQuery = world.CreateQuery<EcsPosition, EcsVelocity>();
+    kb::ecs::Query<EcsPosition, EcsChurnMass> massQuery = world.CreateQuery<EcsPosition, EcsChurnMass>();
+
+    for (int frame = 0; frame < 80; ++frame) {
+        for (int operation = 0; operation < 64; ++operation) {
+            const std::uint32_t value = NextStressValue(randomState);
+            if (alive.empty() || (value % 11U) == 0U) {
+                createEntity(static_cast<float>((value >> 8U) & 0x3FFU), (value >> 4U) & 0xFU);
+                continue;
+            }
+
+            const std::size_t index = static_cast<std::size_t>(value % alive.size());
+            StressEntityState& state = alive[index];
+            switch ((value >> 16U) % 6U) {
+            case 0:
+                state.positionX += 1.0F;
+                world.Set(state.entity, EcsPosition{ .x = state.positionX, .y = 0.0F });
+                break;
+            case 1:
+                if (state.hasVelocity) {
+                    world.Remove<EcsVelocity>(state.entity);
+                    state.hasVelocity = false;
+                } else {
+                    world.Set(state.entity, EcsVelocity{ .x = 2.0F, .y = 0.0F });
+                    state.hasVelocity = true;
+                }
+                break;
+            case 2:
+                if (state.hasMass) {
+                    world.Remove<EcsChurnMass>(state.entity);
+                    state.hasMass = false;
+                } else {
+                    world.Set(state.entity, EcsChurnMass{ .value = 4.0F });
+                    state.hasMass = true;
+                }
+                break;
+            case 3:
+                if (state.hasMarker) {
+                    world.Remove<EcsQueryMarker>(state.entity);
+                    state.hasMarker = false;
+                } else {
+                    world.Set(state.entity, EcsQueryMarker{ .value = frame });
+                    state.hasMarker = true;
+                }
+                break;
+            case 4:
+                if (state.hasPayload) {
+                    world.Remove<EcsChurnPayload>(state.entity);
+                    state.hasPayload = false;
+                } else {
+                    world.Set(state.entity, EcsChurnPayload{ .value = operation });
+                    state.hasPayload = true;
+                }
+                break;
+            default: {
+                const kb::ecs::Entity destroyed = state.entity;
+                world.DestroyEntity(destroyed);
+                alive[index] = alive.back();
+                alive.pop_back();
+                kb::tests::Require(!world.IsAlive(destroyed), "ECS archetype churn destroy left an entity alive");
+                break;
+            }
+            }
+        }
+
+        int expectedMoving = 0;
+        int expectedMass = 0;
+        float expectedMovingSum = 0.0F;
+        float expectedMassSum = 0.0F;
+        std::array<bool, 16U> occupiedMasks{};
+        std::size_t expectedArchetypes = 0;
+        for (const StressEntityState& state : alive) {
+            kb::tests::Require(world.IsAlive(state.entity), "ECS archetype churn model contains a dead entity");
+            kb::tests::Require(world.Has<EcsPosition>(state.entity), "ECS archetype churn entity lost required position");
+            std::uint32_t mask = 0U;
+            if (state.hasVelocity) {
+                ++expectedMoving;
+                expectedMovingSum += state.positionX + 2.0F;
+                mask |= 0x1U;
+                kb::tests::Require(world.Has<EcsVelocity>(state.entity), "ECS archetype churn lost velocity");
+            }
+            if (state.hasMass) {
+                ++expectedMass;
+                expectedMassSum += state.positionX + 4.0F;
+                mask |= 0x2U;
+                kb::tests::Require(world.Has<EcsChurnMass>(state.entity), "ECS archetype churn lost mass");
+            }
+            if (state.hasMarker) {
+                mask |= 0x4U;
+                kb::tests::Require(world.Has<EcsQueryMarker>(state.entity), "ECS archetype churn lost marker");
+            }
+            if (state.hasPayload) {
+                mask |= 0x8U;
+                kb::tests::Require(world.Has<EcsChurnPayload>(state.entity), "ECS archetype churn lost payload");
+            }
+            if (!occupiedMasks[mask]) {
+                occupiedMasks[mask] = true;
+                ++expectedArchetypes;
+            }
+        }
+
+        EcsIterationCounters movingCounters;
+        movingQuery.ForEachBatch(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 5 }, &CountMovingBatches, &movingCounters);
+        kb::tests::Require(movingCounters.visited == expectedMoving, "ECS archetype churn moving query returned an invalid count");
+        kb::tests::Require(kb::tests::NearlyEqual(movingCounters.sumX, expectedMovingSum), "ECS archetype churn moving query returned invalid data");
+
+        EcsIterationCounters massCounters;
+        massQuery.ForEachBatch(kb::ecs::QueryExecutionSettings{ .maxBatchSize = 5 }, &CountMassBatches, &massCounters);
+        kb::tests::Require(massCounters.visited == expectedMass, "ECS archetype churn mass query returned an invalid count");
+        kb::tests::Require(kb::tests::NearlyEqual(massCounters.sumX, expectedMassSum), "ECS archetype churn mass query returned invalid data");
+
+        const kb::ecs::NativeEcsStorageStats stats = world.NativeStorageStats();
+        kb::tests::Require(stats.liveEntities == alive.size(), "ECS archetype churn native storage live count diverged from the model");
+        kb::tests::Require(stats.archetypeCount >= expectedArchetypes, "ECS archetype churn did not expose expected archetype diversity");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -268,6 +457,7 @@ void RunEcsComponentApiTests() {
     RunTypedEcsComponentApiTest();
     RunTypedEcsEntityAndComponentLifetimeValidationTest();
     RunTypedEcsRandomStructuralStressTest();
+    RunTypedEcsArchetypeChurnStressTest();
 }
 
 } // namespace kb::tests

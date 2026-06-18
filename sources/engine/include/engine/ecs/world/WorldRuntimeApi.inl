@@ -4,7 +4,11 @@ void RequestQuit() noexcept;
 
 [[nodiscard]] ecs_world_t* NativeHandle() noexcept;
 [[nodiscard]] const ecs_world_t* NativeHandle() const noexcept;
+[[nodiscard]] bool BackendEntityAlive(Entity entity) const noexcept;
 [[nodiscard]] const WorldConfig& Config() const noexcept;
 [[nodiscard]] const NativeArchetypeStorage& NativeStorage() const noexcept;
 [[nodiscard]] NativeEcsStorageStats NativeStorageStats() const;
+[[nodiscard]] NativeEcsMaintenanceStats MaintainNativeStorage(NativeEcsMaintenanceBudget budget);
 [[nodiscard]] std::size_t NativeChunkPayloadBytes() const noexcept;
+[[nodiscard]] WorldTelemetrySnapshot TelemetrySnapshot() const;
+void ResetTelemetryFrameCounters() noexcept;
