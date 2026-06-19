@@ -1400,7 +1400,10 @@ void RunUnsafeHotQueryMutableRangePlanTest() {
         2U,
         2U,
         std::span<const kb::ecs::ComponentId>{ &positionComponent, 1U });
-    kb::tests::Require(hotQuery.Rebuild(query, kb::ecs::QueryExecutionSettings{ .maxBatchSize = 4 }), "ECS unsafe hot query failed to rebuild after marking a dirty range");
+    kb::tests::Require(hotQuery.RebuildIfChanged(query), "ECS unsafe hot query failed to refresh dirty metadata without structural changes");
+    hotQuery.ForEachMutableChunk([](kb::ecs::UnsafeHotMutableChunk<EcsPosition, EcsVelocity>& chunk) {
+        kb::tests::Require(chunk.DirtyCount<0>() == 2U, "ECS unsafe hot query conditional rebuild did not refresh dirty metadata");
+    });
     std::vector<kb::ecs::NativeComponentDirtyRange> dirtyRanges;
     std::size_t dirtyRangeVisits = 0U;
     std::size_t dirtyRows = 0U;
@@ -1433,6 +1436,30 @@ void RunUnsafeHotQueryMutableRangePlanTest() {
         "ECS unsafe hot dirty query did not clear visited dirty rows");
     kb::tests::Require(kb::tests::NearlyEqual(world.TryGet<EcsPosition>(entities[2])->y, 104.0F), "ECS unsafe hot dirty query did not mutate the first dirty row");
     kb::tests::Require(kb::tests::NearlyEqual(world.TryGet<EcsPosition>(entities[3])->y, 106.0F), "ECS unsafe hot dirty query did not mutate the second dirty row");
+
+    nativeStorage.MarkArchetypeChunkComponentsModified(
+        dirtyRecord.nativeArchetypeIndex,
+        dirtyRecord.nativeChunkIndex,
+        4U,
+        1U,
+        std::span<const kb::ecs::ComponentId>{ &positionComponent, 1U });
+    std::size_t reusedDirtyRangeVisits = 0U;
+    const kb::ecs::UnsafeHotDirtyRangeDispatchStats reusedDirtyStats = hotQuery.ForEachDirtyMutableRange<0>(
+        nativeStorage,
+        2U,
+        dirtyRanges,
+        true,
+        [&](kb::ecs::UnsafeHotMutableChunk<EcsPosition, EcsVelocity>& chunk, std::size_t dirtyCount) {
+            ++reusedDirtyRangeVisits;
+            kb::tests::Require(dirtyCount == 1U, "ECS unsafe hot dirty query reused plan reported an invalid dirty count");
+            EcsPosition* positions = chunk.Components<0>();
+            for (std::size_t row = 0; row < chunk.Count(); ++row) {
+                positions[row].x += 300.0F;
+            }
+        });
+    kb::tests::Require(reusedDirtyStats.ranges == 1U, "ECS unsafe hot dirty query reused plan skipped fresh dirty metadata");
+    kb::tests::Require(reusedDirtyStats.dirtyRows == 1U, "ECS unsafe hot dirty query reused plan reported invalid dirty rows");
+    kb::tests::Require(reusedDirtyRangeVisits == 1U, "ECS unsafe hot dirty query reused plan visited an invalid range count");
 
     nativeStorage.MarkArchetypeChunkComponentsModified(
         dirtyRecord.nativeArchetypeIndex,
@@ -1516,7 +1543,7 @@ void RunUnsafeHotQueryMutableRangePlanTest() {
     for (std::size_t index = 0; index < entities.size(); ++index) {
         const EcsPosition* position = world.TryGet<EcsPosition>(entities[index]);
         kb::tests::Require(position != nullptr, "ECS unsafe hot query update lost a position component");
-        const float expectedX = static_cast<float>(index) + 5.0F + (index >= 6U ? 200.0F : 0.0F);
+        const float expectedX = static_cast<float>(index) + 5.0F + (index == 4U || index == 5U ? 300.0F : 0.0F) + (index >= 6U ? 200.0F : 0.0F);
         kb::tests::Require(kb::tests::NearlyEqual(position->x, expectedX), "ECS unsafe hot query wrote an invalid X value");
         const float expectedY = static_cast<float>(index * 2) - 1.0F + (index == 2U || index == 3U ? 100.0F : 0.0F);
         kb::tests::Require(kb::tests::NearlyEqual(position->y, expectedY), "ECS unsafe hot query wrote an invalid Y value");

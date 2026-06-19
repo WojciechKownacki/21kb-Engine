@@ -431,35 +431,30 @@ private:
 
     void WriteBack(SceneSystemContext& context) {
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
-        constexpr kb::ecs::QueryExecutionSettings settings{
-            .maxBatchSize = 1024U,
-            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
-        };
-        PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
-        physicsBodyQuery.ForEachMutableBatchKernel(settings, [this, &bodyInterface, &context](PhysicsBodyQuery::MutableBatch& batch) {
-            TransformComponent* transforms = batch.Components<0>();
-            RigidbodyComponent* rigidbodies = batch.Components<1>();
-            const ColliderComponent* colliders = batch.Components<2>();
-            for (std::size_t index = 0; index < batch.Count(); ++index) {
-                const SceneEntity entity{ batch.EntityAt(index).Id() };
-                const auto body = bodies_.find(entity.Id());
-                if (body == bodies_.end() || rigidbodies[index].bodyType == RigidbodyBodyType::Static) {
-                    continue;
-                }
-
-                const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body->second.bodyId)), colliders[index].center);
-                transforms[index].localPosition = position;
-                transforms[index].worldPosition = position;
-                transforms[index].localRotation = FromJolt(bodyInterface.GetRotation(body->second.bodyId));
-                transforms[index].worldRotation = transforms[index].localRotation;
-                transforms[index].worldDirty = true;
-                context.Transforms().MarkModified(entity);
-
-                rigidbodies[index].linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body->second.bodyId));
-                rigidbodies[index].angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body->second.bodyId));
-                context.GetScene().Components().Rigidbodies().MarkModified(entity);
+        for (const auto& [entityId, body] : bodies_) {
+            SceneEntity entity{ entityId };
+            if (!context.Transforms().IsAlive(entity)) {
+                continue;
             }
-        });
+
+            RigidbodyComponent* rigidbody = context.GetScene().Components().Rigidbodies().TryGet(entity);
+            TransformComponent* transform = context.Transforms().TryGet(entity);
+            if (rigidbody == nullptr || transform == nullptr || rigidbody->bodyType == RigidbodyBodyType::Static) {
+                continue;
+            }
+
+            const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), body.signature.center);
+            transform->localPosition = position;
+            transform->worldPosition = position;
+            transform->localRotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
+            transform->worldRotation = transform->localRotation;
+            transform->worldDirty = true;
+            context.Transforms().MarkModified(entity);
+
+            rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
+            rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));
+            context.GetScene().Components().Rigidbodies().MarkModified(entity);
+        }
     }
 
     void RemoveBody(JPH::BodyID bodyId) {
