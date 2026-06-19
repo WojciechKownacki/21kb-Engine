@@ -69,7 +69,7 @@ jobs:
         shell: pwsh
         run: |
           "${{ matrix.targets }}".Split(';') | ForEach-Object {
-            cmake --build build/ci --config Debug --target $_
+            cmake --build build/ci --config Debug --parallel --target $_
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
