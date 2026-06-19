@@ -2,7 +2,9 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +22,27 @@ LightComponent* SceneComponentMutationService::TryGetLight(Scene& scene, SceneEn
 
 void SceneComponentMutationService::SetLight(Scene& scene, SceneEntity entity, const LightComponent& light) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Lights().Set(entity, light);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Lights().Set(entity, light);
+        SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Light);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveLight(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Lights().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Lights().Remove(entity);
+        ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Light);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkLightModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Lights().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Lights().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

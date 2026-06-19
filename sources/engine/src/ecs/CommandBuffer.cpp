@@ -26,6 +26,28 @@ struct PlaybackComponentSnapshot {
     std::vector<std::byte> bytes;
 };
 
+struct PlaybackComponentSnapshotKey {
+    Entity entity;
+    ComponentId componentId = 0;
+
+    [[nodiscard]] bool operator==(const PlaybackComponentSnapshotKey& other) const noexcept {
+        return entity == other.entity && componentId == other.componentId;
+    }
+};
+
+struct PlaybackComponentSnapshotKeyHash {
+    [[nodiscard]] std::size_t operator()(const PlaybackComponentSnapshotKey& key) const noexcept {
+        const std::uint64_t entityHash = static_cast<std::uint64_t>(key.entity.Id());
+        const std::uint64_t componentHash = static_cast<std::uint64_t>(key.componentId);
+        const std::uint64_t mixed = entityHash ^ (componentHash + 0x9e3779b97f4a7c15ULL + (entityHash << 6U) + (entityHash >> 2U));
+        if constexpr (sizeof(std::size_t) >= sizeof(std::uint64_t)) {
+            return static_cast<std::size_t>(mixed);
+        } else {
+            return static_cast<std::size_t>(mixed ^ (mixed >> 32U));
+        }
+    }
+};
+
 struct PlaybackParentSnapshot {
     Entity child;
     Entity parent;
@@ -164,6 +186,7 @@ void CommandBufferPlaybackState::Reset() noexcept {
     result_ = CommandBufferPlaybackResult{};
     playbackCreatedIds_.clear();
     destroyedIds_.clear();
+    destroyedIdsActive_ = false;
     scratchEntities_.clear();
     scratchParentEntities_.clear();
     scratchComponentData_.clear();
@@ -339,12 +362,18 @@ void CommandBuffer::WorkerBuffer::DestroyEntities(std::span<const CommandEntity>
 }
 
 void CommandBuffer::WorkerBuffer::DestroyEntities(std::span<const Entity> entities) {
-    std::vector<CommandEntity> commandEntities;
-    commandEntities.reserve(entities.size());
-    for (Entity entity : entities) {
-        commandEntities.push_back(CommandEntity::Existing(entity));
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
-    DestroyEntities(std::span<const CommandEntity>{ commandEntities });
+    if (entities.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::DestroyEntities;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = entities.size();
+    owner_->Push(workerIndex_, std::move(command));
 }
 
 void CommandBuffer::WorkerBuffer::SetParent(CommandEntity child, CommandEntity parent) {
@@ -382,6 +411,25 @@ void CommandBuffer::WorkerBuffer::SetParents(std::span<const CommandEntity> chil
     owner_->Push(workerIndex_, std::move(command));
 }
 
+void CommandBuffer::WorkerBuffer::SetParents(std::vector<CommandEntity>&& children, std::vector<CommandEntity>&& parents) {
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (children.size() != parents.size()) {
+        throw std::invalid_argument("ECS command buffer bulk parent changes require matching child and parent counts");
+    }
+    if (children.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetParents;
+    command.count = children.size();
+    command.entities = std::move(children);
+    command.parents = std::move(parents);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
 void CommandBuffer::WorkerBuffer::SetParentsForNewEntitiesKnownAcyclic(std::span<const CommandEntity> children, std::span<const CommandEntity> parents) {
     if (owner_ == nullptr) {
         throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
@@ -399,6 +447,26 @@ void CommandBuffer::WorkerBuffer::SetParentsForNewEntitiesKnownAcyclic(std::span
     command.parents.assign(parents.begin(), parents.end());
     command.count = children.size();
     command.parentBatchKnownAcyclicForNewEntities = true;
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+void CommandBuffer::WorkerBuffer::SetParentsForNewEntitiesKnownAcyclic(std::vector<CommandEntity>&& children, std::vector<CommandEntity>&& parents) {
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (children.size() != parents.size()) {
+        throw std::invalid_argument("ECS command buffer new-entity parent changes require matching child and parent counts");
+    }
+    if (children.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetParents;
+    command.count = children.size();
+    command.parentBatchKnownAcyclicForNewEntities = true;
+    command.entities = std::move(children);
+    command.parents = std::move(parents);
     owner_->Push(workerIndex_, std::move(command));
 }
 
@@ -502,6 +570,19 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world, const CommandB
     return Playback(world);
 }
 
+CommandBufferPlaybackResult CommandBuffer::PlaybackTrusted(World& world) {
+    CommandBufferPlaybackState state;
+    state.trustedFastPath_ = true;
+    CommandBufferPlaybackBudget budget;
+    while (!state.Complete()) {
+        const CommandBufferPlaybackSlice slice = PlaybackSlice(world, budget, state);
+        if (!slice.madeProgress && !slice.complete) {
+            throw std::runtime_error("ECS trusted command buffer playback did not make progress");
+        }
+    }
+    return state.Result();
+}
+
 CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
     CommandBufferPlaybackResult result;
     result.createdEntities_.resize(lanes_.size());
@@ -513,22 +594,25 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
     playbackCreatedIds.reserve(deferredEntityCount);
 
     std::vector<PlaybackComponentSnapshot> componentRollback;
+    std::unordered_set<PlaybackComponentSnapshotKey, PlaybackComponentSnapshotKeyHash> componentRollbackKeys;
     std::vector<PlaybackParentSnapshot> parentRollback;
+    std::unordered_set<Entity::IdType> parentRollbackIds;
     std::vector<Entity> playbackScratchEntities;
     std::vector<Entity> playbackScratchParentEntities;
+    std::vector<Entity> playbackScratchCreatedEntities;
+    std::vector<ComponentId> playbackScratchComponentIds;
+    std::vector<World::BulkComponentData> playbackScratchComponents;
 
     auto isPlaybackCreated = [&playbackCreatedIds](Entity entity) {
         return entity.IsValid() && playbackCreatedIds.find(entity.Id()) != playbackCreatedIds.end();
     };
 
-    auto snapshotComponent = [&world, &componentRollback, &isPlaybackCreated](Entity entity, ComponentId componentId) {
+    auto snapshotComponent = [&world, &componentRollback, &componentRollbackKeys, &isPlaybackCreated](Entity entity, ComponentId componentId) {
         if (componentId == 0 || !world.IsAlive(entity) || isPlaybackCreated(entity)) {
             return;
         }
-        const auto alreadyCaptured = std::any_of(componentRollback.begin(), componentRollback.end(), [entity, componentId](const PlaybackComponentSnapshot& snapshot) {
-            return snapshot.entity == entity && snapshot.componentId == componentId;
-        });
-        if (alreadyCaptured) {
+        const PlaybackComponentSnapshotKey key{ .entity = entity, .componentId = componentId };
+        if (!componentRollbackKeys.insert(key).second) {
             return;
         }
 
@@ -549,19 +633,39 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         componentRollback.push_back(std::move(snapshot));
     };
 
-    auto snapshotParent = [&world, &parentRollback, &isPlaybackCreated](Entity child) {
+    auto reserveComponentSnapshots = [&componentRollback, &componentRollbackKeys](std::size_t count) {
+        if (count == 0U) {
+            return;
+        }
+        const std::size_t targetSize = componentRollback.size() + count;
+        if (componentRollback.capacity() < targetSize) {
+            componentRollback.reserve(targetSize);
+        }
+        componentRollbackKeys.reserve(targetSize);
+    };
+
+    auto snapshotParent = [&world, &parentRollback, &parentRollbackIds, &isPlaybackCreated](Entity child) {
         if (!world.IsAlive(child) || isPlaybackCreated(child)) {
             return;
         }
-        const auto alreadyCaptured = std::any_of(parentRollback.begin(), parentRollback.end(), [child](const PlaybackParentSnapshot& snapshot) {
-            return snapshot.child == child;
-        });
-        if (!alreadyCaptured) {
-            parentRollback.push_back(PlaybackParentSnapshot{
-                .child = child,
-                .parent = world.Parent(child),
-            });
+        if (!parentRollbackIds.insert(child.Id()).second) {
+            return;
         }
+        parentRollback.push_back(PlaybackParentSnapshot{
+            .child = child,
+            .parent = world.Parent(child),
+        });
+    };
+
+    auto reserveParentSnapshots = [&parentRollback, &parentRollbackIds](std::size_t count) {
+        if (count == 0U) {
+            return;
+        }
+        const std::size_t targetSize = parentRollback.size() + count;
+        if (parentRollback.capacity() < targetSize) {
+            parentRollback.reserve(targetSize);
+        }
+        parentRollbackIds.reserve(targetSize);
     };
 
     auto rollbackPlayback = [&world, &result, &componentRollback, &parentRollback]() {
@@ -595,13 +699,69 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
     };
 
     std::unordered_set<Entity::IdType> destroyedIds;
-    auto scheduleDestroy = [&result, &destroyedIds](Entity entity) {
+    bool destroyedIdsActive = false;
+    auto ensureDestroyedIds = [&result, &destroyedIds, &destroyedIdsActive]() {
+        if (destroyedIdsActive) {
+            return;
+        }
+        destroyedIds.clear();
+        destroyedIds.reserve(result.destroyedEntities_.size());
+        for (Entity entity : result.destroyedEntities_) {
+            destroyedIds.insert(entity.Id());
+        }
+        destroyedIdsActive = true;
+    };
+    auto scheduleDestroy = [&result, &destroyedIds, &ensureDestroyedIds](Entity entity) {
         if (!entity.IsValid()) {
             return;
         }
+        ensureDestroyedIds();
         if (destroyedIds.insert(entity.Id()).second) {
             result.destroyedEntities_.push_back(entity);
         }
+    };
+    auto scheduleStrictlyIncreasingExistingDestroyBatch = [&result, &destroyedIdsActive](std::span<const CommandEntity> entities) {
+        if (destroyedIdsActive || !result.destroyedEntities_.empty() || entities.empty()) {
+            return false;
+        }
+
+        Entity::IdType previousId = 0;
+        bool hasPrevious = false;
+        for (CommandEntity commandEntity : entities) {
+            if (commandEntity.IsDeferred()) {
+                return false;
+            }
+            const Entity entity = commandEntity.ExistingEntity();
+            if (!entity.IsValid() || (hasPrevious && entity.Id() <= previousId)) {
+                return false;
+            }
+            previousId = entity.Id();
+            hasPrevious = true;
+        }
+
+        result.destroyedEntities_.reserve(entities.size());
+        for (CommandEntity commandEntity : entities) {
+            result.destroyedEntities_.push_back(commandEntity.ExistingEntity());
+        }
+        return true;
+    };
+    auto scheduleStrictlyIncreasingExistingDestroyEntityBatch = [&result, &destroyedIdsActive](std::span<const Entity> entities) {
+        if (destroyedIdsActive || !result.destroyedEntities_.empty() || entities.empty()) {
+            return false;
+        }
+
+        Entity::IdType previousId = 0;
+        bool hasPrevious = false;
+        for (Entity entity : entities) {
+            if (!entity.IsValid() || (hasPrevious && entity.Id() <= previousId)) {
+                return false;
+            }
+            previousId = entity.Id();
+            hasPrevious = true;
+        }
+
+        result.destroyedEntities_.assign(entities.begin(), entities.end());
+        return true;
     };
 
     try {
@@ -622,8 +782,8 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
 
                     ++result.stats_.structuralCommands;
                     ++result.stats_.bulkCreateCommands;
-                    std::vector<World::BulkComponentData> components;
-                    components.reserve(command.bulkComponents.size());
+                    playbackScratchComponents.clear();
+                    playbackScratchComponents.reserve(command.bulkComponents.size());
                     for (const BulkComponentCommand& component : command.bulkComponents) {
                         if (component.registerComponent == nullptr) {
                             throw std::logic_error("ECS command buffer bulk create component is missing a register function");
@@ -636,7 +796,7 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                             (borrowed ? component.borrowedCount != sourceCount : component.bytes.size() != sourceBytes)) {
                             throw std::logic_error("ECS command buffer bulk create component payload size mismatch");
                         }
-                        components.push_back(World::BulkComponentData{
+                        playbackScratchComponents.push_back(World::BulkComponentData{
                             .componentId = component.registerComponent(world),
                             .componentSize = component.componentSize,
                             .componentCount = command.count,
@@ -646,13 +806,13 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                         result.stats_.componentBytesCopied += componentBytes;
                     }
 
-                    const std::vector<Entity> entities = world.CreateEntitiesWithComponents(command.count, components);
-                    if (entities.size() != command.count) {
+                    world.CreateEntitiesWithComponentsInto(playbackScratchCreatedEntities, command.count, playbackScratchComponents);
+                    if (playbackScratchCreatedEntities.size() != command.count) {
                         throw std::runtime_error("ECS command buffer bulk create returned an unexpected entity count");
                     }
-                    for (std::size_t index = 0; index < entities.size(); ++index) {
-                        result.createdEntities_[workerIndex][command.first.LocalIndex() + index] = entities[index];
-                        playbackCreatedIds.insert(entities[index].Id());
+                    for (std::size_t index = 0; index < playbackScratchCreatedEntities.size(); ++index) {
+                        result.createdEntities_[workerIndex][command.first.LocalIndex() + index] = playbackScratchCreatedEntities[index];
+                        playbackCreatedIds.insert(playbackScratchCreatedEntities[index].Id());
                     }
                     continue;
                 }
@@ -681,13 +841,21 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                     scheduleDestroy(ResolveForPlayback(command.first, result));
                     break;
                 case CommandKind::DestroyEntities:
-                    if (command.entities.size() != command.count) {
+                    if (CommandEntityCount(command) != command.count) {
                         throw std::logic_error("ECS command buffer bulk destroy command has an invalid entity count");
                     }
                     ++result.stats_.structuralCommands;
                     result.stats_.destroyCommands += command.count;
-                    for (CommandEntity commandEntity : command.entities) {
-                        scheduleDestroy(ResolveForPlayback(commandEntity, result));
+                    if (!command.existingEntities.empty()) {
+                        if (!scheduleStrictlyIncreasingExistingDestroyEntityBatch(command.existingEntities)) {
+                            for (Entity entity : command.existingEntities) {
+                                scheduleDestroy(entity);
+                            }
+                        }
+                    } else if (!scheduleStrictlyIncreasingExistingDestroyBatch(command.entities)) {
+                        for (CommandEntity commandEntity : command.entities) {
+                            scheduleDestroy(ResolveForPlayback(commandEntity, result));
+                        }
                     }
                     break;
                 case CommandKind::SetComponent: {
@@ -716,76 +884,80 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                     break;
                 }
                 case CommandKind::SetComponents: {
-                    if (command.entities.size() != command.count) {
+                    if (CommandEntityCount(command) != command.count) {
                         throw std::logic_error("ECS command buffer bulk component set command has an invalid entity count");
                     }
 
-                    std::vector<ComponentId> componentIds;
-                    componentIds.reserve(command.bulkComponents.size());
+                    playbackScratchComponentIds.clear();
+                    playbackScratchComponentIds.reserve(command.bulkComponents.size());
                     for (const BulkComponentCommand& component : command.bulkComponents) {
                         if (component.registerComponent == nullptr) {
                             throw std::logic_error("ECS command buffer bulk component set is missing a register function");
                         }
-                        if (component.componentSize == 0 || component.bytes.size() != command.count * component.componentSize) {
+                        if (component.componentSize == 0 || command.count > std::numeric_limits<std::size_t>::max() / component.componentSize) {
                             throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
                         }
-                        componentIds.push_back(component.registerComponent(world));
+                        const std::size_t componentBytes = command.count * component.componentSize;
+                        const bool borrowed = component.borrowedData != nullptr;
+                        if ((borrowed && component.borrowedCount != command.count) || (!borrowed && component.bytes.size() != componentBytes)) {
+                            throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
+                        }
+                        playbackScratchComponentIds.push_back(component.registerComponent(world));
                     }
 
-                    std::vector<Entity> entities;
-                    entities.reserve(command.entities.size());
-                    for (CommandEntity commandEntity : command.entities) {
-                        const Entity entity = ResolveForPlayback(commandEntity, result);
-                        entities.push_back(entity);
-                        for (ComponentId componentId : componentIds) {
+                    playbackScratchEntities.clear();
+                    ResolveCommandEntitiesForPlayback(command, result, playbackScratchEntities);
+                    reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    for (Entity entity : playbackScratchEntities) {
+                        for (ComponentId componentId : playbackScratchComponentIds) {
                             snapshotComponent(entity, componentId);
                         }
                     }
 
-                    std::vector<World::BulkComponentData> components;
-                    components.reserve(command.bulkComponents.size());
+                    playbackScratchComponents.clear();
+                    playbackScratchComponents.reserve(command.bulkComponents.size());
                     for (std::size_t componentIndex = 0; componentIndex < command.bulkComponents.size(); ++componentIndex) {
                         const BulkComponentCommand& component = command.bulkComponents[componentIndex];
-                        components.push_back(World::BulkComponentData{
-                            .componentId = componentIds[componentIndex],
+                        const bool borrowed = component.borrowedData != nullptr;
+                        playbackScratchComponents.push_back(World::BulkComponentData{
+                            .componentId = playbackScratchComponentIds[componentIndex],
                             .componentSize = component.componentSize,
-                            .data = component.bytes.data(),
+                            .data = borrowed ? component.borrowedData : component.bytes.data(),
                         });
-                        result.stats_.componentBytesCopied += component.bytes.size();
+                        result.stats_.componentBytesCopied += command.count * component.componentSize;
                     }
-                    world.AddComponents(entities, components);
+                    world.AddComponents(playbackScratchEntities, playbackScratchComponents);
                     ++result.stats_.structuralCommands;
                     result.stats_.componentSetCommands += command.count * command.bulkComponents.size();
                     break;
                 }
                 case CommandKind::RemoveComponents: {
-                    if (command.entities.size() != command.count) {
+                    if (CommandEntityCount(command) != command.count) {
                         throw std::logic_error("ECS command buffer bulk component remove command has an invalid entity count");
                     }
 
-                    std::vector<ComponentId> componentIds;
-                    componentIds.reserve(command.bulkRemoveComponents.size());
+                    playbackScratchComponentIds.clear();
+                    playbackScratchComponentIds.reserve(command.bulkRemoveComponents.size());
                     for (const BulkRemoveComponentCommand& component : command.bulkRemoveComponents) {
                         if (component.findComponent == nullptr) {
                             throw std::logic_error("ECS command buffer bulk component remove is missing a component lookup function");
                         }
                         const ComponentId componentId = component.findComponent(world);
                         if (componentId != 0) {
-                            componentIds.push_back(componentId);
+                            playbackScratchComponentIds.push_back(componentId);
                         }
                     }
-                    std::vector<Entity> entities;
-                    entities.reserve(command.entities.size());
-                    for (CommandEntity commandEntity : command.entities) {
-                        const Entity entity = ResolveForPlayback(commandEntity, result);
-                        entities.push_back(entity);
-                        for (ComponentId componentId : componentIds) {
+                    playbackScratchEntities.clear();
+                    ResolveCommandEntitiesForPlayback(command, result, playbackScratchEntities);
+                    reserveComponentSnapshots(playbackScratchEntities.size() * playbackScratchComponentIds.size());
+                    for (Entity entity : playbackScratchEntities) {
+                        for (ComponentId componentId : playbackScratchComponentIds) {
                             snapshotComponent(entity, componentId);
                         }
                     }
-                    world.RemoveComponents(entities, componentIds);
+                    world.RemoveComponents(playbackScratchEntities, playbackScratchComponentIds);
                     ++result.stats_.structuralCommands;
-                    result.stats_.componentRemoveCommands += command.count * componentIds.size();
+                    result.stats_.componentRemoveCommands += command.count * playbackScratchComponentIds.size();
                     break;
                 }
                 case CommandKind::SetParent: {
@@ -806,20 +978,15 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                     }
                     playbackScratchEntities.clear();
                     playbackScratchParentEntities.clear();
-                    playbackScratchEntities.reserve(command.count);
-                    playbackScratchParentEntities.reserve(command.count);
-                    for (std::size_t index = 0; index < command.count; ++index) {
-                        const Entity child = ResolveForPlayback(command.entities[index], result);
-                        const Entity parent = ResolveForPlayback(command.parents[index], result);
-                        playbackScratchEntities.push_back(child);
-                        playbackScratchParentEntities.push_back(parent);
-                    }
+                    ResolveForPlaybackRange(command.entities, result, playbackScratchEntities);
+                    ResolveForPlaybackRange(command.parents, result, playbackScratchParentEntities);
                     if (command.parentBatchKnownAcyclicForNewEntities) {
                         world.SetParentsForNewEntitiesKnownAcyclic(playbackScratchEntities, playbackScratchParentEntities);
                     } else if (std::all_of(playbackScratchEntities.begin(), playbackScratchEntities.end(), isPlaybackCreated) &&
                         ParentBatchIsLocallyAcyclic(playbackScratchEntities, playbackScratchParentEntities)) {
                         world.SetParentsForNewEntitiesKnownAcyclic(playbackScratchEntities, playbackScratchParentEntities);
                     } else {
+                        reserveParentSnapshots(playbackScratchEntities.size());
                         for (Entity child : playbackScratchEntities) {
                             snapshotParent(child);
                         }
@@ -846,10 +1013,9 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
                         throw std::logic_error("ECS command buffer bulk clear parent command has an invalid entity count");
                     }
                     playbackScratchEntities.clear();
-                    playbackScratchEntities.reserve(command.count);
-                    for (CommandEntity commandEntity : command.entities) {
-                        const Entity child = ResolveForPlayback(commandEntity, result);
-                        playbackScratchEntities.push_back(child);
+                    ResolveForPlaybackRange(command.entities, result, playbackScratchEntities);
+                    reserveParentSnapshots(playbackScratchEntities.size());
+                    for (Entity child : playbackScratchEntities) {
                         snapshotParent(child);
                     }
                     world.ClearParents(playbackScratchEntities);
@@ -864,8 +1030,8 @@ CommandBufferPlaybackResult CommandBuffer::Playback(World& world) {
         result.stats_.applyPhaseNanoseconds = ElapsedCommandBufferNanoseconds(applyPhaseStart, CommandBufferStatsClock::now());
 
         const auto destroyPhaseStart = CommandBufferStatsClock::now();
-        for (Entity entity : result.destroyedEntities_) {
-            world.DestroyEntity(entity);
+        if (!result.destroyedEntities_.empty()) {
+            world.DestroyEntities(result.destroyedEntities_);
         }
         result.stats_.destroyPhaseNanoseconds = result.destroyedEntities_.empty() ? 0U : ElapsedCommandBufferNanoseconds(destroyPhaseStart, CommandBufferStatsClock::now());
 
@@ -890,7 +1056,9 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
     }
 
     if (state.phase_ == CommandBufferPlaybackState::Phase::NotStarted) {
+        const bool trustedFastPath = state.trustedFastPath_;
         state.Reset();
+        state.trustedFastPath_ = trustedFastPath;
         state.phase_ = CommandBufferPlaybackState::Phase::Create;
         state.result_.createdEntities_.resize(lanes_.size());
         std::size_t deferredEntityCount = 0;
@@ -924,13 +1092,70 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
         return entity.IsValid() && state.playbackCreatedIds_.find(entity.Id()) != state.playbackCreatedIds_.end();
     };
 
-    auto scheduleDestroy = [&state](Entity entity) {
+    auto ensureDestroyedIds = [&state]() {
+        if (state.destroyedIdsActive_) {
+            return;
+        }
+        state.destroyedIds_.clear();
+        state.destroyedIds_.reserve(state.result_.destroyedEntities_.size());
+        for (Entity entity : state.result_.destroyedEntities_) {
+            state.destroyedIds_.insert(entity.Id());
+        }
+        state.destroyedIdsActive_ = true;
+    };
+
+    auto scheduleDestroy = [&state, &ensureDestroyedIds](Entity entity) {
         if (!entity.IsValid()) {
             return;
         }
+        ensureDestroyedIds();
         if (state.destroyedIds_.insert(entity.Id()).second) {
             state.result_.destroyedEntities_.push_back(entity);
         }
+    };
+
+    auto scheduleStrictlyIncreasingExistingDestroyBatch = [&state](std::span<const CommandEntity> entities) {
+        if (state.destroyedIdsActive_ || !state.result_.destroyedEntities_.empty() || entities.empty()) {
+            return false;
+        }
+
+        Entity::IdType previousId = 0;
+        bool hasPrevious = false;
+        for (CommandEntity commandEntity : entities) {
+            if (commandEntity.IsDeferred()) {
+                return false;
+            }
+            const Entity entity = commandEntity.ExistingEntity();
+            if (!entity.IsValid() || (hasPrevious && entity.Id() <= previousId)) {
+                return false;
+            }
+            previousId = entity.Id();
+            hasPrevious = true;
+        }
+
+        state.result_.destroyedEntities_.reserve(entities.size());
+        for (CommandEntity commandEntity : entities) {
+            state.result_.destroyedEntities_.push_back(commandEntity.ExistingEntity());
+        }
+        return true;
+    };
+    auto scheduleStrictlyIncreasingExistingDestroyEntityBatch = [&state](std::span<const Entity> entities) {
+        if (state.destroyedIdsActive_ || !state.result_.destroyedEntities_.empty() || entities.empty()) {
+            return false;
+        }
+
+        Entity::IdType previousId = 0;
+        bool hasPrevious = false;
+        for (Entity entity : entities) {
+            if (!entity.IsValid() || (hasPrevious && entity.Id() <= previousId)) {
+                return false;
+            }
+            previousId = entity.Id();
+            hasPrevious = true;
+        }
+
+        state.result_.destroyedEntities_.assign(entities.begin(), entities.end());
+        return true;
     };
 
     auto applyCreateCommand = [&world, &state](std::size_t workerIndex, const Command& command) {
@@ -962,7 +1187,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 });
             }
 
-            state.scratchEntities_ = world.CreateEntitiesWithComponents(command.count, state.scratchComponentData_);
+            world.CreateEntitiesWithComponentsInto(state.scratchEntities_, command.count, state.scratchComponentData_, world.Config().mirrorEntitiesToBackend);
             if (state.scratchEntities_.size() != command.count) {
                 throw std::runtime_error("ECS command buffer bulk create returned an unexpected entity count");
             }
@@ -991,11 +1216,17 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             scheduleDestroy(ResolveForPlayback(command.first, state.result_));
             break;
         case CommandKind::DestroyEntities:
-            if (command.entities.size() != command.count) {
+            if (CommandEntityCount(command) != command.count) {
                 throw std::logic_error("ECS command buffer bulk destroy command has an invalid entity count");
             }
-            for (CommandEntity commandEntity : command.entities) {
-                scheduleDestroy(ResolveForPlayback(commandEntity, state.result_));
+            if (!command.existingEntities.empty()) {
+                for (Entity entity : command.existingEntities) {
+                    scheduleDestroy(entity);
+                }
+            } else {
+                for (CommandEntity commandEntity : command.entities) {
+                    scheduleDestroy(ResolveForPlayback(commandEntity, state.result_));
+                }
             }
             break;
         case CommandKind::SetComponent:
@@ -1012,7 +1243,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             command.component.remove(world, command.first, state.result_);
             break;
         case CommandKind::SetComponents: {
-            if (command.entities.size() != command.count) {
+            if (CommandEntityCount(command) != command.count) {
                 throw std::logic_error("ECS command buffer bulk component set command has an invalid entity count");
             }
 
@@ -1022,26 +1253,32 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 if (component.registerComponent == nullptr) {
                     throw std::logic_error("ECS command buffer bulk component set is missing a register function");
                 }
-                if (component.componentSize == 0 || component.bytes.size() != command.count * component.componentSize) {
+                if (component.componentSize == 0 || command.count > std::numeric_limits<std::size_t>::max() / component.componentSize) {
+                    throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
+                }
+                const std::size_t componentBytes = command.count * component.componentSize;
+                const bool borrowed = component.borrowedData != nullptr;
+                if ((borrowed && component.borrowedCount != command.count) || (!borrowed && component.bytes.size() != componentBytes)) {
                     throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
                 }
                 state.scratchComponentData_.push_back(World::BulkComponentData{
                     .componentId = component.registerComponent(world),
                     .componentSize = component.componentSize,
-                    .data = component.bytes.data(),
+                    .data = borrowed ? component.borrowedData : component.bytes.data(),
                 });
             }
 
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(command.entities.size());
-            for (CommandEntity commandEntity : command.entities) {
-                state.scratchEntities_.push_back(ResolveForPlayback(commandEntity, state.result_));
+            ResolveCommandEntitiesForPlayback(command, state.result_, state.scratchEntities_);
+            if (state.trustedFastPath_ && command.bulkSetComponentsKnownMissing) {
+                world.AddMissingComponentsTrusted(state.scratchEntities_, state.scratchComponentData_);
+            } else {
+                world.AddComponents(state.scratchEntities_, state.scratchComponentData_);
             }
-            world.AddComponents(state.scratchEntities_, state.scratchComponentData_);
             break;
         }
         case CommandKind::RemoveComponents: {
-            if (command.entities.size() != command.count) {
+            if (CommandEntityCount(command) != command.count) {
                 throw std::logic_error("ECS command buffer bulk component remove command has an invalid entity count");
             }
 
@@ -1057,11 +1294,12 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 }
             }
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(command.entities.size());
-            for (CommandEntity commandEntity : command.entities) {
-                state.scratchEntities_.push_back(ResolveForPlayback(commandEntity, state.result_));
+            ResolveCommandEntitiesForPlayback(command, state.result_, state.scratchEntities_);
+            if (state.trustedFastPath_ && command.bulkRemoveComponentsKnownExisting) {
+                world.RemoveExistingComponentsTrusted(state.scratchEntities_, state.scratchComponentIds_);
+            } else {
+                world.RemoveComponents(state.scratchEntities_, state.scratchComponentIds_);
             }
-            world.RemoveComponents(state.scratchEntities_, state.scratchComponentIds_);
             break;
         }
         case CommandKind::SetParent: {
@@ -1076,12 +1314,8 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             }
             state.scratchEntities_.clear();
             state.scratchParentEntities_.clear();
-            state.scratchEntities_.reserve(command.count);
-            state.scratchParentEntities_.reserve(command.count);
-            for (std::size_t index = 0; index < command.count; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-                state.scratchParentEntities_.push_back(ResolveForPlayback(command.parents[index], state.result_));
-            }
+            ResolveForPlaybackRange(command.entities, state.result_, state.scratchEntities_);
+            ResolveForPlaybackRange(command.parents, state.result_, state.scratchParentEntities_);
             if (command.parentBatchKnownAcyclicForNewEntities) {
                 world.SetParentsForNewEntitiesKnownAcyclic(state.scratchEntities_, state.scratchParentEntities_);
             } else if (std::all_of(state.scratchEntities_.begin(), state.scratchEntities_.end(), isPlaybackCreated) &&
@@ -1100,10 +1334,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 throw std::logic_error("ECS command buffer bulk clear parent command has an invalid entity count");
             }
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(command.count);
-            for (std::size_t index = 0; index < command.count; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-            }
+            ResolveForPlaybackRange(command.entities, state.result_, state.scratchEntities_);
             world.ClearParents(state.scratchEntities_);
             break;
         }
@@ -1162,7 +1393,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
         }
 
         if (command.kind == CommandKind::DestroyEntities) {
-            if (command.entities.size() != command.count || state.commandElementIndex_ > command.count) {
+            if (CommandEntityCount(command) != command.count || state.commandElementIndex_ > command.count) {
                 throw std::logic_error("ECS command buffer bulk destroy command has an invalid entity count");
             }
             if (state.commandElementIndex_ == command.count) {
@@ -1190,9 +1421,33 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 return slice;
             }
 
-            const std::size_t end = state.commandElementIndex_ + entitiesThisSlice;
-            for (std::size_t index = state.commandElementIndex_; index < end; ++index) {
-                scheduleDestroy(ResolveForPlayback(command.entities[index], state.result_));
+            const std::size_t begin = state.commandElementIndex_;
+            const std::size_t end = begin + entitiesThisSlice;
+            if (begin == 0U && entitiesThisSlice == command.count && !command.existingEntities.empty() &&
+                scheduleStrictlyIncreasingExistingDestroyEntityBatch(command.existingEntities)) {
+                state.commandElementIndex_ = end;
+                consumeCost(cost);
+                ++state.commandIndex_;
+                state.commandElementIndex_ = 0;
+                continue;
+            }
+            if (begin == 0U && entitiesThisSlice == command.count && command.existingEntities.empty() &&
+                scheduleStrictlyIncreasingExistingDestroyBatch(command.entities)) {
+                state.commandElementIndex_ = end;
+                consumeCost(cost);
+                ++state.commandIndex_;
+                state.commandElementIndex_ = 0;
+                continue;
+            }
+
+            if (!command.existingEntities.empty()) {
+                for (std::size_t index = begin; index < end; ++index) {
+                    scheduleDestroy(command.existingEntities[index]);
+                }
+            } else {
+                for (std::size_t index = begin; index < end; ++index) {
+                    scheduleDestroy(ResolveForPlayback(command.entities[index], state.result_));
+                }
             }
             state.commandElementIndex_ = end;
             consumeCost(cost);
@@ -1204,7 +1459,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
         }
 
         if (command.kind == CommandKind::SetComponents) {
-            if (command.entities.size() != command.count || state.commandElementIndex_ > command.count) {
+            if (CommandEntityCount(command) != command.count || state.commandElementIndex_ > command.count) {
                 throw std::logic_error("ECS command buffer bulk component set command has an invalid entity count");
             }
             if (state.commandElementIndex_ == command.count) {
@@ -1218,7 +1473,12 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 if (component.registerComponent == nullptr) {
                     throw std::logic_error("ECS command buffer bulk component set is missing a register function");
                 }
-                if (component.componentSize == 0 || component.bytes.size() != command.count * component.componentSize) {
+                if (component.componentSize == 0 || command.count > std::numeric_limits<std::size_t>::max() / component.componentSize) {
+                    throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
+                }
+                const std::size_t componentBytes = command.count * component.componentSize;
+                const bool borrowed = component.borrowedData != nullptr;
+                if ((borrowed && component.borrowedCount != command.count) || (!borrowed && component.bytes.size() != componentBytes)) {
                     throw std::logic_error("ECS command buffer bulk component set payload size mismatch");
                 }
                 bytesPerEntity += component.componentSize;
@@ -1255,18 +1515,16 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             const std::size_t begin = state.commandElementIndex_;
             const std::size_t end = begin + entitiesThisSlice;
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(entitiesThisSlice);
-            for (std::size_t index = begin; index < end; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-            }
+            ResolveCommandEntitiesForPlayback(command, begin, entitiesThisSlice, state.result_, state.scratchEntities_);
 
             state.scratchComponentData_.clear();
             state.scratchComponentData_.reserve(componentCount);
             for (const BulkComponentCommand& component : command.bulkComponents) {
+                const auto* source = static_cast<const std::byte*>(component.borrowedData != nullptr ? component.borrowedData : component.bytes.data());
                 state.scratchComponentData_.push_back(World::BulkComponentData{
                     .componentId = component.registerComponent(world),
                     .componentSize = component.componentSize,
-                    .data = component.bytes.data() + (begin * component.componentSize),
+                    .data = source + (begin * component.componentSize),
                 });
             }
 
@@ -1281,7 +1539,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
         }
 
         if (command.kind == CommandKind::RemoveComponents) {
-            if (command.entities.size() != command.count || state.commandElementIndex_ > command.count) {
+            if (CommandEntityCount(command) != command.count || state.commandElementIndex_ > command.count) {
                 throw std::logic_error("ECS command buffer bulk component remove command has an invalid entity count");
             }
             if (state.commandElementIndex_ == command.count) {
@@ -1338,10 +1596,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             const std::size_t begin = state.commandElementIndex_;
             const std::size_t end = begin + entitiesThisSlice;
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(entitiesThisSlice);
-            for (std::size_t index = begin; index < end; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-            }
+            ResolveCommandEntitiesForPlayback(command, begin, entitiesThisSlice, state.result_, state.scratchEntities_);
             world.RemoveComponents(state.scratchEntities_, state.scratchComponentIds_);
             state.commandElementIndex_ = end;
             consumeCost(cost);
@@ -1385,12 +1640,8 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             const std::size_t end = begin + entitiesThisSlice;
             state.scratchEntities_.clear();
             state.scratchParentEntities_.clear();
-            state.scratchEntities_.reserve(entitiesThisSlice);
-            state.scratchParentEntities_.reserve(entitiesThisSlice);
-            for (std::size_t index = begin; index < end; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-                state.scratchParentEntities_.push_back(ResolveForPlayback(command.parents[index], state.result_));
-            }
+            ResolveForPlaybackRange(std::span<const CommandEntity>{ command.entities.data() + begin, entitiesThisSlice }, state.result_, state.scratchEntities_);
+            ResolveForPlaybackRange(std::span<const CommandEntity>{ command.parents.data() + begin, entitiesThisSlice }, state.result_, state.scratchParentEntities_);
 
             const bool wholeCommand = begin == 0U && entitiesThisSlice == command.count;
             if (command.parentBatchKnownAcyclicForNewEntities) {
@@ -1443,10 +1694,7 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
             const std::size_t begin = state.commandElementIndex_;
             const std::size_t end = begin + entitiesThisSlice;
             state.scratchEntities_.clear();
-            state.scratchEntities_.reserve(entitiesThisSlice);
-            for (std::size_t index = begin; index < end; ++index) {
-                state.scratchEntities_.push_back(ResolveForPlayback(command.entities[index], state.result_));
-            }
+            ResolveForPlaybackRange(std::span<const CommandEntity>{ command.entities.data() + begin, entitiesThisSlice }, state.result_, state.scratchEntities_);
             world.ClearParents(state.scratchEntities_);
 
             state.commandElementIndex_ = end;
@@ -1478,11 +1726,26 @@ CommandBufferPlaybackSlice CommandBuffer::PlaybackSlice(World& world, const Comm
                 }
                 return slice;
             }
-            const Entity entity = state.result_.destroyedEntities_[state.destroyIndex_++];
-            if (world.IsAlive(entity)) {
-                world.DestroyEntity(entity);
+            const std::size_t remainingBudget = destroyBudget - slice.destroyedEntitiesApplied;
+            const std::size_t remainingEntities = state.result_.destroyedEntities_.size() - state.destroyIndex_;
+            const std::size_t entityCount = std::min(remainingBudget, remainingEntities);
+            if (state.trustedFastPath_) {
+                world.DestroyEntitiesTrusted(std::span<const Entity>{ state.result_.destroyedEntities_.data() + state.destroyIndex_, entityCount });
+            } else {
+                state.scratchEntities_.clear();
+                state.scratchEntities_.reserve(entityCount);
+                for (std::size_t offset = 0U; offset < entityCount; ++offset) {
+                    const Entity entity = state.result_.destroyedEntities_[state.destroyIndex_ + offset];
+                    if (world.IsAlive(entity)) {
+                        state.scratchEntities_.push_back(entity);
+                    }
+                }
+                if (!state.scratchEntities_.empty()) {
+                    world.DestroyEntities(state.scratchEntities_);
+                }
             }
-            ++slice.destroyedEntitiesApplied;
+            state.destroyIndex_ += entityCount;
+            slice.destroyedEntitiesApplied += entityCount;
             slice.madeProgress = true;
         }
         state.phase_ = CommandBufferPlaybackState::Phase::Complete;
@@ -1539,6 +1802,74 @@ Entity CommandBuffer::ResolveForPlayback(CommandEntity entity, const CommandBuff
     return result.Resolve(entity);
 }
 
+void CommandBuffer::ResolveForPlaybackRange(std::span<const CommandEntity> source, const CommandBufferPlaybackResult& result, std::vector<Entity>& target) {
+    target.clear();
+    target.reserve(source.size());
+    if (source.empty()) {
+        return;
+    }
+
+    const CommandEntity first = source.front();
+    if (first.IsDeferred()) {
+        const std::size_t workerIndex = first.WorkerIndex();
+        const std::size_t firstLocalIndex = first.LocalIndex();
+        bool contiguousDeferredRange = true;
+        for (std::size_t index = 1; index < source.size(); ++index) {
+            const CommandEntity entity = source[index];
+            if (!entity.IsDeferred() || entity.WorkerIndex() != workerIndex || entity.LocalIndex() != firstLocalIndex + index) {
+                contiguousDeferredRange = false;
+                break;
+            }
+        }
+
+        if (contiguousDeferredRange) {
+            if (workerIndex >= result.createdEntities_.size()) {
+                throw std::out_of_range("ECS command buffer deferred entity worker index is invalid");
+            }
+            const std::vector<Entity>& laneEntities = result.createdEntities_[workerIndex];
+            if (firstLocalIndex > laneEntities.size() || source.size() > laneEntities.size() - firstLocalIndex) {
+                throw std::out_of_range("ECS command buffer deferred entity local range is invalid");
+            }
+            target.insert(target.end(), laneEntities.begin() + static_cast<std::ptrdiff_t>(firstLocalIndex), laneEntities.begin() + static_cast<std::ptrdiff_t>(firstLocalIndex + source.size()));
+            return;
+        }
+    }
+
+    for (CommandEntity entity : source) {
+        target.push_back(ResolveForPlayback(entity, result));
+    }
+}
+
+std::size_t CommandBuffer::CommandEntityCount(const Command& command) noexcept {
+    return command.existingEntities.empty() ? command.entities.size() : command.existingEntities.size();
+}
+
+void CommandBuffer::ResolveCommandEntitiesForPlayback(const Command& command, const CommandBufferPlaybackResult& result, std::vector<Entity>& target) {
+    if (!command.existingEntities.empty()) {
+        target.assign(command.existingEntities.begin(), command.existingEntities.end());
+        return;
+    }
+    ResolveForPlaybackRange(command.entities, result, target);
+}
+
+void CommandBuffer::ResolveCommandEntitiesForPlayback(
+    const Command& command,
+    std::size_t begin,
+    std::size_t count,
+    const CommandBufferPlaybackResult& result,
+    std::vector<Entity>& target) {
+    if (!command.existingEntities.empty()) {
+        if (begin > command.existingEntities.size() || count > command.existingEntities.size() - begin) {
+            throw std::logic_error("ECS command buffer existing entity range is invalid");
+        }
+        target.assign(
+            command.existingEntities.begin() + static_cast<std::ptrdiff_t>(begin),
+            command.existingEntities.begin() + static_cast<std::ptrdiff_t>(begin + count));
+        return;
+    }
+    ResolveForPlaybackRange(std::span<const CommandEntity>{ command.entities.data() + begin, count }, result, target);
+}
+
 CommandBufferPlaybackResult::Stats CommandBuffer::EstimateCommandStats(const Command& command) {
     CommandBufferPlaybackResult::Stats stats;
     switch (command.kind) {
@@ -1574,7 +1905,7 @@ CommandBufferPlaybackResult::Stats CommandBuffer::EstimateCommandStats(const Com
         ++stats.structuralCommands;
         stats.componentSetCommands += command.count * command.bulkComponents.size();
         for (const BulkComponentCommand& component : command.bulkComponents) {
-            stats.componentBytesCopied += component.bytes.size();
+            stats.componentBytesCopied += component.borrowedData != nullptr ? component.componentSize * command.count : component.bytes.size();
         }
         break;
     case CommandKind::RemoveComponents:

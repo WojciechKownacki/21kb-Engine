@@ -49,10 +49,18 @@ struct ScenePrefabInstantiationStats {
     std::size_t parentCommands = 0;
     std::size_t componentBytesCopied = 0;
     std::size_t componentSourceBytesRead = 0;
+    double componentCopyBytesPerSecond = 0.0;
+    double componentSourceBytesPerSecond = 0.0;
+    double entityCreateEntitiesPerSecond = 0.0;
     std::size_t chunksAllocatedDelta = 0;
     std::size_t chunksReusedDelta = 0;
     std::size_t registeredInstanceCount = 0;
     std::uint64_t entityCreateNanoseconds = 0;
+    std::uint64_t prefabBakeNanoseconds = 0;
+    std::uint64_t componentPayloadBuildNanoseconds = 0;
+    std::uint64_t entityBulkCreateNanoseconds = 0;
+    std::uint64_t entityPrefabOrderMapNanoseconds = 0;
+    std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t commandBuildNanoseconds = 0;
     std::uint64_t commandPlaybackNanoseconds = 0;
     std::uint64_t commandPlaybackCreateNanoseconds = 0;
@@ -63,6 +71,9 @@ struct ScenePrefabInstantiationStats {
     std::uint64_t nameAssignmentNanoseconds = 0;
     std::uint64_t registryResolveNanoseconds = 0;
     std::uint64_t historyRecordNanoseconds = 0;
+    bool hasGeneratedEntityIndexRange = false;
+    bool hasContiguousGeneratedEntityRuns = false;
+    std::uint32_t maxGeneratedEntityIndex = 0;
 };
 
 class ScenePrefabs {
@@ -120,6 +131,7 @@ public:
     [[nodiscard]] bool Unpack(ScenePrefabInstanceHandle handle, ScenePrefabUnpackMode mode = ScenePrefabUnpackMode::RootOnly);
     [[nodiscard]] ScenePrefabOverrideReport Overrides(ScenePrefabInstanceHandle handle) const;
     [[nodiscard]] bool RevertOverrides(ScenePrefabInstanceHandle handle);
+    [[nodiscard]] bool RevertOverrides(std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle);
     [[nodiscard]] bool ApplyOverrides(std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] bool ApplyOverrides(ScenePrefabInstanceHandle handle, const std::filesystem::path& assetPath);

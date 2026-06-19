@@ -19,6 +19,11 @@ public:
     static void SetName(SceneState& state, SceneEntity entity, std::string_view name);
     static void SetNames(SceneState& state, std::span<const SceneEntity> entities, std::span<const std::string> names);
     static void SetRepeatedNames(SceneState& state, std::span<const SceneEntity> entities, std::span<const std::string> namesByNode);
+    static void SetRepeatedNamesForCreatedDenseEntities(
+        SceneState& state,
+        std::span<const SceneEntity> entities,
+        std::span<const std::string> namesByNode,
+        std::uint32_t maxDenseIndex);
     static void ClearName(SceneState& state, SceneEntity entity) noexcept;
 };
 

@@ -39,6 +39,11 @@ struct SceneRuntimeHotPathReport {
     std::size_t transformTopologicalBatchCount = 0U;
     std::uint64_t transformTopologicalBatchBuildCount = 0U;
     std::size_t transformRenderProxyUpdateCount = 0U;
+    std::size_t transformRenderProxyMeshRendererCount = 0U;
+    std::size_t transformRenderProxyVisibleMeshRendererCount = 0U;
+    std::size_t transformRenderProxyCameraCount = 0U;
+    std::size_t transformRenderProxyLightCount = 0U;
+    std::size_t transformRenderProxyIdentityAffineFastPathCount = 0U;
     std::size_t transformHierarchyInspectedCount = 0U;
     std::size_t transformHierarchyUpdatedCount = 0U;
     std::size_t transformHierarchyRootFastPathCount = 0U;
@@ -89,6 +94,7 @@ public:
     [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
+    [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
 
 private:
     const Scene& scene_;
@@ -113,6 +119,7 @@ public:
     [[nodiscard]] SceneRuntimeHotPathReport HotPathReport() const noexcept;
     [[nodiscard]] std::optional<TransformComponent> InterpolatedTransform(SceneEntity entity) const noexcept;
     [[nodiscard]] std::span<const SceneEntity> TransformRenderProxyUpdateEntities() const noexcept;
+    [[nodiscard]] std::span<const WorldTransformAffine3x4> TransformRenderProxyWorldAffine3x4() const noexcept;
     [[nodiscard]] bool Update(float deltaSeconds);
     void RequestQuit() noexcept;
     [[nodiscard]] bool ShouldQuit() const noexcept;

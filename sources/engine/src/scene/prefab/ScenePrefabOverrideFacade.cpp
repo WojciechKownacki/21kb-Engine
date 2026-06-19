@@ -16,6 +16,10 @@ bool ScenePrefabOverrideFacade::Revert(Scene& scene, ScenePrefabInstanceHandle h
     return ScenePrefabOverrideService::Revert(scene, handle);
 }
 
+bool ScenePrefabOverrideFacade::Revert(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles) {
+    return ScenePrefabOverrideService::Revert(scene, handles);
+}
+
 bool ScenePrefabOverrideFacade::Apply(Scene& scene, ScenePrefabInstanceHandle handle) {
     return ScenePrefabOverrideService::Apply(scene, handle);
 }

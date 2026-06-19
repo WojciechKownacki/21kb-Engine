@@ -34,7 +34,15 @@ QueryState* QueryStateFactory::Create(
         return nullptr;
     }
 
-    return new QueryState{ nativeStorage, std::move(plan), config.executionGrainSize, mutableBorrowLocks, structuralChangeValidator, nullptr };
+    return new QueryState{
+        nativeStorage,
+        std::move(plan),
+        config.executionGrainSize,
+        config.queryPrefetchDistance,
+        mutableBorrowLocks,
+        structuralChangeValidator,
+        nullptr,
+    };
 }
 
 } // namespace kb::ecs

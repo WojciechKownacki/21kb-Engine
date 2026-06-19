@@ -55,6 +55,10 @@ std::span<const SceneEntity> SceneRuntimeQueries::TransformRenderProxyUpdateEnti
     return SceneRuntimeService::TransformRenderProxyUpdateEntities(scene_);
 }
 
+std::span<const WorldTransformAffine3x4> SceneRuntimeQueries::TransformRenderProxyWorldAffine3x4() const noexcept {
+    return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -116,6 +120,10 @@ std::optional<TransformComponent> SceneRuntime::InterpolatedTransform(SceneEntit
 
 std::span<const SceneEntity> SceneRuntime::TransformRenderProxyUpdateEntities() const noexcept {
     return SceneRuntimeService::TransformRenderProxyUpdateEntities(scene_);
+}
+
+std::span<const WorldTransformAffine3x4> SceneRuntime::TransformRenderProxyWorldAffine3x4() const noexcept {
+    return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {

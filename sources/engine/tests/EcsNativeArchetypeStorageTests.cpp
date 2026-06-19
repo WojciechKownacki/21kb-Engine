@@ -68,18 +68,59 @@ void RequireStorageStatsConsistent(const kb::ecs::NativeEcsStorageStats& stats, 
     std::size_t countedChunks = 0;
     std::size_t countedLiveEntities = 0;
     std::size_t countedCapacity = 0;
+    std::size_t countedHotOnlyCapacity = 0;
+    std::size_t countedCapacityLostToNonHotStorage = 0;
+    std::size_t countedSidePayloadBytes = 0;
     std::size_t countedSparseChunks = 0;
     std::size_t countedTailSparseChunks = 0;
     std::size_t countedFragmentedChunks = 0;
     std::size_t countedEmptyChunks = 0;
     std::size_t countedUsedBytes = 0;
     std::size_t countedWastedBytes = 0;
+    std::size_t countedHotTableComponents = 0;
+    std::size_t countedColdTableComponents = 0;
+    std::size_t countedSparseTagComponents = 0;
+    std::size_t countedSparsePayloadComponents = 0;
+    std::size_t countedSharedValueComponents = 0;
+    std::size_t countedExternalBlobComponents = 0;
+    std::size_t countedHotTableUsedBytes = 0;
+    std::size_t countedColdTableUsedBytes = 0;
+    std::size_t countedSparseTagUsedBytes = 0;
+    std::size_t countedSparsePayloadUsedBytes = 0;
+    std::size_t countedSharedValueUsedBytes = 0;
+    std::size_t countedExternalBlobUsedBytes = 0;
+    std::size_t countedHotTableCapacityBytes = 0;
+    std::size_t countedColdTableCapacityBytes = 0;
+    std::size_t countedSparseTagCapacityBytes = 0;
+    std::size_t countedSparsePayloadCapacityBytes = 0;
+    std::size_t countedSharedValueCapacityBytes = 0;
+    std::size_t countedExternalBlobCapacityBytes = 0;
 
     for (const kb::ecs::NativeEcsArchetypeMemoryCounters& archetype : stats.archetypeCounters) {
+        countedHotTableComponents += archetype.hotTableComponents;
+        countedColdTableComponents += archetype.coldTableComponents;
+        countedSparseTagComponents += archetype.sparseTagComponents;
+        countedSparsePayloadComponents += archetype.sparsePayloadComponents;
+        countedSharedValueComponents += archetype.sharedValueComponents;
+        countedExternalBlobComponents += archetype.externalBlobComponents;
+        countedHotTableUsedBytes += archetype.hotTableUsedBytes;
+        countedColdTableUsedBytes += archetype.coldTableUsedBytes;
+        countedSparseTagUsedBytes += archetype.sparseTagUsedBytes;
+        countedSparsePayloadUsedBytes += archetype.sparsePayloadUsedBytes;
+        countedSharedValueUsedBytes += archetype.sharedValueUsedBytes;
+        countedExternalBlobUsedBytes += archetype.externalBlobUsedBytes;
+        countedHotTableCapacityBytes += archetype.hotTableCapacityBytes;
+        countedColdTableCapacityBytes += archetype.coldTableCapacityBytes;
+        countedSparseTagCapacityBytes += archetype.sparseTagCapacityBytes;
+        countedSparsePayloadCapacityBytes += archetype.sparsePayloadCapacityBytes;
+        countedSharedValueCapacityBytes += archetype.sharedValueCapacityBytes;
+        countedExternalBlobCapacityBytes += archetype.externalBlobCapacityBytes;
         std::size_t archetypeRows = 0;
         std::size_t archetypeUsedBytes = 0;
         std::size_t archetypeWastedBytes = 0;
         std::size_t archetypePayloadBytes = 0;
+        std::size_t archetypeSidePayloadBytes = 0;
+        std::size_t archetypeMetadataBytes = 0;
         for (const kb::ecs::NativeEcsChunkMemoryCounters& chunk : archetype.chunkCounters) {
             archetypeRows += chunk.liveEntities;
             if (chunk.liveEntities == 0U) {
@@ -95,16 +136,24 @@ void RequireStorageStatsConsistent(const kb::ecs::NativeEcsStorageStats& stats, 
             archetypeUsedBytes += chunk.usedBytes;
             archetypeWastedBytes += chunk.wastedBytes;
             archetypePayloadBytes += chunk.payloadBytes;
+            archetypeSidePayloadBytes += chunk.sidePayloadBytes;
+            archetypeMetadataBytes += chunk.metadataBytes;
             kb::tests::Require(chunk.usedBytes + chunk.wastedBytes == chunk.payloadBytes, message);
+            kb::tests::Require(chunk.metadataBytes >= chunk.capacity * sizeof(kb::ecs::Entity), message);
         }
         kb::tests::Require(archetypeRows == archetype.liveEntities, message);
         kb::tests::Require(archetypeUsedBytes == archetype.usedBytes, message);
         kb::tests::Require(archetypeWastedBytes == archetype.wastedBytes, message);
         kb::tests::Require(archetypePayloadBytes == archetype.payloadBytes, message);
+        kb::tests::Require(archetypeSidePayloadBytes == archetype.sidePayloadBytes, message);
+        kb::tests::Require(archetypeMetadataBytes == archetype.metadataBytes, message);
 
         countedChunks += archetype.chunks;
         countedLiveEntities += archetype.liveEntities;
         countedCapacity += archetype.capacity;
+        countedHotOnlyCapacity += archetype.hotOnlyCapacity;
+        countedCapacityLostToNonHotStorage += archetype.capacityLostToNonHotStorage;
+        countedSidePayloadBytes += archetype.sidePayloadBytes;
         countedUsedBytes += archetype.usedBytes;
         countedWastedBytes += archetype.wastedBytes;
     }
@@ -114,6 +163,8 @@ void RequireStorageStatsConsistent(const kb::ecs::NativeEcsStorageStats& stats, 
     kb::tests::Require(countedLiveEntities == expectedLiveEntities, message);
     kb::tests::Require(stats.chunks == countedChunks, message);
     kb::tests::Require(stats.capacity == countedCapacity, message);
+    kb::tests::Require(stats.hotOnlyCapacity == countedHotOnlyCapacity, message);
+    kb::tests::Require(stats.capacityLostToNonHotStorage == countedCapacityLostToNonHotStorage, message);
     kb::tests::Require(stats.sparseChunks == countedSparseChunks, message);
     kb::tests::Require(stats.tailSparseChunks == countedTailSparseChunks, message);
     kb::tests::Require(stats.fragmentedChunks == countedFragmentedChunks, message);
@@ -124,8 +175,35 @@ void RequireStorageStatsConsistent(const kb::ecs::NativeEcsStorageStats& stats, 
     kb::tests::Require(stats.chunkPoolAllocated == stats.chunkPoolInUse + stats.chunkPoolFree, message);
     kb::tests::Require(stats.chunkPoolAcquireCount >= stats.chunkPoolInUse, message);
     kb::tests::Require(stats.chunkPoolReleaseCount >= stats.chunkPoolFree, message);
+    kb::tests::Require(stats.chunkPoolSystemAllocationCount >= stats.chunkPoolAllocated, message);
+    kb::tests::Require(stats.chunkPoolPeakAllocated >= stats.chunkPoolAllocated, message);
+    kb::tests::Require(stats.activePayloadBytes <= stats.committedPayloadBytes, message);
+    kb::tests::Require(stats.activePayloadBytes + stats.activeSidePayloadBytes >= stats.usedBytes, message);
+    kb::tests::Require(stats.committedPayloadBytes == stats.activePayloadBytes + stats.freePayloadBytes, message);
+    kb::tests::Require(stats.peakCommittedPayloadBytes >= stats.committedPayloadBytes, message);
+    kb::tests::Require(stats.activeSidePayloadBytes == countedSidePayloadBytes, message);
+    kb::tests::Require(stats.trackedBytes == stats.committedPayloadBytes + stats.activeSidePayloadBytes + stats.chunkMetadataBytes + stats.entityRecordBytes, message);
+    kb::tests::Require(stats.trackedBytes >= stats.committedPayloadBytes, message);
     kb::tests::Require(stats.usedBytes == countedUsedBytes, message);
     kb::tests::Require(stats.wastedBytes == countedWastedBytes, message);
+    kb::tests::Require(stats.hotTableComponents == countedHotTableComponents, message);
+    kb::tests::Require(stats.coldTableComponents == countedColdTableComponents, message);
+    kb::tests::Require(stats.sparseTagComponents == countedSparseTagComponents, message);
+    kb::tests::Require(stats.sparsePayloadComponents == countedSparsePayloadComponents, message);
+    kb::tests::Require(stats.sharedValueComponents == countedSharedValueComponents, message);
+    kb::tests::Require(stats.externalBlobComponents == countedExternalBlobComponents, message);
+    kb::tests::Require(stats.hotTableUsedBytes == countedHotTableUsedBytes, message);
+    kb::tests::Require(stats.coldTableUsedBytes == countedColdTableUsedBytes, message);
+    kb::tests::Require(stats.sparseTagUsedBytes == countedSparseTagUsedBytes, message);
+    kb::tests::Require(stats.sparsePayloadUsedBytes == countedSparsePayloadUsedBytes, message);
+    kb::tests::Require(stats.sharedValueUsedBytes == countedSharedValueUsedBytes, message);
+    kb::tests::Require(stats.externalBlobUsedBytes == countedExternalBlobUsedBytes, message);
+    kb::tests::Require(stats.hotTableCapacityBytes == countedHotTableCapacityBytes, message);
+    kb::tests::Require(stats.coldTableCapacityBytes == countedColdTableCapacityBytes, message);
+    kb::tests::Require(stats.sparseTagCapacityBytes == countedSparseTagCapacityBytes, message);
+    kb::tests::Require(stats.sparsePayloadCapacityBytes == countedSparsePayloadCapacityBytes, message);
+    kb::tests::Require(stats.sharedValueCapacityBytes == countedSharedValueCapacityBytes, message);
+    kb::tests::Require(stats.externalBlobCapacityBytes == countedExternalBlobCapacityBytes, message);
 }
 
 void RunChunkProfileAndStatsTest() {
@@ -162,6 +240,76 @@ void RunChunkProfileAndStatsTest() {
     kb::tests::Require(storage.ChunkCount() == emptyStats.chunks, "native ECS lightweight chunk count did not track empty storage");
 }
 
+void RunArchetypeCapacityReportTest() {
+    const std::array componentTypes{
+        ComponentType<Position>(kPositionId),
+        ComponentType<Velocity>(kVelocityId),
+        ComponentType<Mass>(kMassId),
+    };
+
+    const kb::ecs::NativeArchetypeCapacityReport report = kb::ecs::EstimateNativeArchetypeCapacity(
+        componentTypes,
+        kb::ecs::ChunkSizeProfile::Chunk4KB);
+    kb::tests::Require(report.chunkPayloadBytes == kb::ecs::ChunkPayloadBytes(kb::ecs::ChunkSizeProfile::Chunk4KB), "native ECS capacity report used an invalid chunk payload");
+    kb::tests::Require(report.entitiesPerChunk > 0U, "native ECS capacity report did not fit a compact archetype");
+    kb::tests::Require(report.bytesPerEntity == sizeof(Position) + sizeof(Velocity) + sizeof(Mass), "native ECS capacity report produced invalid bytes per entity");
+    kb::tests::Require(report.hotBytesPerEntity == report.bytesPerEntity, "native ECS capacity report misclassified default hot bytes");
+    kb::tests::Require(report.nonHotBytesPerEntity == 0U, "native ECS capacity report reported non-hot bytes for default hot components");
+    kb::tests::Require(report.hotOnlyEntitiesPerChunk == report.entitiesPerChunk, "native ECS capacity report lost capacity for an all-hot archetype");
+    kb::tests::Require(report.capacityLostToNonHotStorage == 0U, "native ECS capacity report reported non-hot capacity loss for an all-hot archetype");
+    kb::tests::Require(report.hotOnlyUsedPayloadBytes == report.usedPayloadBytes, "native ECS capacity report diverged hot-only and full payload for an all-hot archetype");
+    kb::tests::Require(report.nonHotUsedPayloadBytes == 0U, "native ECS capacity report reported non-hot payload for an all-hot archetype");
+    kb::tests::Require(report.sidePayloadBytes == 0U, "native ECS capacity report reported side payload for an all-hot archetype");
+    kb::tests::Require(report.usedPayloadBytes + report.wastedPayloadBytes == report.chunkPayloadBytes, "native ECS capacity report did not account for the whole payload");
+
+    const kb::ecs::NativeArchetypeCapacityReport larger = kb::ecs::EstimateNativeArchetypeCapacity(
+        componentTypes,
+        kb::ecs::ChunkSizeProfile::Chunk16KB);
+    kb::tests::Require(larger.entitiesPerChunk > report.entitiesPerChunk, "native ECS capacity report did not scale with chunk size");
+
+    const std::array wideTypes{
+        ComponentType<WideAlignedComponent>(kWideAlignedId),
+    };
+    const kb::ecs::NativeArchetypeCapacityReport wide = kb::ecs::EstimateNativeArchetypeCapacity(
+        wideTypes,
+        kb::ecs::ChunkSizeProfile::Chunk4KB);
+    kb::tests::Require(wide.FitsAtLeastOneEntity(), "native ECS capacity report rejected a valid aligned component");
+    kb::tests::Require(wide.usedPayloadBytes % alignof(WideAlignedComponent) == 0U, "native ECS capacity report did not preserve aligned payload layout");
+
+    const std::array mixedTypes{
+        ComponentType<Position>(kPositionId),
+        kb::ecs::NativeComponentType{
+            .id = kVelocityId,
+            .size = sizeof(Velocity),
+            .alignment = alignof(Velocity),
+            .storageClass = kb::ecs::ComponentStorageClass::ColdTable,
+        },
+        kb::ecs::NativeComponentType{
+            .id = kMassId,
+            .size = sizeof(Mass),
+            .alignment = alignof(Mass),
+            .storageClass = kb::ecs::ComponentStorageClass::SharedValue,
+        },
+    };
+    const kb::ecs::NativeArchetypeCapacityReport mixed = kb::ecs::EstimateNativeArchetypeCapacity(
+        mixedTypes,
+        kb::ecs::ChunkSizeProfile::Chunk4KB);
+    kb::tests::Require(mixed.hotBytesPerEntity == sizeof(Position), "native ECS capacity report missed hot bytes in a mixed archetype");
+    kb::tests::Require(
+        mixed.nonHotBytesPerEntity == sizeof(Velocity) + sizeof(Mass),
+        "native ECS capacity report missed non-hot bytes in a mixed archetype");
+    kb::tests::Require(
+        mixed.hotOnlyEntitiesPerChunk == mixed.entitiesPerChunk,
+        "native ECS capacity report did not recover hot-only capacity for a mixed archetype");
+    kb::tests::Require(
+        mixed.capacityLostToNonHotStorage > 0U,
+        "native ECS capacity report did not expose avoided capacity loss from non-hot side storage");
+    kb::tests::Require(
+        mixed.nonHotUsedPayloadBytes == mixed.nonHotBytesPerEntity * mixed.entitiesPerChunk,
+        "native ECS capacity report produced invalid non-hot payload bytes");
+    kb::tests::Require(mixed.sidePayloadBytes >= mixed.nonHotUsedPayloadBytes, "native ECS capacity report missed side payload bytes");
+}
+
 void RunChunkPoolReuseAccountingTest() {
     kb::ecs::WorldConfig config;
     config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
@@ -182,6 +330,12 @@ void RunChunkPoolReuseAccountingTest() {
     kb::tests::Require(afterCreate.chunkPoolFree == 0U, "native ECS chunk pool reported a free chunk too early");
     kb::tests::Require(afterCreate.chunkPoolAcquireCount == 1U, "native ECS chunk pool did not count first acquire");
     kb::tests::Require(afterCreate.chunkPoolReuseCount == 0U, "native ECS chunk pool reported reuse before a release");
+    kb::tests::Require(afterCreate.chunkPoolSystemAllocationCount == 1U, "native ECS chunk pool did not count first system allocation");
+    kb::tests::Require(afterCreate.chunkPoolPeakAllocated == 1U, "native ECS chunk pool did not count peak allocation");
+    kb::tests::Require(afterCreate.activePayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool reported invalid active payload bytes");
+    kb::tests::Require(afterCreate.committedPayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool reported invalid committed payload bytes");
+    kb::tests::Require(afterCreate.freePayloadBytes == 0U, "native ECS chunk pool reported invalid free payload bytes");
+    kb::tests::Require(afterCreate.peakCommittedPayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool reported invalid peak committed payload bytes");
 
     storage.DestroyEntity(first);
     const kb::ecs::NativeEcsStorageStats afterDestroy = storage.Stats();
@@ -189,6 +343,11 @@ void RunChunkPoolReuseAccountingTest() {
     kb::tests::Require(storage.ChunkCount() == afterDestroy.chunks, "native ECS chunk count did not track chunk release");
     kb::tests::Require(afterDestroy.chunkPoolFree == 1U, "native ECS chunk pool did not retain a free chunk");
     kb::tests::Require(afterDestroy.chunkPoolReleaseCount == 1U, "native ECS chunk pool did not count release");
+    kb::tests::Require(afterDestroy.chunkPoolSystemAllocationCount == 1U, "native ECS chunk pool changed system allocation count on release");
+    kb::tests::Require(afterDestroy.activePayloadBytes == 0U, "native ECS chunk pool reported active bytes for released chunks");
+    kb::tests::Require(afterDestroy.committedPayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool lost committed bytes while retaining a free chunk");
+    kb::tests::Require(afterDestroy.freePayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool did not report free retained bytes");
+    kb::tests::Require(afterDestroy.peakCommittedPayloadBytes == storage.ChunkPayloadBytes(), "native ECS chunk pool lost peak committed bytes");
 
     [[maybe_unused]] const kb::ecs::Entity second = storage.CreateEntity(components);
     const kb::ecs::NativeEcsStorageStats afterReuse = storage.Stats();
@@ -198,6 +357,8 @@ void RunChunkPoolReuseAccountingTest() {
     kb::tests::Require(afterReuse.chunkPoolFree == 0U, "native ECS chunk pool did not consume the free chunk");
     kb::tests::Require(afterReuse.chunkPoolAcquireCount == 2U, "native ECS chunk pool did not count second acquire");
     kb::tests::Require(afterReuse.chunkPoolReuseCount == 1U, "native ECS chunk pool did not count reuse");
+    kb::tests::Require(afterReuse.chunkPoolSystemAllocationCount == 1U, "native ECS chunk pool allocated from system during reuse");
+    kb::tests::Require(afterReuse.chunkPoolPeakAllocated == 1U, "native ECS chunk pool changed peak allocation during reuse");
 }
 
 void RunChunkPoolMaintenanceBudgetTest() {
@@ -239,6 +400,9 @@ void RunChunkPoolMaintenanceBudgetTest() {
     kb::tests::Require(first.freeChunksAfter == first.freeChunksBefore - first.chunksReleasedToSystem, "native ECS maintenance reported invalid free chunk delta");
     kb::tests::Require(first.chunkPoolAllocatedAfter == first.chunkPoolAllocatedBefore - first.chunksReleasedToSystem, "native ECS maintenance reported invalid allocated chunk delta");
     kb::tests::Require(first.budgetExhausted, "native ECS maintenance did not report an exhausted partial budget");
+    const kb::ecs::NativeEcsStorageStats afterPartialTrim = storage.Stats();
+    kb::tests::Require(afterPartialTrim.peakCommittedPayloadBytes >= afterPartialTrim.committedPayloadBytes, "native ECS maintenance lost peak committed byte telemetry");
+    kb::tests::Require(afterPartialTrim.chunkPoolPeakAllocated >= afterPartialTrim.chunkPoolAllocated, "native ECS maintenance lost peak allocation telemetry");
 
     const kb::ecs::NativeEcsMaintenanceStats second = storage.MaintainChunks(kb::ecs::NativeEcsMaintenanceBudget{
         .maxFreeChunksToKeep = 0U,
@@ -246,6 +410,68 @@ void RunChunkPoolMaintenanceBudgetTest() {
     kb::tests::Require(second.freeChunksAfter == 0U, "native ECS maintenance did not trim all free chunks");
     kb::tests::Require(!second.budgetExhausted, "native ECS maintenance reported budget exhaustion after full trim");
     kb::tests::Require(storage.Stats().chunkPoolTrimCount == first.chunksReleasedToSystem + second.chunksReleasedToSystem, "native ECS maintenance did not account trimmed chunks");
+    const kb::ecs::NativeEcsStorageStats afterFullTrim = storage.Stats();
+    kb::tests::Require(afterFullTrim.committedPayloadBytes == 0U, "native ECS maintenance left committed payload bytes after trimming all free chunks");
+    kb::tests::Require(afterFullTrim.peakCommittedPayloadBytes >= beforeMaintenance.committedPayloadBytes, "native ECS maintenance did not preserve peak committed byte telemetry");
+}
+
+void RunChunkCommitGuardTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.maxNativeStorageCommittedPayloadBytes = kb::ecs::ChunkPayloadBytes(kb::ecs::ChunkSizeProfile::Chunk4KB);
+
+    kb::ecs::NativeArchetypeStorage storage{ config };
+    constexpr Position kPosition{ .x = 1.0F, .y = 2.0F };
+    const std::array positionComponent{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = &kPosition,
+            .stride = sizeof(Position),
+            .sourceCount = 1U,
+        },
+    };
+    const std::array positionType{ ComponentType<Position>(kPositionId) };
+    const kb::ecs::NativeArchetypeCapacityReport capacity = kb::ecs::EstimateNativeArchetypeCapacity(
+        positionType,
+        kb::ecs::ChunkSizeProfile::Chunk4KB);
+    std::vector<kb::ecs::Entity> entities = storage.CreateEntities(capacity.entitiesPerChunk, positionComponent);
+    kb::tests::Require(entities.size() == capacity.entitiesPerChunk, "native ECS chunk commit guard blocked the first chunk");
+    kb::tests::Require(storage.Stats().committedPayloadBytes == config.maxNativeStorageCommittedPayloadBytes, "native ECS chunk commit guard reported invalid committed bytes");
+
+    bool rejectedCreate = false;
+    const std::array singlePositionValue{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &kPosition },
+    };
+    try {
+        [[maybe_unused]] const kb::ecs::Entity rejected = storage.CreateEntity(singlePositionValue);
+    } catch (const std::length_error&) {
+        rejectedCreate = true;
+    }
+    kb::tests::Require(rejectedCreate, "native ECS chunk commit guard allowed a second committed chunk");
+    kb::tests::Require(storage.Stats().liveEntities == capacity.entitiesPerChunk, "native ECS chunk commit guard leaked an entity on rejected create");
+
+    storage.DestroyEntities(entities);
+    const kb::ecs::NativeEcsStorageStats afterDestroy = storage.Stats();
+    kb::tests::Require(afterDestroy.committedPayloadBytes == config.maxNativeStorageCommittedPayloadBytes, "native ECS chunk commit guard lost retained committed bytes");
+    kb::tests::Require(afterDestroy.freePayloadBytes == config.maxNativeStorageCommittedPayloadBytes, "native ECS chunk commit guard did not expose reusable free bytes");
+
+    const kb::ecs::Entity reused = storage.CreateEntity(singlePositionValue);
+    kb::tests::Require(storage.IsAlive(reused), "native ECS chunk commit guard blocked free chunk reuse");
+    kb::tests::Require(storage.Stats().chunkPoolSystemAllocationCount == 1U, "native ECS chunk commit guard allocated from system during reuse");
+
+    constexpr Velocity kVelocity{ .x = 3.0F, .y = 4.0F };
+    const std::array velocityValue{
+        kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &kVelocity },
+    };
+    bool rejectedMigration = false;
+    try {
+        storage.AddComponents(reused, velocityValue);
+    } catch (const std::length_error&) {
+        rejectedMigration = true;
+    }
+    kb::tests::Require(rejectedMigration, "native ECS chunk commit guard allowed a migration requiring another committed chunk");
+    kb::tests::Require(storage.IsAlive(reused), "native ECS chunk commit guard killed an entity on rejected migration");
+    kb::tests::Require(!storage.HasComponent(reused, kVelocityId), "native ECS chunk commit guard partially migrated a rejected entity");
 }
 
 void RunGeneratedEntityResolveFastPathTest() {
@@ -282,7 +508,15 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
     };
     const std::array movingComponents{
         kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position },
-        kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &velocity },
+        kb::ecs::NativeComponentValue{
+            .type = kb::ecs::NativeComponentType{
+                .id = kVelocityId,
+                .size = sizeof(Velocity),
+                .alignment = alignof(Velocity),
+                .storageClass = kb::ecs::ComponentStorageClass::ColdTable,
+            },
+            .data = &velocity,
+        },
     };
 
     const kb::ecs::Entity positionEntity = storage.CreateEntity(positionComponents);
@@ -301,6 +535,7 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
     std::size_t countedEmptyChunks = 0;
     std::size_t countedUsedBytes = 0;
     std::size_t countedWastedBytes = 0;
+    std::size_t countedMetadataBytes = 0;
 
     for (const kb::ecs::NativeEcsArchetypeMemoryCounters& archetype : stats.archetypeCounters) {
         if (archetype.componentIds.size() == 1U && archetype.componentIds[0] == kPositionId) {
@@ -314,16 +549,28 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
         kb::tests::Require(archetype.capacity >= archetype.liveEntities, "native ECS memory counters reported invalid archetype capacity");
         kb::tests::Require(archetype.usedBytes + archetype.wastedBytes == archetype.payloadBytes, "native ECS memory counters reported invalid archetype byte totals");
         kb::tests::Require(archetype.version > 0U, "native ECS memory counters omitted archetype version");
+        kb::tests::Require(
+            archetype.hotTableComponents + archetype.coldTableComponents + archetype.sparseTagComponents + archetype.sparsePayloadComponents
+                + archetype.sharedValueComponents + archetype.externalBlobComponents == archetype.componentIds.size(),
+            "native ECS memory counters reported invalid storage-class component totals");
+        kb::tests::Require(
+            archetype.hotTableComponents + archetype.coldTableComponents + archetype.sparseTagComponents + archetype.sparsePayloadComponents
+                + archetype.sharedValueComponents + archetype.externalBlobComponents == archetype.componentIds.size(),
+            "native ECS memory counters reported invalid storage-class component totals");
 
         std::size_t archetypeRows = 0;
         std::size_t archetypeUsedBytes = 0;
         std::size_t archetypeWastedBytes = 0;
         std::size_t archetypePayloadBytes = 0;
+        std::size_t archetypeMetadataBytes = 0;
         for (const kb::ecs::NativeEcsChunkMemoryCounters& chunk : archetype.chunkCounters) {
             kb::tests::Require(chunk.archetypeIndex == archetype.archetypeIndex, "native ECS memory counters recorded invalid chunk archetype index");
             kb::tests::Require(chunk.capacity >= chunk.liveEntities, "native ECS memory counters reported invalid chunk capacity");
-            kb::tests::Require(chunk.payloadBytes == storage.ChunkPayloadBytes(), "native ECS memory counters recorded invalid chunk payload bytes");
+            kb::tests::Require(
+                chunk.payloadBytes == storage.ChunkPayloadBytes() + chunk.sidePayloadBytes,
+                "native ECS memory counters recorded invalid chunk payload bytes");
             kb::tests::Require(chunk.usedBytes + chunk.wastedBytes == chunk.payloadBytes, "native ECS memory counters reported invalid chunk byte totals");
+            kb::tests::Require(chunk.metadataBytes >= chunk.capacity * sizeof(kb::ecs::Entity), "native ECS memory counters missed chunk entity metadata");
             if (chunk.liveEntities == 0U) {
                 ++countedEmptyChunks;
             } else if (chunk.liveEntities < chunk.capacity) {
@@ -338,17 +585,20 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
             archetypeUsedBytes += chunk.usedBytes;
             archetypeWastedBytes += chunk.wastedBytes;
             archetypePayloadBytes += chunk.payloadBytes;
+            archetypeMetadataBytes += chunk.metadataBytes;
         }
 
         kb::tests::Require(archetypeRows == archetype.liveEntities, "native ECS memory counters did not sum chunk entity counts");
         kb::tests::Require(archetypeUsedBytes == archetype.usedBytes, "native ECS memory counters did not sum chunk used bytes");
         kb::tests::Require(archetypeWastedBytes == archetype.wastedBytes, "native ECS memory counters did not sum chunk wasted bytes");
         kb::tests::Require(archetypePayloadBytes == archetype.payloadBytes, "native ECS memory counters did not sum chunk payload bytes");
+        kb::tests::Require(archetypeMetadataBytes == archetype.metadataBytes, "native ECS memory counters did not sum chunk metadata bytes");
 
         countedChunks += archetype.chunks;
         countedCapacity += archetype.capacity;
         countedUsedBytes += archetype.usedBytes;
         countedWastedBytes += archetype.wastedBytes;
+        countedMetadataBytes += archetype.metadataBytes;
     }
 
     kb::tests::Require(stats.archetypeCounters.size() == stats.archetypeCount, "native ECS memory counters omitted archetype counters");
@@ -362,8 +612,39 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
     kb::tests::Require(stats.emptyChunks == 0U, "native ECS storage left an empty chunk in use after compaction");
     kb::tests::Require(stats.usedBytes == countedUsedBytes, "native ECS memory counters did not sum storage used bytes");
     kb::tests::Require(stats.wastedBytes == countedWastedBytes, "native ECS memory counters did not sum storage wasted bytes");
+    kb::tests::Require(stats.chunkMetadataBytes == countedMetadataBytes, "native ECS memory counters did not sum storage metadata bytes");
+    kb::tests::Require(stats.entityRecordBytes >= stats.liveEntities * sizeof(kb::ecs::Entity), "native ECS memory counters reported invalid entity record bytes");
+    kb::tests::Require(
+        stats.trackedBytes == stats.committedPayloadBytes + stats.activeSidePayloadBytes + stats.chunkMetadataBytes + stats.entityRecordBytes,
+        "native ECS memory counters reported invalid tracked bytes");
     kb::tests::Require(positionArchetype != nullptr && positionArchetype->usedBytes == sizeof(Position), "native ECS memory counters missed the position archetype");
     kb::tests::Require(movingArchetype != nullptr && movingArchetype->usedBytes == sizeof(Position) + sizeof(Velocity), "native ECS memory counters missed the moving archetype");
+    kb::tests::Require(positionArchetype->hotOnlyCapacity == positionArchetype->capacity, "native ECS memory counters reported hot-only capacity loss for an all-hot archetype");
+    kb::tests::Require(positionArchetype->capacityLostToNonHotStorage == 0U, "native ECS memory counters reported non-hot capacity loss for an all-hot archetype");
+    kb::tests::Require(movingArchetype->hotOnlyCapacity == movingArchetype->capacity, "native ECS memory counters did not recover hot-only capacity for a mixed archetype");
+    kb::tests::Require(
+        movingArchetype->capacityLostToNonHotStorage > 0U,
+        "native ECS memory counters missed avoided non-hot capacity loss");
+    kb::tests::Require(movingArchetype->sidePayloadBytes > 0U, "native ECS memory counters missed mixed archetype side payload");
+    kb::tests::Require(stats.activeSidePayloadBytes >= movingArchetype->sidePayloadBytes, "native ECS memory counters missed aggregate side payload");
+    kb::tests::Require(stats.hotOnlyCapacity >= stats.capacity, "native ECS memory counters reported invalid aggregate hot-only capacity");
+    kb::tests::Require(stats.capacityLostToNonHotStorage >= movingArchetype->capacityLostToNonHotStorage, "native ECS memory counters missed aggregate non-hot capacity loss");
+    kb::tests::Require(positionArchetype->hotTableComponents == 1U, "native ECS memory counters missed hot table storage metadata");
+    kb::tests::Require(movingArchetype->hotTableComponents == 1U, "native ECS memory counters missed moving hot table storage metadata");
+    kb::tests::Require(movingArchetype->coldTableComponents == 1U, "native ECS memory counters missed cold table storage metadata");
+    kb::tests::Require(stats.hotTableComponents == 2U, "native ECS memory counters reported invalid aggregate hot table metadata");
+    kb::tests::Require(stats.coldTableComponents == 1U, "native ECS memory counters reported invalid aggregate cold table metadata");
+    kb::tests::Require(positionArchetype->hotTableUsedBytes == sizeof(Position), "native ECS memory counters reported invalid hot table used bytes");
+    kb::tests::Require(movingArchetype->hotTableUsedBytes == sizeof(Position), "native ECS memory counters reported invalid moving hot table used bytes");
+    kb::tests::Require(movingArchetype->coldTableUsedBytes == sizeof(Velocity), "native ECS memory counters reported invalid cold table used bytes");
+    kb::tests::Require(stats.hotTableUsedBytes == sizeof(Position) * 2U, "native ECS memory counters reported invalid aggregate hot table used bytes");
+    kb::tests::Require(stats.coldTableUsedBytes == sizeof(Velocity), "native ECS memory counters reported invalid aggregate cold table used bytes");
+    kb::tests::Require(
+        positionArchetype->hotTableCapacityBytes == positionArchetype->capacity * sizeof(Position),
+        "native ECS memory counters reported invalid hot table capacity bytes");
+    kb::tests::Require(
+        movingArchetype->coldTableCapacityBytes == movingArchetype->capacity * sizeof(Velocity),
+        "native ECS memory counters reported invalid cold table capacity bytes");
 }
 
 void RunMultiComponentMigrationTest() {
@@ -767,7 +1048,15 @@ void RunArchetypeSignatureMatchingTest() {
     };
     const std::array movingComponents{
         kb::ecs::NativeComponentValue{ .type = ComponentType<Position>(kPositionId), .data = &position },
-        kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &velocity },
+        kb::ecs::NativeComponentValue{
+            .type = kb::ecs::NativeComponentType{
+                .id = kVelocityId,
+                .size = sizeof(Velocity),
+                .alignment = alignof(Velocity),
+                .storageClass = kb::ecs::ComponentStorageClass::ColdTable,
+            },
+            .data = &velocity,
+        },
     };
     const std::array weightedComponents{
         kb::ecs::NativeComponentValue{ .type = ComponentType<Velocity>(kVelocityId), .data = &velocity },
@@ -798,6 +1087,12 @@ void RunArchetypeSignatureMatchingTest() {
     kb::tests::Require(storage.EntityArchetypeMatches(movingB, positionQuery), "native ECS entity archetype signature did not match subset components");
     kb::tests::Require(!storage.EntityArchetypeMatches(positionOnly, movingQuery), "native ECS entity archetype signature accepted a missing component");
     kb::tests::Require(storage.EntityArchetypeMatches(weighted, massQuery), "native ECS entity archetype signature rejected a present component");
+    kb::tests::Require(storage.EntityArchetypeMatches(movingA, positionQuery, massQuery), "native ECS include/exclude signature rejected a valid moving archetype");
+    kb::tests::Require(!storage.EntityArchetypeMatches(movingA, positionQuery, movingQuery), "native ECS include/exclude signature accepted an excluded component");
+    kb::tests::Require(
+        !storage.EntityArchetypeMatches(positionOnly, missingQuery, std::span<const kb::ecs::ComponentId>{}),
+        "native ECS include/exclude signature accepted an unknown required component");
+    kb::tests::Require(storage.EntityArchetypeMatches(positionOnly, positionQuery, missingQuery), "native ECS include/exclude signature rejected an unknown excluded component");
 
     const std::array massComponent{
         kb::ecs::NativeComponentValue{ .type = ComponentType<Mass>(kMassId), .data = &mass },
@@ -805,10 +1100,12 @@ void RunArchetypeSignatureMatchingTest() {
     storage.AddComponents(positionOnly, massComponent);
     const std::array positionMassQuery{ kPositionId, kMassId };
     kb::tests::Require(storage.EntityArchetypeMatches(positionOnly, positionMassQuery), "native ECS signature was not updated after add-component migration");
+    kb::tests::Require(!storage.EntityArchetypeMatches(positionOnly, positionQuery, massQuery), "native ECS include/exclude signature missed add-component migration");
 
     const std::array removedMass{ kMassId };
     storage.RemoveComponents(positionOnly, removedMass);
     kb::tests::Require(!storage.EntityArchetypeMatches(positionOnly, positionMassQuery), "native ECS signature was not updated after remove-component migration");
+    kb::tests::Require(storage.EntityArchetypeMatches(positionOnly, positionQuery, massQuery), "native ECS include/exclude signature missed remove-component migration");
 }
 
 void RunNativeBulkCreateAdoptColumnAppendTest() {
@@ -844,6 +1141,20 @@ void RunNativeBulkCreateAdoptColumnAppendTest() {
     kb::tests::Require(storage.Stats().chunks > 1U, "native ECS bulk create did not append across multiple chunks");
 
     const std::array movingQuery{ kPositionId, kVelocityId };
+    std::size_t dirtyPositionRows = 0U;
+    std::size_t dirtyVelocityRows = 0U;
+    std::vector<kb::ecs::QueryTableDispatchRecord> createdRecords;
+    storage.CollectQueryRecords(movingQuery, {}, {}, createdRecords);
+    kb::tests::Require(createdRecords.size() > 1U, "native ECS bulk create dirty regression setup did not span multiple query records");
+    for (const kb::ecs::QueryTableDispatchRecord& record : createdRecords) {
+        kb::tests::Require(record.componentDirtyCounts[0] == record.entityCount, "native ECS bulk create did not dirty all position rows in a chunk");
+        kb::tests::Require(record.componentDirtyCounts[1] == record.entityCount, "native ECS bulk create did not dirty all velocity rows in a chunk");
+        dirtyPositionRows += record.componentDirtyCounts[0];
+        dirtyVelocityRows += record.componentDirtyCounts[1];
+    }
+    kb::tests::Require(dirtyPositionRows == kEntityCount, "native ECS bulk create dirty position row total is invalid");
+    kb::tests::Require(dirtyVelocityRows == kEntityCount, "native ECS bulk create dirty velocity row total is invalid");
+
     const std::array<std::size_t, 5U> createdSamples{ 0U, 17U, 512U, 1025U, kEntityCount - 1U };
     for (std::size_t index : createdSamples) {
         const kb::ecs::Entity entity = entities[index];
@@ -962,6 +1273,47 @@ void RunWorldDirectBulkCreateTest() {
         kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, std::span<const kb::ecs::ComponentId>{ archetype }), "World direct bulk create assigned an invalid archetype");
         kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, positions[index].x), "World direct bulk create wrote the wrong position row");
         kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(world.NativeStorage(), entity, velocityId).y, velocities[index].y), "World direct bulk create wrote the wrong velocity row");
+    }
+}
+
+void RunWorldDirectBulkCreateIntoReuseTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    kb::ecs::World world{ config };
+
+    constexpr std::size_t kEntityCount = 32U;
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(kEntityCount);
+    velocities.reserve(kEntityCount);
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index + 3U), .y = static_cast<float>(index + 4U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index + 5U), .y = static_cast<float>(index + 6U) });
+    }
+
+    const std::array componentViews{
+        kb::ecs::World::MakeBulkComponentView<Position>(std::span<const Position>{ positions }),
+        kb::ecs::World::MakeBulkComponentView<Velocity>(std::span<const Velocity>{ velocities }),
+    };
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(128U);
+    const std::size_t preservedCapacity = entities.capacity();
+    entities.push_back(kb::ecs::Entity{ 123U });
+
+    world.CreateEntitiesNativeOnlyInto(entities, kEntityCount, std::span<const kb::ecs::World::BulkComponentView>{ componentViews });
+    kb::tests::Require(entities.size() == kEntityCount, "World direct bulk create-into returned an unexpected entity count");
+    kb::tests::Require(entities.capacity() == preservedCapacity, "World direct bulk create-into did not reuse the caller-provided buffer");
+    RequireStorageStatsConsistent(world.NativeStorageStats(), kEntityCount, "World direct bulk create-into storage stats are inconsistent");
+
+    const kb::ecs::ComponentId positionId = world.Component<Position>();
+    const kb::ecs::ComponentId velocityId = world.Component<Velocity>();
+    const std::array archetype{ positionId, velocityId };
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const kb::ecs::Entity entity = entities[index];
+        kb::tests::Require(world.IsAlive(entity), "World direct bulk create-into did not create a live entity");
+        kb::tests::Require(world.NativeStorage().EntityArchetypeMatches(entity, std::span<const kb::ecs::ComponentId>{ archetype }), "World direct bulk create-into assigned an invalid archetype");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(world.NativeStorage(), entity, positionId).x, positions[index].x), "World direct bulk create-into wrote the wrong position row");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Velocity>(world.NativeStorage(), entity, velocityId).y, velocities[index].y), "World direct bulk create-into wrote the wrong velocity row");
     }
 }
 
@@ -1338,6 +1690,74 @@ void RunNativeComponentAlignmentTest() {
     kb::tests::Require(IsAligned(mutableRecords.front().fieldComponents[0], alignof(WideAlignedComponent)), "native ECS mutable query returned an unaligned component column");
 }
 
+void RunNativeComponentDirtyRangeTest() {
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+
+    std::vector<Position> positions{
+        Position{ .x = 1.0F, .y = 1.0F },
+        Position{ .x = 2.0F, .y = 2.0F },
+        Position{ .x = 3.0F, .y = 3.0F },
+        Position{ .x = 4.0F, .y = 4.0F },
+        Position{ .x = 5.0F, .y = 5.0F },
+        Position{ .x = 6.0F, .y = 6.0F },
+        Position{ .x = 7.0F, .y = 7.0F },
+        Position{ .x = 8.0F, .y = 8.0F },
+    };
+    const kb::ecs::NativeBulkComponentColumn positionColumn{
+        .type = ComponentType<Position>(kPositionId),
+        .data = positions.data(),
+        .stride = sizeof(Position),
+        .sourceCount = positions.size(),
+    };
+    const std::vector<kb::ecs::Entity> entities = storage.CreateEntities(positions.size(), std::span<const kb::ecs::NativeBulkComponentColumn>{ &positionColumn, 1U });
+
+    const std::array queryIds{ kPositionId };
+    std::vector<kb::ecs::QueryTableDispatchRecord> records;
+    storage.CollectQueryRecords(queryIds, {}, {}, records);
+    kb::tests::Require(records.size() == 1U, "native ECS dirty range setup did not produce one chunk");
+
+    const kb::ecs::QueryTableDispatchRecord& record = records.front();
+    kb::tests::Require(record.componentDirtyCounts[0] == positions.size(), "native ECS query did not expose initial dirty row count");
+    kb::tests::Require(
+        storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId) == positions.size(),
+        "native ECS component dirty count did not include bulk-created rows");
+
+    std::vector<kb::ecs::NativeComponentDirtyRange> ranges;
+    const std::size_t initialRanges = storage.CollectComponentDirtyRanges(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId, 4U, ranges);
+    kb::tests::Require(initialRanges == 2U, "native ECS component dirty range summary did not split by requested range size");
+    kb::tests::Require(ranges[0].begin == 0U && ranges[0].count == 4U && ranges[0].dirtyCount == 4U, "native ECS first dirty range is invalid");
+    kb::tests::Require(ranges[1].begin == 4U && ranges[1].count == 4U && ranges[1].dirtyCount == 4U, "native ECS second dirty range is invalid");
+
+    storage.ClearComponentDirtyRows(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId);
+    kb::tests::Require(storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId) == 0U, "native ECS dirty clear did not reset the component row bits");
+    ranges.clear();
+    kb::tests::Require(
+        storage.CollectComponentDirtyRanges(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId, 4U, ranges) == 0U,
+        "native ECS clean component produced dirty range summaries");
+
+    Position updated{ .x = 30.0F, .y = 40.0F };
+    storage.SetComponent(entities[3], kPositionId, &updated, sizeof(updated));
+    kb::tests::Require(storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId) == 1U, "native ECS point set did not dirty exactly one row");
+
+    ranges.clear();
+    kb::tests::Require(
+        storage.CollectComponentDirtyRanges(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId, 2U, ranges) == 1U,
+        "native ECS point set produced an invalid dirty range count");
+    kb::tests::Require(ranges.front().begin == 2U && ranges.front().count == 2U && ranges.front().dirtyCount == 1U, "native ECS point set dirty range is invalid");
+
+    storage.ClearComponentDirtyRows(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId, 2U, 2U);
+    kb::tests::Require(storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId) == 0U, "native ECS partial dirty clear left stale row bits");
+
+    storage.MarkArchetypeChunkComponentsModified(record.nativeArchetypeIndex, record.nativeChunkIndex, 5U, 2U, queryIds);
+    kb::tests::Require(storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, kPositionId) == 2U, "native ECS chunk range mark did not dirty the requested rows");
+
+    std::vector<kb::ecs::MutableQueryTableDispatchRecord> mutableRecords;
+    storage.CollectMutableQueryRecords(queryIds, {}, {}, mutableRecords);
+    kb::tests::Require(mutableRecords.size() == 1U && mutableRecords.front().componentDirtyCounts[0] == 2U, "native ECS mutable query did not expose component dirty counts");
+}
+
 void RunNativeComponentAlignmentValidationTest() {
     kb::ecs::NativeArchetypeStorage storage;
     std::uint32_t value = 7U;
@@ -1359,14 +1779,422 @@ void RunNativeComponentAlignmentValidationTest() {
     kb::tests::Require(rejected, "native ECS storage accepted a component type whose size cannot preserve row alignment");
 }
 
+void RunBulkDestroyDuplicateValidationTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    std::array<Position, 4U> positions{
+        Position{ .x = 1.0F, .y = 2.0F },
+        Position{ .x = 3.0F, .y = 4.0F },
+        Position{ .x = 5.0F, .y = 6.0F },
+        Position{ .x = 7.0F, .y = 8.0F },
+    };
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+    const std::vector<kb::ecs::Entity> entities = storage.CreateEntities(positions.size(), columns);
+
+    bool rejectedDuplicate = false;
+    const std::array invalidBatch{
+        entities[1],
+        entities[2],
+        entities[1],
+    };
+    try {
+        storage.DestroyEntities(invalidBatch);
+    } catch (const std::invalid_argument&) {
+        rejectedDuplicate = true;
+    }
+
+    kb::tests::Require(rejectedDuplicate, "native ECS bulk destroy accepted duplicate entities");
+    kb::tests::Require(storage.Stats().liveEntities == entities.size(), "native ECS bulk destroy duplicate validation partially mutated storage");
+    for (kb::ecs::Entity entity : entities) {
+        kb::tests::Require(storage.IsAlive(entity), "native ECS bulk destroy duplicate validation destroyed an entity");
+    }
+}
+
+void RunBulkDestroyAllFastPathTest() {
+    kb::ecs::NativeArchetypeStorage storage(kb::ecs::WorldConfig{
+        .reserveEntities = 16,
+    });
+    std::array<Position, 6U> positions{
+        Position{ .x = 1.0F, .y = 2.0F },
+        Position{ .x = 3.0F, .y = 4.0F },
+        Position{ .x = 5.0F, .y = 6.0F },
+        Position{ .x = 7.0F, .y = 8.0F },
+        Position{ .x = 9.0F, .y = 10.0F },
+        Position{ .x = 11.0F, .y = 12.0F },
+    };
+    std::array<Velocity, 6U> velocities{
+        Velocity{ .x = 0.5F, .y = 1.5F },
+        Velocity{ .x = 2.5F, .y = 3.5F },
+        Velocity{ .x = 4.5F, .y = 5.5F },
+        Velocity{ .x = 6.5F, .y = 7.5F },
+        Velocity{ .x = 8.5F, .y = 9.5F },
+        Velocity{ .x = 10.5F, .y = 11.5F },
+    };
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Velocity>(kVelocityId),
+            .data = velocities.data(),
+            .stride = sizeof(Velocity),
+        },
+    };
+
+    const std::vector<kb::ecs::Entity> generated = storage.CreateEntities(positions.size(), columns);
+    const std::array external{
+        kb::ecs::Entity{ 45'000'000ULL },
+        kb::ecs::Entity{ 45'000'001ULL },
+        kb::ecs::Entity{ 45'000'002ULL },
+        kb::ecs::Entity{ 45'000'003ULL },
+        kb::ecs::Entity{ 45'000'004ULL },
+        kb::ecs::Entity{ 45'000'005ULL },
+    };
+    storage.AdoptEntities(external, columns);
+    const kb::ecs::NativeEcsStorageStats beforeDestroy = storage.Stats();
+    kb::tests::Require(beforeDestroy.liveEntities == generated.size() + external.size(), "native ECS destroy-all setup did not create every entity");
+    kb::tests::Require(beforeDestroy.chunkPoolInUse > 0U, "native ECS destroy-all setup did not allocate chunks");
+
+    std::vector<kb::ecs::Entity> allEntities;
+    allEntities.reserve(generated.size() + external.size());
+    allEntities.insert(allEntities.end(), generated.begin(), generated.end());
+    allEntities.insert(allEntities.end(), external.begin(), external.end());
+    storage.DestroyEntities(allEntities);
+
+    const kb::ecs::NativeEcsStorageStats afterDestroy = storage.Stats();
+    RequireStorageStatsConsistent(afterDestroy, 0U, "native ECS destroy-all fast path left inconsistent stats");
+    kb::tests::Require(afterDestroy.chunks == 0U, "native ECS destroy-all fast path left live chunks");
+    kb::tests::Require(afterDestroy.chunkPoolInUse == 0U, "native ECS destroy-all fast path did not release chunk pool blocks");
+    kb::tests::Require(afterDestroy.chunkPoolFree == beforeDestroy.chunkPoolInUse, "native ECS destroy-all fast path did not retain released chunks");
+    for (kb::ecs::Entity entity : allEntities) {
+        kb::tests::Require(!storage.IsAlive(entity), "native ECS destroy-all fast path left an entity alive");
+    }
+    for (kb::ecs::Entity entity : external) {
+        kb::tests::Require(!storage.ResolveAliveEntity(entity.Id()).IsValid(), "native ECS destroy-all fast path left an external lookup alive");
+    }
+    std::vector<kb::ecs::Entity> recreated;
+    storage.CreateEntitiesInto(recreated, generated.size(), columns);
+    kb::tests::Require(recreated.size() == generated.size(), "native ECS destroy-all fast path broke bulk generated id reuse");
+    for (std::size_t index = 0U; index < recreated.size(); ++index) {
+        const kb::ecs::Entity entity = recreated[index];
+        kb::tests::Require(storage.IsAlive(entity), "native ECS destroy-all fast path bulk recreate produced a dead entity");
+        kb::tests::Require(entity != generated[index], "native ECS destroy-all fast path did not advance generated entity generation");
+    }
+    for (std::size_t index = 1U; index < recreated.size(); ++index) {
+        kb::tests::Require(recreated[index - 1U].Id() < recreated[index].Id(), "native ECS destroy-all fast path bulk recreate returned unsorted generated ids");
+    }
+
+    storage.Clear();
+    const kb::ecs::NativeEcsStorageStats afterClear = storage.Stats();
+    RequireStorageStatsConsistent(afterClear, 0U, "native ECS clear left inconsistent stats");
+    kb::tests::Require(afterClear.chunkPoolInUse == 0U, "native ECS clear did not release chunk pool blocks");
+    for (const kb::ecs::Entity entity : recreated) {
+        kb::tests::Require(!storage.IsAlive(entity), "native ECS clear left a recreated entity alive");
+    }
+}
+
+void RunClearRetainingCapacityTest() {
+    constexpr std::size_t kEntityCount = 1024U;
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk4KB;
+    config.reserveEntities = kEntityCount;
+    config.reserveArchetypes = 2U;
+    kb::ecs::NativeArchetypeStorage storage(config);
+
+    std::vector<Position> positions;
+    std::vector<Velocity> velocities;
+    positions.reserve(kEntityCount);
+    velocities.reserve(kEntityCount);
+    for (std::size_t index = 0U; index < kEntityCount; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index + 1U) });
+        velocities.push_back(Velocity{ .x = static_cast<float>(index + 2U), .y = static_cast<float>(index + 3U) });
+    }
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Velocity>(kVelocityId),
+            .data = velocities.data(),
+            .stride = sizeof(Velocity),
+        },
+    };
+
+    std::vector<kb::ecs::Entity> entities;
+    storage.CreateEntitiesInto(entities, kEntityCount, columns);
+    const kb::ecs::NativeEcsStorageStats beforeClear = storage.Stats();
+    RequireStorageStatsConsistent(beforeClear, kEntityCount, "native ECS retaining clear setup left inconsistent stats");
+    kb::tests::Require(beforeClear.chunks > 1U, "native ECS retaining clear setup did not allocate multiple chunks");
+    kb::tests::Require(beforeClear.chunkPoolFree == 0U, "native ECS retaining clear setup unexpectedly had free chunks");
+
+    storage.ClearRetainingCapacity();
+    const kb::ecs::NativeEcsStorageStats afterRetainClear = storage.Stats();
+    kb::tests::Require(afterRetainClear.liveEntities == 0U, "native ECS retaining clear did not clear live entity count");
+    kb::tests::Require(afterRetainClear.chunks == beforeClear.chunks, "native ECS retaining clear released table chunks");
+    kb::tests::Require(storage.ChunkCount() == beforeClear.chunks, "native ECS retaining clear did not preserve chunk count");
+    kb::tests::Require(afterRetainClear.capacity == beforeClear.capacity, "native ECS retaining clear did not preserve row capacity");
+    kb::tests::Require(afterRetainClear.chunkPoolInUse == beforeClear.chunkPoolInUse, "native ECS retaining clear returned chunks to the pool");
+    kb::tests::Require(afterRetainClear.chunkPoolFree == beforeClear.chunkPoolFree, "native ECS retaining clear changed the free pool");
+    kb::tests::Require(afterRetainClear.emptyChunks == beforeClear.chunks, "native ECS retaining clear did not report retained chunks as empty");
+    kb::tests::Require(afterRetainClear.usedBytes == 0U, "native ECS retaining clear left used payload bytes");
+    for (const kb::ecs::Entity entity : entities) {
+        kb::tests::Require(!storage.IsAlive(entity), "native ECS retaining clear left an entity alive");
+    }
+
+    std::vector<kb::ecs::Entity> recreated;
+    storage.CreateEntitiesInto(recreated, kEntityCount, columns);
+    const kb::ecs::NativeEcsStorageStats afterRecreate = storage.Stats();
+    RequireStorageStatsConsistent(afterRecreate, kEntityCount, "native ECS retaining clear recreate left inconsistent stats");
+    kb::tests::Require(afterRecreate.chunkPoolAcquireCount == afterRetainClear.chunkPoolAcquireCount, "native ECS retaining clear recreate acquired new chunks");
+    kb::tests::Require(afterRecreate.chunkPoolInUse == beforeClear.chunkPoolInUse, "native ECS retaining clear recreate changed in-use chunk count");
+    kb::tests::Require(recreated.size() == kEntityCount, "native ECS retaining clear recreate returned the wrong entity count");
+    kb::tests::Require(
+        kb::tests::NearlyEqual(Component<Position>(storage, recreated[127U], kPositionId).x, positions[127U].x),
+        "native ECS retaining clear recreate wrote the wrong component row");
+
+    storage.Clear();
+    const kb::ecs::NativeEcsStorageStats afterReleaseClear = storage.Stats();
+    RequireStorageStatsConsistent(afterReleaseClear, 0U, "native ECS release clear after retaining clear left inconsistent stats");
+    kb::tests::Require(afterReleaseClear.chunkPoolInUse == 0U, "native ECS release clear after retaining clear kept chunks in use");
+}
+
+void RunBulkAdoptDuplicateValidationTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    std::array<Position, 4U> positions{
+        Position{ .x = 1.0F, .y = 2.0F },
+        Position{ .x = 3.0F, .y = 4.0F },
+        Position{ .x = 5.0F, .y = 6.0F },
+        Position{ .x = 7.0F, .y = 8.0F },
+    };
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+
+    const std::array sortedDuplicateBatch{
+        kb::ecs::Entity{ 40'000'000ULL },
+        kb::ecs::Entity{ 40'000'000ULL },
+        kb::ecs::Entity{ 40'000'001ULL },
+    };
+    bool rejectedSortedDuplicate = false;
+    try {
+        storage.AdoptEntities(sortedDuplicateBatch, columns);
+    } catch (const std::invalid_argument&) {
+        rejectedSortedDuplicate = true;
+    }
+    kb::tests::Require(rejectedSortedDuplicate, "native ECS bulk adopt accepted a sorted duplicate entity batch");
+    kb::tests::Require(storage.Stats().liveEntities == 0U, "native ECS sorted duplicate adopt partially mutated storage");
+
+    const std::array unsortedDuplicateBatch{
+        kb::ecs::Entity{ 40'000'002ULL },
+        kb::ecs::Entity{ 40'000'004ULL },
+        kb::ecs::Entity{ 40'000'002ULL },
+    };
+    bool rejectedUnsortedDuplicate = false;
+    try {
+        storage.AdoptEntities(unsortedDuplicateBatch, columns);
+    } catch (const std::invalid_argument&) {
+        rejectedUnsortedDuplicate = true;
+    }
+    kb::tests::Require(rejectedUnsortedDuplicate, "native ECS bulk adopt accepted an unsorted duplicate entity batch");
+    kb::tests::Require(storage.Stats().liveEntities == 0U, "native ECS unsorted duplicate adopt partially mutated storage");
+}
+
+void RunBulkAdoptExternalResolveFastPathTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const Position position{ .x = 1.0F, .y = 2.0F };
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = &position,
+            .stride = sizeof(Position),
+            .sourceCount = 1U,
+        },
+    };
+    const std::array externalEntities{
+        kb::ecs::Entity{ 46'000'000ULL },
+        kb::ecs::Entity{ (static_cast<kb::ecs::Entity::IdType>(7U) << 32U) | 46'000'001ULL },
+    };
+
+    storage.AdoptEntities(externalEntities, columns);
+    kb::tests::Require(storage.ResolveAliveEntity(externalEntities[0].Id()) == externalEntities[0], "native ECS external exact resolve failed");
+    kb::tests::Require(storage.ResolveAliveEntity(46'000'001ULL) == externalEntities[1], "native ECS stripped external resolve failed");
+    kb::tests::Require(storage.IsAlive(externalEntities[0]), "native ECS exact external slot did not keep entity alive");
+    kb::tests::Require(storage.IsAlive(externalEntities[1]), "native ECS stripped external slot did not keep entity alive");
+
+    storage.DestroyEntities(externalEntities);
+    kb::tests::Require(!storage.ResolveAliveEntity(externalEntities[0].Id()).IsValid(), "native ECS external exact resolve survived destroy");
+    kb::tests::Require(!storage.ResolveAliveEntity(46'000'001ULL).IsValid(), "native ECS stripped external resolve survived destroy");
+}
+
+void RunBulkAdoptContiguousExternalRangeFastPathTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    std::vector<Position> positions;
+    std::vector<kb::ecs::Entity> externalEntities;
+    positions.reserve(128U);
+    externalEntities.reserve(128U);
+    for (std::size_t index = 0; index < 128U; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index + 10U) });
+        externalEntities.push_back(kb::ecs::Entity{ 60'000'000ULL + static_cast<kb::ecs::Entity::IdType>(index) });
+    }
+
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+
+    storage.AdoptEntities(externalEntities, columns);
+    for (std::size_t index = 0; index < externalEntities.size(); ++index) {
+        const kb::ecs::Entity entity = externalEntities[index];
+        kb::tests::Require(storage.ResolveAliveEntity(entity.Id()) == entity, "native ECS contiguous external range resolve failed");
+        kb::tests::Require(storage.IsAlive(entity), "native ECS contiguous external range did not keep entity alive");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entity, kPositionId).x, positions[index].x), "native ECS contiguous external range read the wrong row");
+    }
+
+    const kb::ecs::Entity recycledEntity = externalEntities[17U];
+    storage.DestroyEntity(recycledEntity);
+    kb::tests::Require(!storage.IsAlive(recycledEntity), "native ECS contiguous external range kept a destroyed entity alive");
+    kb::tests::Require(!storage.ResolveAliveEntity(recycledEntity.Id()).IsValid(), "native ECS contiguous external range resolved a destroyed entity");
+
+    const Position recycledPosition{ .x = 777.0F, .y = 888.0F };
+    const std::array recycledColumns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = &recycledPosition,
+            .stride = sizeof(Position),
+            .sourceCount = 1U,
+        },
+    };
+    const std::array recycledBatch{ recycledEntity };
+    storage.AdoptEntities(recycledBatch, recycledColumns);
+    kb::tests::Require(storage.IsAlive(recycledEntity), "native ECS contiguous external range did not allow readopting a destroyed external entity");
+    kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, recycledEntity, kPositionId).x, recycledPosition.x), "native ECS contiguous external range reused a stale record after readopt");
+
+    storage.DestroyEntities(externalEntities);
+    kb::tests::Require(storage.Stats().liveEntities == 0U, "native ECS contiguous external range full destroy did not clear live entities");
+    for (const kb::ecs::Entity entity : externalEntities) {
+        kb::tests::Require(!storage.ResolveAliveEntity(entity.Id()).IsValid(), "native ECS contiguous external range survived full destroy");
+    }
+
+    storage.AdoptEntities(externalEntities, columns);
+    kb::tests::Require(storage.Stats().liveEntities == externalEntities.size(), "native ECS contiguous external range readopt did not restore all entities");
+    for (std::size_t index = 0; index < externalEntities.size(); ++index) {
+        const kb::ecs::Entity entity = externalEntities[index];
+        kb::tests::Require(storage.ResolveAliveEntity(entity.Id()) == entity, "native ECS contiguous external range readopt resolve failed");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entity, kPositionId).x, positions[index].x), "native ECS contiguous external range readopt read the wrong row");
+    }
+
+    storage.ClearRetainingCapacity();
+    kb::tests::Require(storage.Stats().liveEntities == 0U, "native ECS contiguous external retaining clear did not clear live entities");
+    for (const kb::ecs::Entity entity : externalEntities) {
+        kb::tests::Require(!storage.IsAlive(entity), "native ECS contiguous external retaining clear kept a stale entity alive");
+        kb::tests::Require(!storage.ResolveAliveEntity(entity.Id()).IsValid(), "native ECS contiguous external retaining clear resolved a stale entity");
+    }
+
+    std::vector<Position> readoptedPositions;
+    readoptedPositions.reserve(externalEntities.size());
+    for (std::size_t index = 0; index < externalEntities.size(); ++index) {
+        readoptedPositions.push_back(Position{ .x = static_cast<float>(index + 1000U), .y = static_cast<float>(index + 2000U) });
+    }
+    const std::array readoptedColumns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = readoptedPositions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+    storage.AdoptEntities(externalEntities, readoptedColumns);
+    kb::tests::Require(storage.Stats().liveEntities == externalEntities.size(), "native ECS contiguous external retaining clear readopt did not restore all entities");
+    for (std::size_t index = 0; index < externalEntities.size(); ++index) {
+        const kb::ecs::Entity entity = externalEntities[index];
+        kb::tests::Require(storage.IsAlive(entity), "native ECS contiguous external retaining clear readopt produced a dead entity");
+        kb::tests::Require(kb::tests::NearlyEqual(Component<Position>(storage, entity, kPositionId).x, readoptedPositions[index].x), "native ECS contiguous external retaining clear readopt reused stale component data");
+    }
+}
+
+void RunNativeStorageStructuralVersionTest() {
+    kb::ecs::NativeArchetypeStorage storage;
+    const std::uint64_t initialVersion = storage.StructuralVersion();
+
+    const Position position{ .x = 1.0F, .y = 2.0F };
+    const std::array positionComponent{
+        kb::ecs::NativeComponentValue{
+            .type = ComponentType<Position>(kPositionId),
+            .data = &position,
+        },
+    };
+    const kb::ecs::Entity entity = storage.CreateEntity(positionComponent);
+    const std::uint64_t afterCreate = storage.StructuralVersion();
+    kb::tests::Require(afterCreate > initialVersion, "native ECS structural version did not advance after create");
+
+    const Position overwritten{ .x = 3.0F, .y = 4.0F };
+    storage.SetComponent(entity, kPositionId, &overwritten, sizeof(overwritten));
+    kb::tests::Require(storage.StructuralVersion() == afterCreate, "native ECS structural version advanced after non-structural component write");
+
+    const Velocity velocity{ .x = 5.0F, .y = 6.0F };
+    const std::array velocityComponent{
+        kb::ecs::NativeComponentValue{
+            .type = ComponentType<Velocity>(kVelocityId),
+            .data = &velocity,
+        },
+    };
+    storage.AddComponents(entity, velocityComponent);
+    const std::uint64_t afterAdd = storage.StructuralVersion();
+    kb::tests::Require(afterAdd > afterCreate, "native ECS structural version did not advance after component add migration");
+
+    const std::array removedIds{ kVelocityId };
+    storage.RemoveComponents(entity, removedIds);
+    const std::uint64_t afterRemove = storage.StructuralVersion();
+    kb::tests::Require(afterRemove > afterAdd, "native ECS structural version did not advance after component remove migration");
+
+    storage.DestroyEntity(entity);
+    const std::uint64_t afterDestroy = storage.StructuralVersion();
+    kb::tests::Require(afterDestroy > afterRemove, "native ECS structural version did not advance after destroy");
+
+    std::vector<Position> positions(8);
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+        },
+    };
+    const std::vector<kb::ecs::Entity> entities = storage.CreateEntities(positions.size(), columns);
+    const std::uint64_t afterBulkCreate = storage.StructuralVersion();
+    kb::tests::Require(afterBulkCreate > afterDestroy, "native ECS structural version did not advance after bulk create");
+
+    storage.ClearRetainingCapacity();
+    kb::tests::Require(storage.StructuralVersion() > afterBulkCreate, "native ECS structural version did not advance after retaining clear");
+    for (kb::ecs::Entity cleared : entities) {
+        kb::tests::Require(!storage.IsAlive(cleared), "native ECS structural version test clear left an entity alive");
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsNativeArchetypeStorageTests() {
     RunChunkProfileAndStatsTest();
+    RunArchetypeCapacityReportTest();
     RunChunkPoolReuseAccountingTest();
     RunChunkPoolMaintenanceBudgetTest();
+    RunChunkCommitGuardTest();
     RunGeneratedEntityResolveFastPathTest();
     RunMemoryCountersPerArchetypeAndChunkTest();
     RunMultiComponentMigrationTest();
@@ -1379,14 +2207,23 @@ void RunEcsNativeArchetypeStorageTests() {
     RunNativeBulkCreateAdoptColumnAppendTest();
     RunWorldNativeStorageMirrorTest();
     RunWorldDirectBulkCreateTest();
+    RunWorldDirectBulkCreateIntoReuseTest();
     RunWorldDirectBulkBroadcastCreateTest();
     RunWorldDirectBulkPatternCreateTest();
     RunWorldNativeStorageMaintenanceTest();
     RunWorldBulkStorageStatsConsistencyTest();
     RunWorldBulkMappingIntegrityTest();
     RunWorldBulkVersioningTest();
+    RunNativeComponentDirtyRangeTest();
     RunNativeComponentAlignmentTest();
     RunNativeComponentAlignmentValidationTest();
+    RunBulkAdoptDuplicateValidationTest();
+    RunBulkAdoptExternalResolveFastPathTest();
+    RunBulkAdoptContiguousExternalRangeFastPathTest();
+    RunBulkDestroyDuplicateValidationTest();
+    RunBulkDestroyAllFastPathTest();
+    RunClearRetainingCapacityTest();
+    RunNativeStorageStructuralVersionTest();
 }
 
 } // namespace kb::tests

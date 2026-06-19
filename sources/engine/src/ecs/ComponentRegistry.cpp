@@ -6,7 +6,13 @@
 
 namespace kb::ecs {
 
-ComponentId ComponentRegistry::Register(ecs_world_t* world, std::type_index type, std::string_view name, std::size_t size, std::size_t alignment) {
+ComponentId ComponentRegistry::Register(
+    ecs_world_t* world,
+    std::type_index type,
+    std::string_view name,
+    std::size_t size,
+    std::size_t alignment,
+    ComponentRegistrationOptions options) {
     if (const ComponentId cachedComponent = cache_.Find(type); cachedComponent != 0) {
         return cachedComponent;
     }
@@ -22,6 +28,7 @@ ComponentId ComponentRegistry::Register(ecs_world_t* world, std::type_index type
         .name = std::string{ name },
         .size = size,
         .alignment = alignment,
+        .storageClass = options.storageClass,
     });
     return componentId;
 }

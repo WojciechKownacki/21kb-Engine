@@ -176,6 +176,11 @@ SceneRuntimeHotPathReport SceneRuntimeService::HotPathReport(const Scene& scene)
         .transformTopologicalBatchCount = state.transformTopologicalBatches.size(),
         .transformTopologicalBatchBuildCount = state.transformTopologicalBatchBuildCount,
         .transformRenderProxyUpdateCount = state.transformRenderProxyUpdateEntities.size(),
+        .transformRenderProxyMeshRendererCount = state.transformRenderProxyMeshRendererIndices.size(),
+        .transformRenderProxyVisibleMeshRendererCount = state.transformRenderProxyVisibleMeshRendererIndices.size(),
+        .transformRenderProxyCameraCount = state.transformRenderProxyCameraIndices.size(),
+        .transformRenderProxyLightCount = state.transformRenderProxyLightIndices.size(),
+        .transformRenderProxyIdentityAffineFastPathCount = state.lastTransformRenderProxyIdentityAffineFastPathCount,
         .transformHierarchyInspectedCount = state.lastTransformHierarchyInspectedCount,
         .transformHierarchyUpdatedCount = state.lastTransformHierarchyUpdatedCount,
         .transformHierarchyRootFastPathCount = state.lastTransformHierarchyRootFastPathCount,
@@ -228,12 +233,22 @@ std::span<const SceneEntity> SceneRuntimeService::TransformRenderProxyUpdateEnti
     return SceneAccess::State(scene).transformRenderProxyUpdateEntities;
 }
 
+std::span<const WorldTransformAffine3x4> SceneRuntimeService::TransformRenderProxyWorldAffine3x4(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).transformRenderProxyWorldAffine3x4;
+}
+
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
     if (state.mode == SceneMode::PrefabPrivate) {
         state.lastFixedStepCount = 0U;
         state.fixedInterpolationAlpha = 0.0F;
         state.transformRenderProxyUpdateEntities.clear();
+        state.transformRenderProxyWorldAffine3x4.clear();
+        state.transformRenderProxyMeshRendererIndices.clear();
+        state.transformRenderProxyVisibleMeshRendererIndices.clear();
+        state.transformRenderProxyCameraIndices.clear();
+        state.transformRenderProxyLightIndices.clear();
+        state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         SynchronizeTransformHierarchy(state);
         return false;
     }
@@ -241,7 +256,18 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     const SceneRuntimeFixedStepSettings fixed = state.fixedStepSettings;
     state.lastFixedStepCount = 0U;
     state.transformRenderProxyUpdateEntities.clear();
+    state.transformRenderProxyWorldAffine3x4.clear();
+    state.transformRenderProxyMeshRendererIndices.clear();
+    state.transformRenderProxyVisibleMeshRendererIndices.clear();
+    state.transformRenderProxyCameraIndices.clear();
+    state.transformRenderProxyLightIndices.clear();
+    state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
+    state.transformRenderProxyWorldAffine3x4.reserve(HierarchyTrackedSlotCount(state));
+    state.transformRenderProxyMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
+    state.transformRenderProxyVisibleMeshRendererIndices.reserve(HierarchyTrackedSlotCount(state));
+    state.transformRenderProxyCameraIndices.reserve(HierarchyTrackedSlotCount(state));
+    state.transformRenderProxyLightIndices.reserve(HierarchyTrackedSlotCount(state));
 
     SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);

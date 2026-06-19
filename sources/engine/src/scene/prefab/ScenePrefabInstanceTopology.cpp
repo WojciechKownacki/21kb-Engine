@@ -4,6 +4,7 @@
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 
+#include <algorithm>
 #include <span>
 
 namespace kb::scene {
@@ -22,9 +23,12 @@ ScenePrefabTrackedEntitySet ScenePrefabInstanceTopology::TrackedEntities(const S
     trackedEntities.reserve(objects.size());
     for (const SceneObject object : objects) {
         if (object.IsValid()) {
-            trackedEntities.insert(object.Entity().Id());
+            trackedEntities.push_back(object.Entity().Id());
         }
     }
+    std::ranges::sort(trackedEntities);
+    const auto uniqueEnd = std::ranges::unique(trackedEntities).begin();
+    trackedEntities.erase(uniqueEnd, trackedEntities.end());
     return trackedEntities;
 }
 
@@ -43,7 +47,7 @@ bool ScenePrefabInstanceTopology::HasUntrackedChild(Scene& scene, SceneObject ob
     }
 
     for (const SceneEntity child : scene.Hierarchy().ChildEntities(object.Entity())) {
-        if (!trackedEntities.contains(child.Id())) {
+        if (!std::ranges::binary_search(trackedEntities, child.Id())) {
             return true;
         }
     }
@@ -57,7 +61,7 @@ void ScenePrefabInstanceTopology::DestroyUntrackedChildren(Scene& scene, const S
         }
 
         for (const SceneEntity child : scene.Hierarchy().ChildEntities(object.Entity())) {
-            if (!trackedEntities.contains(child.Id())) {
+            if (!std::ranges::binary_search(trackedEntities, child.Id())) {
                 scene.Entities().Destroy(child);
             }
         }

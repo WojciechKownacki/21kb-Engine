@@ -32,16 +32,20 @@ add_library(kb_engine STATIC
     include/engine/ecs/ComponentReflection.hpp
     include/engine/ecs/ComponentReflectionMacros.hpp
     include/engine/ecs/ComponentSerialization.hpp
+    include/engine/ecs/ComponentStoragePolicy.hpp
     include/engine/ecs/ComponentTypeInfo.hpp
     include/engine/ecs/Entity.hpp
+    include/engine/ecs/HotKernel.hpp
     include/engine/ecs/Kernel.hpp
     include/engine/ecs/KernelVectorMath.hpp
+    include/engine/ecs/MemoryTrafficEstimator.hpp
     include/engine/ecs/MutableComponentBorrowLocks.hpp
     include/engine/ecs/NativeArchetypeStorage.hpp
     include/engine/ecs/QueryAdapters.inl
     include/engine/ecs/QueryBatch.hpp
     include/engine/ecs/QueryExecutionSettings.hpp
     include/engine/ecs/QueryExecutionScratch.hpp
+    include/engine/ecs/QueryExecutionTuning.hpp
     include/engine/ecs/QueryFilter.hpp
     include/engine/ecs/Query.hpp
     include/engine/ecs/QueryPrefetch.hpp
@@ -58,6 +62,7 @@ add_library(kb_engine STATIC
     include/engine/ecs/SystemSchedulerTrace.hpp
     include/engine/ecs/SystemSchedulerTraceExport.hpp
     include/engine/ecs/TypeIds.hpp
+    include/engine/ecs/UnsafeHotQuery.hpp
     include/engine/ecs/WorkerPool.hpp
     include/engine/ecs/World.hpp
     include/engine/ecs/WorldComponentAccess.inl
@@ -65,6 +70,8 @@ add_library(kb_engine STATIC
     include/engine/ecs/WorldComponentTypes.inl
     include/engine/ecs/WorldConfig.hpp
     include/engine/ecs/WorldConfigPresets.hpp
+    include/engine/ecs/WorldTelemetry.hpp
+    include/engine/ecs/WorldTelemetryExport.hpp
     include/engine/ecs/WorldProfile.hpp
     include/engine/ecs/WorldEditorInspection.hpp
     include/engine/ecs/WorldEvents.inl
@@ -310,6 +317,7 @@ add_library(kb_engine STATIC
     src/ecs/WorldRegistrySet.cpp
     src/ecs/WorldRelations.cpp
     src/ecs/WorldRuntime.cpp
+    src/ecs/WorldTelemetryExport.cpp
     src/ecs/WorldSerialized.cpp
     src/ecs/WorldSnapshotBuilder.cpp
     src/ecs/WorldSnapshots.cpp
@@ -335,6 +343,7 @@ add_library(kb_engine STATIC
     src/scene/SceneHierarchy.cpp
     src/scene/SceneLightIterationService.cpp
     src/scene/SceneMeshRendererIterationService.cpp
+    src/scene/ScenePhysicsBodyIterationService.cpp
     src/scene/SceneModules.cpp
     src/scene/SceneObject.cpp
     src/scene/SceneRuntime.cpp
@@ -379,6 +388,7 @@ add_library(kb_engine STATIC
     src/scene/components/SceneMeshRendererIterationDispatcher.cpp
     src/scene/components/SceneMeshRendererStorage.cpp
     src/scene/components/SceneMeshRendererIteration.cpp
+    src/scene/components/ScenePhysicsBodyIteration.cpp
     src/scene/components/SceneRigidbodyApi.cpp
     src/scene/components/SceneRigidbodyStorage.cpp
     src/scene/components/SceneTagsApi.cpp
@@ -697,6 +707,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabCaptureValidator.hpp
     src/private/scene/prefab/ScenePrefabChildrenReader.hpp
     src/private/scene/prefab/ScenePrefabComponentSnapshot.hpp
+    src/private/scene/prefab/ScenePrefabDirtyTracker.hpp
     src/private/scene/prefab/ScenePrefabHierarchyCounter.hpp
     src/private/scene/prefab/ScenePrefabGuid.hpp
     src/private/scene/prefab/ScenePrefabComponentHasher.hpp
@@ -750,6 +761,7 @@ add_library(kb_engine STATIC
     src/private/scene/prefab/ScenePrefabNodeFactory.hpp
     src/private/scene/prefab/ScenePrefabNodeTreeIndex.hpp
     src/private/scene/prefab/ScenePrefabNodeStateWriter.hpp
+    src/private/scene/prefab/ScenePrefabOptionalComponentMask.hpp
     src/private/scene/prefab/ScenePrefabOuterChildAppender.hpp
     src/private/scene/prefab/ScenePrefabObjectOverrideReporter.hpp
     src/private/scene/prefab/ScenePrefabOverrideApplier.hpp
@@ -786,6 +798,7 @@ add_library(kb_engine STATIC
     src/private/scene/transform/QuatMath.hpp
     src/private/scene/transform/SceneTransformBranchUpdater.hpp
     src/private/scene/transform/SceneTransformHierarchySystem.hpp
+    src/private/scene/transform/SceneTransformRootHotKernel.hpp
     src/private/scene/transform/SceneTransformRootCollector.hpp
     src/private/scene/transform/TransformMath.hpp
     src/private/scene/transform/Vec3Math.hpp
@@ -947,6 +960,17 @@ target_link_libraries(kb_engine
         flecs::flecs_static
         kb_lua
 )
+
+if(KB_ENGINE_ENABLE_NATIVE_AVX2)
+    if(MSVC)
+        target_compile_options(kb_engine PUBLIC /arch:AVX2)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(kb_engine PUBLIC -mavx2)
+    else()
+        message(WARNING "KB_ENGINE_ENABLE_NATIVE_AVX2 is not configured for ${CMAKE_CXX_COMPILER_ID}; continuing without AVX2 compile flags.")
+    endif()
+    target_compile_definitions(kb_engine PUBLIC KB_ENGINE_NATIVE_AVX2=1)
+endif()
 
 kb_apply_quality_gates(kb_engine)
 

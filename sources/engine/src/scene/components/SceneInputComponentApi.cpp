@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ InputComponent* SceneComponentMutationService::TryGetInput(Scene& scene, SceneEn
 
 void SceneComponentMutationService::SetInput(Scene& scene, SceneEntity entity, const InputComponent& input) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Inputs().Set(entity, input);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Inputs().Set(entity, input);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveInput(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Inputs().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Inputs().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkInputModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Inputs().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Inputs().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

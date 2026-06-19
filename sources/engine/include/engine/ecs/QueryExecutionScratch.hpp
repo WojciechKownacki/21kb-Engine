@@ -25,6 +25,7 @@ struct QueryTableDispatchRecord {
     std::size_t entityCount = 0;
     std::array<const void*, kQueryExecutionScratchMaxTerms> fieldComponents{};
     std::array<std::uint64_t, kQueryExecutionScratchMaxTerms> componentVersions{};
+    std::array<std::size_t, kQueryExecutionScratchMaxTerms> componentDirtyCounts{};
     std::size_t nativeArchetypeIndex = 0;
     std::size_t nativeChunkIndex = 0;
     Entity::IdType firstEntityId = 0;
@@ -37,6 +38,7 @@ struct MutableQueryTableDispatchRecord {
     std::size_t entityCount = 0;
     std::array<void*, kQueryExecutionScratchMaxTerms> fieldComponents{};
     std::array<std::uint64_t, kQueryExecutionScratchMaxTerms> componentVersions{};
+    std::array<std::size_t, kQueryExecutionScratchMaxTerms> componentDirtyCounts{};
     std::size_t nativeArchetypeIndex = 0;
     std::size_t nativeChunkIndex = 0;
     Entity::IdType firstEntityId = 0;
@@ -94,7 +96,10 @@ public:
 
     void ResetForSettings(QueryExecutionSettings settings, const T& initialValue = T{}) {
         std::size_t slotCount = 1U;
-        if (settings.workerPool != nullptr && settings.reductionMode == QueryReductionMode::PerWorker) {
+        if (settings.workerPool != nullptr &&
+            settings.reductionMode == QueryReductionMode::PerWorker &&
+            settings.policy != QueryExecutionPolicy::SingleThread &&
+            settings.policy != QueryExecutionPolicy::Deterministic) {
             const std::size_t poolWorkerCount = settings.workerPool->WorkerCount();
             slotCount = settings.workerCountOverride == 0U
                 ? poolWorkerCount

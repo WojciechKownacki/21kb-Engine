@@ -1,5 +1,6 @@
 #include "scene/transform/SceneTransformBranchUpdater.hpp"
 
+#include "scene/transform/SceneTransformRootHotKernel.hpp"
 #include "scene/transform/TransformMath.hpp"
 
 #include <algorithm>
@@ -41,8 +42,12 @@ void UpdateSceneTransformBatchEntry(SceneTransformBatchEntry& entry) noexcept {
                 *entry.transform = TransformMath::Compose(entry.parentTransform, *entry.transform);
             }
         } else {
-            *entry.transform = TransformMath::ComposeRoot(*entry.transform);
-            entry.rootFastPath = true;
+            if (SceneTransformRootHotKernel::CanApplyIdentityRotationFastPath(*entry.transform)) {
+                SceneTransformRootHotKernel::ApplyIdentityRotationRoot(*entry.transform);
+                entry.rootFastPath = true;
+            } else {
+                *entry.transform = TransformMath::ComposeRoot(*entry.transform);
+            }
         }
     }
     entry.updated = shouldUpdate;

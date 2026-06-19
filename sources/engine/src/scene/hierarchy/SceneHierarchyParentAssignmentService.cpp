@@ -5,6 +5,7 @@
 #include "scene/SceneTransformService.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 #include "scene/hierarchy/SceneHierarchyOperations.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 #include "ecs/FlecsEntityIds.hpp"
 
@@ -33,6 +34,10 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
             return false;
         }
         SceneHierarchyCache::Move(state, child, oldParent, parent);
+        SceneTransformService::MarkParentModified(scene, child);
+        MarkScenePrefabTopologyDirty(state, child);
+        MarkScenePrefabTopologyDirty(state, oldParent);
+        MarkScenePrefabTopologyDirty(state, parent);
         return true;
     }
 
@@ -40,6 +45,9 @@ bool SceneHierarchyParentAssignmentService::SetParent(Scene& scene, SceneEntity 
     if (changed) {
         SceneHierarchyCache::Move(state, child, oldParent, parent);
         SceneTransformService::MarkParentModified(scene, child);
+        MarkScenePrefabTopologyDirty(state, child);
+        MarkScenePrefabTopologyDirty(state, oldParent);
+        MarkScenePrefabTopologyDirty(state, parent);
     }
     return changed;
 }

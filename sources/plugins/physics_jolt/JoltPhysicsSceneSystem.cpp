@@ -1,5 +1,7 @@
 #include "JoltPhysicsSceneSystem.hpp"
 
+#include "engine/ecs/Query.hpp"
+#include "engine/ecs/World.hpp"
 #include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/Scene.hpp"
@@ -33,6 +35,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 JPH_SUPPRESS_WARNINGS
 
@@ -122,10 +125,13 @@ class JoltRuntime {
 public:
     JoltRuntime() {
         std::lock_guard lock{ mutex_ };
-        if (instanceCount_ == 0U) {
+        if (instanceCount_ == 0U && !registered_) {
             JPH::RegisterDefaultAllocator();
-            JPH::Factory::sInstance = new JPH::Factory();
+            if (JPH::Factory::sInstance == nullptr) {
+                JPH::Factory::sInstance = new JPH::Factory();
+            }
             JPH::RegisterTypes();
+            registered_ = true;
         }
         ++instanceCount_;
     }
@@ -136,11 +142,9 @@ public:
             return;
         }
         --instanceCount_;
-        if (instanceCount_ == 0U) {
-            JPH::UnregisterTypes();
-            delete JPH::Factory::sInstance;
-            JPH::Factory::sInstance = nullptr;
-        }
+        // Keep the Jolt registry alive for the process lifetime. Unregistering
+        // during plugin teardown is order-sensitive on Windows and can fault
+        // after all bodies have already been removed cleanly.
     }
 
     JoltRuntime(const JoltRuntime&) = delete;
@@ -149,6 +153,7 @@ public:
 private:
     inline static std::mutex mutex_;
     inline static std::size_t instanceCount_ = 0U;
+    inline static bool registered_ = false;
 };
 
 struct BodySignature {
@@ -278,10 +283,14 @@ struct BodyRecord {
     return new JPH::BoxShape(JPH::Vec3(0.5F, 0.5F, 0.5F));
 }
 
-struct TransformCollectContext {
-    void* system = nullptr;
-    SceneSystemContext* sceneContext = nullptr;
+struct PhysicsBodySnapshot {
+    SceneEntity entity{};
+    TransformComponent transform{};
+    RigidbodyComponent rigidbody{};
+    ColliderComponent collider{};
 };
+
+using PhysicsBodyQuery = kb::ecs::Query<TransformComponent, RigidbodyComponent, ColliderComponent>;
 
 } // namespace
 
@@ -309,18 +318,17 @@ public:
         RemoveAllBodies();
     }
 
-    void SynchronizeBody(SceneEntity entity, TransformComponent& transform, SceneSystemContext& context) {
-        const RigidbodyComponent* rigidbody = context.GetScene().Components().Rigidbodies().TryGet(entity);
-        const ColliderComponent* collider = context.GetScene().Components().Colliders().TryGet(entity);
-        if (rigidbody == nullptr || collider == nullptr) {
-            return;
-        }
-
+    void SynchronizeBody(
+        SceneEntity entity,
+        const TransformComponent& transform,
+        const RigidbodyComponent& rigidbody,
+        const ColliderComponent& collider,
+        SceneSystemContext& context) {
         seenEntities_->insert(entity.Id());
-        const BodySignature signature = MakeSignature(*rigidbody, *collider, transform);
+        const BodySignature signature = MakeSignature(rigidbody, collider, transform);
         const auto existing = bodies_.find(entity.Id());
         if (existing != bodies_.end() && existing->second.signature == signature) {
-            SynchronizeKinematicOrStaticBody(existing->second.bodyId, *rigidbody, *collider, transform, context.DeltaSeconds());
+            SynchronizeKinematicOrStaticBody(existing->second.bodyId, rigidbody, collider, transform, context.DeltaSeconds());
             return;
         }
 
@@ -328,7 +336,7 @@ public:
             RemoveBody(existing->second.bodyId);
             bodies_.erase(existing);
         }
-        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = CreateBody(*rigidbody, *collider, transform), .signature = signature });
+        bodies_.emplace(entity.Id(), BodyRecord{ .bodyId = CreateBody(rigidbody, collider, transform), .signature = signature });
     }
 
 private:
@@ -338,12 +346,36 @@ private:
     }
 
     void SynchronizeBodies(SceneSystemContext& context) {
+        physicsBodyScratch_.clear();
+        physicsBodyScratch_.reserve(std::max<std::size_t>(bodies_.size(), 16U));
+        constexpr kb::ecs::QueryExecutionSettings settings{
+            .maxBatchSize = 1024U,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+        {
+            PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
+            physicsBodyQuery.ForEachBatchKernel(settings, [this](const PhysicsBodyQuery::Batch& batch) {
+                const TransformComponent* transforms = batch.Components<0>();
+                const RigidbodyComponent* rigidbodies = batch.Components<1>();
+                const ColliderComponent* colliders = batch.Components<2>();
+                for (std::size_t index = 0; index < batch.Count(); ++index) {
+                    physicsBodyScratch_.push_back(PhysicsBodySnapshot{
+                        .entity = SceneEntity{ batch.EntityAt(index).Id() },
+                        .transform = transforms[index],
+                        .rigidbody = rigidbodies[index],
+                        .collider = colliders[index],
+                    });
+                }
+            });
+        }
+
         std::unordered_set<std::uint64_t> seen;
-        seen.reserve(bodies_.size());
+        seen.reserve(std::max(bodies_.size(), physicsBodyScratch_.size()));
         seenEntities_ = &seen;
 
-        TransformCollectContext collectContext{ .system = this, .sceneContext = &context };
-        context.Transforms().ForEachMutable(&SynchronizeTransformBody, &collectContext);
+        for (const PhysicsBodySnapshot& body : physicsBodyScratch_) {
+            SynchronizeBody(body.entity, body.transform, body.rigidbody, body.collider, context);
+        }
         seenEntities_ = nullptr;
 
         for (auto it = bodies_.begin(); it != bodies_.end();) {
@@ -354,14 +386,6 @@ private:
                 ++it;
             }
         }
-    }
-
-    static void SynchronizeTransformBody(SceneEntity entity, TransformComponent& transform, void* rawContext) {
-        auto* collectContext = static_cast<TransformCollectContext*>(rawContext);
-        if (collectContext == nullptr || collectContext->system == nullptr || collectContext->sceneContext == nullptr) {
-            return;
-        }
-        static_cast<Impl*>(collectContext->system)->SynchronizeBody(entity, transform, *collectContext->sceneContext);
     }
 
     [[nodiscard]] JPH::BodyID CreateBody(const RigidbodyComponent& rigidbody, const ColliderComponent& collider, const TransformComponent& transform) {
@@ -407,31 +431,35 @@ private:
 
     void WriteBack(SceneSystemContext& context) {
         JPH::BodyInterface& bodyInterface = physicsSystem_.GetBodyInterface();
-        for (const auto& [entityId, body] : bodies_) {
-            SceneEntity entity{ entityId };
-            if (!context.Transforms().IsAlive(entity)) {
-                continue;
+        constexpr kb::ecs::QueryExecutionSettings settings{
+            .maxBatchSize = 1024U,
+            .policy = kb::ecs::QueryExecutionPolicy::SingleThread,
+        };
+        PhysicsBodyQuery physicsBodyQuery = context.EcsWorld().CreateQuery<TransformComponent, RigidbodyComponent, ColliderComponent>();
+        physicsBodyQuery.ForEachMutableBatchKernel(settings, [this, &bodyInterface, &context](PhysicsBodyQuery::MutableBatch& batch) {
+            TransformComponent* transforms = batch.Components<0>();
+            RigidbodyComponent* rigidbodies = batch.Components<1>();
+            const ColliderComponent* colliders = batch.Components<2>();
+            for (std::size_t index = 0; index < batch.Count(); ++index) {
+                const SceneEntity entity{ batch.EntityAt(index).Id() };
+                const auto body = bodies_.find(entity.Id());
+                if (body == bodies_.end() || rigidbodies[index].bodyType == RigidbodyBodyType::Static) {
+                    continue;
+                }
+
+                const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body->second.bodyId)), colliders[index].center);
+                transforms[index].localPosition = position;
+                transforms[index].worldPosition = position;
+                transforms[index].localRotation = FromJolt(bodyInterface.GetRotation(body->second.bodyId));
+                transforms[index].worldRotation = transforms[index].localRotation;
+                transforms[index].worldDirty = true;
+                context.Transforms().MarkModified(entity);
+
+                rigidbodies[index].linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body->second.bodyId));
+                rigidbodies[index].angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body->second.bodyId));
+                context.GetScene().Components().Rigidbodies().MarkModified(entity);
             }
-
-            const ColliderComponent* collider = context.GetScene().Components().Colliders().TryGet(entity);
-            RigidbodyComponent* rigidbody = context.GetScene().Components().Rigidbodies().TryGet(entity);
-            TransformComponent* transform = context.Transforms().TryGet(entity);
-            if (collider == nullptr || rigidbody == nullptr || transform == nullptr || rigidbody->bodyType == RigidbodyBodyType::Static) {
-                continue;
-            }
-
-            const Vec3 position = Subtract(FromJoltPosition(bodyInterface.GetPosition(body.bodyId)), collider->center);
-            transform->localPosition = position;
-            transform->worldPosition = position;
-            transform->localRotation = FromJolt(bodyInterface.GetRotation(body.bodyId));
-            transform->worldRotation = transform->localRotation;
-            transform->worldDirty = true;
-            context.Transforms().MarkModified(entity);
-
-            rigidbody->linearVelocity = FromJolt(bodyInterface.GetLinearVelocity(body.bodyId));
-            rigidbody->angularVelocity = FromJolt(bodyInterface.GetAngularVelocity(body.bodyId));
-            context.GetScene().Components().Rigidbodies().MarkModified(entity);
-        }
+        });
     }
 
     void RemoveBody(JPH::BodyID bodyId) {
@@ -460,6 +488,7 @@ private:
     JPH::TempAllocatorImpl tempAllocator_;
     JPH::JobSystemThreadPool jobSystem_;
     std::unordered_map<std::uint64_t, BodyRecord> bodies_;
+    std::vector<PhysicsBodySnapshot> physicsBodyScratch_;
     std::unordered_set<std::uint64_t>* seenEntities_ = nullptr;
 };
 

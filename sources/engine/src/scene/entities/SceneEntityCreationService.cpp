@@ -3,6 +3,7 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneHierarchyService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
 
@@ -31,6 +32,9 @@ SceneEntity SceneEntityCreationService::CreateEntity(Scene& scene, SceneObjectDe
     SceneHierarchyCache::AssignOrder(state, entity);
     SceneHierarchyCache::AddRoot(state, entity);
     state.componentStorage.SetDefaults(entity, desc.transform, desc.visibility);
+    if (!desc.visibility.visible) {
+        SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Hidden);
+    }
 
     if (desc.parent.EntityHandle().IsValid()) {
         [[maybe_unused]] const bool parentAssigned = SceneHierarchyService::SetParent(scene, entity, desc.parent.Entity());

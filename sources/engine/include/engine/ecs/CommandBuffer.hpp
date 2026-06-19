@@ -112,6 +112,7 @@ private:
     CommandBufferPlaybackResult result_;
     std::unordered_set<Entity::IdType> playbackCreatedIds_;
     std::unordered_set<Entity::IdType> destroyedIds_;
+    bool destroyedIdsActive_ = false;
     std::vector<Entity> scratchEntities_;
     std::vector<Entity> scratchParentEntities_;
     std::vector<World::BulkComponentData> scratchComponentData_;
@@ -120,6 +121,7 @@ private:
     std::size_t commandIndex_ = 0;
     std::size_t commandElementIndex_ = 0;
     std::size_t destroyIndex_ = 0;
+    bool trustedFastPath_ = false;
     Phase phase_ = Phase::NotStarted;
 
     friend class CommandBuffer;
@@ -173,6 +175,24 @@ public:
         template <typename... Components>
         void Set(std::span<const Entity> entities, std::span<const Components>... components);
 
+        template <typename... Components>
+        void SetBorrowed(std::span<const CommandEntity> entities, std::span<const Components>... components);
+
+        template <typename... Components>
+        void SetBorrowed(std::span<const Entity> entities, std::span<const Components>... components);
+
+        template <typename... Components>
+        void AddMissing(std::span<const CommandEntity> entities, std::span<const Components>... components);
+
+        template <typename... Components>
+        void AddMissing(std::span<const Entity> entities, std::span<const Components>... components);
+
+        template <typename... Components>
+        void AddMissingBorrowed(std::span<const CommandEntity> entities, std::span<const Components>... components);
+
+        template <typename... Components>
+        void AddMissingBorrowed(std::span<const Entity> entities, std::span<const Components>... components);
+
         template <typename T>
         void Remove(CommandEntity entity);
 
@@ -185,10 +205,18 @@ public:
         template <typename... Components>
         void Remove(std::span<const Entity> entities);
 
+        template <typename... Components>
+        void RemoveExisting(std::span<const CommandEntity> entities);
+
+        template <typename... Components>
+        void RemoveExisting(std::span<const Entity> entities);
+
         void SetParent(CommandEntity child, CommandEntity parent);
         void SetParent(Entity child, Entity parent);
         void SetParents(std::span<const CommandEntity> children, std::span<const CommandEntity> parents);
+        void SetParents(std::vector<CommandEntity>&& children, std::vector<CommandEntity>&& parents);
         void SetParentsForNewEntitiesKnownAcyclic(std::span<const CommandEntity> children, std::span<const CommandEntity> parents);
+        void SetParentsForNewEntitiesKnownAcyclic(std::vector<CommandEntity>&& children, std::vector<CommandEntity>&& parents);
         void SetParents(std::span<const Entity> children, std::span<const Entity> parents);
         void ClearParent(CommandEntity child);
         void ClearParent(Entity child);
@@ -218,6 +246,7 @@ public:
     [[nodiscard]] bool FitsPlaybackBudget(const CommandBufferPlaybackBudget& budget) const;
     CommandBufferPlaybackResult Playback(World& world);
     CommandBufferPlaybackResult Playback(World& world, const CommandBufferPlaybackBudget& budget);
+    CommandBufferPlaybackResult PlaybackTrusted(World& world);
     CommandBufferPlaybackSlice PlaybackSlice(World& world, const CommandBufferPlaybackBudget& budget, CommandBufferPlaybackState& state);
     void Clear() noexcept;
 
@@ -267,10 +296,13 @@ private:
         CommandEntity first;
         CommandEntity second;
         std::vector<CommandEntity> entities;
+        std::vector<Entity> existingEntities;
         std::vector<CommandEntity> parents;
         std::string name;
         std::size_t count = 0;
         bool parentBatchKnownAcyclicForNewEntities = false;
+        bool bulkSetComponentsKnownMissing = false;
+        bool bulkRemoveComponentsKnownExisting = false;
         ComponentCommand component;
         std::vector<BulkComponentCommand> bulkComponents;
         std::vector<BulkRemoveComponentCommand> bulkRemoveComponents;
@@ -286,6 +318,10 @@ private:
     [[nodiscard]] CommandEntity AllocateDeferredEntity(std::size_t workerIndex);
     [[nodiscard]] std::vector<CommandEntity> AllocateDeferredEntities(std::size_t workerIndex, std::size_t count);
     [[nodiscard]] static Entity ResolveForPlayback(CommandEntity entity, const CommandBufferPlaybackResult& result);
+    static void ResolveForPlaybackRange(std::span<const CommandEntity> source, const CommandBufferPlaybackResult& result, std::vector<Entity>& target);
+    static void ResolveCommandEntitiesForPlayback(const Command& command, const CommandBufferPlaybackResult& result, std::vector<Entity>& target);
+    static void ResolveCommandEntitiesForPlayback(const Command& command, std::size_t begin, std::size_t count, const CommandBufferPlaybackResult& result, std::vector<Entity>& target);
+    [[nodiscard]] static std::size_t CommandEntityCount(const Command& command) noexcept;
     [[nodiscard]] static CommandBufferPlaybackResult::Stats EstimateCommandStats(const Command& command);
     [[nodiscard]] static bool IsCreateCommand(CommandKind kind) noexcept;
 
@@ -303,6 +339,9 @@ private:
 
     template <typename T>
     static void AppendBulkComponent(Command& command, std::span<const T> components);
+
+    template <typename T>
+    static void AppendBorrowedBulkComponent(Command& command, std::span<const T> components);
 
     template <typename T>
     static void AppendBulkRemoveComponent(Command& command);
@@ -395,12 +434,195 @@ void CommandBuffer::WorkerBuffer::Set(std::span<const CommandEntity> entities, s
 
 template <typename... Components>
 void CommandBuffer::WorkerBuffer::Set(std::span<const Entity> entities, std::span<const Components>... components) {
-    std::vector<CommandEntity> commandEntities;
-    commandEntities.reserve(entities.size());
-    for (Entity entity : entities) {
-        commandEntities.push_back(CommandEntity::Existing(entity));
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component set requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
-    Set(std::span<const CommandEntity>{ commandEntities }, components...);
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer bulk component set spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::SetBorrowed(std::span<const CommandEntity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer borrowed bulk component set requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer borrowed bulk component set spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.entities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBorrowedBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::SetBorrowed(std::span<const Entity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer borrowed bulk component set requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer borrowed bulk component set spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBorrowedBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::AddMissing(std::span<const CommandEntity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component add requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer bulk component add spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.entities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkSetComponentsKnownMissing = true;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::AddMissing(std::span<const Entity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component add requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer bulk component add spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkSetComponentsKnownMissing = true;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::AddMissingBorrowed(std::span<const CommandEntity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer borrowed bulk component add requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer borrowed bulk component add spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.entities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkSetComponentsKnownMissing = true;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBorrowedBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::AddMissingBorrowed(std::span<const Entity> entities, std::span<const Components>... components) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer borrowed bulk component add requires at least one component span");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS command buffer components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS command buffer components must be trivially destructible");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+
+    const std::array<std::size_t, sizeof...(Components)> sizes{ components.size()... };
+    const std::size_t count = entities.size();
+    if (!std::all_of(sizes.begin(), sizes.end(), [count](std::size_t size) { return size == count; })) {
+        throw std::invalid_argument("ECS command buffer borrowed bulk component add spans must match entity count");
+    }
+    if (count == 0) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::SetComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = count;
+    command.bulkSetComponentsKnownMissing = true;
+    command.bulkComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBorrowedBulkComponent<Components>(command, components), ...);
+    owner_->Push(workerIndex_, std::move(command));
 }
 
 template <typename T>
@@ -445,12 +667,61 @@ void CommandBuffer::WorkerBuffer::Remove(std::span<const CommandEntity> entities
 
 template <typename... Components>
 void CommandBuffer::WorkerBuffer::Remove(std::span<const Entity> entities) {
-    std::vector<CommandEntity> commandEntities;
-    commandEntities.reserve(entities.size());
-    for (Entity entity : entities) {
-        commandEntities.push_back(CommandEntity::Existing(entity));
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component remove requires at least one component type");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
     }
-    Remove<Components...>(std::span<const CommandEntity>{ commandEntities });
+    if (entities.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::RemoveComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = entities.size();
+    command.bulkRemoveComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkRemoveComponent<Components>(command), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::RemoveExisting(std::span<const CommandEntity> entities) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component remove requires at least one component type");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (entities.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::RemoveComponents;
+    command.entities.assign(entities.begin(), entities.end());
+    command.count = entities.size();
+    command.bulkRemoveComponentsKnownExisting = true;
+    command.bulkRemoveComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkRemoveComponent<Components>(command), ...);
+    owner_->Push(workerIndex_, std::move(command));
+}
+
+template <typename... Components>
+void CommandBuffer::WorkerBuffer::RemoveExisting(std::span<const Entity> entities) {
+    static_assert(sizeof...(Components) > 0, "ECS command buffer bulk component remove requires at least one component type");
+    if (owner_ == nullptr) {
+        throw std::logic_error("ECS command buffer worker buffer is not bound to an owner");
+    }
+    if (entities.empty()) {
+        return;
+    }
+
+    Command command;
+    command.kind = CommandKind::RemoveComponents;
+    command.existingEntities.assign(entities.begin(), entities.end());
+    command.count = entities.size();
+    command.bulkRemoveComponentsKnownExisting = true;
+    command.bulkRemoveComponents.reserve(sizeof...(Components));
+    (CommandBuffer::AppendBulkRemoveComponent<Components>(command), ...);
+    owner_->Push(workerIndex_, std::move(command));
 }
 
 template <typename T>
@@ -492,6 +763,17 @@ void CommandBuffer::AppendBulkComponent(Command& command, std::span<const T> com
     component.bytes.resize(sizeof(T) * components.size());
     const auto* source = reinterpret_cast<const std::byte*>(components.data());
     std::copy(source, source + component.bytes.size(), component.bytes.begin());
+    command.bulkComponents.push_back(std::move(component));
+}
+
+template <typename T>
+void CommandBuffer::AppendBorrowedBulkComponent(Command& command, std::span<const T> components) {
+    BulkComponentCommand component;
+    component.registerComponent = &CommandBuffer::RegisterBulkComponent<T>;
+    component.componentSize = sizeof(T);
+    component.sourceCount = components.size();
+    component.borrowedData = components.data();
+    component.borrowedCount = components.size();
     command.bulkComponents.push_back(std::move(component));
 }
 

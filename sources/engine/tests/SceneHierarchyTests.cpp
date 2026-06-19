@@ -1,6 +1,7 @@
 #include "TestSupport.hpp"
 #include "TestSuites.hpp"
 
+#include "engine/ecs/World.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -25,6 +26,11 @@ struct SceneCameraLightVisitorStats {
 struct TransformReplaySnapshot {
     std::vector<kb::scene::TransformComponent> transforms;
     kb::scene::SceneRuntimeHotPathReport report{};
+};
+
+struct BehaviourIterationHotQueryStats {
+    std::size_t visited = 0U;
+    std::uint64_t checksum = 0U;
 };
 
 void AccumulateCameraVisit(
@@ -282,7 +288,7 @@ void RunTransformRootFastPathReportTest() {
     scene.Runtime().SynchronizeTransforms();
     const kb::scene::SceneRuntimeHotPathReport firstReport = scene.Runtime().HotPathReport();
     kb::tests::Require(firstReport.transformHierarchyInspectedCount == 11U, "Transform root fast path report did not inspect every transform");
-    kb::tests::Require(firstReport.transformHierarchyRootFastPathCount == 6U, "Transform root fast path did not process every root");
+    kb::tests::Require(firstReport.transformHierarchyRootFastPathCount == 3U, "Transform root fast path did not isolate identity-rotation roots");
     kb::tests::Require(firstReport.transformHierarchyTranslatedParentFastPathCount == 1U, "Transform translated-parent fast path did not process the child");
     kb::tests::Require(firstReport.transformHierarchyUnrotatedParentFastPathCount == 1U, "Transform unrotated-parent fast path did not process the scaled child");
     kb::tests::Require(firstReport.transformHierarchyUnitScaleParentFastPathCount == 1U, "Transform unit-scale parent fast path did not process the rotated child");
@@ -570,6 +576,13 @@ void RunTransformSparseFlushReportTest() {
             },
         }));
     }
+    [[maybe_unused]] const kb::scene::SceneObject hierarchySentinel = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Sparse Flush Sentinel",
+        .parent = roots.back(),
+        .transform = kb::scene::TransformComponent{
+            .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+        },
+    });
 
     scene.Runtime().SynchronizeTransforms();
     kb::scene::TransformComponent moved = scene.Transforms().Get(roots.front());
@@ -663,6 +676,75 @@ void RunTransformHierarchyDeepDirtyFrontierReportTest() {
     kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Deep transform frontier did not use sparse flush");
     kb::tests::Require(report.transformHierarchyFlushedEntityCount == 8U, "Deep transform frontier flushed an unexpected entity count");
     kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(leaves.front()).worldPosition.x, 17.0F), "Deep transform frontier did not update the leaf world position");
+}
+
+void RunTransformHierarchyNestedDirtyFrontierReportTest() {
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneObject> dirtyChain;
+    dirtyChain.reserve(8U);
+    for (std::size_t chain = 0; chain < 16U; ++chain) {
+        kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+            .name = "Nested Frontier Root",
+            .transform = kb::scene::TransformComponent{
+                .localPosition = kb::scene::Vec3{ static_cast<float>(chain), 0.0F, 0.0F },
+            },
+        });
+        if (chain == 0U) {
+            dirtyChain.push_back(parent);
+        }
+        for (std::size_t depth = 1; depth < 8U; ++depth) {
+            parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+                .name = "Nested Frontier Child",
+                .parent = parent,
+                .transform = kb::scene::TransformComponent{
+                    .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F },
+                },
+            });
+            if (chain == 0U) {
+                dirtyChain.push_back(parent);
+            }
+        }
+    }
+
+    scene.Runtime().SynchronizeTransforms();
+    kb::scene::TransformComponent moved = scene.Transforms().Get(dirtyChain[3]);
+    moved.localPosition.x = 20.0F;
+    scene.Transforms().Set(dirtyChain[3], moved);
+    scene.Runtime().SynchronizeTransforms();
+
+    const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 5U, "Nested transform frontier did not visit exactly the dirty subtree");
+    kb::tests::Require(report.transformHierarchyInspectedCount == 5U, "Nested transform frontier inspected clean ancestors or unrelated chains");
+    kb::tests::Require(report.transformHierarchyUpdatedCount == 5U, "Nested transform frontier did not update the full dirty subtree");
+    kb::tests::Require(report.transformHierarchySparseFlushCount == 1U, "Nested transform frontier did not use sparse flush");
+    kb::tests::Require(report.transformHierarchyFlushedEntityCount == 5U, "Nested transform frontier flushed an unexpected entity count");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(dirtyChain.back()).worldPosition.x, 26.0F), "Nested transform frontier did not update the leaf world position");
+}
+
+void RunTransformHierarchyDirtyFrontierDuplicateSetTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject root = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Duplicate Frontier Root",
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } },
+    });
+    const kb::scene::SceneObject child = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Duplicate Frontier Child",
+        .parent = root,
+        .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 2.0F, 0.0F, 0.0F } },
+    });
+
+    scene.Runtime().SynchronizeTransforms();
+    kb::scene::TransformComponent moved = scene.Transforms().Get(root);
+    moved.localPosition.x = 11.0F;
+    scene.Transforms().Set(root, moved);
+    moved.localPosition.x = 12.0F;
+    scene.Transforms().Set(root, moved);
+    scene.Runtime().SynchronizeTransforms();
+
+    const kb::scene::SceneRuntimeHotPathReport report = scene.Runtime().HotPathReport();
+    kb::tests::Require(report.transformHierarchyDirtyFrontierCount == 2U, "Duplicate transform frontier set added redundant dirty entries");
+    kb::tests::Require(report.transformHierarchyUpdatedCount == 2U, "Duplicate transform frontier set did not update the root and child");
+    kb::tests::Require(kb::tests::NearlyEqual(scene.Transforms().Get(child).worldPosition.x, 14.0F), "Duplicate transform frontier set did not use the latest transform value");
 }
 
 void RunTransformHierarchyMultiRootDirtyFrontierReportTest() {
@@ -992,6 +1074,60 @@ void RunTransformSplitPayloadContractTest() {
     kb::tests::Require(relation.topologyVersion == 99U, "Transform hierarchy relation lost topology version");
 }
 
+void RunSceneHierarchyRootCollectorUsesUnsafeHotQueryTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject firstRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Root A",
+    });
+    const kb::scene::SceneObject secondRoot = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Root B",
+    });
+    static_cast<void>(scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Child",
+        .parent = firstRoot,
+    }));
+
+    const kb::ecs::WorldTelemetrySnapshot before = scene.Runtime().EcsWorld().TelemetrySnapshot();
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    const kb::ecs::WorldTelemetrySnapshot after = scene.Runtime().EcsWorld().TelemetrySnapshot();
+
+    kb::tests::Require(roots.size() == 2U, "Scene hierarchy hot root collector returned an invalid root count");
+    kb::tests::Require(roots[0] == firstRoot.Entity(), "Scene hierarchy hot root collector lost stable root order");
+    kb::tests::Require(roots[1] == secondRoot.Entity(), "Scene hierarchy hot root collector lost the second root");
+    kb::tests::Require(after.queryExecutions == before.queryExecutions, "Scene hierarchy root collector used the safe query executor");
+}
+
+void RunSceneBehaviourIterationUsesUnsafeHotQueryTest() {
+    kb::scene::Scene scene;
+
+    const kb::scene::SceneObject object = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Behaviour",
+    });
+    scene.Components().Behaviours().Set(object.Entity(), kb::scene::BehaviourComponent{
+        .behaviourAssetId = 77U,
+        .backend = kb::scene::BehaviourBackend::Lua,
+        .enabled = true,
+        .tickGroup = kb::scene::BehaviourTickGroup::Gameplay,
+        .executionOrder = 5,
+    });
+
+    const kb::ecs::WorldTelemetrySnapshot before = scene.Runtime().EcsWorld().TelemetrySnapshot();
+    BehaviourIterationHotQueryStats stats;
+    scene.Components().Behaviours().ForEach([](kb::scene::SceneEntity entity, const kb::scene::BehaviourComponent& behaviour, void* context) {
+        auto& data = *static_cast<BehaviourIterationHotQueryStats*>(context);
+        if (entity.IsValid()) {
+            ++data.visited;
+            data.checksum += behaviour.behaviourAssetId;
+        }
+    }, &stats);
+    const kb::ecs::WorldTelemetrySnapshot after = scene.Runtime().EcsWorld().TelemetrySnapshot();
+
+    kb::tests::Require(stats.visited == 1U, "Scene behaviour hot iterator did not visit the behaviour component");
+    kb::tests::Require(stats.checksum == 77U, "Scene behaviour hot iterator provided an invalid behaviour payload");
+    kb::tests::Require(after.queryExecutions == before.queryExecutions, "Scene behaviour iterator used the safe query executor");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -1010,11 +1146,15 @@ void RunSceneHierarchyTests() {
     RunTransformSparseFlushReportTest();
     RunTransformHierarchyDirtyFrontierReportTest();
     RunTransformHierarchyDeepDirtyFrontierReportTest();
+    RunTransformHierarchyNestedDirtyFrontierReportTest();
+    RunTransformHierarchyDirtyFrontierDuplicateSetTest();
     RunTransformHierarchyMultiRootDirtyFrontierReportTest();
     RunTransformHierarchyWideFanoutDirtyFrontierReportTest();
     RunTransformHierarchyParallelFanoutDirtyFrontierReportTest();
     RunTransformVersioningTest();
     RunTransformSplitPayloadContractTest();
+    RunSceneHierarchyRootCollectorUsesUnsafeHotQueryTest();
+    RunSceneBehaviourIterationUsesUnsafeHotQueryTest();
     RunSceneBatchDuplicateTest();
     RunSceneHistoryUndoRedoTest();
     RunDestroyedEntityHandleDoesNotAffectNewEntityTest();

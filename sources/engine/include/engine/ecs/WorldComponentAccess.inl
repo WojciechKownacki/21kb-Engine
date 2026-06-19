@@ -6,21 +6,41 @@ namespace kb::ecs {
 
 template <typename T>
 ComponentId World::RegisterComponent(std::string_view name) {
+    return RegisterComponent<T>(name, ComponentRegistrationOptions{});
+}
+
+template <typename T>
+ComponentId World::RegisterComponent(ComponentRegistrationOptions options) {
+    return RegisterComponent<T>({}, options);
+}
+
+template <typename T>
+ComponentId World::RegisterComponent(std::string_view name, ComponentRegistrationOptions options) {
     ValidateComponentType<T>();
     return RegisterComponent(
         std::type_index{ typeid(T) },
         name.empty() ? DefaultComponentName<T>() : name,
         sizeof(T),
-        alignof(T));
+        alignof(T),
+        options);
 }
 
 template <typename T>
 World::BulkComponentView World::MakeBulkComponentView(std::span<const T> components) noexcept {
+    return MakeBulkComponentView<T>(components, ComponentRegistrationOptions{});
+}
+
+template <typename T>
+World::BulkComponentView World::MakeBulkComponentView(std::span<const T> components, ComponentRegistrationOptions options) noexcept {
     ValidateComponentType<T>();
     return BulkComponentView{
         .registerComponent = +[](World& world) -> ComponentId {
             return world.RegisterComponent<T>();
         },
+        .registerComponentWithOptions = +[](World& world, ComponentRegistrationOptions registrationOptions) -> ComponentId {
+            return world.RegisterComponent<T>(registrationOptions);
+        },
+        .registrationOptions = options,
         .componentSize = sizeof(T),
         .componentCount = components.size(),
         .sourceCount = components.size(),
@@ -30,11 +50,20 @@ World::BulkComponentView World::MakeBulkComponentView(std::span<const T> compone
 
 template <typename T>
 World::BulkComponentView World::MakeBulkComponentBroadcastView(const T& component) noexcept {
+    return MakeBulkComponentBroadcastView<T>(component, ComponentRegistrationOptions{});
+}
+
+template <typename T>
+World::BulkComponentView World::MakeBulkComponentBroadcastView(const T& component, ComponentRegistrationOptions options) noexcept {
     ValidateComponentType<T>();
     return BulkComponentView{
         .registerComponent = +[](World& world) -> ComponentId {
             return world.RegisterComponent<T>();
         },
+        .registerComponentWithOptions = +[](World& world, ComponentRegistrationOptions registrationOptions) -> ComponentId {
+            return world.RegisterComponent<T>(registrationOptions);
+        },
+        .registrationOptions = options,
         .componentSize = sizeof(T),
         .componentCount = 0,
         .sourceCount = 1U,
@@ -46,6 +75,12 @@ template <typename T>
 ComponentId World::Component() const noexcept {
     ValidateComponentType<T>();
     return FindComponent(std::type_index{ typeid(T) });
+}
+
+template <typename T>
+ComponentStorageClass World::ComponentStorage() const noexcept {
+    ValidateComponentType<T>();
+    return ComponentStorage(Component<T>());
 }
 
 template <typename T>

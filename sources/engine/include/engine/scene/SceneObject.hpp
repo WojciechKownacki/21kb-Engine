@@ -18,8 +18,8 @@ public:
     SceneObject() noexcept = default;
 
     [[nodiscard]] bool IsValid() const noexcept;
-    [[nodiscard]] kb::ecs::Entity EntityHandle() const noexcept;
-    [[nodiscard]] SceneEntity Entity() const noexcept;
+    [[nodiscard]] kb::ecs::Entity EntityHandle() const noexcept { return entity_; }
+    [[nodiscard]] SceneEntity Entity() const noexcept { return entity_; }
 
     [[nodiscard]] std::string Name() const;
     void SetName(std::string_view name) const;

@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ AudioSourceComponent* SceneComponentMutationService::TryGetAudioSource(Scene& sc
 
 void SceneComponentMutationService::SetAudioSource(Scene& scene, SceneEntity entity, const AudioSourceComponent& audioSource) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioSources().Set(entity, audioSource);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioSources().Set(entity, audioSource);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveAudioSource(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioSources().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioSources().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkAudioSourceModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioSources().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioSources().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

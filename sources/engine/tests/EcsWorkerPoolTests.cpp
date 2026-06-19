@@ -97,7 +97,7 @@ void RunWorkerPoolCancelsPendingJobsAfterExceptionTest() {
 }
 
 void RunWorkerPoolStealsPreferredBatchesTest() {
-    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2, .collectDispatchTelemetry = true } };
 
     std::vector<kb::ecs::WorkerPoolBatch> batches;
     for (std::size_t index = 0; index < 16; ++index) {
@@ -131,6 +131,9 @@ void RunWorkerPoolStealsPreferredBatchesTest() {
 
     kb::tests::Require(stolen.load(std::memory_order_acquire) > 0, "ECS worker pool did not steal preferred query batches");
     kb::tests::Require(processed.load(std::memory_order_acquire) == 64U, "ECS worker pool did not process every query batch row");
+    const kb::ecs::WorkerPoolDispatchTelemetry telemetry = pool.DispatchTelemetry();
+    kb::tests::Require(telemetry.lastStealCount > 0U, "ECS worker telemetry did not count stolen preferred batches");
+    kb::tests::Require(telemetry.totalStealCount >= telemetry.lastStealCount, "ECS worker telemetry reported invalid total steal count");
 }
 
 void RunWorkerPoolBatchesHonorWorkerCountLimitTest() {
@@ -159,6 +162,43 @@ void RunWorkerPoolBatchesHonorWorkerCountLimitTest() {
 
     kb::tests::Require(visited.load(std::memory_order_acquire) == batches.size(), "ECS worker pool limited batch dispatch did not visit every batch");
     kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b11U) == 0U, "ECS worker pool limited batch dispatch used a forbidden worker slot");
+}
+
+void RunWorkerPoolRunBatchesStaticStridedVisitsOnceTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    std::vector<kb::ecs::WorkerPoolBatch> batches;
+    batches.reserve(23);
+    for (std::size_t index = 0; index < 23; ++index) {
+        batches.push_back(kb::ecs::WorkerPoolBatch{
+            .index = index,
+            .begin = index * 5U,
+            .count = 5U,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 3U,
+        });
+    }
+
+    std::vector<std::atomic<std::size_t>> visits(batches.size());
+    std::atomic<std::uint32_t> workerMask = 0;
+    std::atomic<std::size_t> rows = 0;
+
+    pool.RunBatches(batches, [&visits, &workerMask, &rows](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch& batch) {
+        kb::tests::Require(context.workerCount == 3U, "ECS static batch dispatch ignored worker limit");
+        kb::tests::Require(context.workerIndex < 3U, "ECS static batch dispatch used a worker outside the limit");
+        kb::tests::Require(batch.index < visits.size(), "ECS static batch dispatch returned an invalid batch index");
+        kb::tests::Require(batch.begin == batch.index * 5U, "ECS static batch dispatch did not preserve batch begin");
+        kb::tests::Require(batch.count == 5U, "ECS static batch dispatch did not preserve batch count");
+        workerMask.fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        visits[batch.index].fetch_add(1U, std::memory_order_acq_rel);
+        rows.fetch_add(batch.count, std::memory_order_acq_rel);
+    });
+
+    for (const std::atomic<std::size_t>& visitCount : visits) {
+        kb::tests::Require(visitCount.load(std::memory_order_acquire) == 1U, "ECS static batch dispatch did not visit each batch exactly once");
+    }
+    kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b111U) == 0U, "ECS static batch dispatch used a forbidden worker slot");
+    kb::tests::Require(rows.load(std::memory_order_acquire) == batches.size() * 5U, "ECS static batch dispatch did not process every row");
 }
 
 void RunWorkerPoolParallelForChunksPartitionsRangeTest() {
@@ -201,6 +241,121 @@ void RunWorkerPoolParallelForChunksPreservesChunkMetadataTest() {
 
     kb::tests::Require(indexSum.load(std::memory_order_acquire) == 30U, "ECS parallel-for did not preserve caller chunk indexes");
     kb::tests::Require(visited.load(std::memory_order_acquire) == 7U, "ECS parallel-for did not process caller chunk counts");
+}
+
+void RunWorkerPoolParallelForChunksStaticStridedVisitsOnceTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    std::vector<kb::ecs::WorkerPoolChunk> chunks;
+    chunks.reserve(19);
+    for (std::size_t index = 0; index < 19; ++index) {
+        chunks.push_back(kb::ecs::WorkerPoolChunk{
+            .index = index,
+            .begin = index * 3U,
+            .count = 3U,
+            .preferredWorkerIndex = index,
+            .workerCountLimit = 3U,
+        });
+    }
+
+    std::vector<std::atomic<std::size_t>> visits(chunks.size());
+    std::atomic<std::uint32_t> workerMask = 0;
+    std::atomic<std::size_t> rows = 0;
+
+    pool.ParallelForChunks(chunks, [&visits, &workerMask, &rows](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk& chunk) {
+        kb::tests::Require(context.workerCount == 3U, "ECS static chunk dispatch ignored worker limit");
+        kb::tests::Require(context.workerIndex < 3U, "ECS static chunk dispatch used a worker outside the limit");
+        kb::tests::Require(chunk.index < visits.size(), "ECS static chunk dispatch returned an invalid chunk index");
+        kb::tests::Require(chunk.begin == chunk.index * 3U, "ECS static chunk dispatch did not preserve chunk begin");
+        kb::tests::Require(chunk.count == 3U, "ECS static chunk dispatch did not preserve chunk count");
+        workerMask.fetch_or(1U << context.workerIndex, std::memory_order_acq_rel);
+        visits[chunk.index].fetch_add(1U, std::memory_order_acq_rel);
+        rows.fetch_add(chunk.count, std::memory_order_acq_rel);
+    });
+
+    for (const std::atomic<std::size_t>& visitCount : visits) {
+        kb::tests::Require(visitCount.load(std::memory_order_acquire) == 1U, "ECS static chunk dispatch did not visit each chunk exactly once");
+    }
+    kb::tests::Require((workerMask.load(std::memory_order_acquire) & ~0b111U) == 0U, "ECS static chunk dispatch used a forbidden worker slot");
+    kb::tests::Require(rows.load(std::memory_order_acquire) == chunks.size() * 3U, "ECS static chunk dispatch did not process every row");
+}
+
+void RunWorkerPoolDispatchTelemetryReportsStaticAndQueuedPathsTest() {
+    kb::ecs::WorkerPool defaultPool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+    defaultPool.ParallelForChunks(4, 1, [](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk&) {});
+    kb::tests::Require(defaultPool.DispatchTelemetry().dispatchCount == 0U, "ECS worker telemetry must be opt-in for hot dispatches");
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4, .collectDispatchTelemetry = true } };
+
+    std::vector<kb::ecs::WorkerPoolChunk> staticChunks;
+    staticChunks.reserve(8);
+    for (std::size_t index = 0; index < 8; ++index) {
+        staticChunks.push_back(kb::ecs::WorkerPoolChunk{
+            .index = index,
+            .begin = index * 4U,
+            .count = 4U,
+            .preferredWorkerIndex = index,
+        });
+    }
+
+    std::atomic<std::size_t> staticRows = 0;
+    pool.ParallelForChunks(staticChunks, [&staticRows](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        staticRows.fetch_add(chunk.count, std::memory_order_acq_rel);
+    });
+
+    kb::ecs::WorkerPoolDispatchTelemetry telemetry = pool.DispatchTelemetry();
+    kb::tests::Require(staticRows.load(std::memory_order_acquire) == 32U, "ECS worker telemetry static dispatch test did not process every row");
+    kb::tests::Require(telemetry.lastMode == kb::ecs::WorkerPoolDispatchMode::ChunksStaticStrided, "ECS worker telemetry did not report the static chunk hot path");
+    kb::tests::Require(telemetry.dispatchCount == 1U, "ECS worker telemetry did not count the first dispatch");
+    kb::tests::Require(telemetry.staticStridedDispatchCount == 1U, "ECS worker telemetry did not count the static dispatch");
+    kb::tests::Require(telemetry.queuedDispatchCount == 0U, "ECS worker telemetry misreported static dispatch as queued");
+    kb::tests::Require(telemetry.lastWorkItemCount == staticChunks.size(), "ECS worker telemetry lost static dispatch work item count");
+    kb::tests::Require(telemetry.lastActiveWorkerCount == 4U, "ECS worker telemetry reported an invalid active worker count");
+    kb::tests::Require(telemetry.lastDispatchScheduleNanoseconds > 0U, "ECS worker telemetry did not measure static dispatch scheduling time");
+    kb::tests::Require(telemetry.totalDispatchScheduleNanoseconds >= telemetry.lastDispatchScheduleNanoseconds, "ECS worker telemetry reported invalid total dispatch scheduling time");
+    kb::tests::Require(telemetry.averageDispatchScheduleNanoseconds > 0U, "ECS worker telemetry did not report average dispatch scheduling time");
+    kb::tests::Require(telemetry.lastDispatchWallNanoseconds > 0U, "ECS worker telemetry did not measure static dispatch wall time");
+    kb::tests::Require(telemetry.totalDispatchWallNanoseconds >= telemetry.lastDispatchWallNanoseconds, "ECS worker telemetry reported invalid total dispatch wall time");
+    kb::tests::Require(telemetry.lastWorkerActiveNanoseconds > 0U, "ECS worker telemetry did not measure static worker active time");
+    kb::tests::Require(telemetry.totalWorkerActiveNanoseconds >= telemetry.lastWorkerActiveNanoseconds, "ECS worker telemetry reported invalid total worker active time");
+    kb::tests::Require(telemetry.lastWorkerCapacityNanoseconds >= telemetry.lastDispatchWallNanoseconds, "ECS worker telemetry reported invalid worker capacity time");
+    kb::tests::Require(telemetry.lastWorkerUtilizationPercent > 0.0, "ECS worker telemetry did not report static worker utilization");
+    kb::tests::Require(telemetry.averageWorkerUtilizationPercent > 0.0, "ECS worker telemetry did not report average worker utilization");
+
+    std::vector<kb::ecs::WorkerPoolChunk> queuedChunks;
+    queuedChunks.reserve(5);
+    for (std::size_t index = 0; index < 5; ++index) {
+        queuedChunks.push_back(kb::ecs::WorkerPoolChunk{
+            .index = index,
+            .begin = index,
+            .count = 1U,
+            .preferredWorkerIndex = (index + 1U) % 4U,
+        });
+    }
+
+    std::atomic<std::size_t> queuedRows = 0;
+    pool.ParallelForChunks(queuedChunks, [&queuedRows](kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        queuedRows.fetch_add(chunk.count, std::memory_order_acq_rel);
+    });
+
+    telemetry = pool.DispatchTelemetry();
+    kb::tests::Require(queuedRows.load(std::memory_order_acquire) == queuedChunks.size(), "ECS worker telemetry queued dispatch test did not process every row");
+    kb::tests::Require(telemetry.lastMode == kb::ecs::WorkerPoolDispatchMode::Chunks, "ECS worker telemetry did not report queued chunk dispatch");
+    kb::tests::Require(telemetry.dispatchCount == 2U, "ECS worker telemetry did not count both dispatches");
+    kb::tests::Require(telemetry.staticStridedDispatchCount == 1U, "ECS worker telemetry changed the static dispatch count after queued work");
+    kb::tests::Require(telemetry.queuedDispatchCount == 1U, "ECS worker telemetry did not count queued dispatch");
+    kb::tests::Require(telemetry.lastWorkItemCount == queuedChunks.size(), "ECS worker telemetry lost queued dispatch work item count");
+    kb::tests::Require(telemetry.lastDispatchScheduleNanoseconds > 0U, "ECS worker telemetry did not measure queued dispatch scheduling time");
+    kb::tests::Require(telemetry.totalDispatchScheduleNanoseconds >= telemetry.lastDispatchScheduleNanoseconds, "ECS worker telemetry reported invalid queued total scheduling time");
+    kb::tests::Require(telemetry.averageDispatchScheduleNanoseconds <= telemetry.totalDispatchScheduleNanoseconds, "ECS worker telemetry reported invalid average scheduling time");
+    kb::tests::Require(telemetry.lastDispatchWallNanoseconds > 0U, "ECS worker telemetry did not measure queued dispatch wall time");
+    kb::tests::Require(telemetry.totalDispatchWallNanoseconds >= telemetry.lastDispatchWallNanoseconds, "ECS worker telemetry reported invalid queued total dispatch wall time");
+    kb::tests::Require(telemetry.lastWorkerActiveNanoseconds > 0U, "ECS worker telemetry did not measure queued worker active time");
+    kb::tests::Require(telemetry.totalWorkerActiveNanoseconds >= telemetry.lastWorkerActiveNanoseconds, "ECS worker telemetry reported invalid queued total worker active time");
+    kb::tests::Require(telemetry.averageWorkerActiveNanoseconds > 0U, "ECS worker telemetry did not report average active worker time");
+    kb::tests::Require(telemetry.lastWorkerCapacityNanoseconds >= telemetry.lastDispatchWallNanoseconds, "ECS worker telemetry reported invalid queued worker capacity time");
+    kb::tests::Require(telemetry.lastWorkerUtilizationPercent > 0.0, "ECS worker telemetry did not report queued worker utilization");
+    kb::tests::Require(telemetry.averageWorkerUtilizationPercent > 0.0, "ECS worker telemetry did not retain average worker utilization");
 }
 
 void RunWorkerPoolChunksHonorWorkerCountLimitTest() {
@@ -502,6 +657,19 @@ void RunWorkerPoolSingleThreadCancelsPendingWorkAfterExceptionTest() {
     kb::tests::Require(!pendingJobRan.load(std::memory_order_acquire), "ECS single-thread worker pool executed pending work after the first exception");
 }
 
+void RunWorkerPoolRejectsTelemetryReconfigureWhileRunningTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 2 } };
+
+    bool rejected = false;
+    try {
+        pool.Start(kb::ecs::WorkerPoolConfig{ .workerCount = 2, .collectDispatchTelemetry = true });
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+
+    kb::tests::Require(rejected, "ECS worker pool accepted telemetry reconfiguration while running");
+}
+
 void RunWorkerPoolStopCancelsSubmittedHandleTest() {
     kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 1 } };
 
@@ -557,6 +725,56 @@ void RunWorkerPoolStopCancelsSubmittedHandleTest() {
     kb::tests::Require(!pool.Running(), "ECS worker pool still reported running after Stop");
 }
 
+void RunWorkerPoolReusesBatchQueuesAcrossDispatchesTest() {
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{ .workerCount = 4 } };
+
+    for (std::size_t iteration = 0; iteration < 64; ++iteration) {
+        std::vector<kb::ecs::WorkerPoolChunk> chunks;
+        chunks.reserve(31);
+        for (std::size_t index = 0; index < 31; ++index) {
+            chunks.push_back(kb::ecs::WorkerPoolChunk{
+                .index = index,
+                .begin = index,
+                .count = 1,
+                .preferredWorkerIndex = (index + iteration) % 4U,
+            });
+        }
+
+        std::vector<std::atomic<std::size_t>> chunkVisits(chunks.size());
+        pool.ParallelForChunks(chunks, [&chunkVisits](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolChunk& chunk) {
+            kb::tests::Require(context.workerIndex < context.workerCount, "ECS worker pool reused queue dispatch reported an invalid worker index");
+            kb::tests::Require(chunk.index < chunkVisits.size(), "ECS worker pool reused queue dispatch returned an invalid chunk index");
+            chunkVisits[chunk.index].fetch_add(1U, std::memory_order_acq_rel);
+        });
+
+        for (const std::atomic<std::size_t>& visits : chunkVisits) {
+            kb::tests::Require(visits.load(std::memory_order_acquire) == 1U, "ECS worker pool reused chunk queues did not execute each chunk exactly once");
+        }
+
+        std::vector<kb::ecs::WorkerPoolBatch> batches;
+        batches.reserve(29);
+        for (std::size_t index = 0; index < 29; ++index) {
+            batches.push_back(kb::ecs::WorkerPoolBatch{
+                .index = index,
+                .begin = index,
+                .count = 1,
+                .preferredWorkerIndex = (iteration + index * 3U) % 4U,
+            });
+        }
+
+        std::vector<std::atomic<std::size_t>> batchVisits(batches.size());
+        pool.RunBatches(batches, [&batchVisits](kb::ecs::WorkerContext context, const kb::ecs::WorkerPoolBatch& batch) {
+            kb::tests::Require(context.workerIndex < context.workerCount, "ECS worker pool reused batch dispatch reported an invalid worker index");
+            kb::tests::Require(batch.index < batchVisits.size(), "ECS worker pool reused batch dispatch returned an invalid batch index");
+            batchVisits[batch.index].fetch_add(1U, std::memory_order_acq_rel);
+        });
+
+        for (const std::atomic<std::size_t>& visits : batchVisits) {
+            kb::tests::Require(visits.load(std::memory_order_acquire) == 1U, "ECS worker pool reused batch queues did not execute each batch exactly once");
+        }
+    }
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -567,8 +785,11 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolCancelsPendingJobsAfterExceptionTest();
     RunWorkerPoolStealsPreferredBatchesTest();
     RunWorkerPoolBatchesHonorWorkerCountLimitTest();
+    RunWorkerPoolRunBatchesStaticStridedVisitsOnceTest();
     RunWorkerPoolParallelForChunksPartitionsRangeTest();
     RunWorkerPoolParallelForChunksPreservesChunkMetadataTest();
+    RunWorkerPoolParallelForChunksStaticStridedVisitsOnceTest();
+    RunWorkerPoolDispatchTelemetryReportsStaticAndQueuedPathsTest();
     RunWorkerPoolChunksHonorWorkerCountLimitTest();
     RunWorkerPoolSubmittedWorkHonorsWorkerCountLimitTest();
     RunWorkerPoolSynchronousHotPathAcceptsMoveOnlyJobsTest();
@@ -580,7 +801,9 @@ void RunEcsWorkerPoolTests() {
     RunWorkerPoolSingleThreadModeRunsJobsInlineTest();
     RunWorkerPoolSingleThreadSubmitCompletesHandleTest();
     RunWorkerPoolSingleThreadCancelsPendingWorkAfterExceptionTest();
+    RunWorkerPoolRejectsTelemetryReconfigureWhileRunningTest();
     RunWorkerPoolStopCancelsSubmittedHandleTest();
+    RunWorkerPoolReusesBatchQueuesAcrossDispatchesTest();
 }
 
 } // namespace kb::tests

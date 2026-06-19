@@ -5,13 +5,13 @@
 #include "engine/scene/ScenePrefabNode.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
-#include <unordered_set>
+#include <vector>
 
 namespace kb::scene {
 
 class Scene;
 
-using ScenePrefabTrackedEntitySet = std::unordered_set<SceneEntity::IdType>;
+using ScenePrefabTrackedEntitySet = std::vector<SceneEntity::IdType>;
 
 class ScenePrefabInstanceTopology {
 public:

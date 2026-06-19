@@ -25,6 +25,7 @@ public:
 
     [[nodiscard]] void* FindSymbol(std::string_view name, std::vector<std::string>& errors, std::string_view diagnosticLabel = "engine module") const;
     void Reset() noexcept;
+    void ReleaseWithoutUnload() noexcept;
 
 private:
     friend class EngineModuleLoader;

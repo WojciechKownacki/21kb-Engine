@@ -10,5 +10,8 @@ void RequestQuit() noexcept;
 [[nodiscard]] NativeEcsStorageStats NativeStorageStats() const;
 [[nodiscard]] NativeEcsMaintenanceStats MaintainNativeStorage(NativeEcsMaintenanceBudget budget);
 [[nodiscard]] std::size_t NativeChunkPayloadBytes() const noexcept;
+[[nodiscard]] QueryExecutionSettings DefaultQueryExecutionSettings(
+    WorkerPool* workerPool = nullptr,
+    QueryExecutionPolicy policy = QueryExecutionPolicy::ParallelChunks) const noexcept;
 [[nodiscard]] WorldTelemetrySnapshot TelemetrySnapshot() const;
 void ResetTelemetryFrameCounters() noexcept;

@@ -16,6 +16,15 @@
 #include <vector>
 
 namespace kb::ecs {
+namespace {
+
+[[nodiscard]] ComponentId RegisterBulkComponent(World& world, const World::BulkComponentView& component) {
+    return component.registerComponentWithOptions != nullptr
+        ? component.registerComponentWithOptions(world, component.registrationOptions)
+        : component.registerComponent(world);
+}
+
+} // namespace
 
 void World::BulkInitFlecsEntities(std::span<const Entity> entities, std::span<const BulkComponentData> components) {
     if (world_ == nullptr || entities.empty()) {
@@ -73,18 +82,20 @@ Entity World::CreateEntity() {
         throw std::runtime_error("ECS world is not initialized");
     }
     const Entity entity = nativeStorage_->CreateEntity();
-    try {
-        ecs_make_alive(world_, FlecsEntityId(entity));
-    } catch (...) {
-        if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
-            nativeStorage_->DestroyEntity(entity);
+    if (config_.mirrorEntitiesToBackend) {
+        try {
+            ecs_make_alive(world_, FlecsEntityId(entity));
+        } catch (...) {
+            if (nativeStorage_ != nullptr && nativeStorage_->IsAlive(entity)) {
+                nativeStorage_->DestroyEntity(entity);
+            }
+            if (ecs_is_alive(world_, FlecsEntityId(entity))) {
+                ecs_delete(world_, FlecsEntityId(entity));
+            }
+            throw;
         }
-        if (ecs_is_alive(world_, FlecsEntityId(entity))) {
-            ecs_delete(world_, FlecsEntityId(entity));
-        }
-        throw;
     }
-    if (registries_ != nullptr) {
+    if (config_.trackEntityCatalog && registries_ != nullptr) {
         registries_->Entities().Add(entity);
     }
     RecordStructuralChange();
@@ -101,10 +112,16 @@ Entity World::CreateEntity(std::string_view name) {
 }
 
 std::vector<Entity> World::CreateEntities(std::size_t count, std::span<const BulkComponentView> components) {
+    std::vector<Entity> entities;
+    CreateEntitiesInto(entities, count, components);
+    return entities;
+}
+
+void World::CreateEntitiesInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components) {
     std::vector<BulkComponentData> componentData;
     componentData.reserve(components.size());
     for (const BulkComponentView& component : components) {
-        if (component.registerComponent == nullptr || component.componentSize == 0) {
+        if ((component.registerComponent == nullptr && component.registerComponentWithOptions == nullptr) || component.componentSize == 0) {
             throw std::invalid_argument("ECS bulk create component view is incomplete");
         }
         const std::size_t sourceCount = component.sourceCount == 0U ? component.componentCount : component.sourceCount;
@@ -119,21 +136,27 @@ std::vector<Entity> World::CreateEntities(std::size_t count, std::span<const Bul
             throw std::length_error("ECS bulk create component payload exceeds addressable size");
         }
         componentData.push_back(BulkComponentData{
-            .componentId = component.registerComponent(*this),
+            .componentId = RegisterBulkComponent(*this, component),
             .componentSize = component.componentSize,
             .componentCount = componentCount,
             .sourceCount = sourceCount,
             .data = component.data,
         });
     }
-    return CreateEntitiesWithComponents(count, std::span<const BulkComponentData>{ componentData }, true);
+    CreateEntitiesWithComponentsInto(output, count, std::span<const BulkComponentData>{ componentData }, true);
 }
 
 std::vector<Entity> World::CreateEntitiesNativeOnly(std::size_t count, std::span<const BulkComponentView> components) {
+    std::vector<Entity> entities;
+    CreateEntitiesNativeOnlyInto(entities, count, components);
+    return entities;
+}
+
+void World::CreateEntitiesNativeOnlyInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components) {
     std::vector<BulkComponentData> componentData;
     componentData.reserve(components.size());
     for (const BulkComponentView& component : components) {
-        if (component.registerComponent == nullptr || component.componentSize == 0) {
+        if ((component.registerComponent == nullptr && component.registerComponentWithOptions == nullptr) || component.componentSize == 0) {
             throw std::invalid_argument("ECS bulk create component view is incomplete");
         }
         const std::size_t sourceCount = component.sourceCount == 0U ? component.componentCount : component.sourceCount;
@@ -148,19 +171,20 @@ std::vector<Entity> World::CreateEntitiesNativeOnly(std::size_t count, std::span
             throw std::length_error("ECS bulk create component payload exceeds addressable size");
         }
         componentData.push_back(BulkComponentData{
-            .componentId = component.registerComponent(*this),
+            .componentId = RegisterBulkComponent(*this, component),
             .componentSize = component.componentSize,
             .componentCount = componentCount,
             .sourceCount = sourceCount,
             .data = component.data,
         });
     }
-    return CreateEntitiesWithComponents(count, std::span<const BulkComponentData>{ componentData }, false);
+    CreateEntitiesWithComponentsInto(output, count, std::span<const BulkComponentData>{ componentData }, false);
 }
 
-std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend) {
+void World::CreateEntitiesWithComponentsInto(std::vector<Entity>& entities, std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend) {
+    entities.clear();
     if (count == 0) {
-        return {};
+        return;
     }
     ValidateStructuralChangeAllowed("CreateEntitiesWithComponents");
     if (world_ == nullptr || nativeStorage_ == nullptr) {
@@ -195,18 +219,17 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
         componentIds.push_back(component.componentId);
     }
 
-    std::vector<Entity> entities;
     try {
         const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
-        entities = nativeStorage_->CreateEntities(count, nativeComponents);
-        if (mirrorBackend) {
+        nativeStorage_->CreateEntitiesInto(entities, count, nativeComponents);
+        if (mirrorBackend && config_.mirrorEntitiesToBackend) {
             BulkInitFlecsEntities(entities, components);
         }
-        if (registries_ != nullptr) {
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
             registries_->Entities().AddMany(entities);
         }
     } catch (...) {
-        if (registries_ != nullptr) {
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
             registries_->Entities().RemoveMany(entities);
         }
         for (Entity entity : entities) {
@@ -221,6 +244,11 @@ std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::
     }
 
     InvalidateQueryPlansForArchetypeChange(nullptr, EntityArchetype(entities.front()));
+}
+
+std::vector<Entity> World::CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend) {
+    std::vector<Entity> entities;
+    CreateEntitiesWithComponentsInto(entities, count, components, mirrorBackend);
     return entities;
 }
 
@@ -272,12 +300,14 @@ void World::AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityId
     try {
         const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
         nativeStorage_->AdoptEntities(adoptedEntities, nativeComponents);
-        BulkInitFlecsEntities(adoptedEntities, components);
-        if (registries_ != nullptr) {
+        if (config_.mirrorEntitiesToBackend) {
+            BulkInitFlecsEntities(adoptedEntities, components);
+        }
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
             registries_->Entities().AddMany(adoptedEntities);
         }
     } catch (...) {
-        if (registries_ != nullptr) {
+        if (config_.trackEntityCatalog && registries_ != nullptr) {
             registries_->Entities().RemoveMany(adoptedEntities);
         }
         for (Entity entity : adoptedEntities) {
@@ -301,12 +331,68 @@ void World::DestroyEntity(Entity entity) {
     }
     ecs_table_t* previousArchetype = EntityArchetype(entity);
     DestroyNativeEntity(entity);
-    if (world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+    if (config_.mirrorEntitiesToBackend && world_ != nullptr && entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
         ecs_delete(world_, FlecsEntityId(entity));
     }
     InvalidateQueryPlansForArchetypeChange(previousArchetype, EntityArchetype(entity));
-    if (registries_ != nullptr) {
+    if (config_.trackEntityCatalog && registries_ != nullptr) {
         registries_->Entities().Remove(entity);
+    }
+}
+
+void World::DestroyEntities(std::span<const Entity> entities) {
+    if (entities.empty()) {
+        return;
+    }
+    ValidateStructuralChangeAllowed("DestroyEntities");
+
+    std::vector<ecs_table_t*> previousArchetypes;
+    previousArchetypes.reserve(entities.size());
+    for (Entity entity : entities) {
+        ValidateEntityHandle(entity, "DestroyEntities");
+        ecs_table_t* previousArchetype = EntityArchetype(entity);
+        if (std::find(previousArchetypes.begin(), previousArchetypes.end(), previousArchetype) == previousArchetypes.end()) {
+            previousArchetypes.push_back(previousArchetype);
+        }
+    }
+
+    if (nativeStorage_ != nullptr) {
+        nativeStorage_->DestroyEntities(entities);
+    }
+    if (config_.mirrorEntitiesToBackend && world_ != nullptr) {
+        for (Entity entity : entities) {
+            if (entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+                ecs_delete(world_, FlecsEntityId(entity));
+            }
+        }
+    }
+    for (ecs_table_t* previousArchetype : previousArchetypes) {
+        InvalidateQueryPlansForArchetypeChange(previousArchetype, nullptr);
+    }
+    if (config_.trackEntityCatalog && registries_ != nullptr) {
+        registries_->Entities().RemoveMany(entities);
+    }
+}
+
+void World::DestroyEntitiesTrusted(std::span<const Entity> entities) {
+    if (entities.empty()) {
+        return;
+    }
+    ValidateStructuralChangeAllowed("DestroyEntitiesTrusted");
+
+    if (nativeStorage_ != nullptr) {
+        nativeStorage_->DestroyEntities(entities);
+    }
+    if (config_.mirrorEntitiesToBackend && world_ != nullptr) {
+        for (Entity entity : entities) {
+            if (entity.IsValid() && ecs_is_valid(world_, FlecsEntityId(entity))) {
+                ecs_delete(world_, FlecsEntityId(entity));
+            }
+        }
+    }
+    InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
+    if (config_.trackEntityCatalog && registries_ != nullptr) {
+        registries_->Entities().RemoveMany(entities);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabVariantOverrideMutationService.hpp"
 
+#include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
 #include "scene/prefab/ScenePrefabRecordStore.hpp"
@@ -10,6 +11,19 @@
 #include <vector>
 
 namespace kb::scene {
+namespace {
+
+void RefreshBakedPrefabCache(ScenePrefabRecord& record) {
+    if (record.prefab.Empty()) {
+        record.bakedPrefab = ScenePrefabBakedData{};
+        record.bakedContentHash = 0;
+        return;
+    }
+    record.bakedPrefab = ScenePrefabBakedData::Bake(record.prefab.Nodes());
+    record.bakedContentHash = record.contentHash;
+}
+
+} // namespace
 
 bool ScenePrefabVariantOverrideMutationService::Upsert(ScenePrefabRecordStore& records, ScenePrefabHandle handle, ScenePrefabPropertyOverride property) {
     ScenePrefabRecord* record = records.FindMutable(handle);
@@ -31,6 +45,7 @@ bool ScenePrefabVariantOverrideMutationService::Upsert(ScenePrefabRecordStore& r
     record->variantOverrides = std::move(candidate.variantOverrides);
     record->prefab = std::move(candidate.prefab);
     record->contentHash = ScenePrefabHasher::Hash(record->prefab);
+    RefreshBakedPrefabCache(*record);
     ScenePrefabVariantRefreshService::RefreshDerived(records, handle);
     return true;
 }

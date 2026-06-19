@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ TagsComponent* SceneComponentMutationService::TryGetTags(Scene& scene, SceneEnti
 
 void SceneComponentMutationService::SetTags(Scene& scene, SceneEntity entity, const TagsComponent& tags) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Tags().Set(entity, tags);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Tags().Set(entity, tags);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveTags(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Tags().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Tags().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkTagsModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Tags().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Tags().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

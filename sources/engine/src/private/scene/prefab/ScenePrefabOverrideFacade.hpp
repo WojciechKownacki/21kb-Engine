@@ -19,6 +19,7 @@ public:
     [[nodiscard]] static bool IsInstance(Scene& scene, ScenePrefabInstanceHandle handle) noexcept;
     [[nodiscard]] static ScenePrefabOverrideReport Overrides(Scene& scene, ScenePrefabInstanceHandle handle);
     [[nodiscard]] static bool Revert(Scene& scene, ScenePrefabInstanceHandle handle);
+    [[nodiscard]] static bool Revert(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] static bool Apply(Scene& scene, ScenePrefabInstanceHandle handle);
     [[nodiscard]] static bool Apply(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] static bool ApplyAndSave(Scene& scene, ScenePrefabInstanceHandle handle, const std::filesystem::path& assetPath);
