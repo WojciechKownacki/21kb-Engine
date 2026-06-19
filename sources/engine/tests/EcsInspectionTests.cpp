@@ -299,14 +299,9 @@ void RunWorldTelemetrySnapshotTest() {
         [](const kb::ecs::QueryBatch<EcsPosition, EcsVelocity>& batch) {
             kb::tests::Require(batch.Count() == 1, "ECS telemetry query test did not use configured range size");
         });
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
+    KB_TEST_SUPPRESS_DEPRECATED_PUSH
     world.ForEachMutable<EcsPosition>(&TouchCompatMutablePosition, nullptr);
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+    KB_TEST_SUPPRESS_DEPRECATED_POP
 
     const kb::ecs::WorldTelemetrySnapshot snapshot = world.TelemetrySnapshot();
     const kb::ecs::NativeEcsStorageStats storageStats = world.NativeStorageStats();
