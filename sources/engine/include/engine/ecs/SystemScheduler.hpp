@@ -43,8 +43,8 @@ public:
 
     SystemScheduler(const SystemScheduler&) = delete;
     SystemScheduler& operator=(const SystemScheduler&) = delete;
-    SystemScheduler(SystemScheduler&&) noexcept = default;
-    SystemScheduler& operator=(SystemScheduler&&) noexcept = default;
+    SystemScheduler(SystemScheduler&&) noexcept = delete;
+    SystemScheduler& operator=(SystemScheduler&&) noexcept = delete;
 
     void Add(std::unique_ptr<System> system, World& world);
     void Update(World& world, float deltaSeconds);
