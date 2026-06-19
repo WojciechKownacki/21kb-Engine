@@ -116,6 +116,21 @@ void Query<Components...>::ForEachBatchKernel(QueryExecutionSettings settings, K
 
 template <typename... Components>
 template <typename Kernel>
+void Query<Components...>::ForEachBatchKernel(QueryExecutionSettings settings, Kernel&& kernel, QueryBatchExecutionScratch& scratch) const {
+    static_assert(sizeof...(Components) > 0, "ECS query must have at least one component");
+    static_assert((std::is_trivially_copyable_v<Components> && ...), "ECS query components must be trivially copyable");
+    static_assert((std::is_trivially_destructible_v<Components> && ...), "ECS query components must be trivially destructible");
+
+    if (!IsValid()) {
+        return;
+    }
+
+    using KernelType = std::remove_reference_t<Kernel>;
+    ForEachQueryStateBatch(state_.get(), settings, &VisitBatchKernel<KernelType>, std::addressof(kernel), scratch);
+}
+
+template <typename... Components>
+template <typename Kernel>
 void Query<Components...>::ForEachMutableBatchKernel(Kernel&& kernel) const {
     ForEachMutableBatchKernel(QueryExecutionSettings{}, std::forward<Kernel>(kernel));
 }

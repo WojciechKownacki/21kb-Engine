@@ -15,6 +15,7 @@ public:
     ScenePrefabOverrideMutationService() = delete;
 
     [[nodiscard]] static bool Revert(Scene& scene, ScenePrefabInstanceHandle handle);
+    [[nodiscard]] static bool Revert(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] static bool Apply(Scene& scene, ScenePrefabInstanceHandle handle);
     [[nodiscard]] static bool Apply(Scene& scene, std::span<const ScenePrefabInstanceHandle> handles);
     [[nodiscard]] static bool RevertProperty(Scene& scene, ScenePrefabInstanceHandle handle, std::uint32_t nodeIndex, std::string_view propertyPath);

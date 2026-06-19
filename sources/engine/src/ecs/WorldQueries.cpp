@@ -7,6 +7,8 @@
 #include <flecs.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -29,6 +31,12 @@ template <typename T>
     return std::vector<std::size_t>{ componentSizes.begin(), componentSizes.end() };
 }
 
+[[nodiscard]] std::uint64_t ElapsedNanoseconds(std::chrono::steady_clock::time_point startedAt) noexcept {
+    std::uint64_t elapsedNanoseconds = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - startedAt).count());
+    return elapsedNanoseconds == 0U ? 1U : elapsedNanoseconds;
+}
+
 } // namespace
 
 QueryState* World::CreateQueryState(
@@ -46,6 +54,7 @@ QueryState* World::CreateQueryState(
     ++telemetryCounters_.queryPlanRequests;
     const std::span<const ComponentId> selectedComponentIds{ componentIds, componentCount };
     const std::span<const std::size_t> selectedComponentSizes{ componentSizes, componentCount };
+    const auto lookupStartedAt = std::chrono::steady_clock::now();
     if (std::shared_ptr<QueryPlan> cachedPlan = FindCachedQueryPlan(
             selectedComponentIds,
             selectedComponentSizes,
@@ -53,18 +62,23 @@ QueryState* World::CreateQueryState(
             optionalComponentIds,
             excludedComponentIds,
             changedComponentIds)) {
+        telemetryCounters_.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
         ++telemetryCounters_.queryCacheHits;
         return new QueryState{
             nativeStorage_.get(),
             std::move(cachedPlan),
             config_.executionGrainSize,
+            config_.queryPrefetchDistance,
             mutableComponentBorrowLocks_.get(),
             structuralChangeValidator_.get(),
             &telemetryCounters_,
         };
     }
 
+    telemetryCounters_.queryPlanCacheLookupElapsedNanoseconds += ElapsedNanoseconds(lookupStartedAt);
     ++telemetryCounters_.queryCacheMisses;
+    ++telemetryCounters_.queryPlanBuilds;
+    const auto buildStartedAt = std::chrono::steady_clock::now();
     auto plan = std::make_shared<QueryPlan>(
         selectedComponentIds,
         selectedComponentSizes,
@@ -73,6 +87,7 @@ QueryState* World::CreateQueryState(
         excludedComponentIds,
         changedComponentIds);
     if (!plan->IsValid()) {
+        telemetryCounters_.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
         return nullptr;
     }
 
@@ -84,10 +99,12 @@ QueryState* World::CreateQueryState(
         excludedComponentIds,
         changedComponentIds,
         plan);
+    telemetryCounters_.queryPlanBuildElapsedNanoseconds += ElapsedNanoseconds(buildStartedAt);
     return new QueryState{
         nativeStorage_.get(),
         std::move(plan),
         config_.executionGrainSize,
+        config_.queryPrefetchDistance,
         mutableComponentBorrowLocks_.get(),
         structuralChangeValidator_.get(),
         &telemetryCounters_,
@@ -145,6 +162,8 @@ ecs_table_t* World::EntityArchetype(Entity entity) const noexcept {
 
 void World::InvalidateQueryPlansForArchetypeChange(ecs_table_t* previousArchetype, ecs_table_t* currentArchetype) noexcept {
     if (previousArchetype != currentArchetype || (previousArchetype == nullptr && currentArchetype == nullptr)) {
+        ++telemetryCounters_.archetypeTransitionInvalidationsSinceReset;
+        ++telemetryCounters_.totalArchetypeTransitionInvalidations;
         RecordStructuralChange();
     }
 }

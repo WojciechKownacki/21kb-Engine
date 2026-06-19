@@ -27,14 +27,42 @@ namespace {
     return ids;
 }
 
+[[nodiscard]] std::size_t ResolveBulkComponentSourceCount(std::size_t componentSourceCount, std::size_t rowCount) {
+    const std::size_t sourceCount = componentSourceCount == 0U ? rowCount : componentSourceCount;
+    if (sourceCount == 0U || sourceCount > rowCount || (rowCount % sourceCount) != 0U) {
+        throw std::invalid_argument("ECS bulk component source count must divide entity count");
+    }
+    return sourceCount;
+}
+
+[[nodiscard]] const void* BulkComponentRowData(const void* data, std::size_t componentSize, std::size_t componentSourceCount, std::size_t rowIndex, std::size_t rowCount) {
+    const std::size_t sourceCount = ResolveBulkComponentSourceCount(componentSourceCount, rowCount);
+    const auto* bytes = static_cast<const std::uint8_t*>(data);
+    const std::size_t sourceIndex = sourceCount == 1U ? 0U : rowIndex % sourceCount;
+    return bytes + (sourceIndex * componentSize);
+}
+
 } // namespace
 
-ComponentId World::RegisterComponent(std::type_index type, std::string_view name, std::size_t size, std::size_t alignment) {
-    return WorldComponentRegistrar::Register(world_, registries_.get(), type, name, size, alignment);
+ComponentId World::RegisterComponent(
+    std::type_index type,
+    std::string_view name,
+    std::size_t size,
+    std::size_t alignment,
+    ComponentRegistrationOptions options) {
+    return WorldComponentRegistrar::Register(world_, registries_.get(), type, name, size, alignment, options);
 }
 
 ComponentId World::FindComponent(std::type_index type) const noexcept {
     return WorldComponentRegistrar::Find(registries_.get(), type);
+}
+
+ComponentStorageClass World::ComponentStorage(ComponentId componentId) const noexcept {
+    if (componentId == 0 || registries_ == nullptr) {
+        return ComponentStorageClass::HotTable;
+    }
+    const ComponentTypeInfo* componentInfo = registries_->Components().FindInfo(componentId);
+    return componentInfo == nullptr ? ComponentStorageClass::HotTable : componentInfo->storageClass;
 }
 
 NativeComponentValue World::MakeNativeComponentValue(const BulkComponentData& component) const {
@@ -56,6 +84,7 @@ NativeComponentValue World::MakeNativeComponentValue(const BulkComponentData& co
             .id = component.componentId,
             .size = componentInfo->size,
             .alignment = componentInfo->alignment,
+            .storageClass = componentInfo->storageClass,
         },
         .data = component.data,
     };
@@ -163,11 +192,10 @@ void World::AddNativeComponents(std::span<const Entity> entities, std::span<cons
         std::vector<BulkComponentData> entityComponents;
         entityComponents.reserve(components.size());
         for (const BulkComponentData& component : components) {
-            const auto* bytes = static_cast<const std::uint8_t*>(component.data);
             entityComponents.push_back(BulkComponentData{
                 .componentId = component.componentId,
                 .componentSize = component.componentSize,
-                .data = bytes + (index * component.componentSize),
+                .data = BulkComponentRowData(component.data, component.componentSize, component.sourceCount, index, entities.size()),
             });
         }
         AddNativeComponents(entities[index], entityComponents);
@@ -333,7 +361,7 @@ void World::AddComponents(Entity entity, std::span<const BulkComponentData> comp
     }
 
     AddNativeComponents(entity, components);
-    if (backendAlive) {
+    if (backendAlive && config_.mirrorNativeComponentChangesToBackend) {
         for (const BulkComponentData& component : components) {
             WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, component.data);
         }
@@ -382,12 +410,70 @@ void World::AddComponents(std::span<const Entity> entities, std::span<const Bulk
     AddNativeComponents(entities, components);
     for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
         const Entity entity = entities[entityIndex];
-        if (!BackendEntityAlive(entity)) {
+        if (!config_.mirrorNativeComponentChangesToBackend || !BackendEntityAlive(entity)) {
             continue;
         }
         for (const BulkComponentData& component : components) {
-            const auto* bytes = static_cast<const std::uint8_t*>(component.data);
-            WorldComponentMutator::Set(world_, entity, component.componentId, component.componentSize, bytes + (entityIndex * component.componentSize));
+            WorldComponentMutator::Set(
+                world_,
+                entity,
+                component.componentId,
+                component.componentSize,
+                BulkComponentRowData(component.data, component.componentSize, component.sourceCount, entityIndex, entities.size()));
+        }
+    }
+    InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
+}
+
+void World::AddMissingComponentsTrusted(std::span<const Entity> entities, std::span<const BulkComponentData> components) {
+    if (entities.empty() || components.empty()) {
+        return;
+    }
+    ValidateStructuralChangeAllowed("AddMissingComponentsTrusted");
+
+    std::vector<ComponentId> validatedComponentIds;
+    validatedComponentIds.reserve(components.size());
+    for (const BulkComponentData& component : components) {
+        if (component.componentId == 0 || component.componentSize == 0 || component.data == nullptr) {
+            throw std::invalid_argument("ECS trusted bulk component add received invalid component data");
+        }
+        if (std::find(validatedComponentIds.begin(), validatedComponentIds.end(), component.componentId) != validatedComponentIds.end()) {
+            throw std::invalid_argument("ECS trusted bulk component add received duplicate component data");
+        }
+        if (registries_ != nullptr) {
+            const ComponentTypeInfo* componentInfo = registries_->Components().FindInfo(component.componentId);
+            if (componentInfo == nullptr) {
+                throw std::invalid_argument("ECS trusted bulk component add received an unregistered component id");
+            }
+            if (componentInfo->size != component.componentSize) {
+                throw std::invalid_argument("ECS trusted bulk component add payload size does not match registered component type");
+            }
+        }
+        validatedComponentIds.push_back(component.componentId);
+    }
+
+    for (Entity entity : entities) {
+        ValidateEntityHandle(entity, "AddMissingComponentsTrusted");
+    }
+
+    if (nativeStorage_ != nullptr) {
+        const std::vector<NativeBulkComponentColumn> nativeComponents = MakeNativeBulkComponentColumns(components);
+        nativeStorage_->AddComponents(entities, nativeComponents);
+    }
+    if (config_.mirrorNativeComponentChangesToBackend) {
+        for (std::size_t entityIndex = 0; entityIndex < entities.size(); ++entityIndex) {
+            const Entity entity = entities[entityIndex];
+            if (!BackendEntityAlive(entity)) {
+                continue;
+            }
+            for (const BulkComponentData& component : components) {
+                WorldComponentMutator::Set(
+                    world_,
+                    entity,
+                    component.componentId,
+                    component.componentSize,
+                    BulkComponentRowData(component.data, component.componentSize, component.sourceCount, entityIndex, entities.size()));
+            }
         }
     }
     InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
@@ -423,7 +509,7 @@ void World::RemoveComponents(Entity entity, std::span<const ComponentId> compone
     ecs_table_t* previousArchetype = backendAlive ? EntityArchetype(entity) : nullptr;
 
     RemoveNativeComponents(entity, requestedIds);
-    if (backendAlive) {
+    if (backendAlive && config_.mirrorNativeComponentChangesToBackend) {
         for (ComponentId componentId : requestedIds) {
             WorldComponentMutator::Remove(world_, entity, componentId);
         }
@@ -461,11 +547,49 @@ void World::RemoveComponents(std::span<const Entity> entities, std::span<const C
 
     RemoveNativeComponents(entities, requestedIds);
     for (Entity entity : entities) {
-        if (!BackendEntityAlive(entity)) {
+        if (!config_.mirrorNativeComponentChangesToBackend || !BackendEntityAlive(entity)) {
             continue;
         }
         for (ComponentId componentId : requestedIds) {
             WorldComponentMutator::Remove(world_, entity, componentId);
+        }
+    }
+    InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);
+}
+
+void World::RemoveExistingComponentsTrusted(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
+    if (entities.empty() || componentIds.empty()) {
+        return;
+    }
+    ValidateStructuralChangeAllowed("RemoveExistingComponentsTrusted");
+
+    std::vector<ecs_id_t> requestedIds;
+    requestedIds.reserve(componentIds.size());
+    for (ComponentId componentId : componentIds) {
+        if (componentId != 0) {
+            requestedIds.push_back(componentId);
+        }
+    }
+    requestedIds = SortedUniqueIds(std::move(requestedIds));
+    if (requestedIds.empty()) {
+        return;
+    }
+
+    for (Entity entity : entities) {
+        ValidateEntityHandle(entity, "RemoveExistingComponentsTrusted");
+    }
+
+    if (nativeStorage_ != nullptr) {
+        nativeStorage_->RemoveComponents(entities, requestedIds);
+    }
+    if (config_.mirrorNativeComponentChangesToBackend) {
+        for (Entity entity : entities) {
+            if (!BackendEntityAlive(entity)) {
+                continue;
+            }
+            for (ComponentId componentId : requestedIds) {
+                WorldComponentMutator::Remove(world_, entity, componentId);
+            }
         }
     }
     InvalidateQueryPlansForArchetypeChange(nullptr, nullptr);

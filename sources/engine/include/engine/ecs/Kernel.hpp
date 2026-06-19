@@ -43,6 +43,16 @@ enum class KernelBackendPreference {
     Avx512,
 };
 
+struct KernelBackendReport {
+    KernelBackend backend = KernelBackend::Scalar;
+    std::string_view name = "scalar";
+    std::size_t floatLanes = 1U;
+    bool nativelyCompiled = true;
+    bool hardwareSupported = true;
+    bool autoSelectable = true;
+    bool preferred = true;
+};
+
 [[nodiscard]] constexpr std::string_view KernelBackendName(KernelBackend backend) noexcept {
     switch (backend) {
     case KernelBackend::Scalar:
@@ -262,6 +272,54 @@ namespace detail {
 #endif
 }
 
+[[nodiscard]] constexpr bool IsKernelBackendNativelyCompiled(KernelBackend backend) noexcept {
+    switch (backend) {
+    case KernelBackend::Scalar:
+        return true;
+    case KernelBackend::Neon:
+#if defined(__ARM_NEON) || defined(__ARM_NEON__) || defined(_M_ARM64) || defined(__aarch64__)
+        return true;
+#else
+        return false;
+#endif
+    case KernelBackend::Sse2:
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+        return true;
+#else
+        return false;
+#endif
+    case KernelBackend::Avx2:
+#if defined(__AVX2__) || defined(_M_AVX2)
+        return true;
+#else
+        return false;
+#endif
+    case KernelBackend::Avx512:
+#if defined(__AVX512F__) || defined(_M_AVX512)
+        return true;
+#else
+        return false;
+#endif
+    }
+    return false;
+}
+
+[[nodiscard]] inline bool IsKernelBackendAutoSelectable(KernelBackend backend) noexcept {
+    switch (backend) {
+    case KernelBackend::Scalar:
+        return true;
+    case KernelBackend::Neon:
+        return IsKernelBackendNativelyCompiled(backend) && CpuSupportsNeon();
+    case KernelBackend::Sse2:
+        return IsKernelBackendNativelyCompiled(backend) && CpuSupportsSse2();
+    case KernelBackend::Avx2:
+        return IsKernelBackendNativelyCompiled(backend) && CpuSupportsAvx2();
+    case KernelBackend::Avx512:
+        return IsKernelBackendNativelyCompiled(backend) && CpuSupportsAvx512();
+    }
+    return false;
+}
+
 template <typename T, typename... Types>
 inline constexpr bool ContainsType = (std::is_same_v<T, Types> || ...);
 
@@ -312,19 +370,19 @@ template <typename Kernel, typename Batch>
     if (preference == KernelBackendPreference::Scalar) {
         return KernelBackend::Scalar;
     }
-    if ((preference == KernelBackendPreference::Neon || preference == KernelBackendPreference::Auto)
+    if (((preference == KernelBackendPreference::Neon && CpuSupportsNeon()) || (preference == KernelBackendPreference::Auto && IsKernelBackendAutoSelectable(KernelBackend::Neon)))
         && CanInvokeKernelNeon<Kernel, Batch> && CpuSupportsNeon()) {
         return KernelBackend::Neon;
     }
-    if ((preference == KernelBackendPreference::Avx512 || preference == KernelBackendPreference::Auto)
+    if (((preference == KernelBackendPreference::Avx512 && CpuSupportsAvx512()) || (preference == KernelBackendPreference::Auto && IsKernelBackendAutoSelectable(KernelBackend::Avx512)))
         && CanInvokeKernelAvx512<Kernel, Batch> && CpuSupportsAvx512()) {
         return KernelBackend::Avx512;
     }
-    if ((preference == KernelBackendPreference::Avx2 || preference == KernelBackendPreference::Auto)
+    if (((preference == KernelBackendPreference::Avx2 && CpuSupportsAvx2()) || (preference == KernelBackendPreference::Auto && IsKernelBackendAutoSelectable(KernelBackend::Avx2)))
         && CanInvokeKernelAvx2<Kernel, Batch> && CpuSupportsAvx2()) {
         return KernelBackend::Avx2;
     }
-    if ((preference == KernelBackendPreference::Sse2 || preference == KernelBackendPreference::Auto)
+    if (((preference == KernelBackendPreference::Sse2 && CpuSupportsSse2()) || (preference == KernelBackendPreference::Auto && IsKernelBackendAutoSelectable(KernelBackend::Sse2)))
         && CanInvokeKernelSse2<Kernel, Batch> && CpuSupportsSse2()) {
         return KernelBackend::Sse2;
     }
@@ -393,6 +451,14 @@ void AssertKernelComponentColumnAligned(const T* components, std::size_t count) 
     return false;
 }
 
+[[nodiscard]] constexpr bool IsKernelBackendCompiled(KernelBackend backend) noexcept {
+    return detail::IsKernelBackendNativelyCompiled(backend);
+}
+
+[[nodiscard]] inline bool IsKernelBackendAutoSelectable(KernelBackend backend) noexcept {
+    return detail::IsKernelBackendAutoSelectable(backend);
+}
+
 [[nodiscard]] constexpr std::size_t KernelBackendFloatLaneCount(KernelBackend backend) noexcept {
     switch (backend) {
     case KernelBackend::Scalar:
@@ -410,19 +476,36 @@ void AssertKernelComponentColumnAligned(const T* components, std::size_t count) 
 }
 
 [[nodiscard]] inline KernelBackend PreferredKernelBackend() noexcept {
-    if (IsKernelBackendSupported(KernelBackend::Neon)) {
+    if (IsKernelBackendAutoSelectable(KernelBackend::Neon)) {
         return KernelBackend::Neon;
     }
-    if (IsKernelBackendSupported(KernelBackend::Avx512)) {
+    if (IsKernelBackendAutoSelectable(KernelBackend::Avx512)) {
         return KernelBackend::Avx512;
     }
-    if (IsKernelBackendSupported(KernelBackend::Avx2)) {
+    if (IsKernelBackendAutoSelectable(KernelBackend::Avx2)) {
         return KernelBackend::Avx2;
     }
-    if (IsKernelBackendSupported(KernelBackend::Sse2)) {
+    if (IsKernelBackendAutoSelectable(KernelBackend::Sse2)) {
         return KernelBackend::Sse2;
     }
     return KernelBackend::Scalar;
+}
+
+[[nodiscard]] inline KernelBackendReport MakeKernelBackendReport(KernelBackend backend) noexcept {
+    const KernelBackend preferred = PreferredKernelBackend();
+    return KernelBackendReport{
+        .backend = backend,
+        .name = KernelBackendName(backend),
+        .floatLanes = KernelBackendFloatLaneCount(backend),
+        .nativelyCompiled = IsKernelBackendCompiled(backend),
+        .hardwareSupported = IsKernelBackendSupported(backend),
+        .autoSelectable = IsKernelBackendAutoSelectable(backend),
+        .preferred = backend == preferred,
+    };
+}
+
+[[nodiscard]] inline KernelBackendReport PreferredKernelBackendReport() noexcept {
+    return MakeKernelBackendReport(PreferredKernelBackend());
 }
 
 template <typename... InputTypes, typename... OutputTypes, typename... AssetTypes, typename ConstantsType>

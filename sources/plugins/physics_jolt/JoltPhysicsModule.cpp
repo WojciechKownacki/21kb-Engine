@@ -12,10 +12,11 @@ namespace kb::physics_jolt {
 
 kb::modules::EngineModuleMetadata JoltPhysicsModule::Metadata() const {
     return kb::modules::EngineModuleMetadata{
-        "Physics.Jolt",
-        1U,
-        {},
-        kb::modules::EngineModuleLoadingPhase::Default,
+        .name = "Physics.Jolt",
+        .version = 1U,
+        .dependencies = {},
+        .loadingPhase = kb::modules::EngineModuleLoadingPhase::Default,
+        .unloadLibraryOnShutdown = false,
     };
 }
 

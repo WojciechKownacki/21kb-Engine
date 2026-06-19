@@ -135,6 +135,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
     const std::span<const ScenePrefabNodeDesc> nodes = nextBaseline.Nodes();
     std::vector<SceneObject> rebuiltObjects;
     rebuiltObjects.reserve(nodes.size());
+    ScenePrefabNodeStateWriterContext writerContext{ scene, SceneAccess::State(scene) };
 
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
         const ScenePrefabNodeDesc& node = nodes[nodeIndex];
@@ -144,7 +145,7 @@ void DestroyRemovedObjects(Scene& scene, std::span<const SceneObject> oldObjects
             object = stableObject->second;
         }
         if (object.IsValid() && scene.Entities().IsAlive(object)) {
-            ScenePrefabNodeStateWriter::Write(scene, object, ParentForNode(node, instance, rebuiltObjects), node);
+            ScenePrefabNodeStateWriter::Write(writerContext, object, ParentForNode(node, instance, rebuiltObjects), node);
         } else {
             object = ScenePrefabNodeFactory::Create(
                 scene,

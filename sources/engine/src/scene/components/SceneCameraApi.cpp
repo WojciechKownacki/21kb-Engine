@@ -2,7 +2,9 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +22,27 @@ CameraComponent* SceneComponentMutationService::TryGetCamera(Scene& scene, Scene
 
 void SceneComponentMutationService::SetCamera(Scene& scene, SceneEntity entity, const CameraComponent& camera) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Cameras().Set(entity, camera);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Cameras().Set(entity, camera);
+        SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveCamera(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Cameras().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Cameras().Remove(entity);
+        ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::Camera);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkCameraModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Cameras().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Cameras().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

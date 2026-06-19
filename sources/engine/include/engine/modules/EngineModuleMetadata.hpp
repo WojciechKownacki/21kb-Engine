@@ -16,6 +16,7 @@ struct EngineModuleMetadata {
     std::uint32_t version = 1U;
     std::vector<std::string> dependencies;
     EngineModuleLoadingPhase loadingPhase = EngineModuleLoadingPhase::Default;
+    bool unloadLibraryOnShutdown = true;
 };
 
 } // namespace kb::modules

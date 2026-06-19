@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <vector>
 
 namespace kb::ecs {
 
@@ -26,6 +27,7 @@ public:
         NativeArchetypeStorage* nativeStorage,
         std::shared_ptr<QueryPlan> plan,
         std::size_t defaultExecutionGrainSize,
+        std::size_t defaultPrefetchDistance,
         MutableComponentBorrowLocks* mutableBorrowLocks,
         StructuralChangeValidator* structuralChangeValidator,
         WorldTelemetryCounters* telemetryCounters);
@@ -39,6 +41,7 @@ public:
     [[nodiscard]] bool IsValid() const noexcept;
     [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
     [[nodiscard]] std::span<const std::size_t> ComponentSizes() const noexcept;
+    [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(QueryRawVisitor visitor, void* context) const;
@@ -65,6 +68,10 @@ private:
 
     [[nodiscard]] bool RecordChanged(const QueryTableDispatchRecord& record) const;
     [[nodiscard]] bool RecordChanged(const MutableQueryTableDispatchRecord& record) const;
+    void PrepareReadRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
+    void PrepareMutableRecords(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch, bool refreshMetadata) const;
+    void RefreshRecordMetadata(std::span<QueryTableDispatchRecord> records) const;
+    void RefreshRecordMetadata(std::span<MutableQueryTableDispatchRecord> records) const;
     void CommitRecordVersions(const QueryTableDispatchRecord& record) const;
     void CommitRecordVersions(const MutableQueryTableDispatchRecord& record) const;
 
@@ -74,7 +81,12 @@ private:
     StructuralChangeValidator* structuralChangeValidator_ = nullptr;
     WorldTelemetryCounters* telemetryCounters_ = nullptr;
     std::size_t defaultExecutionGrainSize_ = kDefaultQueryExecutionGrainSize;
+    std::size_t defaultPrefetchDistance_ = 0;
     mutable std::unordered_map<ChangeVersionKey, std::uint64_t, ChangeVersionKeyHash> observedVersions_;
+    mutable std::vector<QueryTableDispatchRecord> cachedReadRecords_;
+    mutable std::vector<MutableQueryTableDispatchRecord> cachedMutableRecords_;
+    mutable std::uint64_t cachedReadStructuralVersion_ = 0;
+    mutable std::uint64_t cachedMutableStructuralVersion_ = 0;
 };
 
 } // namespace kb::ecs

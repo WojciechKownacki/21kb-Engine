@@ -3,8 +3,10 @@
 #include "engine/ecs/World.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/ColliderComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/SceneVisitors.hpp"
 #include "engine/scene/TransformComponent.hpp"
@@ -45,6 +47,14 @@ public:
         std::uint64_t lightComponentId,
         ecs_query_t*& cachedQuery,
         LightVisitor visitor,
+        void* context);
+    static void ForEachPhysicsBody(
+        const kb::ecs::World& world,
+        std::uint64_t transformComponentId,
+        std::uint64_t rigidbodyComponentId,
+        std::uint64_t colliderComponentId,
+        ecs_query_t*& cachedQuery,
+        PhysicsBodyVisitor visitor,
         void* context);
 };
 

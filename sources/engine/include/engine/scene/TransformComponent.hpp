@@ -29,6 +29,15 @@ struct WorldTransform {
     Vec3 scale{ 1.0F, 1.0F, 1.0F };
 };
 
+struct WorldTransformAffine3x4 {
+    float values[12]{
+        1.0F, 0.0F, 0.0F,
+        0.0F, 1.0F, 0.0F,
+        0.0F, 0.0F, 1.0F,
+        0.0F, 0.0F, 0.0F,
+    };
+};
+
 struct TransformVersionMetadata {
     std::uint64_t localVersion = 1;
     std::uint64_t parentVersion = 0;

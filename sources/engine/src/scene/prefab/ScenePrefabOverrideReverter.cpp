@@ -2,6 +2,8 @@
 
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/ScenePrefab.hpp"
+#include "scene/SceneAccess.hpp"
+#include "scene/SceneState.hpp"
 #include "scene/prefab/ScenePrefabInstanceTopology.hpp"
 #include "scene/prefab/ScenePrefabNodeStateWriter.hpp"
 
@@ -22,8 +24,9 @@ bool ScenePrefabOverrideReverter::Revert(Scene& scene, const ScenePrefab& prefab
 
     const ScenePrefabTrackedEntitySet trackedEntities = ScenePrefabInstanceTopology::TrackedEntities(instance);
     ScenePrefabInstanceTopology::DestroyUntrackedChildren(scene, instance, trackedEntities);
+    ScenePrefabNodeStateWriterContext writerContext{ scene, SceneAccess::State(scene) };
     for (std::uint32_t nodeIndex = 0; nodeIndex < static_cast<std::uint32_t>(nodes.size()); ++nodeIndex) {
-        ScenePrefabNodeStateWriter::Write(scene, objects[nodeIndex], ScenePrefabInstanceTopology::ExpectedParent(nodes[nodeIndex], instance), nodes[nodeIndex]);
+        ScenePrefabNodeStateWriter::Write(writerContext, objects[nodeIndex], ScenePrefabInstanceTopology::ExpectedParent(nodes[nodeIndex], instance), nodes[nodeIndex]);
     }
     return true;
 }

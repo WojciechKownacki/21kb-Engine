@@ -23,4 +23,8 @@ void SceneSystemQueryAccess::ForEachLight(LightVisitor visitor, void* context) c
     SceneIterationService::ForEachLight(scene_, visitor, context);
 }
 
+void SceneSystemQueryAccess::ForEachPhysicsBody(PhysicsBodyVisitor visitor, void* context) const {
+    SceneIterationService::ForEachPhysicsBody(scene_, visitor, context);
+}
+
 } // namespace kb::scene

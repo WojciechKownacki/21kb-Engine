@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ BehaviourComponent* SceneComponentMutationService::TryGetBehaviour(Scene& scene,
 
 void SceneComponentMutationService::SetBehaviour(Scene& scene, SceneEntity entity, const BehaviourComponent& behaviour) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Behaviours().Set(entity, behaviour);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Behaviours().Set(entity, behaviour);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveBehaviour(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Behaviours().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Behaviours().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkBehaviourModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Behaviours().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Behaviours().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

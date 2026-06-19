@@ -1,6 +1,7 @@
 #include "scene/prefab/ScenePrefabRecordFactory.hpp"
 
 #include "scene/prefab/ScenePrefabGuid.hpp"
+#include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabValidator.hpp"
 
@@ -14,6 +15,7 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateTemplate(std::s
     }
 
     const std::uint64_t contentHash = ScenePrefabHasher::Hash(prefab);
+    ScenePrefabBakedData bakedPrefab = ScenePrefabBakedData::Bake(prefab.Nodes());
     return ScenePrefabRecord{
         .kind = ScenePrefabRecordKind::Template,
         .guid = ScenePrefabGuid::Create(name, prefab, localId),
@@ -23,6 +25,8 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateTemplate(std::s
         .basePrefabGuid = {},
         .variantOverrides = {},
         .contentHash = contentHash,
+        .bakedPrefab = std::move(bakedPrefab),
+        .bakedContentHash = contentHash,
     };
 }
 
@@ -31,6 +35,8 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateLoadedTemplate(
         return std::nullopt;
     }
 
+    const std::uint64_t contentHash = ScenePrefabHasher::Hash(prefab);
+    ScenePrefabBakedData bakedPrefab = ScenePrefabBakedData::Bake(prefab.Nodes());
     return ScenePrefabRecord{
         .kind = ScenePrefabRecordKind::Template,
         .guid = std::move(guid),
@@ -39,7 +45,9 @@ std::optional<ScenePrefabRecord> ScenePrefabRecordFactory::CreateLoadedTemplate(
         .basePrefab = {},
         .basePrefabGuid = {},
         .variantOverrides = {},
-        .contentHash = ScenePrefabHasher::Hash(prefab),
+        .contentHash = contentHash,
+        .bakedPrefab = std::move(bakedPrefab),
+        .bakedContentHash = contentHash,
     };
 }
 

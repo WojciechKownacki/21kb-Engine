@@ -2,6 +2,7 @@
 
 #include "ecs/FlecsEntityIds.hpp"
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
 #include <flecs.h>
@@ -26,16 +27,19 @@ std::vector<SceneEntity> SceneHierarchyRootCollector::Roots(const kb::ecs::World
 
     kb::ecs::QueryExecutionSettings settings;
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
-    query.ForEachBatch(settings, [](const kb::ecs::QueryBatch<TransformComponent>& batch, void* rawContext) {
-        const auto* callbackContext = static_cast<const Context*>(rawContext);
-        callbackContext->roots->reserve(callbackContext->roots->size() + batch.Count());
+    kb::ecs::UnsafeHotReadQuery<TransformComponent> hotQuery;
+    if (!hotQuery.Rebuild(query, settings)) {
+        return roots;
+    }
+    hotQuery.ForEachRange(settings.maxBatchSize, [&context](const auto& batch) {
+        context.roots->reserve(context.roots->size() + batch.Count());
         for (std::size_t index = 0; index < batch.Count(); ++index) {
             const SceneEntity entity = batch.EntityAt(index);
-            if (entity.IsValid() && ecs_get_parent(callbackContext->world->NativeHandle(), kb::ecs::FlecsEntityId(entity)) == 0) {
-                callbackContext->roots->push_back(entity);
+            if (entity.IsValid() && ecs_get_parent(context.world->NativeHandle(), kb::ecs::FlecsEntityId(entity)) == 0) {
+                context.roots->push_back(entity);
             }
         }
-    }, &context);
+    });
 
     std::ranges::sort(roots, [](SceneEntity left, SceneEntity right) {
         return left.Id() < right.Id();

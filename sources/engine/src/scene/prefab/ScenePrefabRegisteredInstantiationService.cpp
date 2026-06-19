@@ -2,6 +2,7 @@
 
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabBulkInstantiationService.hpp"
 #include "scene/prefab/ScenePrefabInstantiationService.hpp"
 #include "scene/prefab/ScenePrefabNestedResolver.hpp"
 #include "scene/prefab/ScenePrefabRecord.hpp"
@@ -20,6 +21,22 @@ using PrefabStatsClock = std::chrono::steady_clock;
 [[nodiscard]] std::uint64_t ElapsedNanoseconds(PrefabStatsClock::time_point start, PrefabStatsClock::time_point end) noexcept {
     const std::uint64_t nanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
     return nanoseconds == 0U ? 1U : nanoseconds;
+}
+
+[[nodiscard]] bool HasNestedPrefabNodes(const ScenePrefab& prefab) noexcept {
+    for (const ScenePrefabNodeDesc& node : prefab.Nodes()) {
+        if (!node.nestedPrefabGuid.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool HasValidBakedCache(const ScenePrefabRecord& record) noexcept {
+    return record.bakedContentHash != 0U &&
+        record.bakedContentHash == record.contentHash &&
+        record.bakedPrefab.NodeCount() == record.prefab.NodeCount() &&
+        !HasNestedPrefabNodes(record.prefab);
 }
 
 } // namespace
@@ -44,31 +61,47 @@ std::vector<ScenePrefabInstance> ScenePrefabRegisteredInstantiationService::Inst
         return {};
     }
 
-    ScenePrefab resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab);
+    const bool useBakedCache = HasValidBakedCache(*record);
+    ScenePrefab resolvedPrefab;
+    const ScenePrefab* spawnPrefab = &record->prefab;
+    if (!useBakedCache) {
+        resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab);
+        spawnPrefab = &resolvedPrefab;
+    }
     const std::uint64_t registryResolveNanoseconds = ElapsedNanoseconds(registryStart, PrefabStatsClock::now());
-    std::vector<ScenePrefabInstance> instances = ScenePrefabInstantiationService::InstantiateMany(scene, resolvedPrefab, count, settings);
+    std::vector<ScenePrefabInstance> instances = useBakedCache
+        ? ScenePrefabBulkInstantiationService::InstantiateBaked(scene, *spawnPrefab, record->bakedPrefab, count, settings)
+        : ScenePrefabInstantiationService::InstantiateMany(scene, *spawnPrefab, count, settings);
+    const ScenePrefabInstantiationStats spawnStats = state.lastPrefabInstantiationStats;
 
     const auto historyStart = PrefabStatsClock::now();
-    const std::vector<ScenePrefabInstanceHandle> handles = state.prefabInstances.RegisterManyInstances(
-        handle,
-        record->guid,
-        settings.parent,
-        std::span<const ScenePrefabInstance>{ instances },
-        resolvedPrefab,
-        true);
+    const std::size_t registeredCount = spawnStats.hasGeneratedEntityIndexRange
+        ? state.prefabInstances.RegisterManyCreatedDenseInstancesInPlace(
+            handle,
+            record->guid,
+            settings.parent,
+            std::span<ScenePrefabInstance>{ instances },
+            *spawnPrefab,
+            spawnStats.maxGeneratedEntityIndex,
+            true,
+            spawnStats.hasContiguousGeneratedEntityRuns,
+            true)
+        : state.prefabInstances.RegisterManyInstancesInPlace(
+            handle,
+            record->guid,
+            settings.parent,
+            std::span<ScenePrefabInstance>{ instances },
+            *spawnPrefab,
+            true);
     const std::uint64_t historyRecordNanoseconds = ElapsedNanoseconds(historyStart, PrefabStatsClock::now());
-    if (handles.size() != instances.size()) {
+    if (registeredCount != instances.size()) {
         state.lastPrefabInstantiationStats.registryResolveNanoseconds = registryResolveNanoseconds;
         state.lastPrefabInstantiationStats.historyRecordNanoseconds = historyRecordNanoseconds;
         return {};
     }
-    state.lastPrefabInstantiationStats.registeredInstanceCount = handles.size();
+    state.lastPrefabInstantiationStats.registeredInstanceCount = registeredCount;
     state.lastPrefabInstantiationStats.registryResolveNanoseconds = registryResolveNanoseconds;
     state.lastPrefabInstantiationStats.historyRecordNanoseconds = historyRecordNanoseconds;
-
-    for (std::size_t index = 0; index < instances.size(); ++index) {
-        instances[index].AssignHandle(handles[index]);
-    }
     return instances;
 }
 
@@ -84,9 +117,17 @@ ScenePrefabInstantiationStats ScenePrefabRegisteredInstantiationService::Instant
         return state.lastPrefabInstantiationStats;
     }
 
-    ScenePrefab resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab);
+    const bool useBakedCache = HasValidBakedCache(*record);
+    ScenePrefab resolvedPrefab;
+    const ScenePrefab* spawnPrefab = &record->prefab;
+    if (!useBakedCache) {
+        resolvedPrefab = ScenePrefabNestedResolver::Resolve(state.prefabs, record->prefab);
+        spawnPrefab = &resolvedPrefab;
+    }
     const std::uint64_t registryResolveNanoseconds = ElapsedNanoseconds(registryStart, PrefabStatsClock::now());
-    ScenePrefabInstantiationStats stats = ScenePrefabInstantiationService::InstantiateBatch(scene, resolvedPrefab, count, settings);
+    ScenePrefabInstantiationStats stats = useBakedCache
+        ? ScenePrefabBulkInstantiationService::InstantiateBatchBaked(scene, *spawnPrefab, record->bakedPrefab, count, settings)
+        : ScenePrefabInstantiationService::InstantiateBatch(scene, *spawnPrefab, count, settings);
     stats.registryResolveNanoseconds = registryResolveNanoseconds;
     state.lastPrefabInstantiationStats.registryResolveNanoseconds = registryResolveNanoseconds;
     return stats;

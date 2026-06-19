@@ -65,6 +65,10 @@ bool ScenePrefabs::RevertOverrides(ScenePrefabInstanceHandle handle) {
     return ScenePrefabOverrideFacade::Revert(scene_, handle);
 }
 
+bool ScenePrefabs::RevertOverrides(std::span<const ScenePrefabInstanceHandle> handles) {
+    return ScenePrefabOverrideFacade::Revert(scene_, handles);
+}
+
 bool ScenePrefabs::ApplyOverrides(ScenePrefabInstanceHandle handle) {
     return ScenePrefabOverrideFacade::Apply(scene_, handle);
 }

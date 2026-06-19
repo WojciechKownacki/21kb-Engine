@@ -30,6 +30,10 @@ SceneState::~SceneState() {
         ecs_query_fini(visibleMeshRendererIterationQuery);
         visibleMeshRendererIterationQuery = nullptr;
     }
+    if (physicsBodyIterationQuery != nullptr) {
+        ecs_query_fini(physicsBodyIterationQuery);
+        physicsBodyIterationQuery = nullptr;
+    }
 }
 
 } // namespace kb::scene

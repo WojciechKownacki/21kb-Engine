@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <type_traits>
@@ -14,6 +15,7 @@ struct WorkerPoolConfig {
     bool pinWorkersToCores = false;
     std::size_t firstPinnedCore = 0;
     bool singleThreaded = false;
+    bool collectDispatchTelemetry = false;
 };
 
 struct WorkerContext {
@@ -49,6 +51,41 @@ struct WorkerPoolChunk {
 };
 
 using WorkerPoolChunkCallback = void (*)(WorkerContext, const WorkerPoolChunk&, void*);
+
+enum class WorkerPoolDispatchMode {
+    None,
+    Jobs,
+    Batches,
+    BatchesStaticStrided,
+    Chunks,
+    ChunksStaticStrided,
+};
+
+struct WorkerPoolDispatchTelemetry {
+    WorkerPoolDispatchMode lastMode = WorkerPoolDispatchMode::None;
+    std::size_t dispatchCount = 0;
+    std::size_t staticStridedDispatchCount = 0;
+    std::size_t queuedDispatchCount = 0;
+    std::size_t lastWorkItemCount = 0;
+    std::size_t lastActiveWorkerCount = 0;
+    std::size_t lastConfiguredWorkerCount = 0;
+    std::size_t lastQueueOwnerCount = 0;
+    std::size_t lastStealCount = 0;
+    std::size_t totalStealCount = 0;
+    std::uint64_t lastDispatchScheduleNanoseconds = 0;
+    std::uint64_t totalDispatchScheduleNanoseconds = 0;
+    std::uint64_t averageDispatchScheduleNanoseconds = 0;
+    std::uint64_t lastDispatchWallNanoseconds = 0;
+    std::uint64_t totalDispatchWallNanoseconds = 0;
+    std::uint64_t averageDispatchWallNanoseconds = 0;
+    std::uint64_t lastWorkerActiveNanoseconds = 0;
+    std::uint64_t totalWorkerActiveNanoseconds = 0;
+    std::uint64_t averageWorkerActiveNanoseconds = 0;
+    std::uint64_t lastWorkerCapacityNanoseconds = 0;
+    std::uint64_t totalWorkerCapacityNanoseconds = 0;
+    double lastWorkerUtilizationPercent = 0.0;
+    double averageWorkerUtilizationPercent = 0.0;
+};
 
 class JobHandle {
 public:
@@ -119,6 +156,7 @@ public:
     [[nodiscard]] bool Running() const noexcept;
     [[nodiscard]] std::size_t WorkerCount() const noexcept;
     [[nodiscard]] WorkerPoolConfig Config() const noexcept;
+    [[nodiscard]] WorkerPoolDispatchTelemetry DispatchTelemetry() const noexcept;
 
     [[nodiscard]] static std::size_t DefaultWorkerCount() noexcept;
     [[nodiscard]] static std::size_t ResolveWorkerCount(std::size_t requestedWorkerCount) noexcept;

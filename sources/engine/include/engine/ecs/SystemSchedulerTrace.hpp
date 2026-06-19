@@ -65,6 +65,28 @@ struct SystemSchedulerFrameCounters {
     std::size_t stageCount = 0;
     std::size_t parallelStageCount = 0;
     std::size_t workerCount = 0;
+    std::string lastWorkerDispatchMode;
+    std::uint64_t workerDispatchCount = 0;
+    std::uint64_t workerStaticStridedDispatchCount = 0;
+    std::uint64_t workerQueuedDispatchCount = 0;
+    std::uint64_t lastWorkerDispatchWorkItemCount = 0;
+    std::uint64_t lastWorkerDispatchActiveWorkerCount = 0;
+    std::uint64_t lastWorkerDispatchConfiguredWorkerCount = 0;
+    std::uint64_t lastWorkerStealCount = 0;
+    std::uint64_t workerStealCount = 0;
+    std::uint64_t lastWorkerDispatchScheduleNanoseconds = 0;
+    std::uint64_t workerDispatchScheduleNanoseconds = 0;
+    std::uint64_t averageWorkerDispatchScheduleNanoseconds = 0;
+    std::uint64_t lastWorkerDispatchWallNanoseconds = 0;
+    std::uint64_t workerDispatchWallNanoseconds = 0;
+    std::uint64_t averageWorkerDispatchWallNanoseconds = 0;
+    std::uint64_t lastWorkerActiveNanoseconds = 0;
+    std::uint64_t workerActiveNanoseconds = 0;
+    std::uint64_t averageWorkerActiveNanoseconds = 0;
+    std::uint64_t lastWorkerCapacityNanoseconds = 0;
+    std::uint64_t workerCapacityNanoseconds = 0;
+    double lastWorkerUtilizationPercent = 0.0;
+    double averageWorkerUtilizationPercent = 0.0;
 };
 
 struct SystemSchedulerTrace {

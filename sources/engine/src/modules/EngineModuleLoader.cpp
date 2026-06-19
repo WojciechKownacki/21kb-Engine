@@ -100,6 +100,12 @@ void EngineModuleLibrary::Reset() noexcept {
     loadedPath_.clear();
 }
 
+void EngineModuleLibrary::ReleaseWithoutUnload() noexcept {
+    handle_ = nullptr;
+    originalPath_.clear();
+    loadedPath_.clear();
+}
+
 EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
     EngineModuleLoadResult result{};
     desc.key = NormalizeKey(std::move(desc.key), desc.modulePath);

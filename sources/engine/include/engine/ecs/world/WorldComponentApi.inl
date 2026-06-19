@@ -11,7 +11,18 @@ template <typename T>
 [[nodiscard]] ComponentId RegisterComponent(std::string_view name = {});
 
 template <typename T>
+[[nodiscard]] ComponentId RegisterComponent(ComponentRegistrationOptions options);
+
+template <typename T>
+[[nodiscard]] ComponentId RegisterComponent(std::string_view name, ComponentRegistrationOptions options);
+
+template <typename T>
 [[nodiscard]] ComponentId Component() const noexcept;
+
+template <typename T>
+[[nodiscard]] ComponentStorageClass ComponentStorage() const noexcept;
+
+[[nodiscard]] ComponentStorageClass ComponentStorage(ComponentId componentId) const noexcept;
 
 template <typename T>
 [[nodiscard]] const ComponentReflection* RegisterComponentReflection(std::string_view name, std::initializer_list<ComponentFieldDesc> fields);
@@ -50,6 +61,7 @@ void ForEach(ConstComponentVisitor<T> visitor, void* context) const;
 // multi-component systems should use Query<T...> batch iteration to stay on the
 // chunk hot path.
 template <typename T>
+[[deprecated("World::ForEachMutable is a compatibility/debug path; use Query<T...>::ForEachMutableBatch or UnsafeHotQuery in production systems.")]]
 void ForEachMutable(MutableComponentVisitor<T> visitor, void* context);
 
 template <typename TFirst, typename TSecond>

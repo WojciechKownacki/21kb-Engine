@@ -14,14 +14,6 @@ bool SceneObject::IsValid() const noexcept {
     return scene_ != nullptr && SceneEntityService::IsAlive(*scene_, *this);
 }
 
-kb::ecs::Entity SceneObject::EntityHandle() const noexcept {
-    return entity_;
-}
-
-SceneEntity SceneObject::Entity() const noexcept {
-    return entity_;
-}
-
 std::string SceneObject::Name() const {
     return scene_ == nullptr ? std::string{} : SceneEntityService::Name(*scene_, entity_);
 }

@@ -7,7 +7,12 @@ static constexpr void ValidateComponentType() noexcept;
 template <typename T>
 [[nodiscard]] static std::string_view DefaultComponentName() noexcept;
 
-[[nodiscard]] ComponentId RegisterComponent(std::type_index type, std::string_view name, std::size_t size, std::size_t alignment);
+[[nodiscard]] ComponentId RegisterComponent(
+    std::type_index type,
+    std::string_view name,
+    std::size_t size,
+    std::size_t alignment,
+    ComponentRegistrationOptions options = {});
 [[nodiscard]] ComponentId FindComponent(std::type_index type) const noexcept;
 [[nodiscard]] const ComponentReflection* RegisterComponentReflection(ComponentId componentId, std::string_view name, std::size_t size, std::initializer_list<ComponentFieldDesc> fields);
 void SetComponent(Entity entity, ComponentId componentId, std::size_t size, const void* component);

@@ -5,7 +5,7 @@
 #include <flecs.h>
 
 #include <algorithm>
-#include <unordered_set>
+#include <vector>
 
 namespace kb::ecs {
 
@@ -33,23 +33,25 @@ void WorldEntityCatalog::RemoveMany(std::span<const Entity> entities) {
         return;
     }
 
-    std::unordered_set<Entity::IdType> removedIds;
+    std::vector<Entity::IdType> removedIds;
     removedIds.reserve(entities.size());
     for (Entity entity : entities) {
         if (entity.IsValid()) {
-            removedIds.insert(entity.Id());
+            removedIds.push_back(entity.Id());
         }
     }
     if (removedIds.empty()) {
         return;
     }
+    std::sort(removedIds.begin(), removedIds.end());
+    removedIds.erase(std::unique(removedIds.begin(), removedIds.end()), removedIds.end());
 
     entities_.erase(
         std::remove_if(
             entities_.begin(),
             entities_.end(),
             [&removedIds](Entity entity) {
-                return removedIds.find(entity.Id()) != removedIds.end();
+                return std::binary_search(removedIds.begin(), removedIds.end(), entity.Id());
             }),
         entities_.end());
 }

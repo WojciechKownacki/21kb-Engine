@@ -63,7 +63,31 @@ void WriteFrameCounters(std::ostream& output, const SystemSchedulerFrameCounters
     output << "      \"system_count\": " << counters.systemCount << ",\n";
     output << "      \"stage_count\": " << counters.stageCount << ",\n";
     output << "      \"parallel_stage_count\": " << counters.parallelStageCount << ",\n";
-    output << "      \"worker_count\": " << counters.workerCount << '\n';
+    output << "      \"worker_count\": " << counters.workerCount << ",\n";
+    output << "      \"last_worker_dispatch_mode\": ";
+    WriteJsonString(output, counters.lastWorkerDispatchMode);
+    output << ",\n";
+    output << "      \"worker_dispatch_count\": " << counters.workerDispatchCount << ",\n";
+    output << "      \"worker_static_strided_dispatch_count\": " << counters.workerStaticStridedDispatchCount << ",\n";
+    output << "      \"worker_queued_dispatch_count\": " << counters.workerQueuedDispatchCount << ",\n";
+    output << "      \"last_worker_dispatch_work_item_count\": " << counters.lastWorkerDispatchWorkItemCount << ",\n";
+    output << "      \"last_worker_dispatch_active_worker_count\": " << counters.lastWorkerDispatchActiveWorkerCount << ",\n";
+    output << "      \"last_worker_dispatch_configured_worker_count\": " << counters.lastWorkerDispatchConfiguredWorkerCount << ",\n";
+    output << "      \"last_worker_steal_count\": " << counters.lastWorkerStealCount << ",\n";
+    output << "      \"worker_steal_count\": " << counters.workerStealCount << ",\n";
+    output << "      \"last_worker_dispatch_schedule_ns\": " << counters.lastWorkerDispatchScheduleNanoseconds << ",\n";
+    output << "      \"worker_dispatch_schedule_ns\": " << counters.workerDispatchScheduleNanoseconds << ",\n";
+    output << "      \"average_worker_dispatch_schedule_ns\": " << counters.averageWorkerDispatchScheduleNanoseconds << ",\n";
+    output << "      \"last_worker_dispatch_wall_ns\": " << counters.lastWorkerDispatchWallNanoseconds << ",\n";
+    output << "      \"worker_dispatch_wall_ns\": " << counters.workerDispatchWallNanoseconds << ",\n";
+    output << "      \"average_worker_dispatch_wall_ns\": " << counters.averageWorkerDispatchWallNanoseconds << ",\n";
+    output << "      \"last_worker_active_ns\": " << counters.lastWorkerActiveNanoseconds << ",\n";
+    output << "      \"worker_active_ns\": " << counters.workerActiveNanoseconds << ",\n";
+    output << "      \"average_worker_active_ns\": " << counters.averageWorkerActiveNanoseconds << ",\n";
+    output << "      \"last_worker_capacity_ns\": " << counters.lastWorkerCapacityNanoseconds << ",\n";
+    output << "      \"worker_capacity_ns\": " << counters.workerCapacityNanoseconds << ",\n";
+    output << "      \"last_worker_utilization_percent\": " << counters.lastWorkerUtilizationPercent << ",\n";
+    output << "      \"average_worker_utilization_percent\": " << counters.averageWorkerUtilizationPercent << '\n';
 }
 
 void WriteSystemCounters(std::ostream& output, const SystemSchedulerSystemCounters& counters) {

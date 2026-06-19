@@ -14,6 +14,7 @@ public:
     void ForEachMeshRenderer(MeshRendererVisitor visitor, void* context = nullptr) const;
     void ForEachVisibleMeshRenderer(MeshRendererVisitor visitor, void* context = nullptr) const;
     void ForEachLight(LightVisitor visitor, void* context = nullptr) const;
+    void ForEachPhysicsBody(PhysicsBodyVisitor visitor, void* context = nullptr) const;
 
 private:
     Scene& scene_;
