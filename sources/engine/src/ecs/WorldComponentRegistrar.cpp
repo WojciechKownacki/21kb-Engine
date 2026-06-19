@@ -11,8 +11,9 @@ ComponentId WorldComponentRegistrar::Register(
     std::type_index type,
     std::string_view name,
     std::size_t size,
-    std::size_t alignment) {
-    return registries == nullptr ? 0 : registries->Components().Register(world, type, name, size, alignment);
+    std::size_t alignment,
+    ComponentRegistrationOptions options) {
+    return registries == nullptr ? 0 : registries->Components().Register(world, type, name, size, alignment, options);
 }
 
 ComponentId WorldComponentRegistrar::Find(const WorldRegistrySet* registries, std::type_index type) noexcept {

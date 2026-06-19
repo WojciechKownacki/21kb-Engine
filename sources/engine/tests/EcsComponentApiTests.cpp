@@ -20,6 +20,30 @@ struct EcsChurnMass {
 struct EcsChurnPayload {
     int value = 0;
 };
+struct EcsStorageDefaultPayload {
+    float value = 0.0F;
+};
+struct EcsStorageColdPayload {
+    float value = 0.0F;
+};
+struct EcsStorageSparseTagPayload {
+    std::uint32_t value = 0U;
+};
+struct EcsStorageSparsePayload {
+    std::uint32_t value = 0U;
+};
+struct EcsStorageSharedPayload {
+    std::uint64_t value = 0U;
+};
+struct EcsStorageExternalPayload {
+    std::uint64_t value = 0U;
+};
+struct EcsStorageBulkColdPayload {
+    float value = 0.0F;
+};
+struct EcsStorageBulkSharedPayload {
+    std::uint32_t value = 0U;
+};
 
 void CountPositions(kb::ecs::Entity entity, const EcsPosition& position, void* context) {
     static_cast<void>(entity);
@@ -100,7 +124,14 @@ void RunTypedEcsComponentApiTest() {
     kb::tests::Require(counters.visited == 1, "Typed ECS const iteration did not visit the component");
     kb::tests::Require(kb::tests::NearlyEqual(counters.sumX, 5.0F), "Typed ECS const iteration saw invalid component data");
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
     world.ForEachMutable<EcsPosition>(&ApplyVelocity, &world);
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
     position = world.TryGet<EcsPosition>(entity);
     kb::tests::Require(position != nullptr && kb::tests::NearlyEqual(position->x, 9.0F) && kb::tests::NearlyEqual(position->y, 2.0F), "Typed ECS mutable iteration did not update component data");
 
@@ -125,6 +156,91 @@ void RunTypedEcsComponentApiTest() {
     EcsIterationCounters removedQueryCounters;
     movingQuery.ForEach(&CountMovingPositions, &removedQueryCounters);
     kb::tests::Require(removedQueryCounters.visited == 0, "Persistent typed ECS query did not react to removed component");
+}
+
+void RunTypedEcsComponentStoragePolicyTest() {
+    kb::ecs::World world;
+
+    const kb::ecs::ComponentId defaultComponent = world.RegisterComponent<EcsStorageDefaultPayload>("test.StorageDefault");
+    const kb::ecs::ComponentId coldComponent = world.RegisterComponent<EcsStorageColdPayload>(
+        "test.StorageCold",
+        kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::ColdTable });
+    const kb::ecs::ComponentId sparseTagComponent = world.RegisterComponent<EcsStorageSparseTagPayload>(
+        "test.StorageSparseTag",
+        kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::SparseTag });
+    const kb::ecs::ComponentId sparsePayloadComponent = world.RegisterComponent<EcsStorageSparsePayload>(
+        "test.StorageSparsePayload",
+        kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::SparsePayload });
+    const kb::ecs::ComponentId sharedComponent = world.RegisterComponent<EcsStorageSharedPayload>(
+        "test.StorageShared",
+        kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::SharedValue });
+    const kb::ecs::ComponentId externalComponent = world.RegisterComponent<EcsStorageExternalPayload>(
+        "test.StorageExternal",
+        kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::ExternalBlob });
+
+    kb::tests::Require(world.ComponentStorage(defaultComponent) == kb::ecs::ComponentStorageClass::HotTable, "ECS component storage default must be hot table");
+    kb::tests::Require(world.ComponentStorage<EcsStorageDefaultPayload>() == kb::ecs::ComponentStorageClass::HotTable, "ECS typed component storage default must be hot table");
+    kb::tests::Require(world.ComponentStorage(coldComponent) == kb::ecs::ComponentStorageClass::ColdTable, "ECS component cold storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage<EcsStorageColdPayload>() == kb::ecs::ComponentStorageClass::ColdTable, "ECS typed cold storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage(sparseTagComponent) == kb::ecs::ComponentStorageClass::SparseTag, "ECS sparse tag storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage(sparsePayloadComponent) == kb::ecs::ComponentStorageClass::SparsePayload, "ECS sparse payload storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage(sharedComponent) == kb::ecs::ComponentStorageClass::SharedValue, "ECS shared storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage(externalComponent) == kb::ecs::ComponentStorageClass::ExternalBlob, "ECS external storage metadata was not preserved");
+    kb::tests::Require(world.ComponentStorage(0) == kb::ecs::ComponentStorageClass::HotTable, "ECS unknown component storage must be a stable hot-table fallback");
+
+    const kb::ecs::ComponentId sameColdComponent = world.RegisterComponent<EcsStorageColdPayload>();
+    kb::tests::Require(sameColdComponent == coldComponent, "ECS component storage registration must preserve per-type cache identity");
+    kb::tests::Require(world.ComponentStorage<EcsStorageColdPayload>() == kb::ecs::ComponentStorageClass::ColdTable, "ECS cached registration must not reset storage metadata");
+
+    const kb::ecs::Entity entity = world.CreateEntity("StoragePolicy");
+    world.Set(entity, EcsStorageColdPayload{ .value = 4.0F });
+    const kb::ecs::NativeEcsStorageStats storageStats = world.NativeStorageStats();
+    kb::tests::Require(storageStats.coldTableComponents == 1U, "ECS native storage stats did not receive cold component metadata from World");
+    kb::tests::Require(storageStats.hotTableComponents == 0U, "ECS native storage stats reported unexpected hot components for a cold-only entity");
+
+    kb::ecs::World bulkWorld;
+    const std::array bulkColdPayloads{
+        EcsStorageBulkColdPayload{ .value = 1.0F },
+        EcsStorageBulkColdPayload{ .value = 2.0F },
+        EcsStorageBulkColdPayload{ .value = 3.0F },
+    };
+    const EcsStorageBulkSharedPayload sharedPayload{ .value = 7U };
+    const std::array bulkViews{
+        kb::ecs::World::MakeBulkComponentView<EcsStorageBulkColdPayload>(
+            std::span<const EcsStorageBulkColdPayload>{ bulkColdPayloads },
+            kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::ColdTable }),
+        kb::ecs::World::MakeBulkComponentBroadcastView<EcsStorageBulkSharedPayload>(
+            sharedPayload,
+            kb::ecs::ComponentRegistrationOptions{ .storageClass = kb::ecs::ComponentStorageClass::SharedValue }),
+    };
+    const std::vector<kb::ecs::Entity> bulkEntities = bulkWorld.CreateEntitiesNativeOnly(bulkColdPayloads.size(), bulkViews);
+    kb::tests::Require(bulkEntities.size() == bulkColdPayloads.size(), "ECS bulk component storage policy setup did not create entities");
+    kb::tests::Require(
+        bulkWorld.ComponentStorage<EcsStorageBulkColdPayload>() == kb::ecs::ComponentStorageClass::ColdTable,
+        "ECS bulk component view did not preserve cold table registration options");
+    kb::tests::Require(
+        bulkWorld.ComponentStorage<EcsStorageBulkSharedPayload>() == kb::ecs::ComponentStorageClass::SharedValue,
+        "ECS bulk broadcast component view did not preserve shared value registration options");
+    const kb::ecs::NativeEcsStorageStats bulkStats = bulkWorld.NativeStorageStats();
+    kb::tests::Require(bulkStats.coldTableComponents == 1U, "ECS bulk native storage stats missed cold component metadata");
+    kb::tests::Require(bulkStats.sharedValueComponents == 1U, "ECS bulk native storage stats missed shared component metadata");
+    kb::tests::Require(
+        bulkStats.coldTableUsedBytes == bulkColdPayloads.size() * sizeof(EcsStorageBulkColdPayload),
+        "ECS bulk native storage stats reported invalid cold component bytes");
+    kb::tests::Require(
+        bulkStats.sharedValueUsedBytes == bulkColdPayloads.size() * sizeof(EcsStorageBulkSharedPayload),
+        "ECS bulk native storage stats reported invalid shared component bytes");
+    kb::tests::Require(bulkStats.activeSidePayloadBytes > 0U, "ECS bulk native storage stats missed side payload bytes");
+
+    kb::tests::Require(kb::ecs::IsArchetypeTableStorage(kb::ecs::ComponentStorageClass::HotTable), "ECS hot storage must be table-backed");
+    kb::tests::Require(kb::ecs::IsArchetypeTableStorage(kb::ecs::ComponentStorageClass::ColdTable), "ECS cold storage classifier failed");
+    kb::tests::Require(kb::ecs::UsesHotChunkPayload(kb::ecs::ComponentStorageClass::HotTable), "ECS hot storage must use primary chunk payload");
+    kb::tests::Require(!kb::ecs::UsesNativeSideStorage(kb::ecs::ComponentStorageClass::HotTable), "ECS hot storage must not use side payload");
+    kb::tests::Require(!kb::ecs::UsesHotChunkPayload(kb::ecs::ComponentStorageClass::ColdTable), "ECS cold storage must not use primary hot payload");
+    kb::tests::Require(kb::ecs::UsesNativeSideStorage(kb::ecs::ComponentStorageClass::ColdTable), "ECS cold storage must use native side payload");
+    kb::tests::Require(kb::ecs::UsesNativeSideStorage(kb::ecs::ComponentStorageClass::SharedValue), "ECS shared storage must use native side payload");
+    kb::tests::Require(kb::ecs::IsSparseStorage(kb::ecs::ComponentStorageClass::SparseTag), "ECS sparse tag storage classifier failed");
+    kb::tests::Require(kb::ecs::IsSparseStorage(kb::ecs::ComponentStorageClass::SparsePayload), "ECS sparse payload storage classifier failed");
 }
 
 void RunTypedEcsEntityAndComponentLifetimeValidationTest() {
@@ -210,6 +326,34 @@ void RunTypedEcsEntityAndComponentLifetimeValidationTest() {
         invalidDestroyRejected = true;
     }
     kb::tests::Require(invalidDestroyRejected, "ECS entity generation validation accepted an invalid destroy handle");
+}
+
+void RunTypedEcsBulkDestroyValidationTest() {
+    kb::ecs::World world;
+    std::vector<kb::ecs::Entity> entities;
+    entities.reserve(4U);
+    for (int index = 0; index < 4; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 0.0F });
+        entities.push_back(entity);
+    }
+
+    world.DestroyEntities(std::span<const kb::ecs::Entity>{ entities.data(), 2U });
+    kb::tests::Require(!world.IsAlive(entities[0]) && !world.IsAlive(entities[1]), "ECS bulk destroy kept destroyed entities alive");
+    kb::tests::Require(world.IsAlive(entities[2]) && world.IsAlive(entities[3]), "ECS bulk destroy destroyed an entity outside the batch");
+
+    bool rejectedStale = false;
+    const std::array invalidBatch{ entities[2], entities[0] };
+    try {
+        world.DestroyEntities(std::span<const kb::ecs::Entity>{ invalidBatch });
+    } catch (const std::out_of_range&) {
+        rejectedStale = true;
+    }
+    kb::tests::Require(rejectedStale, "ECS bulk destroy accepted a stale entity");
+    kb::tests::Require(world.IsAlive(entities[2]), "ECS bulk destroy partially mutated before rejecting a stale entity");
+
+    world.DestroyEntities(std::span<const kb::ecs::Entity>{ entities.data() + 2U, 2U });
+    kb::tests::Require(!world.IsAlive(entities[2]) && !world.IsAlive(entities[3]), "ECS bulk destroy failed after rejecting an earlier invalid batch");
 }
 
 struct StressEntityState {
@@ -455,7 +599,9 @@ namespace kb::tests {
 
 void RunEcsComponentApiTests() {
     RunTypedEcsComponentApiTest();
+    RunTypedEcsComponentStoragePolicyTest();
     RunTypedEcsEntityAndComponentLifetimeValidationTest();
+    RunTypedEcsBulkDestroyValidationTest();
     RunTypedEcsRandomStructuralStressTest();
     RunTypedEcsArchetypeChurnStressTest();
 }

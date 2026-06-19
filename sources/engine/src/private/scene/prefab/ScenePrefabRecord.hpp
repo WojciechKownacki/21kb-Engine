@@ -3,6 +3,7 @@
 #include "engine/scene/ScenePrefab.hpp"
 #include "engine/scene/ScenePrefabHandle.hpp"
 #include "engine/scene/ScenePrefabOverrides.hpp"
+#include "scene/prefab/ScenePrefabBakedData.hpp"
 
 #include <cstdint>
 #include <string>
@@ -24,6 +25,8 @@ struct ScenePrefabRecord {
     std::string basePrefabGuid;
     std::vector<ScenePrefabPropertyOverride> variantOverrides;
     std::uint64_t contentHash = 0;
+    ScenePrefabBakedData bakedPrefab;
+    std::uint64_t bakedContentHash = 0;
 };
 
 } // namespace kb::scene

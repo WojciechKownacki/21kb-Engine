@@ -2,6 +2,7 @@
 
 #include "engine/ecs/ChunkSizeProfile.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
+#include "engine/ecs/WorldConfig.hpp"
 
 #include <array>
 #include <cstddef>
@@ -29,7 +30,11 @@ struct ChunkSizeTuningCandidate {
     ChunkSizeProfile profile = kDefaultChunkSizeProfile;
     std::size_t payloadBytes = 0;
     std::size_t bytesPerEntity = 0;
+    std::size_t hotBytesPerEntity = 0;
+    std::size_t nonHotBytesPerEntity = 0;
     std::size_t capacity = 0;
+    std::size_t hotOnlyCapacity = 0;
+    std::size_t capacityLostToNonHotStorage = 0;
     std::size_t estimatedChunks = 0;
     std::size_t estimatedAllocatedBytes = 0;
     std::size_t estimatedUsedBytes = 0;
@@ -44,6 +49,12 @@ struct ChunkSizeTuningResult {
     ChunkSizeTuningCandidate recommendation{};
     std::array<ChunkSizeTuningCandidate, static_cast<std::size_t>(ChunkSizeProfile::Count)> candidates{};
     std::size_t candidateCount = 0;
+};
+
+struct ChunkSizeAutoTunedWorldConfig {
+    WorldConfig config{};
+    ChunkSizeTuningResult tuning{};
+    bool applied = false;
 };
 
 [[nodiscard]] constexpr std::array<ChunkSizeProfile, static_cast<std::size_t>(ChunkSizeProfile::Count)> AllChunkSizeProfiles() noexcept {
@@ -71,6 +82,26 @@ struct ChunkSizeTuningResult {
     return components.empty() ? sizeof(Entity) : bytesPerEntity;
 }
 
+[[nodiscard]] constexpr std::size_t ChunkSizeTuningHotBytesPerEntity(std::span<const NativeComponentType> components) noexcept {
+    std::size_t bytesPerEntity = 0;
+    for (const NativeComponentType& component : components) {
+        if (UsesHotChunkPayload(component.storageClass)) {
+            bytesPerEntity += component.size;
+        }
+    }
+    return bytesPerEntity;
+}
+
+[[nodiscard]] constexpr std::size_t ChunkSizeTuningNonHotBytesPerEntity(std::span<const NativeComponentType> components) noexcept {
+    std::size_t bytesPerEntity = 0;
+    for (const NativeComponentType& component : components) {
+        if (UsesNativeSideStorage(component.storageClass)) {
+            bytesPerEntity += component.size;
+        }
+    }
+    return bytesPerEntity;
+}
+
 [[nodiscard]] constexpr std::size_t ChunkSizeTuningPayloadForCapacity(
     std::span<const NativeComponentType> components,
     std::size_t capacity) noexcept {
@@ -80,6 +111,36 @@ struct ChunkSizeTuningResult {
 
     std::size_t offset = 0;
     for (const NativeComponentType& component : components) {
+        offset = ChunkSizeTuningAlignUp(offset, component.alignment);
+        offset += component.size * capacity;
+    }
+    return offset;
+}
+
+[[nodiscard]] constexpr std::size_t ChunkSizeTuningHotPayloadForCapacity(
+    std::span<const NativeComponentType> components,
+    std::size_t capacity) noexcept {
+    std::size_t offset = 0;
+    bool hasHotComponent = false;
+    for (const NativeComponentType& component : components) {
+        if (!UsesHotChunkPayload(component.storageClass)) {
+            continue;
+        }
+        hasHotComponent = true;
+        offset = ChunkSizeTuningAlignUp(offset, component.alignment);
+        offset += component.size * capacity;
+    }
+    return hasHotComponent ? offset : capacity * sizeof(Entity);
+}
+
+[[nodiscard]] constexpr std::size_t ChunkSizeTuningNonHotPayloadForCapacity(
+    std::span<const NativeComponentType> components,
+    std::size_t capacity) noexcept {
+    std::size_t offset = 0;
+    for (const NativeComponentType& component : components) {
+        if (UsesHotChunkPayload(component.storageClass)) {
+            continue;
+        }
         offset = ChunkSizeTuningAlignUp(offset, component.alignment);
         offset += component.size * capacity;
     }
@@ -110,6 +171,32 @@ struct ChunkSizeTuningResult {
     while (low < high) {
         const std::size_t mid = low + ((high - low + 1U) / 2U);
         if (ChunkSizeTuningPayloadForCapacity(components, mid) <= payloadBytes) {
+            low = mid;
+        } else {
+            high = mid - 1U;
+        }
+    }
+    return low;
+}
+
+[[nodiscard]] constexpr std::size_t EstimateHotOnlyChunkCapacity(
+    ChunkSizeProfile profile,
+    std::span<const NativeComponentType> components) noexcept {
+    const std::size_t payloadBytes = ChunkPayloadBytes(profile);
+    if (payloadBytes == 0U) {
+        return 0;
+    }
+    if (components.empty()) {
+        return payloadBytes / sizeof(Entity);
+    }
+
+    const std::size_t hotBytesPerEntity = ChunkSizeTuningHotBytesPerEntity(components);
+    const std::size_t baselineBytesPerEntity = hotBytesPerEntity == 0U ? sizeof(Entity) : hotBytesPerEntity;
+    std::size_t low = 0;
+    std::size_t high = payloadBytes / baselineBytesPerEntity;
+    while (low < high) {
+        const std::size_t mid = low + ((high - low + 1U) / 2U);
+        if (ChunkSizeTuningHotPayloadForCapacity(components, mid) <= payloadBytes) {
             low = mid;
         } else {
             high = mid - 1U;
@@ -153,7 +240,12 @@ struct ChunkSizeTuningResult {
     candidate.profile = profile;
     candidate.payloadBytes = ChunkPayloadBytes(profile);
     candidate.bytesPerEntity = ChunkSizeTuningBytesPerEntity(input.components);
-    candidate.capacity = EstimateChunkCapacity(profile, input.components);
+    candidate.hotBytesPerEntity = ChunkSizeTuningHotBytesPerEntity(input.components);
+    candidate.nonHotBytesPerEntity = ChunkSizeTuningNonHotBytesPerEntity(input.components);
+    const std::size_t coLocatedCapacity = EstimateChunkCapacity(profile, input.components);
+    candidate.capacity = EstimateHotOnlyChunkCapacity(profile, input.components);
+    candidate.hotOnlyCapacity = EstimateHotOnlyChunkCapacity(profile, input.components);
+    candidate.capacityLostToNonHotStorage = candidate.hotOnlyCapacity > coLocatedCapacity ? candidate.hotOnlyCapacity - coLocatedCapacity : 0U;
     if (candidate.payloadBytes == 0U || candidate.capacity == 0U ||
         (input.maxChunkPayloadBytes != 0U && candidate.payloadBytes > input.maxChunkPayloadBytes)) {
         return candidate;
@@ -161,7 +253,8 @@ struct ChunkSizeTuningResult {
 
     candidate.valid = true;
     candidate.estimatedChunks = input.entityCount == 0U ? 0U : ((input.entityCount + candidate.capacity - 1U) / candidate.capacity);
-    candidate.estimatedAllocatedBytes = candidate.estimatedChunks * candidate.payloadBytes;
+    candidate.estimatedAllocatedBytes = candidate.estimatedChunks *
+        (candidate.payloadBytes + ChunkSizeTuningNonHotPayloadForCapacity(input.components, candidate.capacity));
     candidate.estimatedUsedBytes = input.entityCount * candidate.bytesPerEntity;
     candidate.estimatedWastedBytes = candidate.estimatedAllocatedBytes > candidate.estimatedUsedBytes
         ? candidate.estimatedAllocatedBytes - candidate.estimatedUsedBytes
@@ -192,6 +285,19 @@ struct ChunkSizeTuningResult {
         }
     }
     return result;
+}
+
+[[nodiscard]] constexpr ChunkSizeAutoTunedWorldConfig AutoTuneWorldConfig(
+    WorldConfig baseConfig,
+    const ChunkSizeTuningInput& input) noexcept {
+    ChunkSizeAutoTunedWorldConfig tuned;
+    tuned.config = baseConfig;
+    tuned.tuning = TuneChunkSizeProfile(input);
+    tuned.applied = tuned.tuning.recommendation.valid;
+    if (tuned.applied) {
+        tuned.config.chunkSizeProfile = tuned.tuning.recommendation.profile;
+    }
+    return tuned;
 }
 
 } // namespace kb::ecs

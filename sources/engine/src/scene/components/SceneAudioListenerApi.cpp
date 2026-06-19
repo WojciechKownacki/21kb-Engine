@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ AudioListenerComponent* SceneComponentMutationService::TryGetAudioListener(Scene
 
 void SceneComponentMutationService::SetAudioListener(Scene& scene, SceneEntity entity, const AudioListenerComponent& audioListener) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioListeners().Set(entity, audioListener);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioListeners().Set(entity, audioListener);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveAudioListener(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioListeners().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioListeners().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkAudioListenerModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.AudioListeners().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.AudioListeners().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

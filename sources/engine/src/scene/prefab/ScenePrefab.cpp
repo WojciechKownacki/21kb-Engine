@@ -89,6 +89,11 @@ ScenePrefabInstance::ScenePrefabInstance(std::vector<SceneObject> objects) noexc
 ScenePrefabInstance::ScenePrefabInstance(std::shared_ptr<const std::vector<SceneObject>> objects) noexcept
     : sharedObjects_(std::move(objects)) {}
 
+ScenePrefabInstance::ScenePrefabInstance(std::shared_ptr<const std::vector<SceneObject>> objectSlab, std::size_t objectOffset, std::size_t objectCount) noexcept
+    : sharedObjectSlab_(std::move(objectSlab))
+    , objectOffset_(objectOffset)
+    , objectCount_(objectCount) {}
+
 ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::vector<SceneObject> objects) noexcept
     : handle_(handle)
     , sharedObjects_(std::make_shared<std::vector<SceneObject>>(std::move(objects))) {}
@@ -96,6 +101,12 @@ ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::
 ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::shared_ptr<const std::vector<SceneObject>> objects) noexcept
     : handle_(handle)
     , sharedObjects_(std::move(objects)) {}
+
+ScenePrefabInstance::ScenePrefabInstance(ScenePrefabInstanceHandle handle, std::shared_ptr<const std::vector<SceneObject>> objectSlab, std::size_t objectOffset, std::size_t objectCount) noexcept
+    : handle_(handle)
+    , sharedObjectSlab_(std::move(objectSlab))
+    , objectOffset_(objectOffset)
+    , objectCount_(objectCount) {}
 
 bool ScenePrefabInstance::Empty() const noexcept {
     return ActiveObjects().empty();
@@ -119,6 +130,14 @@ std::vector<SceneObject> ScenePrefabInstance::TakeObjects() noexcept {
         sharedObjects_.reset();
         return objects;
     }
+    if (sharedObjectSlab_ != nullptr) {
+        const std::span<const SceneObject> objects = ActiveObjects();
+        std::vector<SceneObject> output{ objects.begin(), objects.end() };
+        sharedObjectSlab_.reset();
+        objectOffset_ = 0U;
+        objectCount_ = 0U;
+        return output;
+    }
     return std::move(objects_);
 }
 
@@ -136,7 +155,30 @@ std::shared_ptr<const std::vector<SceneObject>> ScenePrefabInstance::SharedObjec
     if (sharedObjects_ != nullptr) {
         return sharedObjects_;
     }
+    if (sharedObjectSlab_ != nullptr) {
+        if (objectOffset_ == 0U && objectCount_ == sharedObjectSlab_->size()) {
+            return sharedObjectSlab_;
+        }
+        const std::span<const SceneObject> objects = ActiveObjects();
+        return std::make_shared<std::vector<SceneObject>>(objects.begin(), objects.end());
+    }
     return std::make_shared<std::vector<SceneObject>>(objects_);
+}
+
+std::shared_ptr<const std::vector<SceneObject>> ScenePrefabInstance::SharedObjectSlab() const noexcept {
+    return sharedObjectSlab_;
+}
+
+const std::vector<SceneObject>* ScenePrefabInstance::SharedObjectSlabData() const noexcept {
+    return sharedObjectSlab_.get();
+}
+
+std::size_t ScenePrefabInstance::SharedObjectOffset() const noexcept {
+    return objectOffset_;
+}
+
+std::size_t ScenePrefabInstance::SharedObjectCount() const noexcept {
+    return objectCount_;
 }
 
 void ScenePrefabInstance::AssignHandle(ScenePrefabInstanceHandle handle) noexcept {
@@ -146,6 +188,14 @@ void ScenePrefabInstance::AssignHandle(ScenePrefabInstanceHandle handle) noexcep
 std::span<const SceneObject> ScenePrefabInstance::ActiveObjects() const noexcept {
     if (sharedObjects_ != nullptr) {
         return std::span<const SceneObject>{ *sharedObjects_ };
+    }
+    if (sharedObjectSlab_ != nullptr) {
+        if (objectOffset_ > sharedObjectSlab_->size()) {
+            return {};
+        }
+        const std::size_t available = sharedObjectSlab_->size() - objectOffset_;
+        const std::size_t count = std::min(objectCount_, available);
+        return std::span<const SceneObject>{ sharedObjectSlab_->data() + objectOffset_, count };
     }
     return std::span<const SceneObject>{ objects_ };
 }

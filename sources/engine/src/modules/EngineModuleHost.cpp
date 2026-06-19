@@ -25,18 +25,24 @@ public:
         std::filesystem::path path,
         EngineModuleLibrary library,
         IEngineModule* module,
-        DestroyEngineModuleFn destroy) noexcept
+        DestroyEngineModuleFn destroy,
+        bool unloadLibraryOnShutdown) noexcept
         : path_(std::move(path))
         , library_(std::move(library))
         , module_(module)
-        , destroy_(destroy) {}
+        , destroy_(destroy)
+        , unloadLibraryOnShutdown_(unloadLibraryOnShutdown) {}
 
     ~DynamicEngineModule() override {
         if (module_ != nullptr && destroy_ != nullptr) {
             destroy_(module_);
             module_ = nullptr;
         }
-        library_.Reset();
+        if (unloadLibraryOnShutdown_) {
+            library_.Reset();
+        } else {
+            library_.ReleaseWithoutUnload();
+        }
     }
 
     [[nodiscard]] EngineModuleMetadata Metadata() const override {
@@ -72,6 +78,7 @@ private:
     EngineModuleLibrary library_;
     IEngineModule* module_ = nullptr;
     DestroyEngineModuleFn destroy_ = nullptr;
+    bool unloadLibraryOnShutdown_ = true;
 };
 
 [[nodiscard]] std::unique_ptr<IEngineModule> LoadDynamicModule(
@@ -124,7 +131,8 @@ private:
         return nullptr;
     }
 
-    return std::make_unique<DynamicEngineModule>(loaded.loadedPath, std::move(loaded.library), module, destroy);
+    const EngineModuleMetadata metadata = module->Metadata();
+    return std::make_unique<DynamicEngineModule>(loaded.loadedPath, std::move(loaded.library), module, destroy, metadata.unloadLibraryOnShutdown);
 }
 
 // Topologically order the active modules: a module never loads before a

@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -133,13 +134,21 @@ void ValidateComponentType(const NativeComponentType& type) {
 struct ComponentLayout {
     NativeComponentType type{};
     std::size_t offset = 0;
+    bool primaryPayload = true;
 };
 
 struct ArchetypeLayout {
     std::vector<ComponentLayout> columns;
     std::size_t capacity = 0;
+    std::size_t hotOnlyCapacity = 0;
+    std::size_t capacityLostToNonHotStorage = 0;
     std::size_t bytesPerEntity = 0;
+    std::size_t hotBytesPerEntity = 0;
+    std::size_t nonHotBytesPerEntity = 0;
     std::size_t usedPayloadBytes = 0;
+    std::size_t hotOnlyUsedPayloadBytes = 0;
+    std::size_t nonHotUsedPayloadBytes = 0;
+    std::size_t sidePayloadBytes = 0;
 };
 
 [[nodiscard]] std::size_t PayloadBytesForCapacity(std::span<const NativeComponentType> types, std::size_t capacity) {
@@ -151,44 +160,93 @@ struct ArchetypeLayout {
     return offset;
 }
 
-[[nodiscard]] ArchetypeLayout BuildLayout(std::span<const NativeComponentType> types, std::size_t payloadBytes) {
-    ArchetypeLayout layout;
-    layout.bytesPerEntity = 0;
+[[nodiscard]] std::size_t HotPayloadBytesForCapacity(std::span<const NativeComponentType> types, std::size_t capacity) {
+    std::size_t offset = 0;
+    bool hasHotTableComponent = false;
     for (const NativeComponentType& type : types) {
-        layout.bytesPerEntity += type.size;
-    }
-    if (types.empty()) {
-        layout.capacity = std::max<std::size_t>(payloadBytes / sizeof(Entity), 1U);
-        return layout;
+        if (!UsesHotChunkPayload(type.storageClass)) {
+            continue;
+        }
+        hasHotTableComponent = true;
+        offset = AlignUp(offset, type.alignment);
+        offset += type.size * capacity;
     }
 
+    return hasHotTableComponent ? offset : capacity * sizeof(Entity);
+}
+
+[[nodiscard]] std::size_t FindPayloadCapacity(
+    std::span<const NativeComponentType> types,
+    std::size_t payloadBytes,
+    std::size_t bytesPerEntity,
+    std::size_t (*payloadForCapacity)(std::span<const NativeComponentType>, std::size_t)) {
     std::size_t low = 0;
-    std::size_t high = std::max<std::size_t>(1, payloadBytes / std::max<std::size_t>(layout.bytesPerEntity, 1));
-    while (PayloadBytesForCapacity(types, high) <= payloadBytes && high < (std::numeric_limits<std::size_t>::max() / 2U)) {
+    std::size_t high = std::max<std::size_t>(1, payloadBytes / std::max<std::size_t>(bytesPerEntity, 1));
+    while (payloadForCapacity(types, high) <= payloadBytes && high < (std::numeric_limits<std::size_t>::max() / 2U)) {
         high *= 2U;
     }
 
     while (low < high) {
         const std::size_t mid = low + ((high - low + 1U) / 2U);
-        if (PayloadBytesForCapacity(types, mid) <= payloadBytes) {
+        if (payloadForCapacity(types, mid) <= payloadBytes) {
             low = mid;
         } else {
             high = mid - 1U;
         }
     }
 
-    if (!types.empty() && low == 0) {
-        throw std::invalid_argument("Native ECS chunk payload is too small for archetype");
+    return low;
+}
+
+[[nodiscard]] ArchetypeLayout BuildLayout(std::span<const NativeComponentType> types, std::size_t payloadBytes) {
+    ArchetypeLayout layout;
+    layout.bytesPerEntity = 0;
+    for (const NativeComponentType& type : types) {
+        layout.bytesPerEntity += type.size;
+        if (UsesHotChunkPayload(type.storageClass)) {
+            layout.hotBytesPerEntity += type.size;
+        } else {
+            layout.nonHotBytesPerEntity += type.size;
+        }
+    }
+    if (types.empty()) {
+        layout.capacity = std::max<std::size_t>(payloadBytes / sizeof(Entity), 1U);
+        layout.hotOnlyCapacity = layout.capacity;
+        return layout;
     }
 
-    layout.capacity = types.empty() ? std::max<std::size_t>(payloadBytes / sizeof(Entity), 1U) : low;
-    std::size_t offset = 0;
-    for (const NativeComponentType& type : types) {
-        offset = AlignUp(offset, type.alignment);
-        layout.columns.push_back(ComponentLayout{ .type = type, .offset = offset });
-        offset += type.size * layout.capacity;
+    const std::size_t hotCapacityBaseline = layout.hotBytesPerEntity == 0U ? sizeof(Entity) : layout.hotBytesPerEntity;
+    const std::size_t fullCapacity = FindPayloadCapacity(types, payloadBytes, layout.bytesPerEntity, PayloadBytesForCapacity);
+    layout.hotOnlyCapacity = FindPayloadCapacity(types, payloadBytes, hotCapacityBaseline, HotPayloadBytesForCapacity);
+    if (layout.hotOnlyCapacity == 0) {
+        throw std::invalid_argument("Native ECS chunk payload is too small for archetype hot storage");
     }
-    layout.usedPayloadBytes = offset;
+    layout.capacity = layout.hotOnlyCapacity;
+    layout.capacityLostToNonHotStorage = layout.hotOnlyCapacity > fullCapacity ? layout.hotOnlyCapacity - fullCapacity : 0U;
+    std::size_t hotPayloadOffset = 0;
+    std::size_t sidePayloadOffset = 0;
+    std::size_t hotOffset = 0;
+    std::size_t nonHotPayloadBytes = 0;
+    for (const NativeComponentType& type : types) {
+        if (UsesHotChunkPayload(type.storageClass)) {
+            hotPayloadOffset = AlignUp(hotPayloadOffset, type.alignment);
+            layout.columns.push_back(ComponentLayout{ .type = type, .offset = hotPayloadOffset, .primaryPayload = true });
+            const std::size_t columnPayloadBytes = type.size * layout.capacity;
+            hotPayloadOffset += columnPayloadBytes;
+            hotOffset = AlignUp(hotOffset, type.alignment);
+            hotOffset += type.size * layout.hotOnlyCapacity;
+        } else {
+            sidePayloadOffset = AlignUp(sidePayloadOffset, type.alignment);
+            layout.columns.push_back(ComponentLayout{ .type = type, .offset = sidePayloadOffset, .primaryPayload = false });
+            const std::size_t columnPayloadBytes = type.size * layout.capacity;
+            sidePayloadOffset += columnPayloadBytes;
+            nonHotPayloadBytes += columnPayloadBytes;
+        }
+    }
+    layout.usedPayloadBytes = hotPayloadOffset;
+    layout.hotOnlyUsedPayloadBytes = layout.hotBytesPerEntity == 0U ? layout.hotOnlyCapacity * sizeof(Entity) : hotOffset;
+    layout.nonHotUsedPayloadBytes = nonHotPayloadBytes;
+    layout.sidePayloadBytes = sidePayloadOffset;
     return layout;
 }
 
@@ -218,6 +276,8 @@ public:
         }
         ++chunksInUse_;
         ++allocatedChunks_;
+        ++systemAllocationCount_;
+        peakAllocatedChunks_ = std::max(peakAllocatedChunks_, allocatedChunks_);
         return static_cast<std::byte*>(::operator new(payloadBytes_, std::align_val_t{ alignment_ }));
     }
 
@@ -254,6 +314,8 @@ public:
     [[nodiscard]] std::size_t ReuseCount() const noexcept { return reuseCount_; }
     [[nodiscard]] std::size_t ReleaseCount() const noexcept { return releaseCount_; }
     [[nodiscard]] std::size_t TrimCount() const noexcept { return trimCount_; }
+    [[nodiscard]] std::size_t SystemAllocationCount() const noexcept { return systemAllocationCount_; }
+    [[nodiscard]] std::size_t PeakAllocatedChunks() const noexcept { return peakAllocatedChunks_; }
 
 private:
     std::size_t payloadBytes_ = 0;
@@ -264,6 +326,8 @@ private:
     std::size_t reuseCount_ = 0;
     std::size_t releaseCount_ = 0;
     std::size_t trimCount_ = 0;
+    std::size_t systemAllocationCount_ = 0;
+    std::size_t peakAllocatedChunks_ = 0;
     std::vector<std::byte*> freeList_;
 };
 
@@ -311,14 +375,69 @@ private:
     std::byte* data_ = nullptr;
 };
 
+class NativeSidePayloadBuffer {
+public:
+    NativeSidePayloadBuffer() noexcept = default;
+
+    explicit NativeSidePayloadBuffer(std::size_t size)
+        : size_(size)
+        , data_(size == 0U ? nullptr : static_cast<std::byte*>(::operator new(size, std::align_val_t{ kChunkAlignment }))) {
+        if (data_ != nullptr) {
+            std::memset(data_, 0, size_);
+        }
+    }
+
+    ~NativeSidePayloadBuffer() {
+        Reset();
+    }
+
+    NativeSidePayloadBuffer(const NativeSidePayloadBuffer&) = delete;
+    NativeSidePayloadBuffer& operator=(const NativeSidePayloadBuffer&) = delete;
+
+    NativeSidePayloadBuffer(NativeSidePayloadBuffer&& other) noexcept
+        : size_(std::exchange(other.size_, 0U))
+        , data_(std::exchange(other.data_, nullptr)) {}
+
+    NativeSidePayloadBuffer& operator=(NativeSidePayloadBuffer&& other) noexcept {
+        if (this != &other) {
+            Reset();
+            size_ = std::exchange(other.size_, 0U);
+            data_ = std::exchange(other.data_, nullptr);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] std::byte* Data() noexcept { return data_; }
+    [[nodiscard]] const std::byte* Data() const noexcept { return data_; }
+    [[nodiscard]] std::size_t Size() const noexcept { return size_; }
+
+private:
+    void Reset() noexcept {
+        if (data_ != nullptr) {
+            ::operator delete(data_, std::align_val_t{ kChunkAlignment });
+            data_ = nullptr;
+            size_ = 0U;
+        }
+    }
+
+    std::size_t size_ = 0;
+    std::byte* data_ = nullptr;
+};
+
 struct NativeChunk {
     NativeChunkBuffer payload;
+    NativeSidePayloadBuffer sidePayload;
     std::vector<Entity> entities;
+    std::vector<std::uint64_t> dirtyRowWords;
+    std::vector<std::size_t> dirtyRowCounts;
     std::size_t rowCount = 0;
 
-    NativeChunk(NativeChunkPool& pool, std::size_t capacity)
+    NativeChunk(NativeChunkPool& pool, std::size_t capacity, std::size_t componentCount, std::size_t dirtyWordCount, std::size_t sidePayloadBytes)
         : payload(pool)
-        , entities(capacity) {}
+        , sidePayload(sidePayloadBytes)
+        , entities(capacity)
+        , dirtyRowWords(dirtyWordCount)
+        , dirtyRowCounts(componentCount) {}
 
     NativeChunk(const NativeChunk&) = delete;
     NativeChunk& operator=(const NativeChunk&) = delete;
@@ -330,6 +449,12 @@ struct EntityLocation {
     std::size_t table = 0;
     std::size_t chunk = 0;
     std::size_t row = 0;
+};
+
+struct BulkAppendRange {
+    std::size_t chunk = 0;
+    std::size_t firstRow = 0;
+    std::size_t count = 0;
 };
 
 struct EntityRecord {
@@ -473,8 +598,42 @@ public:
     [[nodiscard]] std::size_t LiveEntities() const noexcept { return liveEntities_; }
     [[nodiscard]] std::size_t ChunkCount() const noexcept { return chunks_.size(); }
     [[nodiscard]] std::size_t Capacity() const noexcept { return layout_.capacity; }
+    [[nodiscard]] std::size_t HotOnlyCapacity() const noexcept { return layout_.hotOnlyCapacity; }
+    [[nodiscard]] std::size_t CapacityLostToNonHotStorage() const noexcept { return layout_.capacityLostToNonHotStorage; }
+    [[nodiscard]] std::size_t SidePayloadBytes() const noexcept { return layout_.sidePayloadBytes * chunks_.size(); }
+    [[nodiscard]] std::size_t ChunkSidePayloadBytes() const noexcept { return layout_.sidePayloadBytes; }
     [[nodiscard]] std::size_t UsedBytes() const noexcept { return liveEntities_ * layout_.bytesPerEntity; }
     [[nodiscard]] std::uint64_t Version() const noexcept { return version_; }
+    [[nodiscard]] std::size_t ChunkMetadataBytes(std::size_t chunkIndex) const {
+        const NativeChunk& chunk = chunks_.at(chunkIndex);
+        return (chunk.entities.capacity() * sizeof(Entity)) +
+            (chunk.dirtyRowWords.capacity() * sizeof(std::uint64_t)) +
+            (chunk.dirtyRowCounts.capacity() * sizeof(std::size_t));
+    }
+    [[nodiscard]] std::size_t NewChunkAcquiresForAppend(std::size_t entityCount) const noexcept {
+        if (entityCount == 0U || layout_.capacity == 0U) {
+            return 0U;
+        }
+
+        std::size_t remaining = entityCount;
+        if (liveEntities_ == 0U && !chunks_.empty()) {
+            for (const NativeChunk& chunk : chunks_) {
+                const std::size_t available = layout_.capacity > chunk.rowCount ? layout_.capacity - chunk.rowCount : 0U;
+                if (available >= remaining) {
+                    return 0U;
+                }
+                remaining -= available;
+            }
+        } else if (!chunks_.empty()) {
+            const std::size_t available = layout_.capacity > chunks_.back().rowCount ? layout_.capacity - chunks_.back().rowCount : 0U;
+            if (available >= remaining) {
+                return 0U;
+            }
+            remaining -= available;
+        }
+
+        return (remaining + layout_.capacity - 1U) / layout_.capacity;
+    }
 
     [[nodiscard]] bool HasComponent(ComponentId componentId) const noexcept {
         return FindColumn(componentId) != nullptr;
@@ -516,7 +675,7 @@ public:
 
     [[nodiscard]] EntityLocation Add(Entity entity) {
         if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
-            chunks_.emplace_back(*pool_, layout_.capacity);
+            chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
         }
         EntityLocation location{ .chunk = chunks_.size() - 1U, .row = chunks_.back().rowCount };
         chunks_.back().entities[location.row] = entity;
@@ -527,6 +686,7 @@ public:
         if (componentVersions_.empty()) {
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
+        MarkAllComponentRowsDirty(location.chunk, location.row, 1U);
         return location;
     }
 
@@ -539,22 +699,34 @@ public:
         if (componentVersions_.empty()) {
             componentVersions_.resize(layout_.columns.size(), 1U);
         }
-
         std::size_t consumed = 0;
+        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
+        std::size_t retainedChunkCursor = 0U;
         while (consumed < entities.size()) {
-            if (chunks_.empty() || chunks_.back().rowCount == layout_.capacity) {
-                chunks_.emplace_back(*pool_, layout_.capacity);
+            std::size_t chunkIndex = chunks_.size();
+            if (reuseRetainedChunks) {
+                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
+                    ++retainedChunkCursor;
+                }
+                if (retainedChunkCursor < chunks_.size()) {
+                    chunkIndex = retainedChunkCursor++;
+                }
+            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
+                chunkIndex = chunks_.size() - 1U;
+            }
+            if (chunkIndex == chunks_.size()) {
+                chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
+                chunkIndex = chunks_.size() - 1U;
             }
 
-            NativeChunk& chunk = chunks_.back();
-            const std::size_t chunkIndex = chunks_.size() - 1U;
+            NativeChunk& chunk = chunks_[chunkIndex];
             const std::size_t firstRow = chunk.rowCount;
             const std::size_t writable = std::min(entities.size() - consumed, layout_.capacity - firstRow);
             std::memcpy(chunk.entities.data() + firstRow, entities.data() + consumed, writable * sizeof(Entity));
 
             if (clearRows) {
                 for (const ComponentLayout& column : layout_.columns) {
-                    std::memset(chunk.payload.Data() + column.offset + (firstRow * column.type.size), 0, writable * column.type.size);
+                    std::memset(ColumnData(chunkIndex, column, firstRow), 0, writable * column.type.size);
                 }
             }
 
@@ -564,6 +736,59 @@ public:
 
             chunk.rowCount += writable;
             liveEntities_ += writable;
+            if (clearRows) {
+                MarkAllComponentRowsDirty(chunkIndex, firstRow, writable);
+            }
+            consumed += writable;
+        }
+        version_ += entities.size();
+    }
+
+    void AddManyRanges(std::span<const Entity> entities, std::vector<BulkAppendRange>& ranges, bool clearRows = true) {
+        ranges.clear();
+        if (entities.empty()) {
+            return;
+        }
+        if (componentVersions_.empty()) {
+            componentVersions_.resize(layout_.columns.size(), 1U);
+        }
+        std::size_t consumed = 0;
+        const bool reuseRetainedChunks = liveEntities_ == 0U && !chunks_.empty();
+        std::size_t retainedChunkCursor = 0U;
+        while (consumed < entities.size()) {
+            std::size_t chunkIndex = chunks_.size();
+            if (reuseRetainedChunks) {
+                while (retainedChunkCursor < chunks_.size() && chunks_[retainedChunkCursor].rowCount == layout_.capacity) {
+                    ++retainedChunkCursor;
+                }
+                if (retainedChunkCursor < chunks_.size()) {
+                    chunkIndex = retainedChunkCursor++;
+                }
+            } else if (!chunks_.empty() && chunks_.back().rowCount < layout_.capacity) {
+                chunkIndex = chunks_.size() - 1U;
+            }
+            if (chunkIndex == chunks_.size()) {
+                chunks_.emplace_back(*pool_, layout_.capacity, layout_.columns.size(), DirtyWordCount(), layout_.sidePayloadBytes);
+                chunkIndex = chunks_.size() - 1U;
+            }
+
+            NativeChunk& chunk = chunks_[chunkIndex];
+            const std::size_t firstRow = chunk.rowCount;
+            const std::size_t writable = std::min(entities.size() - consumed, layout_.capacity - firstRow);
+            std::memcpy(chunk.entities.data() + firstRow, entities.data() + consumed, writable * sizeof(Entity));
+
+            if (clearRows) {
+                for (const ComponentLayout& column : layout_.columns) {
+                    std::memset(ColumnData(chunkIndex, column, firstRow), 0, writable * column.type.size);
+                }
+            }
+
+            ranges.push_back(BulkAppendRange{ .chunk = chunkIndex, .firstRow = firstRow, .count = writable });
+            chunk.rowCount += writable;
+            liveEntities_ += writable;
+            if (clearRows) {
+                MarkAllComponentRowsDirty(chunkIndex, firstRow, writable);
+            }
             consumed += writable;
         }
         version_ += entities.size();
@@ -581,7 +806,9 @@ public:
             CopyRow(last, location);
             movedEntity = lastChunk.entities[last.row];
             chunks_[location.chunk].entities[location.row] = movedEntity;
+            MarkAllComponentRowsDirty(location.chunk, location.row, 1U);
         }
+        ClearAllComponentRowsDirty(last.chunk, last.row, 1U);
 
         --lastChunk.rowCount;
         --liveEntities_;
@@ -607,15 +834,26 @@ public:
         }
 
         removedRows.reserve(locations.size());
+        bool strictlyIncreasingRows = true;
+        std::size_t previousFlatRow = 0;
+        bool hasPreviousFlatRow = false;
         for (EntityLocation location : locations) {
             if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
                 throw std::out_of_range("Invalid native ECS row location");
             }
-            removedRows.push_back(FlatRow(location));
+            const std::size_t flatRow = FlatRow(location);
+            if (hasPreviousFlatRow && flatRow <= previousFlatRow) {
+                strictlyIncreasingRows = false;
+            }
+            previousFlatRow = flatRow;
+            hasPreviousFlatRow = true;
+            removedRows.push_back(flatRow);
         }
-        std::sort(removedRows.begin(), removedRows.end());
-        if (std::adjacent_find(removedRows.begin(), removedRows.end()) != removedRows.end()) {
-            throw std::invalid_argument("Native ECS bulk destroy received duplicate row locations");
+        if (!strictlyIncreasingRows) {
+            std::sort(removedRows.begin(), removedRows.end());
+            if (std::adjacent_find(removedRows.begin(), removedRows.end()) != removedRows.end()) {
+                throw std::invalid_argument("Native ECS bulk destroy received duplicate row locations");
+            }
         }
 
         const std::size_t originalLiveEntities = liveEntities_;
@@ -637,14 +875,46 @@ public:
             Entity movedEntity = chunks_[source.chunk].entities[source.row];
             chunks_[destination.chunk].entities[destination.row] = movedEntity;
             movedEntities.push_back(std::pair{ movedEntity, destination });
+            MarkAllComponentRowsDirty(destination.chunk, destination.row, 1U);
             --tail;
         }
 
+        ClearDirtyRowsFromFlatRange(targetLiveEntities, originalLiveEntities - targetLiveEntities);
         ResizeRows(targetLiveEntities);
         liveEntities_ = targetLiveEntities;
         version_ += removedRows.size();
         for (std::uint64_t& componentVersion : componentVersions_) {
             componentVersion += removedRows.size();
+        }
+    }
+
+    void RemoveAll() {
+        if (liveEntities_ == 0U) {
+            return;
+        }
+        const std::size_t removedCount = liveEntities_;
+        ResizeRows(0U);
+        liveEntities_ = 0U;
+        version_ += removedCount;
+        for (std::uint64_t& componentVersion : componentVersions_) {
+            componentVersion += removedCount;
+        }
+    }
+
+    void RemoveAllRetainingCapacity() {
+        if (liveEntities_ == 0U) {
+            return;
+        }
+        const std::size_t removedCount = liveEntities_;
+        for (NativeChunk& chunk : chunks_) {
+            chunk.rowCount = 0U;
+            std::fill(chunk.dirtyRowWords.begin(), chunk.dirtyRowWords.end(), 0ULL);
+            std::fill(chunk.dirtyRowCounts.begin(), chunk.dirtyRowCounts.end(), 0U);
+        }
+        liveEntities_ = 0U;
+        version_ += removedCount;
+        for (std::uint64_t& componentVersion : componentVersions_) {
+            componentVersion += removedCount;
         }
     }
 
@@ -657,6 +927,7 @@ public:
             if (target.HasComponent(type.id)) {
                 std::memcpy(target.ComponentData(targetLocation, type.id), ComponentData(source, type.id), type.size);
                 target.TouchComponent(type.id);
+                target.MarkComponentRowsDirty(type.id, targetLocation.chunk, targetLocation.row, 1U);
             }
         }
     }
@@ -697,10 +968,11 @@ public:
                 if (sourceColumn == nullptr || targetColumn == nullptr) {
                     throw std::out_of_range("Native ECS bulk migration component column is unavailable");
                 }
-                const auto* sourceData = chunks_[firstSource.chunk].payload.Data() + sourceColumn->offset + (firstSource.row * sourceColumn->type.size);
-                auto* targetData = target.chunks_[firstTarget.chunk].payload.Data() + targetColumn->offset + (firstTarget.row * targetColumn->type.size);
+                const auto* sourceData = ColumnData(firstSource.chunk, *sourceColumn, firstSource.row);
+                auto* targetData = target.ColumnData(firstTarget.chunk, *targetColumn, firstTarget.row);
                 std::memcpy(targetData, sourceData, count * sourceColumn->type.size);
                 target.TouchComponent(type.id);
+                target.MarkComponentRowsDirty(type.id, firstTarget.chunk, firstTarget.row, count);
                 consumed += count;
             }
         }
@@ -713,6 +985,7 @@ public:
         }
         std::memcpy(ComponentData(location, componentId), data, size);
         TouchComponent(componentId);
+        MarkComponentRowsDirty(componentId, location.chunk, location.row, 1U);
     }
 
     void WriteComponentColumn(
@@ -730,7 +1003,7 @@ public:
             throw std::out_of_range("Invalid native ECS component column range");
         }
 
-        auto* destination = chunks_[chunkIndex].payload.Data() + column->offset + (firstRow * column->type.size);
+        auto* destination = ColumnData(chunkIndex, *column, firstRow);
         const auto* source = static_cast<const std::byte*>(data);
         const bool broadcast = stride == 0U;
         const std::size_t sourceStride = broadcast ? 0U : stride;
@@ -747,6 +1020,7 @@ public:
             }
         }
         TouchComponent(componentId);
+        MarkComponentRowsDirty(componentId, chunkIndex, firstRow, count);
     }
 
     static void WriteRepeatedComponentRows(std::byte* destination, const std::byte* source, std::size_t componentSize, std::size_t rowCount) {
@@ -783,7 +1057,7 @@ public:
             throw std::invalid_argument("Invalid native ECS component pattern stride");
         }
 
-        auto* destination = chunks_[chunkIndex].payload.Data() + column->offset + (firstRow * column->type.size);
+        auto* destination = ColumnData(chunkIndex, *column, firstRow);
         const auto* source = static_cast<const std::byte*>(data);
         std::size_t written = 0;
         std::size_t sourceIndex = sourceOffset % sourceCount;
@@ -803,6 +1077,128 @@ public:
             sourceIndex = 0;
         }
         TouchComponent(componentId);
+        MarkComponentRowsDirty(componentId, chunkIndex, firstRow, count);
+    }
+
+    void WriteComponentColumnPrepared(
+        const ComponentLayout& column,
+        std::size_t componentIndex,
+        std::size_t chunkIndex,
+        std::size_t firstRow,
+        const void* data,
+        std::size_t count,
+        std::size_t stride) {
+        if (data == nullptr || count == 0U) {
+            throw std::invalid_argument("Invalid native ECS component column write");
+        }
+        if (chunkIndex >= chunks_.size() || firstRow + count > chunks_[chunkIndex].rowCount) {
+            throw std::out_of_range("Invalid native ECS component column range");
+        }
+
+        auto* destination = ColumnData(chunkIndex, column, firstRow);
+        const auto* source = static_cast<const std::byte*>(data);
+        const bool broadcast = stride == 0U;
+        const std::size_t sourceStride = broadcast ? 0U : stride;
+        if (!broadcast && sourceStride < column.type.size) {
+            throw std::invalid_argument("Invalid native ECS component column stride");
+        }
+        if (broadcast) {
+            WriteRepeatedComponentRows(destination, source, column.type.size, count);
+        } else if (sourceStride == column.type.size) {
+            std::memcpy(destination, source, count * column.type.size);
+        } else {
+            for (std::size_t row = 0; row < count; ++row) {
+                std::memcpy(destination + (row * column.type.size), source + (row * sourceStride), column.type.size);
+            }
+        }
+        MarkComponentRowsDirtyByIndex(componentIndex, chunkIndex, firstRow, count);
+    }
+
+    void WriteComponentColumnPatternPrepared(
+        const ComponentLayout& column,
+        std::size_t componentIndex,
+        std::size_t chunkIndex,
+        std::size_t firstRow,
+        const void* data,
+        std::size_t count,
+        std::size_t stride,
+        std::size_t sourceCount,
+        std::size_t sourceOffset) {
+        if (data == nullptr || count == 0U || sourceCount == 0U) {
+            throw std::invalid_argument("Invalid native ECS component pattern write");
+        }
+        if (chunkIndex >= chunks_.size() || firstRow + count > chunks_[chunkIndex].rowCount) {
+            throw std::out_of_range("Invalid native ECS component pattern range");
+        }
+        if (stride < column.type.size) {
+            throw std::invalid_argument("Invalid native ECS component pattern stride");
+        }
+
+        auto* destination = ColumnData(chunkIndex, column, firstRow);
+        const auto* source = static_cast<const std::byte*>(data);
+        std::size_t written = 0;
+        std::size_t sourceIndex = sourceOffset % sourceCount;
+        while (written < count) {
+            const std::size_t run = std::min(sourceCount - sourceIndex, count - written);
+            if (stride == column.type.size) {
+                std::memcpy(destination + (written * column.type.size), source + (sourceIndex * stride), run * column.type.size);
+            } else {
+                for (std::size_t row = 0; row < run; ++row) {
+                    std::memcpy(
+                        destination + ((written + row) * column.type.size),
+                        source + ((sourceIndex + row) * stride),
+                        column.type.size);
+                }
+            }
+            written += run;
+            sourceIndex = 0;
+        }
+        MarkComponentRowsDirtyByIndex(componentIndex, chunkIndex, firstRow, count);
+    }
+
+    void WriteBulkComponentRanges(
+        std::span<const NativeBulkComponentColumn> components,
+        std::span<const BulkAppendRange> ranges,
+        std::size_t entityCount) {
+        if (components.empty() || ranges.empty()) {
+            return;
+        }
+        if (componentVersions_.empty()) {
+            componentVersions_.resize(layout_.columns.size(), 1U);
+        }
+
+        for (const NativeBulkComponentColumn& component : components) {
+            const ComponentLayout* column = FindColumn(component.type.id);
+            if (column == nullptr) {
+                throw std::out_of_range("Native ECS bulk append component column is unavailable");
+            }
+            const std::size_t componentIndex = static_cast<std::size_t>(column - layout_.columns.data());
+            componentVersions_[componentIndex] += ranges.size();
+            version_ += ranges.size();
+
+            const bool broadcast = component.sourceCount == 1U;
+            const bool repeatedPattern = component.sourceCount > 1U && component.sourceCount < entityCount;
+            const std::size_t stride = broadcast ? 0U : (component.stride == 0U ? component.type.size : component.stride);
+            std::size_t consumed = 0;
+            for (const BulkAppendRange& range : ranges) {
+                const auto* data = broadcast ? component.data : static_cast<const std::byte*>(component.data) + (consumed * stride);
+                if (repeatedPattern) {
+                    WriteComponentColumnPatternPrepared(
+                        *column,
+                        componentIndex,
+                        range.chunk,
+                        range.firstRow,
+                        component.data,
+                        range.count,
+                        stride,
+                        component.sourceCount,
+                        consumed);
+                } else {
+                    WriteComponentColumnPrepared(*column, componentIndex, range.chunk, range.firstRow, data, range.count, stride);
+                }
+                consumed += range.count;
+            }
+        }
     }
 
     void WriteComponentRows(
@@ -839,7 +1235,7 @@ public:
                 ++count;
             }
 
-            auto* destination = chunks_[first.chunk].payload.Data() + column->offset + (first.row * column->type.size);
+            auto* destination = ColumnData(first.chunk, *column, first.row);
             const auto* sourceData = broadcast ? source : source + (sourceRows[consumed] * sourceStride);
             if (broadcast) {
                 for (std::size_t index = 0; index < count; ++index) {
@@ -853,6 +1249,7 @@ public:
                 }
             }
             TouchComponent(componentId);
+            MarkComponentRowsDirty(componentId, first.chunk, first.row, count);
             consumed += count;
         }
     }
@@ -860,6 +1257,18 @@ public:
     void MarkComponentsModified(std::span<const ComponentId> componentIds) {
         for (ComponentId componentId : componentIds) {
             TouchComponent(componentId);
+            MarkComponentAllLiveRowsDirty(componentId);
+        }
+    }
+
+    void MarkComponentsModified(std::size_t chunkIndex, std::size_t firstRow, std::size_t count, std::span<const ComponentId> componentIds) {
+        if (count == 0U) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, count);
+        for (ComponentId componentId : componentIds) {
+            TouchComponent(componentId);
+            MarkComponentRowsDirty(componentId, chunkIndex, firstRow, count);
         }
     }
 
@@ -894,7 +1303,7 @@ public:
         if (column == nullptr || chunkIndex >= chunks_.size()) {
             throw std::out_of_range("Native ECS component column is not available");
         }
-        return chunks_[chunkIndex].payload.Data() + column->offset;
+        return ColumnBase(chunks_[chunkIndex], *column);
     }
 
     [[nodiscard]] void* MutableComponentColumnData(std::size_t chunkIndex, ComponentId componentId) {
@@ -902,7 +1311,7 @@ public:
         if (column == nullptr || chunkIndex >= chunks_.size()) {
             throw std::out_of_range("Native ECS component column is not available");
         }
-        return chunks_[chunkIndex].payload.Data() + column->offset;
+        return ColumnBase(chunks_[chunkIndex], *column);
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, ComponentId componentId) const {
@@ -917,6 +1326,12 @@ private:
     void ValidateLocation(EntityLocation location) const {
         if (location.chunk >= chunks_.size() || location.row >= chunks_[location.chunk].rowCount) {
             throw std::out_of_range("Invalid native ECS row location");
+        }
+    }
+
+    void ValidateRowRange(std::size_t chunkIndex, std::size_t firstRow, std::size_t count) const {
+        if (chunkIndex >= chunks_.size() || firstRow > chunks_[chunkIndex].rowCount || count > chunks_[chunkIndex].rowCount - firstRow) {
+            throw std::out_of_range("Invalid native ECS row range");
         }
     }
 
@@ -941,14 +1356,223 @@ private:
         ++version_;
     }
 
+    [[nodiscard]] std::size_t DirtyWordsPerComponent() const noexcept {
+        return (layout_.capacity + 63U) / 64U;
+    }
+
+    [[nodiscard]] std::size_t DirtyWordCount() const noexcept {
+        return DirtyWordsPerComponent() * layout_.columns.size();
+    }
+
+    [[nodiscard]] std::size_t ComponentColumnIndex(ComponentId componentId) const {
+        const ComponentLayout* column = FindColumn(componentId);
+        if (column == nullptr) {
+            throw std::out_of_range("Native ECS component is not in archetype");
+        }
+        return static_cast<std::size_t>(column - layout_.columns.data());
+    }
+
+    [[nodiscard]] std::uint64_t* DirtyWords(NativeChunk& chunk, std::size_t componentIndex) noexcept {
+        return chunk.dirtyRowWords.data() + (componentIndex * DirtyWordsPerComponent());
+    }
+
+    [[nodiscard]] const std::uint64_t* DirtyWords(const NativeChunk& chunk, std::size_t componentIndex) const noexcept {
+        return chunk.dirtyRowWords.data() + (componentIndex * DirtyWordsPerComponent());
+    }
+
+    [[nodiscard]] static std::size_t SetDirtyBits(std::uint64_t* words, std::size_t firstRow, std::size_t count) noexcept {
+        std::size_t changedCount = 0U;
+        while (count > 0U) {
+            const std::size_t wordIndex = firstRow / 64U;
+            const std::size_t bitIndex = firstRow % 64U;
+            const std::size_t writableBits = std::min<std::size_t>(count, 64U - bitIndex);
+            const std::uint64_t mask = writableBits == 64U ? ~std::uint64_t{ 0 } : (((std::uint64_t{ 1 } << writableBits) - 1U) << bitIndex);
+            std::uint64_t& word = words[wordIndex];
+            const std::uint64_t changed = mask & ~word;
+            word |= mask;
+            changedCount += std::popcount(changed);
+            firstRow += writableBits;
+            count -= writableBits;
+        }
+        return changedCount;
+    }
+
+    [[nodiscard]] static std::size_t ClearDirtyBits(std::uint64_t* words, std::size_t firstRow, std::size_t count) noexcept {
+        std::size_t changedCount = 0U;
+        while (count > 0U) {
+            const std::size_t wordIndex = firstRow / 64U;
+            const std::size_t bitIndex = firstRow % 64U;
+            const std::size_t writableBits = std::min<std::size_t>(count, 64U - bitIndex);
+            const std::uint64_t mask = writableBits == 64U ? ~std::uint64_t{ 0 } : (((std::uint64_t{ 1 } << writableBits) - 1U) << bitIndex);
+            std::uint64_t& word = words[wordIndex];
+            const std::uint64_t changed = mask & word;
+            word &= ~mask;
+            changedCount += std::popcount(changed);
+            firstRow += writableBits;
+            count -= writableBits;
+        }
+        return changedCount;
+    }
+
+    [[nodiscard]] static std::size_t CountDirtyBits(const std::uint64_t* words, std::size_t firstRow, std::size_t count) noexcept {
+        std::size_t dirtyCount = 0U;
+        while (count > 0U) {
+            const std::size_t wordIndex = firstRow / 64U;
+            const std::size_t bitIndex = firstRow % 64U;
+            const std::size_t readableBits = std::min<std::size_t>(count, 64U - bitIndex);
+            const std::uint64_t mask = readableBits == 64U ? ~std::uint64_t{ 0 } : (((std::uint64_t{ 1 } << readableBits) - 1U) << bitIndex);
+            dirtyCount += std::popcount(words[wordIndex] & mask);
+            firstRow += readableBits;
+            count -= readableBits;
+        }
+        return dirtyCount;
+    }
+
+    void MarkComponentRowsDirty(ComponentId componentId, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        if (count == 0U) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, count);
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        NativeChunk& chunk = chunks_[chunkIndex];
+        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+    }
+
+    void MarkComponentRowsDirtyByIndex(std::size_t componentIndex, std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        if (count == 0U) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, count);
+        if (componentIndex >= layout_.columns.size()) {
+            throw std::out_of_range("Native ECS component column index is unavailable");
+        }
+        NativeChunk& chunk = chunks_[chunkIndex];
+        chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+    }
+
+    void MarkComponentAllLiveRowsDirty(ComponentId componentId) {
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        for (NativeChunk& chunk : chunks_) {
+            if (chunk.rowCount == 0U) {
+                continue;
+            }
+            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), 0U, chunk.rowCount);
+        }
+    }
+
+    void MarkAllComponentRowsDirty(std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        if (count == 0U || layout_.columns.empty()) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, count);
+        NativeChunk& chunk = chunks_[chunkIndex];
+        for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
+            chunk.dirtyRowCounts[componentIndex] += SetDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        }
+    }
+
+    void ClearAllComponentRowsDirty(std::size_t chunkIndex, std::size_t firstRow, std::size_t count) {
+        if (count == 0U || layout_.columns.empty()) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, count);
+        NativeChunk& chunk = chunks_[chunkIndex];
+        for (std::size_t componentIndex = 0U; componentIndex < layout_.columns.size(); ++componentIndex) {
+            chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, count);
+        }
+    }
+
+    void ClearDirtyRowsFromFlatRange(std::size_t firstFlatRow, std::size_t count) {
+        std::size_t remaining = count;
+        std::size_t flatRow = firstFlatRow;
+        while (remaining > 0U) {
+            const EntityLocation location = LocationFromFlatRow(flatRow);
+            const std::size_t chunkRows = chunks_[location.chunk].rowCount;
+            const std::size_t clearCount = std::min(remaining, chunkRows - location.row);
+            ClearAllComponentRowsDirty(location.chunk, location.row, clearCount);
+            remaining -= clearCount;
+            flatRow += clearCount;
+        }
+    }
+
+public:
+    [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t chunkIndex, ComponentId componentId) const {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        return chunks_[chunkIndex].dirtyRowCounts[componentIndex];
+    }
+
+    [[nodiscard]] std::size_t CollectComponentDirtyRanges(
+        std::size_t chunkIndex,
+        ComponentId componentId,
+        std::size_t rangeSize,
+        std::vector<NativeComponentDirtyRange>& ranges) const {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        const std::size_t rowCount = chunks_[chunkIndex].rowCount;
+        const std::size_t resolvedRangeSize = rangeSize == 0U ? rowCount : rangeSize;
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        const std::uint64_t* words = DirtyWords(chunks_[chunkIndex], componentIndex);
+        const std::size_t firstOutputIndex = ranges.size();
+        for (std::size_t begin = 0U; begin < rowCount; begin += resolvedRangeSize) {
+            const std::size_t count = std::min(resolvedRangeSize, rowCount - begin);
+            const std::size_t dirtyCount = CountDirtyBits(words, begin, count);
+            if (dirtyCount == 0U) {
+                continue;
+            }
+            ranges.push_back(NativeComponentDirtyRange{
+                .begin = begin,
+                .count = count,
+                .dirtyCount = dirtyCount,
+            });
+        }
+        return ranges.size() - firstOutputIndex;
+    }
+
+    void ClearComponentDirtyRows(std::size_t chunkIndex, ComponentId componentId, std::size_t firstRow, std::size_t count) {
+        if (chunkIndex >= chunks_.size()) {
+            throw std::out_of_range("Invalid native ECS chunk index");
+        }
+        const std::size_t rowCount = chunks_[chunkIndex].rowCount;
+        const std::size_t resolvedCount = count == std::numeric_limits<std::size_t>::max() ? rowCount - firstRow : count;
+        if (resolvedCount == 0U) {
+            return;
+        }
+        ValidateRowRange(chunkIndex, firstRow, resolvedCount);
+        const std::size_t componentIndex = ComponentColumnIndex(componentId);
+        NativeChunk& chunk = chunks_[chunkIndex];
+        chunk.dirtyRowCounts[componentIndex] -= ClearDirtyBits(DirtyWords(chunk, componentIndex), firstRow, resolvedCount);
+    }
+
+private:
+
+    [[nodiscard]] std::byte* ColumnBase(NativeChunk& chunk, const ComponentLayout& column) {
+        return (column.primaryPayload ? chunk.payload.Data() : chunk.sidePayload.Data()) + column.offset;
+    }
+
+    [[nodiscard]] const std::byte* ColumnBase(const NativeChunk& chunk, const ComponentLayout& column) const {
+        return (column.primaryPayload ? chunk.payload.Data() : chunk.sidePayload.Data()) + column.offset;
+    }
+
+    [[nodiscard]] std::byte* ColumnData(std::size_t chunkIndex, const ComponentLayout& column, std::size_t row) {
+        return ColumnBase(chunks_[chunkIndex], column) + (row * column.type.size);
+    }
+
+    [[nodiscard]] const std::byte* ColumnData(std::size_t chunkIndex, const ComponentLayout& column, std::size_t row) const {
+        return ColumnBase(chunks_[chunkIndex], column) + (row * column.type.size);
+    }
+
     [[nodiscard]] void* ComponentData(EntityLocation location, const ComponentLayout& column) {
-        void* data = chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        void* data = ColumnData(location.chunk, column, location.row);
         AssertComponentAlignment(data, column.type);
         return data;
     }
 
     [[nodiscard]] const void* ComponentData(EntityLocation location, const ComponentLayout& column) const {
-        const void* data = chunks_[location.chunk].payload.Data() + column.offset + (location.row * column.type.size);
+        const void* data = ColumnData(location.chunk, column, location.row);
         AssertComponentAlignment(data, column.type);
         return data;
     }
@@ -1082,6 +1706,66 @@ void ValidateRowMappedBulkColumnSourceCounts(std::span<const NativeBulkComponent
     return ids;
 }
 
+void AccumulateStorageClass(
+    const NativeComponentType& type,
+    std::size_t liveEntities,
+    std::size_t capacity,
+    NativeEcsArchetypeMemoryCounters& archetype,
+    NativeEcsStorageStats& stats) noexcept {
+    const std::size_t usedBytes = liveEntities * type.size;
+    const std::size_t capacityBytes = capacity * type.size;
+    switch (type.storageClass) {
+    case ComponentStorageClass::HotTable:
+        ++archetype.hotTableComponents;
+        ++stats.hotTableComponents;
+        archetype.hotTableUsedBytes += usedBytes;
+        stats.hotTableUsedBytes += usedBytes;
+        archetype.hotTableCapacityBytes += capacityBytes;
+        stats.hotTableCapacityBytes += capacityBytes;
+        break;
+    case ComponentStorageClass::ColdTable:
+        ++archetype.coldTableComponents;
+        ++stats.coldTableComponents;
+        archetype.coldTableUsedBytes += usedBytes;
+        stats.coldTableUsedBytes += usedBytes;
+        archetype.coldTableCapacityBytes += capacityBytes;
+        stats.coldTableCapacityBytes += capacityBytes;
+        break;
+    case ComponentStorageClass::SparseTag:
+        ++archetype.sparseTagComponents;
+        ++stats.sparseTagComponents;
+        archetype.sparseTagUsedBytes += usedBytes;
+        stats.sparseTagUsedBytes += usedBytes;
+        archetype.sparseTagCapacityBytes += capacityBytes;
+        stats.sparseTagCapacityBytes += capacityBytes;
+        break;
+    case ComponentStorageClass::SparsePayload:
+        ++archetype.sparsePayloadComponents;
+        ++stats.sparsePayloadComponents;
+        archetype.sparsePayloadUsedBytes += usedBytes;
+        stats.sparsePayloadUsedBytes += usedBytes;
+        archetype.sparsePayloadCapacityBytes += capacityBytes;
+        stats.sparsePayloadCapacityBytes += capacityBytes;
+        break;
+    case ComponentStorageClass::SharedValue:
+        ++archetype.sharedValueComponents;
+        ++stats.sharedValueComponents;
+        archetype.sharedValueUsedBytes += usedBytes;
+        stats.sharedValueUsedBytes += usedBytes;
+        archetype.sharedValueCapacityBytes += capacityBytes;
+        stats.sharedValueCapacityBytes += capacityBytes;
+        break;
+    case ComponentStorageClass::ExternalBlob:
+        ++archetype.externalBlobComponents;
+        ++stats.externalBlobComponents;
+        archetype.externalBlobUsedBytes += usedBytes;
+        stats.externalBlobUsedBytes += usedBytes;
+        archetype.externalBlobCapacityBytes += capacityBytes;
+        stats.externalBlobCapacityBytes += capacityBytes;
+        break;
+    }
+}
+
 class StackComponentIdSet {
 public:
     [[nodiscard]] bool Assign(std::span<const ComponentId> componentIds) {
@@ -1168,9 +1852,25 @@ class NativeArchetypeStorage::Impl {
         }
     };
 
+    struct ExternalRecordRange {
+        Entity::IdType firstId = 0;
+        Entity::IdType lastIdExclusive = 0;
+        std::uint32_t firstRecordIndex = 0;
+        std::size_t liveCount = 0;
+
+        [[nodiscard]] bool Contains(Entity::IdType id) const noexcept {
+            return id >= firstId && id < lastIdExclusive;
+        }
+
+        [[nodiscard]] std::uint32_t RecordIndex(Entity::IdType id) const noexcept {
+            return firstRecordIndex + static_cast<std::uint32_t>(id - firstId);
+        }
+    };
+
 public:
     explicit Impl(WorldConfig config)
         : chunkPayloadBytes_(kb::ecs::ChunkPayloadBytes(config.chunkSizeProfile))
+        , maxCommittedPayloadBytes_(config.maxNativeStorageCommittedPayloadBytes)
         , pool_(chunkPayloadBytes_, kChunkAlignment) {
         if (chunkPayloadBytes_ == 0) {
             throw std::invalid_argument("Invalid native ECS chunk size profile");
@@ -1184,6 +1884,7 @@ public:
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
+        EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
         const Entity entity = AllocateEntity();
         EntityLocation location = table.Add(entity);
         location.table = tableIndex;
@@ -1194,24 +1895,29 @@ public:
                 table.WriteComponent(location, component.type.id, component.data, component.type.size);
             }
         }
+        BumpStructuralVersion();
         return entity;
     }
 
-    [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+    void CreateEntitiesInto(std::vector<Entity>& entities, std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+        entities.clear();
         if (count == 0U) {
-            return {};
+            return;
         }
 
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
         ValidateAppendBulkColumnSourceCounts(components, count);
         const std::size_t tableIndex = FindOrCreateTable(types);
-        std::vector<Entity> entities;
+        EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(count));
         entities.reserve(count);
-        records_.reserve(records_.size() + count);
-        for (std::size_t index = 0; index < count; ++index) {
-            entities.push_back(AllocateEntity());
-        }
+        AllocateEntities(entities, count);
         AppendEntitiesToTable(tableIndex, entities, components, true);
+        BumpStructuralVersion();
+    }
+
+    [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+        std::vector<Entity> entities;
+        CreateEntitiesInto(entities, count, components);
         return entities;
     }
 
@@ -1221,7 +1927,8 @@ public:
         }
 
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
-        if (entitySlots_.find(entity.Id()) != entitySlots_.end()) {
+        const std::optional<std::uint32_t> existingExternalRecord = LookupExternalSlot(entity.Id());
+        if (existingExternalRecord.has_value() && *existingExternalRecord < records_.size() && records_[*existingExternalRecord].alive) {
             throw std::invalid_argument("Native ECS cannot adopt an already live entity");
         }
 
@@ -1232,12 +1939,12 @@ public:
         record.alive = true;
         record.ownsGeneratedId = false;
         record.entity = entity;
-        entitySlots_[entity.Id()] = index;
-        strippedEntitySlots_[StripEntityGeneration(entity)] = index;
+        RegisterExternalSlot(entity, index);
         ++liveEntities_;
 
         const std::size_t tableIndex = FindOrCreateTable(types);
         ArchetypeTable& table = tables_[tableIndex];
+        EnsureChunkCommitBudget(table.NewChunkAcquiresForAppend(1U));
         EntityLocation location = table.Add(entity);
         location.table = tableIndex;
         record.location = location;
@@ -1247,6 +1954,7 @@ public:
                 table.WriteComponent(location, component.type.id, component.data, component.type.size);
             }
         }
+        BumpStructuralVersion();
     }
 
     void AdoptEntities(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
@@ -1254,10 +1962,32 @@ public:
             return;
         }
 
-        auto& uniqueIds = ResetUniqueIds(entities.size());
+        bool strictlyIncreasingIds = true;
+        bool contiguousIds = true;
+        Entity::IdType previousEntityId = 0;
+        bool hasPreviousEntityId = false;
+        Entity::IdType expectedEntityId = entities.front().Id();
+        bool needsStrippedExternalSlots = false;
         for (Entity entity : entities) {
-            if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex || !uniqueIds.insert(entity.Id()).second ||
-                entitySlots_.find(entity.Id()) != entitySlots_.end()) {
+            if (!entity.IsValid() || EntityIndex(entity) == kInvalidEntityIndex) {
+                throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
+            }
+            needsStrippedExternalSlots = needsStrippedExternalSlots || StripEntityGeneration(entity) != entity.Id();
+            contiguousIds = contiguousIds && entity.Id() == expectedEntityId;
+            ++expectedEntityId;
+            if (hasPreviousEntityId && entity.Id() <= previousEntityId) {
+                strictlyIncreasingIds = false;
+            }
+            previousEntityId = entity.Id();
+            hasPreviousEntityId = true;
+        }
+        if (!strictlyIncreasingIds) {
+            auto& entityIds = ResetEntityIds(entities.size());
+            for (Entity entity : entities) {
+                entityIds.push_back(entity.Id());
+            }
+            std::sort(entityIds.begin(), entityIds.end());
+            if (std::adjacent_find(entityIds.begin(), entityIds.end()) != entityIds.end()) {
                 throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
             }
         }
@@ -1265,8 +1995,101 @@ public:
         const std::vector<NativeComponentType> types = NormalizeTypes(components);
         ValidateAppendBulkColumnSourceCounts(components, entities.size());
         const std::size_t tableIndex = FindOrCreateTable(types);
+        EnsureChunkCommitBudget(tables_[tableIndex].NewChunkAcquiresForAppend(entities.size()));
 
         records_.reserve(records_.size() + entities.size());
+        const Entity::IdType rangeFirstId = entities.front().Id();
+        const Entity::IdType rangeLastIdExclusive = rangeFirstId + entities.size();
+        const std::optional<std::size_t> reusableExternalRangeIndex = FindReusableExternalRangeIndex(rangeFirstId, rangeLastIdExclusive);
+        const bool registerExternalRange = strictlyIncreasingIds && contiguousIds && !needsStrippedExternalSlots &&
+            (reusableExternalRangeIndex.has_value() || !ExternalRangeOverlaps(rangeFirstId, rangeLastIdExclusive));
+
+        const bool skipExistingExternalLookup = entitySlots_.empty() && externalRecordRanges_.empty();
+        const bool adoptingDeadReusableRange = reusableExternalRangeIndex.has_value() && strictlyIncreasingIds && contiguousIds &&
+            !needsStrippedExternalSlots && entitySlots_.empty() && strippedEntitySlots_.empty();
+        if (!skipExistingExternalLookup && !adoptingDeadReusableRange) {
+            for (Entity entity : entities) {
+                const std::optional<std::uint32_t> existingExternalRecord = LookupExternalSlot(entity.Id());
+                const bool existingExternalAlive =
+                    existingExternalRecord.has_value() && *existingExternalRecord < records_.size() && records_[*existingExternalRecord].alive;
+                if (existingExternalAlive) {
+                    throw std::invalid_argument("Native ECS cannot bulk adopt invalid, duplicate, or already live entities");
+                }
+            }
+        }
+        if (registerExternalRange) {
+            externalRecordRanges_.reserve(externalRecordRanges_.size() + 1U);
+        } else {
+            entitySlots_.reserve(entitySlots_.size() + entities.size());
+        }
+        if (needsStrippedExternalSlots) {
+            strippedEntitySlots_.reserve(strippedEntitySlots_.size() + entities.size());
+        }
+        auto& adoptedRecordIndices = ResetRecordIndices(entities.size());
+        if (registerExternalRange) {
+            const std::size_t firstRecordIndex = reusableExternalRangeIndex.has_value()
+                ? externalRecordRanges_[*reusableExternalRangeIndex].firstRecordIndex
+                : records_.size();
+            if (!reusableExternalRangeIndex.has_value()) {
+                if (firstRecordIndex > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) - entities.size()) {
+                    throw std::runtime_error("Native ECS entity capacity exceeded");
+                }
+                records_.resize(firstRecordIndex + entities.size());
+            }
+            adoptedRecordIndices.resize(entities.size());
+            for (std::size_t offset = 0; offset < entities.size(); ++offset) {
+                const std::uint32_t index = static_cast<std::uint32_t>(firstRecordIndex + offset);
+                const Entity entity = entities[offset];
+                if (reusableExternalRangeIndex.has_value()) {
+                    EntityRecord& record = records_[index];
+                    record.generation = EntityGeneration(entity);
+                    record.alive = true;
+                    record.ownsGeneratedId = false;
+                    record.entity = entity;
+                } else {
+                    records_[index] = EntityRecord{
+                        .generation = EntityGeneration(entity),
+                        .alive = true,
+                        .ownsGeneratedId = false,
+                        .entity = entity,
+                    };
+                }
+                adoptedRecordIndices[offset] = index;
+            }
+            liveEntities_ += entities.size();
+
+            try {
+                AppendEntitiesToTable(tableIndex, entities, components, false, adoptedRecordIndices, false);
+                if (reusableExternalRangeIndex.has_value()) {
+                    externalRecordRanges_[*reusableExternalRangeIndex].liveCount = entities.size();
+                }
+                if (!reusableExternalRangeIndex.has_value()) {
+                    const ExternalRecordRange range{
+                        .firstId = rangeFirstId,
+                        .lastIdExclusive = rangeLastIdExclusive,
+                        .firstRecordIndex = adoptedRecordIndices.front(),
+                        .liveCount = entities.size(),
+                    };
+                    const auto insertAt = std::lower_bound(
+                        externalRecordRanges_.begin(),
+                        externalRecordRanges_.end(),
+                        range.firstId,
+                        [](const ExternalRecordRange& candidate, Entity::IdType firstId) {
+                            return candidate.firstId < firstId;
+                        });
+                    externalRecordRanges_.insert(insertAt, range);
+                }
+            } catch (...) {
+                for (std::uint32_t recordIndex : adoptedRecordIndices) {
+                    records_[recordIndex].alive = false;
+                }
+                liveEntities_ -= entities.size();
+                throw;
+            }
+            BumpStructuralVersion();
+            return;
+        }
+
         auto& adopted = ResetAdoptedEntities(entities.size());
         try {
             for (Entity entity : entities) {
@@ -1276,19 +2099,21 @@ public:
                 record.alive = true;
                 record.ownsGeneratedId = false;
                 record.entity = entity;
-                entitySlots_[entity.Id()] = index;
-                strippedEntitySlots_[StripEntityGeneration(entity)] = index;
+                if (!registerExternalRange) {
+                    RegisterExternalSlot(entity, index);
+                }
                 ++liveEntities_;
                 adopted.push_back(entity);
+                adoptedRecordIndices.push_back(index);
             }
-            AppendEntitiesToTable(tableIndex, adopted, components);
+            AppendEntitiesToTable(tableIndex, adopted, components, false, adoptedRecordIndices, false);
+            BumpStructuralVersion();
         } catch (...) {
             for (Entity entity : adopted) {
-                const auto slot = entitySlots_.find(entity.Id());
-                if (slot != entitySlots_.end() && slot->second < records_.size()) {
-                    records_[slot->second].alive = false;
-                    strippedEntitySlots_.erase(StripEntityGeneration(entity));
-                    entitySlots_.erase(slot);
+                const std::optional<std::uint32_t> slot = LookupExternalSlot(entity.Id());
+                if (slot.has_value() && *slot < records_.size()) {
+                    records_[*slot].alive = false;
+                    UnregisterExternalSlot(entity);
                     --liveEntities_;
                 }
             }
@@ -1302,15 +2127,18 @@ public:
         ArchetypeTable& table = tables_[record.location.table];
         const Entity movedEntity = table.RemoveAt(record.location);
         if (movedEntity.IsValid()) {
-            records_[RecordIndex(movedEntity)].location = record.location;
+            records_[RecordIndexUnchecked(movedEntity)].location = record.location;
         }
         record.alive = false;
-        entitySlots_.erase(entity.Id());
         if (record.ownsGeneratedId) {
             ++record.generation;
             freeEntityIndices_.push_back(recordIndex);
+        } else {
+            MarkExternalRangeRecordDead(entity, recordIndex);
+            UnregisterExternalSlot(entity);
         }
         --liveEntities_;
+        BumpStructuralVersion();
     }
 
     void DestroyEntities(std::span<const Entity> entities) {
@@ -1318,41 +2146,120 @@ public:
             return;
         }
 
-        auto& uniqueIds = ResetUniqueIds(entities.size());
         auto& recordIndices = ResetRecordIndices(entities.size());
-        auto& locationsByTable = ResetDestroyLocationGroups();
+        auto& singleTableLocations = ResetDestroySingleTableLocations(entities.size());
+        bool strictlyIncreasingIds = true;
+        Entity::IdType previousEntityId = 0;
+        bool hasPreviousEntityId = false;
         for (Entity entity : entities) {
-            if (!entity.IsValid() || !uniqueIds.insert(entity.Id()).second) {
-                throw std::invalid_argument("Native ECS bulk destroy received an invalid or duplicate entity");
+            if (!entity.IsValid()) {
+                throw std::invalid_argument("Native ECS bulk destroy received an invalid entity");
             }
+            if (hasPreviousEntityId && entity.Id() <= previousEntityId) {
+                strictlyIncreasingIds = false;
+            }
+            previousEntityId = entity.Id();
+            hasPreviousEntityId = true;
+        }
+        if (!strictlyIncreasingIds) {
+            auto& entityIds = ResetEntityIds(entities.size());
+            for (Entity entity : entities) {
+                entityIds.push_back(entity.Id());
+            }
+            std::sort(entityIds.begin(), entityIds.end());
+            if (std::adjacent_find(entityIds.begin(), entityIds.end()) != entityIds.end()) {
+                throw std::invalid_argument("Native ECS bulk destroy received a duplicate entity");
+            }
+        }
+
+        if (entities.size() == liveEntities_) {
+            for (Entity entity : entities) {
+                static_cast<void>(RecordIndex(entity));
+            }
+            DestroyAllLiveEntities(false);
+            BumpStructuralVersion(entities.size());
+            return;
+        }
+
+        std::size_t firstTableIndex = 0;
+        bool singleTable = true;
+        bool hasTable = false;
+        for (Entity entity : entities) {
             const std::uint32_t recordIndex = RecordIndex(entity);
             const EntityRecord& record = records_[recordIndex];
             recordIndices.push_back(recordIndex);
-            locationsByTable[record.location.table].push_back(record.location);
+            if (!hasTable) {
+                firstTableIndex = record.location.table;
+                hasTable = true;
+            } else if (record.location.table != firstTableIndex) {
+                singleTable = false;
+            }
+            singleTableLocations.push_back(record.location);
         }
 
-        for (auto& [tableIndex, locations] : locationsByTable) {
-            if (locations.empty()) {
-                continue;
-            }
-            tables_[tableIndex].RemoveMany(locations, movedEntitiesScratch_, removedRowsScratch_);
+        if (singleTable) {
+            tables_[firstTableIndex].RemoveMany(singleTableLocations, movedEntitiesScratch_, removedRowsScratch_);
             for (auto& [movedEntity, location] : movedEntitiesScratch_) {
-                location.table = tableIndex;
-                records_[RecordIndex(movedEntity)].location = location;
+                location.table = firstTableIndex;
+                records_[RecordIndexUnchecked(movedEntity)].location = location;
+            }
+        } else {
+            auto& locationsByTable = ResetDestroyLocationGroups();
+            for (EntityLocation location : singleTableLocations) {
+                locationsByTable[location.table].push_back(location);
+            }
+            for (auto& [tableIndex, locations] : locationsByTable) {
+                if (locations.empty()) {
+                    continue;
+                }
+                tables_[tableIndex].RemoveMany(locations, movedEntitiesScratch_, removedRowsScratch_);
+                for (auto& [movedEntity, location] : movedEntitiesScratch_) {
+                    location.table = tableIndex;
+                    records_[RecordIndexUnchecked(movedEntity)].location = location;
+                }
+            }
+        }
+
+        bool clearExternalSlotsAfterDestroy = externalRecordRanges_.empty() && entitySlots_.size() == entities.size();
+        if (clearExternalSlotsAfterDestroy) {
+            for (std::uint32_t recordIndex : recordIndices) {
+                if (records_[recordIndex].ownsGeneratedId) {
+                    clearExternalSlotsAfterDestroy = false;
+                    break;
+                }
             }
         }
 
         for (std::uint32_t recordIndex : recordIndices) {
             EntityRecord& record = records_[recordIndex];
             record.alive = false;
-            entitySlots_.erase(record.entity.Id());
-            strippedEntitySlots_.erase(StripEntityGeneration(record.entity));
             if (record.ownsGeneratedId) {
                 ++record.generation;
                 freeEntityIndices_.push_back(recordIndex);
+            } else if (!clearExternalSlotsAfterDestroy) {
+                MarkExternalRangeRecordDead(record.entity, recordIndex);
+                UnregisterExternalSlot(record.entity);
             }
         }
+        if (clearExternalSlotsAfterDestroy) {
+            entitySlots_.clear();
+            strippedEntitySlots_.clear();
+            externalRecordRanges_.clear();
+        }
         liveEntities_ -= entities.size();
+        BumpStructuralVersion(entities.size());
+    }
+
+    void Clear() {
+        const std::size_t removedCount = liveEntities_;
+        DestroyAllLiveEntities(false);
+        BumpStructuralVersion(removedCount);
+    }
+
+    void ClearRetainingCapacity() {
+        const std::size_t removedCount = liveEntities_;
+        DestroyAllLiveEntities(true);
+        BumpStructuralVersion(removedCount);
     }
 
     [[nodiscard]] bool IsAlive(Entity entity) const noexcept {
@@ -1364,11 +2271,11 @@ public:
             }
         }
 
-        const auto found = entitySlots_.find(entity.Id());
-        if (found == entitySlots_.end() || found->second >= records_.size()) {
+        const std::optional<std::uint32_t> found = LookupExternalSlot(entity.Id());
+        if (!found.has_value() || *found >= records_.size()) {
             return false;
         }
-        const EntityRecord& record = records_[found->second];
+        const EntityRecord& record = records_[*found];
         return record.alive && record.entity == entity && record.generation == EntityGeneration(entity);
     }
 
@@ -1418,6 +2325,7 @@ public:
             targetTypes.insert(existing, addedType);
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Add, ComponentIds(addedTypes), targetTypes, components);
+        BumpStructuralVersion();
     }
 
     void AddComponents(std::span<const Entity> entities, std::span<const NativeBulkComponentColumn> components) {
@@ -1474,6 +2382,7 @@ public:
                 group,
                 components);
         }
+        BumpStructuralVersion(entities.size());
     }
 
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds) {
@@ -1495,6 +2404,7 @@ public:
             throw std::out_of_range("Native ECS component removal references a missing component");
         }
         Migrate(entity, record, sourceIndex, EdgeKind::Remove, removedIds, targetTypes, {});
+        BumpStructuralVersion();
     }
 
     void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds) {
@@ -1542,6 +2452,7 @@ public:
 
             BulkMigrate(sourceIndex, EdgeKind::Remove, removedIds, targetTypes, group, {});
         }
+        BumpStructuralVersion(entities.size());
     }
 
     void SetComponent(Entity entity, ComponentId componentId, const void* data, std::size_t size) {
@@ -1593,7 +2504,7 @@ public:
 
     void MarkComponentModified(Entity entity, ComponentId componentId) {
         EntityRecord& record = LiveRecord(entity);
-        tables_[record.location.table].MarkComponentsModified(std::span<const ComponentId>{ &componentId, 1U });
+        tables_[record.location.table].MarkComponentsModified(record.location.chunk, record.location.row, 1U, std::span<const ComponentId>{ &componentId, 1U });
     }
 
     void MarkArchetypeComponentsModified(std::size_t archetypeIndex, std::span<const ComponentId> componentIds) {
@@ -1601,6 +2512,49 @@ public:
             throw std::out_of_range("Native ECS archetype index is invalid");
         }
         tables_[archetypeIndex].MarkComponentsModified(componentIds);
+    }
+
+    void MarkArchetypeChunkComponentsModified(
+        std::size_t archetypeIndex,
+        std::size_t chunkIndex,
+        std::size_t firstRow,
+        std::size_t count,
+        std::span<const ComponentId> componentIds) {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        tables_[archetypeIndex].MarkComponentsModified(chunkIndex, firstRow, count, componentIds);
+    }
+
+    [[nodiscard]] std::size_t ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        return tables_[archetypeIndex].ComponentDirtyCount(chunkIndex, componentId);
+    }
+
+    [[nodiscard]] std::size_t CollectComponentDirtyRanges(
+        std::size_t archetypeIndex,
+        std::size_t chunkIndex,
+        ComponentId componentId,
+        std::size_t rangeSize,
+        std::vector<NativeComponentDirtyRange>& ranges) const {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        return tables_[archetypeIndex].CollectComponentDirtyRanges(chunkIndex, componentId, rangeSize, ranges);
+    }
+
+    void ClearComponentDirtyRows(
+        std::size_t archetypeIndex,
+        std::size_t chunkIndex,
+        ComponentId componentId,
+        std::size_t firstRow,
+        std::size_t count) {
+        if (archetypeIndex >= tables_.size()) {
+            throw std::out_of_range("Native ECS archetype index is invalid");
+        }
+        tables_[archetypeIndex].ClearComponentDirtyRows(chunkIndex, componentId, firstRow, count);
     }
 
     [[nodiscard]] void* MutableComponentData(Entity entity, ComponentId componentId) {
@@ -1628,6 +2582,23 @@ public:
 
         const EntityRecord& record = LiveRecord(entity);
         return tables_[record.location.table].Matches(*requiredSignature);
+    }
+
+    [[nodiscard]] bool EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds, std::span<const ComponentId> excludedComponentIds) const {
+        const std::vector<ComponentId> requiredIds = NormalizeComponentIds(requiredComponentIds);
+        const std::optional<ComponentSignature> requiredSignature = signatureRegistry_.TryBuild(requiredIds);
+        if (!requiredSignature.has_value()) {
+            return false;
+        }
+
+        StackComponentIdSet excludedIds;
+        if (!excludedIds.Assign(excludedComponentIds)) {
+            return false;
+        }
+
+        const EntityRecord& record = LiveRecord(entity);
+        const ArchetypeTable& table = tables_[record.location.table];
+        return table.Matches(*requiredSignature) && !HasExcludedComponent(table, excludedIds.Values());
     }
 
     [[nodiscard]] std::vector<NativeArchetypeMatch> MatchingArchetypes(std::span<const ComponentId> requiredComponentIds) const {
@@ -1701,6 +2672,7 @@ public:
                 for (std::size_t field = 0; field < componentIds.size(); ++field) {
                     record.fieldComponents[field] = table.ComponentColumnData(chunkIndex, componentIds[field]);
                     record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                    record.componentDirtyCounts[field] = table.ComponentDirtyCount(chunkIndex, componentIds[field]);
                 }
                 records.push_back(record);
             }
@@ -1756,6 +2728,7 @@ public:
                 for (std::size_t field = 0; field < componentIds.size(); ++field) {
                     record.fieldComponents[field] = table.MutableComponentColumnData(chunkIndex, componentIds[field]);
                     record.componentVersions[field] = table.ComponentVersionOrZero(componentIds[field]);
+                    record.componentDirtyCounts[field] = table.ComponentDirtyCount(chunkIndex, componentIds[field]);
                 }
                 records.push_back(record);
             }
@@ -1777,6 +2750,10 @@ public:
             throw std::out_of_range("Native ECS archetype index is invalid");
         }
         return tables_[archetypeIndex].ComponentVersion(componentId);
+    }
+
+    [[nodiscard]] std::uint64_t StructuralVersion() const noexcept {
+        return structuralVersion_;
     }
 
     [[nodiscard]] std::size_t ChunkPayloadBytes() const noexcept {
@@ -1979,6 +2956,12 @@ public:
         stats.chunkPoolReuseCount = pool_.ReuseCount();
         stats.chunkPoolReleaseCount = pool_.ReleaseCount();
         stats.chunkPoolTrimCount = pool_.TrimCount();
+        stats.chunkPoolSystemAllocationCount = pool_.SystemAllocationCount();
+        stats.chunkPoolPeakAllocated = pool_.PeakAllocatedChunks();
+        stats.activePayloadBytes = stats.chunkPoolInUse * chunkPayloadBytes_;
+        stats.committedPayloadBytes = stats.chunkPoolAllocated * chunkPayloadBytes_;
+        stats.freePayloadBytes = stats.chunkPoolFree * chunkPayloadBytes_;
+        stats.peakCommittedPayloadBytes = stats.chunkPoolPeakAllocated * chunkPayloadBytes_;
         stats.archetypeCount = tables_.size();
         stats.liveEntities = liveEntities_;
         stats.archetypeCounters.reserve(tables_.size());
@@ -1991,19 +2974,24 @@ public:
             archetype.liveEntities = table.LiveEntities();
             archetype.chunks = table.ChunkCount();
             archetype.capacity = table.Capacity() * table.ChunkCount();
-            archetype.payloadBytes = table.ChunkCount() * chunkPayloadBytes_;
+            archetype.hotOnlyCapacity = table.HotOnlyCapacity() * table.ChunkCount();
+            archetype.capacityLostToNonHotStorage = table.CapacityLostToNonHotStorage() * table.ChunkCount();
+            archetype.sidePayloadBytes = table.SidePayloadBytes();
+            archetype.payloadBytes = table.ChunkCount() * chunkPayloadBytes_ + archetype.sidePayloadBytes;
             archetype.usedBytes = table.UsedBytes();
             archetype.wastedBytes = archetype.payloadBytes - std::min(archetype.usedBytes, archetype.payloadBytes);
             archetype.version = table.Version();
             archetype.componentIds.reserve(table.Types().size());
             for (const NativeComponentType& type : table.Types()) {
                 archetype.componentIds.push_back(type.id);
+                AccumulateStorageClass(type, archetype.liveEntities, archetype.capacity, archetype, stats);
             }
 
             archetype.chunkCounters.reserve(table.ChunkCount());
             for (std::size_t chunkIndex = 0; chunkIndex < table.ChunkCount(); ++chunkIndex) {
                 const std::size_t rowCount = table.ChunkRowCount(chunkIndex);
                 const std::size_t usedBytes = table.ChunkUsedBytes(chunkIndex);
+                const std::size_t metadataBytes = table.ChunkMetadataBytes(chunkIndex);
                 if (rowCount == 0U) {
                     ++stats.emptyChunks;
                 } else if (rowCount < table.Capacity()) {
@@ -2019,16 +3007,31 @@ public:
                     .chunkIndex = chunkIndex,
                     .liveEntities = rowCount,
                     .capacity = table.Capacity(),
-                    .payloadBytes = chunkPayloadBytes_,
+                    .hotOnlyCapacity = table.HotOnlyCapacity(),
+                    .capacityLostToNonHotStorage = table.CapacityLostToNonHotStorage(),
+                    .payloadBytes = chunkPayloadBytes_ + table.ChunkSidePayloadBytes(),
+                    .sidePayloadBytes = table.ChunkSidePayloadBytes(),
                     .usedBytes = usedBytes,
-                    .wastedBytes = chunkPayloadBytes_ - std::min(usedBytes, chunkPayloadBytes_),
+                    .wastedBytes = (chunkPayloadBytes_ + table.ChunkSidePayloadBytes()) -
+                        std::min(usedBytes, chunkPayloadBytes_ + table.ChunkSidePayloadBytes()),
+                    .metadataBytes = metadataBytes,
                 });
+                archetype.metadataBytes += metadataBytes;
             }
 
             stats.capacity += archetype.capacity;
+            stats.hotOnlyCapacity += archetype.hotOnlyCapacity;
+            stats.capacityLostToNonHotStorage += archetype.capacityLostToNonHotStorage;
+            stats.activeSidePayloadBytes += archetype.sidePayloadBytes;
             stats.usedBytes += archetype.usedBytes;
+            stats.chunkMetadataBytes += archetype.metadataBytes;
         }
-        stats.wastedBytes = (stats.chunks * chunkPayloadBytes_) - std::min(stats.usedBytes, stats.chunks * chunkPayloadBytes_);
+        stats.entityRecordBytes = (records_.capacity() * sizeof(EntityRecord)) +
+            (freeEntityIndices_.capacity() * sizeof(std::uint32_t)) +
+            (externalRecordRanges_.capacity() * sizeof(ExternalRecordRange));
+        const std::size_t activeComponentPayloadBytes = (stats.chunks * chunkPayloadBytes_) + stats.activeSidePayloadBytes;
+        stats.wastedBytes = activeComponentPayloadBytes - std::min(stats.usedBytes, activeComponentPayloadBytes);
+        stats.trackedBytes = stats.committedPayloadBytes + stats.activeSidePayloadBytes + stats.chunkMetadataBytes + stats.entityRecordBytes;
         return stats;
     }
 
@@ -2063,10 +3066,22 @@ private:
         return recordIndicesScratch_;
     }
 
+    [[nodiscard]] std::vector<Entity::IdType>& ResetEntityIds(std::size_t expectedCount) {
+        entityIdsScratch_.clear();
+        entityIdsScratch_.reserve(expectedCount);
+        return entityIdsScratch_;
+    }
+
     [[nodiscard]] std::vector<Entity>& ResetAdoptedEntities(std::size_t expectedCount) {
         adoptedEntitiesScratch_.clear();
         adoptedEntitiesScratch_.reserve(expectedCount);
         return adoptedEntitiesScratch_;
+    }
+
+    [[nodiscard]] std::vector<EntityLocation>& ResetDestroySingleTableLocations(std::size_t expectedCount) {
+        destroySingleTableLocationsScratch_.clear();
+        destroySingleTableLocationsScratch_.reserve(expectedCount);
+        return destroySingleTableLocationsScratch_;
     }
 
     [[nodiscard]] std::unordered_map<std::size_t, std::vector<EntityLocation>>& ResetDestroyLocationGroups() noexcept {
@@ -2106,6 +3121,7 @@ private:
         std::span<const NativeBulkComponentColumn> addedComponents) {
         const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, std::move(edgeComponents), targetTypes);
         ArchetypeTable& target = tables_[targetIndex];
+        EnsureChunkCommitBudget(target.NewChunkAcquiresForAppend(group.entities.size()));
         auto& targetLocations = targetLocationsScratch_;
         target.AddMany(group.entities, targetIndex, targetLocations, false);
         if (targetLocations.size() != group.entities.size()) {
@@ -2121,7 +3137,7 @@ private:
         tables_[sourceIndex].RemoveMany(group.sourceLocations, movedEntitiesScratch_, removedRowsScratch_);
         for (auto& [movedEntity, location] : movedEntitiesScratch_) {
             location.table = sourceIndex;
-            records_[RecordIndex(movedEntity)].location = location;
+            records_[RecordIndexUnchecked(movedEntity)].location = location;
         }
 
         for (std::size_t index = 0; index < group.recordIndices.size(); ++index) {
@@ -2133,55 +3149,55 @@ private:
         std::size_t tableIndex,
         std::span<const Entity> entities,
         std::span<const NativeBulkComponentColumn> components,
-        bool generatedOwnedEntities = false) {
+        bool generatedOwnedEntities = false,
+        std::span<const std::uint32_t> knownRecordIndices = {},
+        bool validateKnownRecordIndices = true) {
         ArchetypeTable& table = tables_[tableIndex];
-        auto& locations = appendLocationsScratch_;
-        table.AddMany(entities, tableIndex, locations, false);
-        if (locations.size() != entities.size()) {
-            throw std::runtime_error("Native ECS bulk append returned an invalid location count");
+        auto& ranges = appendRangesScratch_;
+        table.AddManyRanges(entities, ranges, false);
+        if (!knownRecordIndices.empty() && knownRecordIndices.size() != entities.size()) {
+            throw std::invalid_argument("Native ECS bulk append received mismatched record indices");
         }
 
-        if (generatedOwnedEntities) {
-            for (std::size_t index = 0; index < entities.size(); ++index) {
-                const std::uint32_t recordIndex = EntityIndex(entities[index]);
-                assert(recordIndex != kInvalidEntityIndex);
-                assert(recordIndex < records_.size());
-                assert(records_[recordIndex].entity == entities[index]);
-                assert(records_[recordIndex].alive);
-                assert(records_[recordIndex].ownsGeneratedId);
-                records_[recordIndex].location = locations[index];
+        std::size_t locationIndex = 0U;
+        if (!knownRecordIndices.empty()) {
+            for (const BulkAppendRange& range : ranges) {
+                for (std::size_t offset = 0U; offset < range.count; ++offset) {
+                    const std::uint32_t recordIndex = knownRecordIndices[locationIndex];
+                    if (validateKnownRecordIndices && (recordIndex >= records_.size() || records_[recordIndex].entity != entities[locationIndex] || !records_[recordIndex].alive)) {
+                        throw std::out_of_range("Native ECS bulk append received an invalid record index");
+                    }
+                    records_[recordIndex].location = EntityLocation{ .table = tableIndex, .chunk = range.chunk, .row = range.firstRow + offset };
+                    ++locationIndex;
+                }
+            }
+        } else if (generatedOwnedEntities) {
+            for (const BulkAppendRange& range : ranges) {
+                for (std::size_t offset = 0U; offset < range.count; ++offset) {
+                    const Entity entity = entities[locationIndex];
+                    const std::uint32_t recordIndex = EntityIndex(entity);
+                    assert(recordIndex != kInvalidEntityIndex);
+                    assert(recordIndex < records_.size());
+                    assert(records_[recordIndex].entity == entity);
+                    assert(records_[recordIndex].alive);
+                    assert(records_[recordIndex].ownsGeneratedId);
+                    records_[recordIndex].location = EntityLocation{ .table = tableIndex, .chunk = range.chunk, .row = range.firstRow + offset };
+                    ++locationIndex;
+                }
             }
         } else {
-            for (std::size_t index = 0; index < entities.size(); ++index) {
-                records_[RecordIndex(entities[index])].location = locations[index];
+            for (const BulkAppendRange& range : ranges) {
+                for (std::size_t offset = 0U; offset < range.count; ++offset) {
+                    records_[RecordIndex(entities[locationIndex])].location = EntityLocation{ .table = tableIndex, .chunk = range.chunk, .row = range.firstRow + offset };
+                    ++locationIndex;
+                }
             }
         }
-
-        for (const NativeBulkComponentColumn& component : components) {
-            const bool broadcast = component.sourceCount == 1U;
-            const bool repeatedPattern = component.sourceCount > 1U && component.sourceCount < entities.size();
-            const std::size_t stride = broadcast ? 0U : (component.stride == 0U ? component.type.size : component.stride);
-            std::size_t consumed = 0;
-            while (consumed < locations.size()) {
-                const EntityLocation first = locations[consumed];
-                std::size_t count = 1U;
-                while (consumed + count < locations.size()) {
-                    const EntityLocation next = locations[consumed + count];
-                    if (next.chunk != first.chunk || next.row != first.row + count) {
-                        break;
-                    }
-                    ++count;
-                }
-
-                const auto* data = broadcast ? component.data : static_cast<const std::byte*>(component.data) + (consumed * stride);
-                if (repeatedPattern) {
-                    table.WriteComponentColumnPattern(first.chunk, first.row, component.type.id, component.data, count, stride, component.sourceCount, consumed);
-                } else {
-                    table.WriteComponentColumn(first.chunk, first.row, component.type.id, data, count, stride);
-                }
-                consumed += count;
-            }
+        if (locationIndex != entities.size()) {
+            throw std::runtime_error("Native ECS bulk append returned an invalid range count");
         }
+
+        table.WriteBulkComponentRanges(components, ranges, entities.size());
     }
 
     [[nodiscard]] static std::vector<ComponentId> ComponentIds(std::span<const NativeComponentType> types) {
@@ -2228,6 +3244,54 @@ private:
         return entity;
     }
 
+    void AllocateEntities(std::vector<Entity>& entities, std::size_t count) {
+        if (count == 0U) {
+            return;
+        }
+
+        entities.clear();
+        entities.reserve(count);
+        if (!freeEntityIndices_.empty()) {
+            const std::size_t reusedCount = std::min(count, freeEntityIndices_.size());
+            entities.resize(reusedCount);
+            for (std::size_t offset = 0; offset < reusedCount; ++offset) {
+                const std::uint32_t recordIndex = freeEntityIndices_.back();
+                freeEntityIndices_.pop_back();
+                EntityRecord& record = records_[recordIndex];
+                record.alive = true;
+            record.ownsGeneratedId = true;
+            record.entity = PackEntity(recordIndex, record.generation);
+            entities[reusedCount - 1U - offset] = record.entity;
+        }
+            liveEntities_ += reusedCount;
+            if (reusedCount == count) {
+                return;
+            }
+        }
+
+        const std::size_t remainingCount = count - entities.size();
+        if (records_.size() > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) - remainingCount) {
+            throw std::runtime_error("Native ECS entity capacity exceeded");
+        }
+
+        const std::uint32_t firstIndex = static_cast<std::uint32_t>(records_.size());
+        records_.resize(records_.size() + remainingCount);
+        const std::size_t firstEntityOffset = entities.size();
+        entities.resize(count);
+        for (std::size_t offset = 0; offset < remainingCount; ++offset) {
+            const std::uint32_t recordIndex = firstIndex + static_cast<std::uint32_t>(offset);
+            const Entity entity = PackEntity(recordIndex, 0U);
+            records_[recordIndex] = EntityRecord{
+                .generation = 0U,
+                .alive = true,
+                .ownsGeneratedId = true,
+                .entity = entity,
+            };
+            entities[firstEntityOffset + offset] = entity;
+        }
+        liveEntities_ += remainingCount;
+    }
+
     [[nodiscard]] std::uint32_t AllocateExternalRecord(Entity entity) {
         if (records_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
             throw std::runtime_error("Native ECS entity capacity exceeded");
@@ -2242,17 +3306,157 @@ private:
         return index;
     }
 
+    [[nodiscard]] static bool RequiresStrippedExternalSlot(Entity entity) noexcept {
+        return StripEntityGeneration(entity) != entity.Id();
+    }
+
+    void RegisterExternalSlot(Entity entity, std::uint32_t recordIndex) {
+        entitySlots_[entity.Id()] = recordIndex;
+        if (RequiresStrippedExternalSlot(entity)) {
+            strippedEntitySlots_[StripEntityGeneration(entity)] = recordIndex;
+        }
+    }
+
+    void UnregisterExternalSlot(Entity entity) {
+        entitySlots_.erase(entity.Id());
+        if (RequiresStrippedExternalSlot(entity)) {
+            strippedEntitySlots_.erase(StripEntityGeneration(entity));
+        }
+    }
+
+    void MarkExternalRangeRecordDead(Entity entity, std::uint32_t recordIndex) noexcept {
+        if (externalRecordRanges_.empty()) {
+            return;
+        }
+        const Entity::IdType entityId = entity.Id();
+        const auto range = std::upper_bound(
+            externalRecordRanges_.begin(),
+            externalRecordRanges_.end(),
+            entityId,
+            [](Entity::IdType id, const ExternalRecordRange& candidate) {
+                return id < candidate.firstId;
+            });
+        if (range == externalRecordRanges_.begin()) {
+            return;
+        }
+        ExternalRecordRange& candidate = *std::prev(range);
+        if (!candidate.Contains(entityId) || candidate.RecordIndex(entityId) != recordIndex || candidate.liveCount == 0U) {
+            return;
+        }
+        --candidate.liveCount;
+    }
+
+    void DestroyAllLiveEntities(bool retainCapacity) {
+        if (liveEntities_ == 0U) {
+            return;
+        }
+        const std::size_t removedCount = liveEntities_;
+        for (ArchetypeTable& table : tables_) {
+            if (retainCapacity) {
+                table.RemoveAllRetainingCapacity();
+            } else {
+                table.RemoveAll();
+            }
+        }
+
+        freeEntityIndices_.reserve(freeEntityIndices_.size() + removedCount);
+        for (std::uint32_t recordIndex = 0; recordIndex < records_.size(); ++recordIndex) {
+            EntityRecord& record = records_[recordIndex];
+            if (!record.alive) {
+                continue;
+            }
+            record.alive = false;
+            if (record.ownsGeneratedId) {
+                ++record.generation;
+                freeEntityIndices_.push_back(recordIndex);
+            }
+        }
+        entitySlots_.clear();
+        strippedEntitySlots_.clear();
+        for (ExternalRecordRange& range : externalRecordRanges_) {
+            range.liveCount = 0U;
+        }
+        liveEntities_ = 0U;
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> LookupExternalSlot(Entity::IdType entityId) const noexcept {
+        const auto found = entitySlots_.find(entityId);
+        if (found != entitySlots_.end()) {
+            return found->second;
+        }
+        const auto range = std::upper_bound(
+            externalRecordRanges_.begin(),
+            externalRecordRanges_.end(),
+            entityId,
+            [](Entity::IdType id, const ExternalRecordRange& candidate) {
+                return id < candidate.firstId;
+            });
+        if (range == externalRecordRanges_.begin()) {
+            return std::nullopt;
+        }
+        const ExternalRecordRange& candidate = *std::prev(range);
+        return candidate.Contains(entityId) ? std::optional<std::uint32_t>{ candidate.RecordIndex(entityId) } : std::nullopt;
+    }
+
+    void BumpStructuralVersion(std::size_t amount = 1U) noexcept {
+        if (amount == 0U) {
+            return;
+        }
+        structuralVersion_ += static_cast<std::uint64_t>(amount);
+        if (structuralVersion_ == 0U) {
+            structuralVersion_ = 1U;
+        }
+    }
+
+    [[nodiscard]] bool ExternalRangeOverlaps(Entity::IdType firstId, Entity::IdType lastIdExclusive) const noexcept {
+        if (firstId >= lastIdExclusive || externalRecordRanges_.empty()) {
+            return false;
+        }
+        const auto range = std::lower_bound(
+            externalRecordRanges_.begin(),
+            externalRecordRanges_.end(),
+            firstId,
+            [](const ExternalRecordRange& candidate, Entity::IdType id) {
+                return candidate.firstId < id;
+            });
+        if (range != externalRecordRanges_.end() && range->firstId < lastIdExclusive) {
+            return true;
+        }
+        if (range != externalRecordRanges_.begin()) {
+            const ExternalRecordRange& previous = *std::prev(range);
+            return previous.lastIdExclusive > firstId;
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::optional<std::size_t> FindReusableExternalRangeIndex(Entity::IdType firstId, Entity::IdType lastIdExclusive) const noexcept {
+        if (firstId >= lastIdExclusive || externalRecordRanges_.empty()) {
+            return std::nullopt;
+        }
+        const auto range = std::lower_bound(
+            externalRecordRanges_.begin(),
+            externalRecordRanges_.end(),
+            firstId,
+            [](const ExternalRecordRange& candidate, Entity::IdType id) {
+                return candidate.firstId < id;
+            });
+        if (range == externalRecordRanges_.end() || range->firstId != firstId || range->lastIdExclusive != lastIdExclusive) {
+            return std::nullopt;
+        }
+        return range->liveCount == 0U ? std::optional<std::size_t>{ static_cast<std::size_t>(range - externalRecordRanges_.begin()) } : std::nullopt;
+    }
+
     [[nodiscard]] std::uint32_t RecordIndexUnchecked(Entity entity) const {
         const std::uint32_t generatedIndex = EntityIndex(entity);
         if (generatedIndex != kInvalidEntityIndex && generatedIndex < records_.size() && records_[generatedIndex].ownsGeneratedId) {
             return generatedIndex;
         }
 
-        const auto found = entitySlots_.find(entity.Id());
-        if (found == entitySlots_.end()) {
+        const std::optional<std::uint32_t> found = LookupExternalSlot(entity.Id());
+        if (!found.has_value()) {
             throw std::out_of_range("Invalid native ECS entity");
         }
-        return found->second;
+        return *found;
     }
 
     [[nodiscard]] std::uint32_t RecordIndex(Entity entity) const {
@@ -2282,6 +3486,28 @@ private:
         return tables_.size() - 1U;
     }
 
+    void EnsureChunkCommitBudget(std::size_t chunkAcquires) const {
+        if (maxCommittedPayloadBytes_ == 0U || chunkAcquires == 0U) {
+            return;
+        }
+
+        const std::size_t freeChunks = pool_.FreeChunks();
+        const std::size_t newCommittedChunks = chunkAcquires > freeChunks ? chunkAcquires - freeChunks : 0U;
+        if (newCommittedChunks == 0U) {
+            return;
+        }
+        if (newCommittedChunks > (std::numeric_limits<std::size_t>::max() / chunkPayloadBytes_)) {
+            throw std::length_error("Native ECS chunk commit guard exceeded addressable payload size");
+        }
+
+        const std::size_t additionalBytes = newCommittedChunks * chunkPayloadBytes_;
+        const std::size_t currentCommittedBytes = pool_.AllocatedChunks() * chunkPayloadBytes_;
+        if (currentCommittedBytes > maxCommittedPayloadBytes_ ||
+            additionalBytes > maxCommittedPayloadBytes_ - currentCommittedBytes) {
+            throw std::length_error("Native ECS chunk commit guard rejected a storage allocation");
+        }
+    }
+
     [[nodiscard]] std::size_t ResolveMigrationTarget(
         std::size_t sourceIndex,
         EdgeKind edgeKind,
@@ -2309,6 +3535,7 @@ private:
         const std::size_t targetIndex = ResolveMigrationTarget(sourceIndex, edgeKind, std::move(edgeComponents), targetTypes);
         ArchetypeTable& source = tables_[sourceIndex];
         ArchetypeTable& target = tables_[targetIndex];
+        EnsureChunkCommitBudget(target.NewChunkAcquiresForAppend(1U));
         EntityLocation targetLocation = target.Add(entity);
         targetLocation.table = targetIndex;
 
@@ -2321,30 +3548,35 @@ private:
 
         const Entity movedEntity = source.RemoveAt(sourceLocation);
         if (movedEntity.IsValid()) {
-            records_[RecordIndex(movedEntity)].location = sourceLocation;
+            records_[RecordIndexUnchecked(movedEntity)].location = sourceLocation;
         }
         record.location = targetLocation;
     }
 
     std::size_t chunkPayloadBytes_ = 0;
+    std::size_t maxCommittedPayloadBytes_ = 0;
     NativeChunkPool pool_;
     std::vector<EntityRecord> records_;
     std::vector<std::uint32_t> freeEntityIndices_;
     std::unordered_map<Entity::IdType, std::uint32_t> entitySlots_;
     std::unordered_map<Entity::IdType, std::uint32_t> strippedEntitySlots_;
+    std::vector<ExternalRecordRange> externalRecordRanges_;
     ComponentSignatureRegistry signatureRegistry_;
     std::vector<ArchetypeTable> tables_;
     std::size_t liveEntities_ = 0;
     std::unordered_set<Entity::IdType> uniqueIdsScratch_;
+    std::vector<Entity::IdType> entityIdsScratch_;
     std::vector<std::uint32_t> recordIndicesScratch_;
+    std::vector<EntityLocation> destroySingleTableLocationsScratch_;
     std::unordered_map<std::size_t, std::vector<EntityLocation>> destroyLocationsByTableScratch_;
     std::unordered_map<std::size_t, BulkMigrationGroup> migrationGroupsScratch_;
     std::vector<Entity> adoptedEntitiesScratch_;
-    std::vector<EntityLocation> appendLocationsScratch_;
+    std::vector<BulkAppendRange> appendRangesScratch_;
     std::vector<EntityLocation> targetLocationsScratch_;
     std::vector<std::pair<Entity, EntityLocation>> movedEntitiesScratch_;
     std::vector<std::size_t> removedRowsScratch_;
     std::vector<NativeComponentType> targetTypesScratch_;
+    std::uint64_t structuralVersion_ = 1;
 };
 
 NativeArchetypeStorage::NativeArchetypeStorage(WorldConfig config)
@@ -2373,6 +3605,10 @@ std::vector<Entity> NativeArchetypeStorage::CreateEntities(std::size_t count, st
     return impl_->CreateEntities(count, components);
 }
 
+void NativeArchetypeStorage::CreateEntitiesInto(std::vector<Entity>& output, std::size_t count, std::span<const NativeBulkComponentColumn> components) {
+    impl_->CreateEntitiesInto(output, count, components);
+}
+
 void NativeArchetypeStorage::AdoptEntity(Entity entity, std::span<const NativeComponentValue> components) {
     impl_->AdoptEntity(entity, components);
 }
@@ -2387,6 +3623,14 @@ void NativeArchetypeStorage::DestroyEntity(Entity entity) {
 
 void NativeArchetypeStorage::DestroyEntities(std::span<const Entity> entities) {
     impl_->DestroyEntities(entities);
+}
+
+void NativeArchetypeStorage::Clear() {
+    impl_->Clear();
+}
+
+void NativeArchetypeStorage::ClearRetainingCapacity() {
+    impl_->ClearRetainingCapacity();
 }
 
 bool NativeArchetypeStorage::IsAlive(Entity entity) const noexcept {
@@ -2429,6 +3673,37 @@ void NativeArchetypeStorage::MarkArchetypeComponentsModified(std::size_t archety
     impl_->MarkArchetypeComponentsModified(archetypeIndex, componentIds);
 }
 
+void NativeArchetypeStorage::MarkArchetypeChunkComponentsModified(
+    std::size_t archetypeIndex,
+    std::size_t chunkIndex,
+    std::size_t firstRow,
+    std::size_t count,
+    std::span<const ComponentId> componentIds) {
+    impl_->MarkArchetypeChunkComponentsModified(archetypeIndex, chunkIndex, firstRow, count, componentIds);
+}
+
+std::size_t NativeArchetypeStorage::ComponentDirtyCount(std::size_t archetypeIndex, std::size_t chunkIndex, ComponentId componentId) const {
+    return impl_->ComponentDirtyCount(archetypeIndex, chunkIndex, componentId);
+}
+
+std::size_t NativeArchetypeStorage::CollectComponentDirtyRanges(
+    std::size_t archetypeIndex,
+    std::size_t chunkIndex,
+    ComponentId componentId,
+    std::size_t rangeSize,
+    std::vector<NativeComponentDirtyRange>& ranges) const {
+    return impl_->CollectComponentDirtyRanges(archetypeIndex, chunkIndex, componentId, rangeSize, ranges);
+}
+
+void NativeArchetypeStorage::ClearComponentDirtyRows(
+    std::size_t archetypeIndex,
+    std::size_t chunkIndex,
+    ComponentId componentId,
+    std::size_t firstRow,
+    std::size_t count) {
+    impl_->ClearComponentDirtyRows(archetypeIndex, chunkIndex, componentId, firstRow, count);
+}
+
 void* NativeArchetypeStorage::MutableComponentData(Entity entity, ComponentId componentId) {
     return impl_->MutableComponentData(entity, componentId);
 }
@@ -2443,6 +3718,10 @@ bool NativeArchetypeStorage::HasComponent(Entity entity, ComponentId componentId
 
 bool NativeArchetypeStorage::EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds) const {
     return impl_->EntityArchetypeMatches(entity, requiredComponentIds);
+}
+
+bool NativeArchetypeStorage::EntityArchetypeMatches(Entity entity, std::span<const ComponentId> requiredComponentIds, std::span<const ComponentId> excludedComponentIds) const {
+    return impl_->EntityArchetypeMatches(entity, requiredComponentIds, excludedComponentIds);
 }
 
 std::vector<NativeArchetypeMatch> NativeArchetypeStorage::MatchingArchetypes(std::span<const ComponentId> requiredComponentIds) const {
@@ -2505,6 +3784,10 @@ std::uint64_t NativeArchetypeStorage::ArchetypeComponentVersion(std::size_t arch
     return impl_->ArchetypeComponentVersion(archetypeIndex, componentId);
 }
 
+std::uint64_t NativeArchetypeStorage::StructuralVersion() const noexcept {
+    return impl_ != nullptr ? impl_->StructuralVersion() : 0;
+}
+
 std::size_t NativeArchetypeStorage::ChunkPayloadBytes() const noexcept {
     return impl_ != nullptr ? impl_->ChunkPayloadBytes() : 0;
 }
@@ -2519,6 +3802,35 @@ NativeEcsStorageStats NativeArchetypeStorage::Stats() const {
 
 NativeEcsMaintenanceStats NativeArchetypeStorage::MaintainChunks(NativeEcsMaintenanceBudget budget) {
     return impl_ != nullptr ? impl_->MaintainChunks(budget) : NativeEcsMaintenanceStats{};
+}
+
+NativeArchetypeCapacityReport EstimateNativeArchetypeCapacity(std::span<const NativeComponentType> componentTypes, std::size_t chunkPayloadBytes) {
+    for (const NativeComponentType& type : componentTypes) {
+        ValidateComponentType(type);
+    }
+    if (!IsValidCustomChunkPayloadBytes(chunkPayloadBytes)) {
+        throw std::invalid_argument("Native ECS chunk payload size must be a supported power-of-two value");
+    }
+
+    const ArchetypeLayout layout = BuildLayout(componentTypes, chunkPayloadBytes);
+    return NativeArchetypeCapacityReport{
+        .chunkPayloadBytes = chunkPayloadBytes,
+        .entitiesPerChunk = layout.capacity,
+        .bytesPerEntity = layout.bytesPerEntity,
+        .hotBytesPerEntity = layout.hotBytesPerEntity,
+        .nonHotBytesPerEntity = layout.nonHotBytesPerEntity,
+        .hotOnlyEntitiesPerChunk = layout.hotOnlyCapacity,
+        .capacityLostToNonHotStorage = layout.capacityLostToNonHotStorage,
+        .usedPayloadBytes = layout.usedPayloadBytes,
+        .hotOnlyUsedPayloadBytes = layout.hotOnlyUsedPayloadBytes,
+        .nonHotUsedPayloadBytes = layout.nonHotUsedPayloadBytes,
+        .sidePayloadBytes = layout.sidePayloadBytes,
+        .wastedPayloadBytes = chunkPayloadBytes >= layout.usedPayloadBytes ? chunkPayloadBytes - layout.usedPayloadBytes : 0U,
+    };
+}
+
+NativeArchetypeCapacityReport EstimateNativeArchetypeCapacity(std::span<const NativeComponentType> componentTypes, ChunkSizeProfile profile) {
+    return EstimateNativeArchetypeCapacity(componentTypes, ChunkPayloadBytes(profile));
 }
 
 } // namespace kb::ecs
