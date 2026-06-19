@@ -124,12 +124,22 @@ void RunTypedEcsComponentApiTest() {
     kb::tests::Require(counters.visited == 1, "Typed ECS const iteration did not visit the component");
     kb::tests::Require(kb::tests::NearlyEqual(counters.sumX, 5.0F), "Typed ECS const iteration saw invalid component data");
 
-#if defined(_MSC_VER)
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable : 4996)
 #endif
     world.ForEachMutable<EcsPosition>(&ApplyVelocity, &world);
-#if defined(_MSC_VER)
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
 #pragma warning(pop)
 #endif
     position = world.TryGet<EcsPosition>(entity);
