@@ -553,6 +553,7 @@ void RunSceneTransformIterationUsesUnsafeHotQueryTest() {
 }
 
 void RunSceneRuntimeTransformHierarchyUsesUnsafeQueryPlanTest() {
+    SceneSystemCounters counters;
     kb::scene::Scene scene;
     kb::scene::SceneObject parent = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
         .name = "Parent",
@@ -573,7 +574,6 @@ void RunSceneRuntimeTransformHierarchyUsesUnsafeQueryPlanTest() {
     }
 
     static_cast<void>(scene.Runtime().Update(0.016F));
-    SceneSystemCounters counters;
     scene.Runtime().AddSceneSystem(std::make_unique<MoveEntitySceneSystem>(
         counters,
         parent.Entity(),
