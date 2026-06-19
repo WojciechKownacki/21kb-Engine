@@ -1056,6 +1056,7 @@ if(BUILD_TESTING)
         target_link_libraries(${target_name}
             PRIVATE
                 kb_engine
+                flecs::flecs_static
         )
 
         add_test(NAME ${target_name} COMMAND $<TARGET_FILE:${target_name}>)
