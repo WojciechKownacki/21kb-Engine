@@ -23,21 +23,21 @@ jobs:
             build_editor: "ON"
             build_renderer: "ON"
             sanitizer: "OFF"
-            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_benchmarks;kb_ecs_kernel_report;kb_renderer_tests;kb_editor_tests;kb_editor"
+            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests;kb_renderer_tests;kb_editor_tests;kb_editor"
           - name: Linux GCC ASan UBSan
             os: ubuntu-24.04
             generator: "Unix Makefiles"
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
-            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_benchmarks;kb_ecs_kernel_report"
+            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests"
           - name: macOS Clang ASan UBSan
             os: macos-15
             generator: "Unix Makefiles"
             build_editor: "OFF"
             build_renderer: "OFF"
             sanitizer: "ON"
-            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_benchmarks;kb_ecs_kernel_report"
+            targets: "kb_engine_tests;kb_ecs_api_tests;kb_ecs_scheduler_correctness_tests;kb_ecs_deterministic_replay_tests;kb_ecs_stress_tests;kb_ecs_snapshot_scale_tests"
 
     steps:
       - name: Check out sources
