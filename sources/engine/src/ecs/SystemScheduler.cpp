@@ -26,6 +26,24 @@ struct SystemExecutionSample {
     SystemProfilerCounters profilerCounters;
 };
 
+[[nodiscard]] std::string_view WorkerDispatchModeTraceName(WorkerPoolDispatchMode mode) noexcept {
+    switch (mode) {
+    case WorkerPoolDispatchMode::Jobs:
+        return "jobs";
+    case WorkerPoolDispatchMode::Batches:
+        return "batches";
+    case WorkerPoolDispatchMode::BatchesStaticStrided:
+        return "batches_static_strided";
+    case WorkerPoolDispatchMode::Chunks:
+        return "chunks";
+    case WorkerPoolDispatchMode::ChunksStaticStrided:
+        return "chunks_static_strided";
+    case WorkerPoolDispatchMode::None:
+        break;
+    }
+    return "none";
+}
+
 } // namespace
 
 SystemScheduler::SystemScheduler(SystemSchedulerConfig config) noexcept
@@ -410,6 +428,31 @@ void SystemScheduler::EndProfilerTrace(std::uint64_t frameDurationNanoseconds) {
     lastTrace_.frameDurationNanoseconds = frameDurationNanoseconds;
     lastTrace_.frameCounters.frameDurationNanoseconds = frameDurationNanoseconds;
     lastTrace_.frameCounters.workerCount = lastTrace_.workers.size();
+    if (workerPool_ != nullptr) {
+        const WorkerPoolDispatchTelemetry dispatchTelemetry = workerPool_->DispatchTelemetry();
+        lastTrace_.frameCounters.lastWorkerDispatchMode = std::string{ WorkerDispatchModeTraceName(dispatchTelemetry.lastMode) };
+        lastTrace_.frameCounters.workerDispatchCount = dispatchTelemetry.dispatchCount;
+        lastTrace_.frameCounters.workerStaticStridedDispatchCount = dispatchTelemetry.staticStridedDispatchCount;
+        lastTrace_.frameCounters.workerQueuedDispatchCount = dispatchTelemetry.queuedDispatchCount;
+        lastTrace_.frameCounters.lastWorkerDispatchWorkItemCount = dispatchTelemetry.lastWorkItemCount;
+        lastTrace_.frameCounters.lastWorkerDispatchActiveWorkerCount = dispatchTelemetry.lastActiveWorkerCount;
+        lastTrace_.frameCounters.lastWorkerDispatchConfiguredWorkerCount = dispatchTelemetry.lastConfiguredWorkerCount;
+        lastTrace_.frameCounters.lastWorkerStealCount = dispatchTelemetry.lastStealCount;
+        lastTrace_.frameCounters.workerStealCount = dispatchTelemetry.totalStealCount;
+        lastTrace_.frameCounters.lastWorkerDispatchScheduleNanoseconds = dispatchTelemetry.lastDispatchScheduleNanoseconds;
+        lastTrace_.frameCounters.workerDispatchScheduleNanoseconds = dispatchTelemetry.totalDispatchScheduleNanoseconds;
+        lastTrace_.frameCounters.averageWorkerDispatchScheduleNanoseconds = dispatchTelemetry.averageDispatchScheduleNanoseconds;
+        lastTrace_.frameCounters.lastWorkerDispatchWallNanoseconds = dispatchTelemetry.lastDispatchWallNanoseconds;
+        lastTrace_.frameCounters.workerDispatchWallNanoseconds = dispatchTelemetry.totalDispatchWallNanoseconds;
+        lastTrace_.frameCounters.averageWorkerDispatchWallNanoseconds = dispatchTelemetry.averageDispatchWallNanoseconds;
+        lastTrace_.frameCounters.lastWorkerActiveNanoseconds = dispatchTelemetry.lastWorkerActiveNanoseconds;
+        lastTrace_.frameCounters.workerActiveNanoseconds = dispatchTelemetry.totalWorkerActiveNanoseconds;
+        lastTrace_.frameCounters.averageWorkerActiveNanoseconds = dispatchTelemetry.averageWorkerActiveNanoseconds;
+        lastTrace_.frameCounters.lastWorkerCapacityNanoseconds = dispatchTelemetry.lastWorkerCapacityNanoseconds;
+        lastTrace_.frameCounters.workerCapacityNanoseconds = dispatchTelemetry.totalWorkerCapacityNanoseconds;
+        lastTrace_.frameCounters.lastWorkerUtilizationPercent = dispatchTelemetry.lastWorkerUtilizationPercent;
+        lastTrace_.frameCounters.averageWorkerUtilizationPercent = dispatchTelemetry.averageWorkerUtilizationPercent;
+    }
     for (SystemSchedulerWorkerTrace& worker : lastTrace_.workers) {
         const std::uint64_t busyTime = worker.busyTimeNanoseconds;
         worker.idleTimeNanoseconds = frameDurationNanoseconds > busyTime ? frameDurationNanoseconds - busyTime : 0;

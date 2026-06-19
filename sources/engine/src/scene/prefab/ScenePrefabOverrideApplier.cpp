@@ -84,15 +84,23 @@ bool ScenePrefabOverrideApplier::Apply(Scene& scene, ScenePrefab& prefab, SceneP
             AppendNode(scene, objects[index], ScenePrefabNodeDesc::NoParent, prefab, instance, updated, updatedObjects);
         }
     }
+    std::vector<SceneEntity::IdType> updatedEntityIds;
+    updatedEntityIds.reserve(updatedObjects.size());
+    for (const SceneObject object : updatedObjects) {
+        if (object.IsValid()) {
+            updatedEntityIds.push_back(object.Entity().Id());
+        }
+    }
+    std::ranges::sort(updatedEntityIds);
+    const auto uniqueEnd = std::ranges::unique(updatedEntityIds).begin();
+    updatedEntityIds.erase(uniqueEnd, updatedEntityIds.end());
+
     for (const SceneObject object : objects) {
         if (!object.IsValid() || !scene.Entities().IsAlive(object)) {
             continue;
         }
 
-        const auto iterator = std::ranges::find_if(updatedObjects, [object](SceneObject updatedObject) {
-            return updatedObject.Entity() == object.Entity();
-        });
-        if (iterator == updatedObjects.end()) {
+        if (!std::ranges::binary_search(updatedEntityIds, object.Entity().Id())) {
             return false;
         }
     }

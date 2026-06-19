@@ -1,6 +1,7 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
 
 #include <cstddef>
 
@@ -18,28 +19,6 @@ struct MutableTransformIterationContext {
     void* userContext = nullptr;
 };
 
-void VisitTransformBatch(const kb::ecs::QueryBatch<TransformComponent>& batch, void* rawContext) {
-    const auto* callbackContext = static_cast<const ConstTransformIterationContext*>(rawContext);
-    const TransformComponent* transforms = batch.Components<0>();
-    for (std::size_t row = 0; row < batch.Count(); ++row) {
-        const SceneEntity entity = batch.EntityAt(row);
-        if (entity.IsValid()) {
-            callbackContext->visitor(entity, transforms[row], callbackContext->userContext);
-        }
-    }
-}
-
-void VisitMutableTransformBatch(kb::ecs::MutableQueryBatch<TransformComponent>& batch, void* rawContext) {
-    const auto* callbackContext = static_cast<const MutableTransformIterationContext*>(rawContext);
-    TransformComponent* transforms = batch.Components<0>();
-    for (std::size_t row = 0; row < batch.Count(); ++row) {
-        const SceneEntity entity = batch.EntityAt(row);
-        if (entity.IsValid()) {
-            callbackContext->visitor(entity, transforms[row], callbackContext->userContext);
-        }
-    }
-}
-
 } // namespace
 
 void SceneComponentIteration::ForEachTransform(const kb::ecs::World& world, std::uint64_t transformComponentId, ConstTransformVisitor visitor, void* context) {
@@ -56,7 +35,19 @@ void SceneComponentIteration::ForEachTransform(const kb::ecs::World& world, std:
     kb::ecs::QueryExecutionSettings settings;
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     ConstTransformIterationContext callbackContext{ .visitor = visitor, .userContext = context };
-    query.ForEachBatch(settings, VisitTransformBatch, &callbackContext);
+    kb::ecs::UnsafeHotReadQuery<TransformComponent> hotQuery;
+    if (!hotQuery.Rebuild(query, settings)) {
+        return;
+    }
+    hotQuery.ForEachRange(0U, [&callbackContext](const kb::ecs::UnsafeHotChunk<TransformComponent>& batch) {
+        const TransformComponent* transforms = batch.Components<0>();
+        for (std::size_t row = 0; row < batch.Count(); ++row) {
+            const SceneEntity entity = batch.EntityAt(row);
+            if (entity.IsValid()) {
+                callbackContext.visitor(entity, transforms[row], callbackContext.userContext);
+            }
+        }
+    });
 }
 
 void SceneComponentIteration::ForEachMutableTransform(kb::ecs::World& world, std::uint64_t transformComponentId, MutableTransformVisitor visitor, void* context) {
@@ -73,7 +64,21 @@ void SceneComponentIteration::ForEachMutableTransform(kb::ecs::World& world, std
     kb::ecs::QueryExecutionSettings settings;
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     MutableTransformIterationContext callbackContext{ .visitor = visitor, .userContext = context };
-    query.ForEachMutableBatch(settings, VisitMutableTransformBatch, &callbackContext);
+    kb::ecs::UnsafeHotQuery<TransformComponent> hotQuery;
+    if (!hotQuery.Rebuild(query, settings)) {
+        return;
+    }
+    hotQuery.ForEachMutableRange(0U, [&callbackContext](kb::ecs::UnsafeHotMutableChunk<TransformComponent>& batch) {
+        TransformComponent* transforms = batch.Components<0>();
+        for (std::size_t row = 0; row < batch.Count(); ++row) {
+            const SceneEntity entity = batch.EntityAt(row);
+            if (entity.IsValid()) {
+                callbackContext.visitor(entity, transforms[row], callbackContext.userContext);
+            }
+        }
+    });
+    auto& nativeStorage = const_cast<kb::ecs::NativeArchetypeStorage&>(world.NativeStorage());
+    hotQuery.MarkCachedRangesDirty(nativeStorage);
 }
 
 } // namespace kb::scene

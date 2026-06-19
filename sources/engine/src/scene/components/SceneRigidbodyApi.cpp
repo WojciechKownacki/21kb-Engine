@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ RigidbodyComponent* SceneComponentMutationService::TryGetRigidbody(Scene& scene,
 
 void SceneComponentMutationService::SetRigidbody(Scene& scene, SceneEntity entity, const RigidbodyComponent& rigidbody) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Rigidbodies().Set(entity, rigidbody);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Rigidbodies().Set(entity, rigidbody);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveRigidbody(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Rigidbodies().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Rigidbodies().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkRigidbodyModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Rigidbodies().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Rigidbodies().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

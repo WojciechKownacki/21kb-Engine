@@ -315,6 +315,7 @@ void RunReadOnlySystemsExecuteInParallelTest() {
 
     kb::ecs::WorkerPoolConfig workerConfig;
     workerConfig.workerCount = 2;
+    workerConfig.collectDispatchTelemetry = true;
     kb::ecs::SystemScheduler scheduler{ kb::ecs::SystemSchedulerConfig{
         .mode = kb::ecs::SystemSchedulingMode::Automatic,
         .debugTraceEnabled = true,
@@ -327,7 +328,29 @@ void RunReadOnlySystemsExecuteInParallelTest() {
     scheduler.Update(world, 0.0F);
 
     kb::tests::Require(maxRunning.load(std::memory_order_acquire) > 1, "ECS scheduler did not execute compatible read-only systems in parallel");
-    kb::tests::Require(scheduler.LastDebugTrace().workers.size() >= 2U, "ECS scheduler trace did not report parallel worker occupancy");
+    const kb::ecs::SystemSchedulerTrace& trace = scheduler.LastDebugTrace();
+    kb::tests::Require(trace.workers.size() >= 2U, "ECS scheduler trace did not report parallel worker occupancy");
+    kb::tests::Require(trace.frameCounters.workerDispatchCount == 1U, "ECS scheduler trace did not report worker dispatch count");
+    kb::tests::Require(trace.frameCounters.workerStaticStridedDispatchCount == 1U, "ECS scheduler trace did not report static worker dispatch");
+    kb::tests::Require(trace.frameCounters.workerQueuedDispatchCount == 0U, "ECS scheduler trace misreported static worker dispatch as queued");
+    kb::tests::Require(trace.frameCounters.lastWorkerDispatchMode == "batches_static_strided", "ECS scheduler trace reported an invalid worker dispatch mode");
+    kb::tests::Require(trace.frameCounters.lastWorkerDispatchWorkItemCount == 2U, "ECS scheduler trace reported an invalid worker dispatch work item count");
+    kb::tests::Require(trace.frameCounters.lastWorkerDispatchActiveWorkerCount == 2U, "ECS scheduler trace reported an invalid active worker count");
+    kb::tests::Require(trace.frameCounters.lastWorkerStealCount == 0U, "ECS scheduler trace reported steals for static worker dispatch");
+    kb::tests::Require(trace.frameCounters.workerStealCount == 0U, "ECS scheduler trace reported total steals for static worker dispatch");
+    kb::tests::Require(trace.frameCounters.lastWorkerDispatchScheduleNanoseconds > 0U, "ECS scheduler trace did not report dispatch schedule time");
+    kb::tests::Require(trace.frameCounters.workerDispatchScheduleNanoseconds >= trace.frameCounters.lastWorkerDispatchScheduleNanoseconds, "ECS scheduler trace reported invalid total dispatch schedule time");
+    kb::tests::Require(trace.frameCounters.averageWorkerDispatchScheduleNanoseconds > 0U, "ECS scheduler trace did not report average dispatch schedule time");
+    kb::tests::Require(trace.frameCounters.lastWorkerDispatchWallNanoseconds > 0U, "ECS scheduler trace did not report worker dispatch wall time");
+    kb::tests::Require(trace.frameCounters.workerDispatchWallNanoseconds >= trace.frameCounters.lastWorkerDispatchWallNanoseconds, "ECS scheduler trace reported invalid total worker dispatch wall time");
+    kb::tests::Require(trace.frameCounters.averageWorkerDispatchWallNanoseconds > 0U, "ECS scheduler trace did not report average worker dispatch wall time");
+    kb::tests::Require(trace.frameCounters.lastWorkerActiveNanoseconds > 0U, "ECS scheduler trace did not report worker active time");
+    kb::tests::Require(trace.frameCounters.workerActiveNanoseconds >= trace.frameCounters.lastWorkerActiveNanoseconds, "ECS scheduler trace reported invalid total worker active time");
+    kb::tests::Require(trace.frameCounters.averageWorkerActiveNanoseconds > 0U, "ECS scheduler trace did not report average worker active time");
+    kb::tests::Require(trace.frameCounters.lastWorkerCapacityNanoseconds >= trace.frameCounters.lastWorkerDispatchWallNanoseconds, "ECS scheduler trace reported invalid worker capacity time");
+    kb::tests::Require(trace.frameCounters.workerCapacityNanoseconds >= trace.frameCounters.lastWorkerCapacityNanoseconds, "ECS scheduler trace reported invalid total worker capacity time");
+    kb::tests::Require(trace.frameCounters.lastWorkerUtilizationPercent > 0.0, "ECS scheduler trace did not report worker utilization");
+    kb::tests::Require(trace.frameCounters.averageWorkerUtilizationPercent > 0.0, "ECS scheduler trace did not report average worker utilization");
 
     scheduler.Shutdown(world);
 }
@@ -511,6 +534,15 @@ void RunProfilerTraceExportWritesExternalJsonFileTest() {
     kb::tests::Require(content.find("\"execution_path\": \"virtual_callback\"") != std::string::npos, "ECS profiler trace export omitted execution path");
     kb::tests::Require(content.find("\"stage_counters\"") != std::string::npos, "ECS profiler trace export omitted stage counters");
     kb::tests::Require(content.find("\"chunk_jobs_count\"") != std::string::npos, "ECS profiler trace export omitted chunk job counters");
+    kb::tests::Require(content.find("\"worker_dispatch_count\"") != std::string::npos, "ECS profiler trace export omitted worker dispatch counters");
+    kb::tests::Require(content.find("\"worker_steal_count\"") != std::string::npos, "ECS profiler trace export omitted worker steal counters");
+    kb::tests::Require(content.find("\"last_worker_dispatch_schedule_ns\"") != std::string::npos, "ECS profiler trace export omitted last dispatch schedule time");
+    kb::tests::Require(content.find("\"worker_dispatch_schedule_ns\"") != std::string::npos, "ECS profiler trace export omitted total dispatch schedule time");
+    kb::tests::Require(content.find("\"average_worker_dispatch_schedule_ns\"") != std::string::npos, "ECS profiler trace export omitted average dispatch schedule time");
+    kb::tests::Require(content.find("\"last_worker_dispatch_wall_ns\"") != std::string::npos, "ECS profiler trace export omitted dispatch wall time");
+    kb::tests::Require(content.find("\"worker_active_ns\"") != std::string::npos, "ECS profiler trace export omitted worker active time");
+    kb::tests::Require(content.find("\"worker_capacity_ns\"") != std::string::npos, "ECS profiler trace export omitted worker capacity time");
+    kb::tests::Require(content.find("\"average_worker_utilization_percent\"") != std::string::npos, "ECS profiler trace export omitted worker utilization");
     kb::tests::Require(content.find("\"chrome_trace_events\"") != std::string::npos, "ECS profiler trace export omitted external trace events");
     kb::tests::Require(content.find("\"ph\": \"X\"") != std::string::npos, "ECS profiler trace export omitted duration events");
     kb::tests::Require(content.find("\"entities_processed\": 7") != std::string::npos, "ECS profiler trace export omitted profiler payload");

@@ -12,7 +12,11 @@
 #include "engine/modules/EngineModuleLoader.hpp"
 #include "engine/modules/IEngineModule.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
+#include "engine/scene/InputComponent.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneInputActivation.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 
@@ -369,6 +373,45 @@ void RunSceneInputToggleTest() {
     }
 }
 
+void RunSceneInputActivationUsesUnsafeHotQueryTest() {
+    auto context = std::make_shared<kb::input::InputMappingContextAsset>();
+    context->mappings.push_back(kb::input::InputKeyMapping{ .actionId = 1U, .key = kb::input::InputKey::W, .scale = 1.0F });
+
+    kb::scene::Scene scene;
+    scene.Input().SetResolvers(
+        [](std::uint64_t) -> std::shared_ptr<const kb::input::InputActionAsset> {
+            return nullptr;
+        },
+        [context](std::uint64_t id) -> std::shared_ptr<const kb::input::InputMappingContextAsset> {
+            return id == 10U ? context : nullptr;
+        });
+
+    const kb::scene::SceneObject enabled = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Input Enabled",
+    });
+    const kb::scene::SceneObject disabled = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
+        .name = "Hot Input Disabled",
+    });
+    scene.Components().Inputs().Set(enabled.Entity(), kb::scene::InputComponent{
+        .mappingContextAssetId = 10U,
+        .priority = 7,
+        .enabled = true,
+    });
+    scene.Components().Inputs().Set(disabled.Entity(), kb::scene::InputComponent{
+        .mappingContextAssetId = 20U,
+        .priority = 100,
+        .enabled = false,
+    });
+
+    const kb::ecs::WorldTelemetrySnapshot before = scene.Runtime().EcsWorld().TelemetrySnapshot();
+    kb::scene::SceneInputActivation::Apply(scene);
+    const kb::ecs::WorldTelemetrySnapshot after = scene.Runtime().EcsWorld().TelemetrySnapshot();
+
+    kb::tests::Require(scene.Input().HasMappingContext(10U), "Scene input activation did not add the enabled mapping context");
+    kb::tests::Require(!scene.Input().HasMappingContext(20U), "Scene input activation added a disabled mapping context");
+    kb::tests::Require(after.queryExecutions == before.queryExecutions, "Scene input activation used the safe query executor");
+}
+
 void RunBasicLightingPluginTogglesSceneLightingTest() {
 #if KB_SKIP_DYNAMIC_ENGINE_MODULE_ASAN_TESTS
     return;
@@ -414,6 +457,7 @@ void RunEngineModuleTests() {
     RunPhaseOrderTest();
     RunEngineModuleLoaderShadowCopyTest();
     RunSceneInputToggleTest();
+    RunSceneInputActivationUsesUnsafeHotQueryTest();
     RunBasicLightingPluginTogglesSceneLightingTest();
 }
 

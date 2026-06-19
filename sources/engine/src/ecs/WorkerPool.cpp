@@ -1,8 +1,9 @@
 #include "engine/ecs/WorkerPool.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
-#include <deque>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <mutex>
@@ -169,6 +170,9 @@ void JobFence::Wait() const {
 
 class WorkerPool::WorkerPoolState {
 public:
+    using DispatchClock = std::chrono::steady_clock;
+    using DispatchTimePoint = DispatchClock::time_point;
+
     explicit WorkerPoolState(WorkerPoolConfig config)
         : config_(config) {
         config_.workerCount = config_.singleThreaded ? 1U : WorkerPool::ResolveWorkerCount(config_.workerCount);
@@ -274,7 +278,9 @@ public:
             jobCount_ = 0;
             nextJob_ = 0;
             batches_ = nullptr;
+            batchCount_ = 0;
             chunks_ = nullptr;
+            chunkCount_ = 0;
             batchCallback_ = nullptr;
             batchCallbackContext_ = nullptr;
             chunkCallback_ = nullptr;
@@ -283,6 +289,8 @@ public:
             ownedBatches_.clear();
             ownedChunks_.clear();
             workerBatchQueues_.clear();
+            workerBatchQueueCursors_.clear();
+            staticStridedWorkerDone_.clear();
             remainingWork_ = 0;
             workMode_ = WorkMode::None;
             batchActive_ = false;
@@ -313,6 +321,7 @@ public:
             return;
         }
 
+        const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
@@ -329,10 +338,12 @@ public:
             cancelledRunException_ = nullptr;
             activeWorkerLimit_ = config_.workerCount;
             workMode_ = WorkMode::Jobs;
+            RecordDispatchLocked(workMode_, jobs.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
         batchAvailable_.notify_all();
+        EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
         batchFinished_.wait(lock, [this] {
@@ -367,6 +378,7 @@ public:
             return;
         }
 
+        const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
@@ -377,24 +389,32 @@ public:
             });
 
             batches_ = batches.data();
+            batchCount_ = batches.size();
             batchCallback_ = callback;
             batchCallbackContext_ = context;
             activeWorkerLimit_ = ResolveBatchWorkerLimit(batches);
-            workerBatchQueues_.assign(config_.workerCount, {});
-            for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
-                const WorkerPoolBatch& batch = batches[batchIndex];
-                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
-                workerBatchQueues_[owner].push_back(batchIndex);
+            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(batches);
+            if (useStaticStridedBatches) {
+                PrepareStaticStridedWorkLocked(batches.size());
+            } else {
+                PrepareWorkerBatchQueuesLocked(batches.size());
+                for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+                    const WorkerPoolBatch& batch = batches[batchIndex];
+                    const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
+                    workerBatchQueues_[owner].push_back(batchIndex);
+                }
             }
 
-            remainingWork_ = batches.size();
+            remainingWork_ = useStaticStridedBatches ? activeWorkerLimit_ : batches.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
-            workMode_ = WorkMode::Batches;
+            workMode_ = useStaticStridedBatches ? WorkMode::BatchesStaticStrided : WorkMode::Batches;
+            RecordDispatchLocked(workMode_, batches.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
         batchAvailable_.notify_all();
+        EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
         batchFinished_.wait(lock, [this] {
@@ -429,6 +449,7 @@ public:
             return;
         }
 
+        const DispatchTimePoint dispatchStartedAt = BeginDispatchScheduleTiming();
         {
             std::unique_lock lock{ mutex_ };
             if (!running_) {
@@ -439,24 +460,32 @@ public:
             });
 
             chunks_ = chunks.data();
+            chunkCount_ = chunks.size();
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
             activeWorkerLimit_ = ResolveChunkWorkerLimit(chunks);
-            workerBatchQueues_.assign(config_.workerCount, {});
-            for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
-                const WorkerPoolChunk& chunk = chunks[chunkIndex];
-                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
-                workerBatchQueues_[owner].push_back(chunkIndex);
+            const bool useStaticStridedChunks = CanRunChunksStaticStrided(chunks);
+            if (useStaticStridedChunks) {
+                PrepareStaticStridedWorkLocked(chunks.size());
+            } else {
+                PrepareWorkerBatchQueuesLocked(chunks.size());
+                for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
+                    const WorkerPoolChunk& chunk = chunks[chunkIndex];
+                    const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
+                    workerBatchQueues_[owner].push_back(chunkIndex);
+                }
             }
 
-            remainingWork_ = chunks.size();
+            remainingWork_ = useStaticStridedChunks ? activeWorkerLimit_ : chunks.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
-            workMode_ = WorkMode::Chunks;
+            workMode_ = useStaticStridedChunks ? WorkMode::ChunksStaticStrided : WorkMode::Chunks;
+            RecordDispatchLocked(workMode_, chunks.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
         batchAvailable_.notify_all();
+        EndDispatchScheduleTiming(dispatchStartedAt);
 
         std::unique_lock lock{ mutex_ };
         batchFinished_.wait(lock, [this] {
@@ -508,6 +537,7 @@ public:
             activeWorkerLimit_ = config_.workerCount;
             activeCompletion_ = completion;
             workMode_ = WorkMode::Jobs;
+            RecordDispatchLocked(workMode_, ownedJobs_.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
@@ -542,21 +572,28 @@ public:
 
             ownedBatches_ = std::move(batches);
             batches_ = ownedBatches_.data();
+            batchCount_ = ownedBatches_.size();
             batchCallback_ = callback;
             batchCallbackContext_ = context;
             activeWorkerLimit_ = ResolveBatchWorkerLimit(ownedBatches_);
-            workerBatchQueues_.assign(config_.workerCount, {});
-            for (std::size_t batchIndex = 0; batchIndex < ownedBatches_.size(); ++batchIndex) {
-                const WorkerPoolBatch& batch = ownedBatches_[batchIndex];
-                const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
-                workerBatchQueues_[owner].push_back(batchIndex);
+            const bool useStaticStridedBatches = CanRunBatchesStaticStrided(ownedBatches_);
+            if (useStaticStridedBatches) {
+                PrepareStaticStridedWorkLocked(ownedBatches_.size());
+            } else {
+                PrepareWorkerBatchQueuesLocked(ownedBatches_.size());
+                for (std::size_t batchIndex = 0; batchIndex < ownedBatches_.size(); ++batchIndex) {
+                    const WorkerPoolBatch& batch = ownedBatches_[batchIndex];
+                    const std::size_t owner = batch.preferredWorkerIndex == kAnyWorkerPoolWorker ? batchIndex % activeWorkerLimit_ : batch.preferredWorkerIndex % activeWorkerLimit_;
+                    workerBatchQueues_[owner].push_back(batchIndex);
+                }
             }
 
-            remainingWork_ = ownedBatches_.size();
+            remainingWork_ = useStaticStridedBatches ? activeWorkerLimit_ : ownedBatches_.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
             activeCompletion_ = completion;
-            workMode_ = WorkMode::Batches;
+            workMode_ = useStaticStridedBatches ? WorkMode::BatchesStaticStrided : WorkMode::Batches;
+            RecordDispatchLocked(workMode_, ownedBatches_.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
@@ -591,21 +628,28 @@ public:
 
             ownedChunks_ = std::move(chunks);
             chunks_ = ownedChunks_.data();
+            chunkCount_ = ownedChunks_.size();
             chunkCallback_ = callback;
             chunkCallbackContext_ = context;
             activeWorkerLimit_ = ResolveChunkWorkerLimit(ownedChunks_);
-            workerBatchQueues_.assign(config_.workerCount, {});
-            for (std::size_t chunkIndex = 0; chunkIndex < ownedChunks_.size(); ++chunkIndex) {
-                const WorkerPoolChunk& chunk = ownedChunks_[chunkIndex];
-                const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
-                workerBatchQueues_[owner].push_back(chunkIndex);
+            const bool useStaticStridedChunks = CanRunChunksStaticStrided(ownedChunks_);
+            if (useStaticStridedChunks) {
+                PrepareStaticStridedWorkLocked(ownedChunks_.size());
+            } else {
+                PrepareWorkerBatchQueuesLocked(ownedChunks_.size());
+                for (std::size_t chunkIndex = 0; chunkIndex < ownedChunks_.size(); ++chunkIndex) {
+                    const WorkerPoolChunk& chunk = ownedChunks_[chunkIndex];
+                    const std::size_t owner = chunk.preferredWorkerIndex == kAnyWorkerPoolWorker ? chunkIndex % activeWorkerLimit_ : chunk.preferredWorkerIndex % activeWorkerLimit_;
+                    workerBatchQueues_[owner].push_back(chunkIndex);
+                }
             }
 
-            remainingWork_ = ownedChunks_.size();
+            remainingWork_ = useStaticStridedChunks ? activeWorkerLimit_ : ownedChunks_.size();
             firstJobException_ = nullptr;
             cancelledRunException_ = nullptr;
             activeCompletion_ = completion;
-            workMode_ = WorkMode::Chunks;
+            workMode_ = useStaticStridedChunks ? WorkMode::ChunksStaticStrided : WorkMode::Chunks;
+            RecordDispatchLocked(workMode_, ownedChunks_.size(), activeWorkerLimit_);
             batchActive_ = true;
         }
 
@@ -622,13 +666,145 @@ public:
         return config_;
     }
 
+    [[nodiscard]] WorkerPoolDispatchTelemetry DispatchTelemetry() const noexcept {
+        std::lock_guard lock{ mutex_ };
+        return telemetry_;
+    }
+
 private:
     enum class WorkMode {
         None,
         Jobs,
         Batches,
+        BatchesStaticStrided,
         Chunks,
+        ChunksStaticStrided,
     };
+
+    [[nodiscard]] static WorkerPoolDispatchMode PublicWorkMode(WorkMode mode) noexcept {
+        switch (mode) {
+        case WorkMode::Jobs:
+            return WorkerPoolDispatchMode::Jobs;
+        case WorkMode::Batches:
+            return WorkerPoolDispatchMode::Batches;
+        case WorkMode::BatchesStaticStrided:
+            return WorkerPoolDispatchMode::BatchesStaticStrided;
+        case WorkMode::Chunks:
+            return WorkerPoolDispatchMode::Chunks;
+        case WorkMode::ChunksStaticStrided:
+            return WorkerPoolDispatchMode::ChunksStaticStrided;
+        case WorkMode::None:
+            break;
+        }
+        return WorkerPoolDispatchMode::None;
+    }
+
+    void RecordDispatchLocked(WorkMode mode, std::size_t workItemCount, std::size_t queueOwnerCount) noexcept {
+        if (!config_.collectDispatchTelemetry) {
+            return;
+        }
+        telemetry_.lastMode = PublicWorkMode(mode);
+        ++telemetry_.dispatchCount;
+        if (mode == WorkMode::BatchesStaticStrided || mode == WorkMode::ChunksStaticStrided) {
+            ++telemetry_.staticStridedDispatchCount;
+        } else if (mode == WorkMode::Batches || mode == WorkMode::Chunks) {
+            ++telemetry_.queuedDispatchCount;
+        }
+        telemetry_.lastWorkItemCount = workItemCount;
+        telemetry_.lastActiveWorkerCount = activeWorkerLimit_;
+        telemetry_.lastConfiguredWorkerCount = config_.workerCount;
+        telemetry_.lastQueueOwnerCount = queueOwnerCount;
+        telemetry_.lastStealCount = 0;
+        telemetry_.lastDispatchWallNanoseconds = 0;
+        telemetry_.lastWorkerActiveNanoseconds = 0;
+        telemetry_.lastWorkerCapacityNanoseconds = 0;
+        telemetry_.lastWorkerUtilizationPercent = 0.0;
+        activeDispatchStartedAt_ = DispatchClock::now();
+    }
+
+    [[nodiscard]] DispatchTimePoint BeginDispatchScheduleTiming() const noexcept {
+        return config_.collectDispatchTelemetry ? DispatchClock::now() : DispatchTimePoint{};
+    }
+
+    void EndDispatchScheduleTiming(DispatchTimePoint startedAt) noexcept {
+        if (!config_.collectDispatchTelemetry || startedAt == DispatchTimePoint{}) {
+            return;
+        }
+
+        std::uint64_t elapsedNanoseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(DispatchClock::now() - startedAt).count());
+        if (elapsedNanoseconds == 0U) {
+            elapsedNanoseconds = 1U;
+        }
+
+        std::lock_guard lock{ mutex_ };
+        telemetry_.lastDispatchScheduleNanoseconds = elapsedNanoseconds;
+        telemetry_.totalDispatchScheduleNanoseconds += elapsedNanoseconds;
+        telemetry_.averageDispatchScheduleNanoseconds =
+            telemetry_.dispatchCount == 0U ? 0U : telemetry_.totalDispatchScheduleNanoseconds / telemetry_.dispatchCount;
+    }
+
+    [[nodiscard]] DispatchTimePoint BeginWorkerActiveTiming() const noexcept {
+        return config_.collectDispatchTelemetry ? DispatchClock::now() : DispatchTimePoint{};
+    }
+
+    [[nodiscard]] std::uint64_t EndWorkerActiveTiming(DispatchTimePoint startedAt) const noexcept {
+        if (!config_.collectDispatchTelemetry || startedAt == DispatchTimePoint{}) {
+            return 0U;
+        }
+
+        std::uint64_t elapsedNanoseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(DispatchClock::now() - startedAt).count());
+        return elapsedNanoseconds == 0U ? 1U : elapsedNanoseconds;
+    }
+
+    void RecordWorkerActiveTimeLocked(std::uint64_t elapsedNanoseconds) noexcept {
+        if (!config_.collectDispatchTelemetry || elapsedNanoseconds == 0U) {
+            return;
+        }
+
+        telemetry_.lastWorkerActiveNanoseconds += elapsedNanoseconds;
+        telemetry_.totalWorkerActiveNanoseconds += elapsedNanoseconds;
+    }
+
+    void RecordWorkerStealLocked() noexcept {
+        if (!config_.collectDispatchTelemetry) {
+            return;
+        }
+
+        ++telemetry_.lastStealCount;
+        ++telemetry_.totalStealCount;
+    }
+
+    void CompleteDispatchTelemetryLocked() noexcept {
+        if (!config_.collectDispatchTelemetry || activeDispatchStartedAt_ == DispatchTimePoint{}) {
+            return;
+        }
+
+        std::uint64_t wallNanoseconds = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(DispatchClock::now() - activeDispatchStartedAt_).count());
+        if (wallNanoseconds == 0U) {
+            wallNanoseconds = 1U;
+        }
+
+        const std::uint64_t activeWorkerCount = static_cast<std::uint64_t>(std::max<std::size_t>(telemetry_.lastActiveWorkerCount, 1U));
+        const std::uint64_t capacityNanoseconds = wallNanoseconds * activeWorkerCount;
+        telemetry_.lastDispatchWallNanoseconds = wallNanoseconds;
+        telemetry_.totalDispatchWallNanoseconds += wallNanoseconds;
+        telemetry_.averageDispatchWallNanoseconds =
+            telemetry_.dispatchCount == 0U ? 0U : telemetry_.totalDispatchWallNanoseconds / telemetry_.dispatchCount;
+        telemetry_.lastWorkerCapacityNanoseconds = capacityNanoseconds;
+        telemetry_.totalWorkerCapacityNanoseconds += capacityNanoseconds;
+        telemetry_.averageWorkerActiveNanoseconds =
+            telemetry_.dispatchCount == 0U ? 0U : telemetry_.totalWorkerActiveNanoseconds / telemetry_.dispatchCount;
+        telemetry_.lastWorkerUtilizationPercent = capacityNanoseconds == 0U
+            ? 0.0
+            : std::min(100.0, (static_cast<double>(telemetry_.lastWorkerActiveNanoseconds) * 100.0) / static_cast<double>(capacityNanoseconds));
+        telemetry_.averageWorkerUtilizationPercent = telemetry_.totalWorkerCapacityNanoseconds == 0U
+            ? 0.0
+            : std::min(100.0, (static_cast<double>(telemetry_.totalWorkerActiveNanoseconds) * 100.0) / static_cast<double>(telemetry_.totalWorkerCapacityNanoseconds));
+        activeDispatchStartedAt_ = DispatchTimePoint{};
+    }
 
     static void ThrowIfFailed(std::exception_ptr exception) {
         if (exception != nullptr) {
@@ -661,6 +837,16 @@ private:
         return ResolveWorkerLimit(workerLimit);
     }
 
+    static bool CanRunBatchesStaticStrided(std::span<const WorkerPoolBatch> batches) noexcept {
+        for (std::size_t batchIndex = 0; batchIndex < batches.size(); ++batchIndex) {
+            const std::size_t preferredWorkerIndex = batches[batchIndex].preferredWorkerIndex;
+            if (preferredWorkerIndex != kAnyWorkerPoolWorker && preferredWorkerIndex != batchIndex) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     std::size_t ResolveChunkWorkerLimit(std::span<const WorkerPoolChunk> chunks) const noexcept {
         std::size_t workerLimit = 0;
         for (const WorkerPoolChunk& chunk : chunks) {
@@ -669,6 +855,16 @@ private:
             }
         }
         return ResolveWorkerLimit(workerLimit);
+    }
+
+    static bool CanRunChunksStaticStrided(std::span<const WorkerPoolChunk> chunks) noexcept {
+        for (std::size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex) {
+            const std::size_t preferredWorkerIndex = chunks[chunkIndex].preferredWorkerIndex;
+            if (preferredWorkerIndex != kAnyWorkerPoolWorker && preferredWorkerIndex != chunkIndex) {
+                return false;
+            }
+        }
+        return true;
     }
 
     static void RunJobsInline(std::span<const WorkerPoolJob> jobs) {
@@ -827,6 +1023,10 @@ private:
             void* batchCallbackContext = nullptr;
             WorkerPoolChunkCallback chunkCallback = nullptr;
             void* chunkCallbackContext = nullptr;
+            const WorkerPoolBatch* staticBatches = nullptr;
+            std::size_t staticBatchCount = 0;
+            const WorkerPoolChunk* staticChunks = nullptr;
+            std::size_t staticChunkCount = 0;
             WorkerPoolBatch batch;
             WorkerPoolChunk chunk;
             WorkMode mode = WorkMode::None;
@@ -851,9 +1051,19 @@ private:
                     batch = batches_[batchIndex];
                     batchCallback = batchCallback_;
                     batchCallbackContext = batchCallbackContext_;
+                } else if (mode == WorkMode::BatchesStaticStrided) {
+                    staticBatches = batches_;
+                    staticBatchCount = batchCount_;
+                    batchCallback = batchCallback_;
+                    batchCallbackContext = batchCallbackContext_;
                 } else if (mode == WorkMode::Chunks) {
                     const std::size_t chunkIndex = TakeBatchLocked(workerIndex);
                     chunk = chunks_[chunkIndex];
+                    chunkCallback = chunkCallback_;
+                    chunkCallbackContext = chunkCallbackContext_;
+                } else if (mode == WorkMode::ChunksStaticStrided) {
+                    staticChunks = chunks_;
+                    staticChunkCount = chunkCount_;
                     chunkCallback = chunkCallback_;
                     chunkCallbackContext = chunkCallbackContext_;
                 }
@@ -864,26 +1074,43 @@ private:
                 .workerCount = workerCount,
             };
 
+            const DispatchTimePoint activeStartedAt = BeginWorkerActiveTiming();
             try {
                 if (mode == WorkMode::Jobs) {
                     job->callback(context, job->context);
                 } else if (mode == WorkMode::Batches) {
                     batchCallback(context, batch, batchCallbackContext);
+                } else if (mode == WorkMode::BatchesStaticStrided) {
+                    for (std::size_t batchIndex = workerIndex; batchIndex < staticBatchCount; batchIndex += workerCount) {
+                        batchCallback(context, staticBatches[batchIndex], batchCallbackContext);
+                    }
                 } else if (mode == WorkMode::Chunks) {
                     chunkCallback(context, chunk, chunkCallbackContext);
+                } else if (mode == WorkMode::ChunksStaticStrided) {
+                    for (std::size_t chunkIndex = workerIndex; chunkIndex < staticChunkCount; chunkIndex += workerCount) {
+                        chunkCallback(context, staticChunks[chunkIndex], chunkCallbackContext);
+                    }
                 }
             } catch (...) {
                 std::lock_guard lock{ mutex_ };
                 if (firstJobException_ == nullptr) {
                     firstJobException_ = std::current_exception();
-                    CancelPendingWorkLocked();
+                    if (mode != WorkMode::BatchesStaticStrided && mode != WorkMode::ChunksStaticStrided) {
+                        CancelPendingWorkLocked();
+                    }
                 }
             }
+            const std::uint64_t activeNanoseconds = EndWorkerActiveTiming(activeStartedAt);
 
             {
                 std::lock_guard lock{ mutex_ };
+                RecordWorkerActiveTimeLocked(activeNanoseconds);
+                if ((mode == WorkMode::BatchesStaticStrided || mode == WorkMode::ChunksStaticStrided) && workerIndex < staticStridedWorkerDone_.size()) {
+                    staticStridedWorkerDone_[workerIndex] = 1U;
+                }
                 --remainingWork_;
                 if (remainingWork_ == 0) {
+                    CompleteDispatchTelemetryLocked();
                     CompleteActiveWorkLocked();
                     ClearActiveWorkLocked();
                     batchFinished_.notify_all();
@@ -904,14 +1131,19 @@ private:
         if (workMode_ == WorkMode::Jobs) {
             return nextJob_ < jobCount_;
         }
+        if (workMode_ == WorkMode::BatchesStaticStrided || workMode_ == WorkMode::ChunksStaticStrided) {
+            return workerIndex < activeWorkerLimit_
+                && workerIndex < staticStridedWorkerDone_.size()
+                && staticStridedWorkerDone_[workerIndex] == 0U;
+        }
         if (workMode_ != WorkMode::Batches && workMode_ != WorkMode::Chunks) {
             return false;
         }
-        if (workerIndex < workerBatchQueues_.size() && !workerBatchQueues_[workerIndex].empty()) {
+        if (QueueHasPendingLocked(workerIndex)) {
             return true;
         }
         for (std::size_t index = 0; index < activeWorkerLimit_; ++index) {
-            if (index != workerIndex && !workerBatchQueues_[index].empty()) {
+            if (index != workerIndex && QueueHasPendingLocked(index)) {
                 return true;
             }
         }
@@ -925,11 +1157,19 @@ private:
         if (workMode_ == WorkMode::Jobs) {
             return nextJob_ < jobCount_;
         }
+        if (workMode_ == WorkMode::BatchesStaticStrided || workMode_ == WorkMode::ChunksStaticStrided) {
+            for (std::size_t index = 0; index < activeWorkerLimit_ && index < staticStridedWorkerDone_.size(); ++index) {
+                if (staticStridedWorkerDone_[index] == 0U) {
+                    return true;
+                }
+            }
+            return false;
+        }
         if (workMode_ != WorkMode::Batches && workMode_ != WorkMode::Chunks) {
             return false;
         }
-        for (const auto& queue : workerBatchQueues_) {
-            if (!queue.empty()) {
+        for (std::size_t index = 0; index < activeWorkerLimit_; ++index) {
+            if (QueueHasPendingLocked(index)) {
                 return true;
             }
         }
@@ -938,23 +1178,75 @@ private:
 
     [[nodiscard]] std::size_t TakeBatchLocked(std::size_t workerIndex) {
         auto& localQueue = workerBatchQueues_[workerIndex];
-        if (!localQueue.empty()) {
-            const std::size_t batchIndex = localQueue.front();
-            localQueue.pop_front();
+        std::size_t& localCursor = workerBatchQueueCursors_[workerIndex];
+        if (localCursor < localQueue.size()) {
+            const std::size_t batchIndex = localQueue[localCursor];
+            ++localCursor;
             return batchIndex;
         }
 
         for (std::size_t offset = 1; offset <= activeWorkerLimit_; ++offset) {
             const std::size_t victimIndex = (workerIndex + offset) % activeWorkerLimit_;
             auto& victimQueue = workerBatchQueues_[victimIndex];
-            if (!victimQueue.empty()) {
+            const std::size_t victimCursor = workerBatchQueueCursors_[victimIndex];
+            if (victimCursor < victimQueue.size()) {
                 const std::size_t batchIndex = victimQueue.back();
                 victimQueue.pop_back();
+                RecordWorkerStealLocked();
                 return batchIndex;
             }
         }
 
         throw std::logic_error("ECS worker pool attempted to take a missing batch");
+    }
+
+    void PrepareWorkerBatchQueuesLocked(std::size_t workCount) {
+        if (workerBatchQueues_.size() != config_.workerCount) {
+            workerBatchQueues_.resize(config_.workerCount);
+        }
+        if (workerBatchQueueCursors_.size() != config_.workerCount) {
+            workerBatchQueueCursors_.resize(config_.workerCount);
+        }
+
+        const std::size_t reservePerActiveWorker = activeWorkerLimit_ == 0U
+            ? 0U
+            : ((workCount + activeWorkerLimit_ - 1U) / activeWorkerLimit_);
+        for (std::size_t workerIndex = 0; workerIndex < config_.workerCount; ++workerIndex) {
+            workerBatchQueues_[workerIndex].clear();
+            workerBatchQueueCursors_[workerIndex] = 0U;
+            if (workerIndex < activeWorkerLimit_ && workerBatchQueues_[workerIndex].capacity() < reservePerActiveWorker) {
+                workerBatchQueues_[workerIndex].reserve(reservePerActiveWorker);
+            }
+        }
+    }
+
+    void PrepareStaticStridedWorkLocked(std::size_t workCount) {
+        activeWorkerLimit_ = std::min<std::size_t>(activeWorkerLimit_, std::max<std::size_t>(workCount, 1U));
+        if (staticStridedWorkerDone_.size() != config_.workerCount) {
+            staticStridedWorkerDone_.resize(config_.workerCount);
+        }
+        std::fill(staticStridedWorkerDone_.begin(), staticStridedWorkerDone_.end(), 1U);
+        std::fill_n(staticStridedWorkerDone_.begin(), activeWorkerLimit_, 0U);
+    }
+
+    void ResetWorkerBatchQueuesLocked() noexcept {
+        for (std::vector<std::size_t>& queue : workerBatchQueues_) {
+            queue.clear();
+        }
+        std::fill(workerBatchQueueCursors_.begin(), workerBatchQueueCursors_.end(), 0U);
+    }
+
+    [[nodiscard]] std::size_t PendingInQueueLocked(std::size_t workerIndex) const noexcept {
+        if (workerIndex >= workerBatchQueues_.size() || workerIndex >= workerBatchQueueCursors_.size()) {
+            return 0U;
+        }
+        const std::vector<std::size_t>& queue = workerBatchQueues_[workerIndex];
+        const std::size_t cursor = std::min(workerBatchQueueCursors_[workerIndex], queue.size());
+        return queue.size() - cursor;
+    }
+
+    [[nodiscard]] bool QueueHasPendingLocked(std::size_t workerIndex) const noexcept {
+        return PendingInQueueLocked(workerIndex) != 0U;
     }
 
     void CancelPendingWorkLocked() noexcept {
@@ -963,9 +1255,16 @@ private:
             pendingWork = jobCount_ > nextJob_ ? jobCount_ - nextJob_ : 0U;
             nextJob_ = jobCount_;
         } else if (workMode_ == WorkMode::Batches || workMode_ == WorkMode::Chunks) {
-            for (auto& queue : workerBatchQueues_) {
-                pendingWork += queue.size();
-                queue.clear();
+            for (std::size_t index = 0; index < activeWorkerLimit_; ++index) {
+                pendingWork += PendingInQueueLocked(index);
+            }
+            ResetWorkerBatchQueuesLocked();
+        } else if (workMode_ == WorkMode::BatchesStaticStrided || workMode_ == WorkMode::ChunksStaticStrided) {
+            for (std::size_t index = 0; index < activeWorkerLimit_ && index < staticStridedWorkerDone_.size(); ++index) {
+                if (staticStridedWorkerDone_[index] == 0U) {
+                    ++pendingWork;
+                    staticStridedWorkerDone_[index] = 1U;
+                }
             }
         }
 
@@ -978,7 +1277,9 @@ private:
         jobCount_ = 0;
         nextJob_ = 0;
         batches_ = nullptr;
+        batchCount_ = 0;
         chunks_ = nullptr;
+        chunkCount_ = 0;
         batchCallback_ = nullptr;
         batchCallbackContext_ = nullptr;
         chunkCallback_ = nullptr;
@@ -987,7 +1288,7 @@ private:
         ownedJobs_.clear();
         ownedBatches_.clear();
         ownedChunks_.clear();
-        workerBatchQueues_.clear();
+        ResetWorkerBatchQueuesLocked();
         remainingWork_ = 0;
         workMode_ = WorkMode::None;
         batchActive_ = false;
@@ -1018,7 +1319,9 @@ private:
     std::size_t jobCount_ = 0;
     std::size_t nextJob_ = 0;
     const WorkerPoolBatch* batches_ = nullptr;
+    std::size_t batchCount_ = 0;
     const WorkerPoolChunk* chunks_ = nullptr;
+    std::size_t chunkCount_ = 0;
     WorkerPoolBatchCallback batchCallback_ = nullptr;
     void* batchCallbackContext_ = nullptr;
     WorkerPoolChunkCallback chunkCallback_ = nullptr;
@@ -1026,7 +1329,11 @@ private:
     std::vector<WorkerPoolJob> ownedJobs_;
     std::vector<WorkerPoolBatch> ownedBatches_;
     std::vector<WorkerPoolChunk> ownedChunks_;
-    std::vector<std::deque<std::size_t>> workerBatchQueues_;
+    std::vector<std::vector<std::size_t>> workerBatchQueues_;
+    std::vector<std::size_t> workerBatchQueueCursors_;
+    std::vector<unsigned char> staticStridedWorkerDone_;
+    WorkerPoolDispatchTelemetry telemetry_;
+    DispatchTimePoint activeDispatchStartedAt_{};
     std::size_t activeWorkerLimit_ = 1;
     std::size_t remainingWork_ = 0;
     std::size_t startupRemaining_ = 0;
@@ -1052,7 +1359,11 @@ void WorkerPool::Start(WorkerPoolConfig config) {
     config.workerCount = config.singleThreaded ? 1U : ResolveWorkerCount(config.workerCount);
     if (state_ != nullptr && state_->Running()) {
         const WorkerPoolConfig current = state_->Config();
-        if (current.workerCount != config.workerCount || current.pinWorkersToCores != config.pinWorkersToCores || current.firstPinnedCore != config.firstPinnedCore || current.singleThreaded != config.singleThreaded) {
+        if (current.workerCount != config.workerCount ||
+            current.pinWorkersToCores != config.pinWorkersToCores ||
+            current.firstPinnedCore != config.firstPinnedCore ||
+            current.singleThreaded != config.singleThreaded ||
+            current.collectDispatchTelemetry != config.collectDispatchTelemetry) {
             throw std::logic_error("ECS worker pool cannot be reconfigured while running");
         }
         return;
@@ -1174,6 +1485,10 @@ std::size_t WorkerPool::WorkerCount() const noexcept {
 
 WorkerPoolConfig WorkerPool::Config() const noexcept {
     return state_ == nullptr ? WorkerPoolConfig{} : state_->Config();
+}
+
+WorkerPoolDispatchTelemetry WorkerPool::DispatchTelemetry() const noexcept {
+    return state_ == nullptr ? WorkerPoolDispatchTelemetry{} : state_->DispatchTelemetry();
 }
 
 std::size_t WorkerPool::DefaultWorkerCount() noexcept {

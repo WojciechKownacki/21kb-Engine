@@ -1,6 +1,7 @@
 #include "scene/components/SceneComponentIteration.hpp"
 
 #include "engine/ecs/Query.hpp"
+#include "engine/ecs/UnsafeHotQuery.hpp"
 
 #include <cstddef>
 
@@ -13,13 +14,13 @@ struct BehaviourIterationContext {
     void* userContext = nullptr;
 };
 
-void VisitBehaviourBatch(const kb::ecs::QueryBatch<BehaviourComponent>& batch, void* rawContext) {
-    const auto* callbackContext = static_cast<const BehaviourIterationContext*>(rawContext);
-    const BehaviourComponent* behaviours = batch.Components<0>();
+template <typename Batch>
+void VisitBehaviourBatch(const Batch& batch, const BehaviourIterationContext& callbackContext) {
+    const BehaviourComponent* behaviours = batch.template Components<0>();
     for (std::size_t index = 0; index < batch.Count(); ++index) {
         const SceneEntity entity = batch.EntityAt(index);
         if (entity.IsValid()) {
-            callbackContext->visitor(entity, behaviours[index], callbackContext->userContext);
+            callbackContext.visitor(entity, behaviours[index], callbackContext.userContext);
         }
     }
 }
@@ -40,7 +41,13 @@ void SceneComponentIteration::ForEachBehaviour(const kb::ecs::World& world, std:
     kb::ecs::QueryExecutionSettings settings;
     settings.policy = kb::ecs::QueryExecutionPolicy::SingleThread;
     BehaviourIterationContext callbackContext{ .visitor = visitor, .userContext = context };
-    query.ForEachBatch(settings, VisitBehaviourBatch, &callbackContext);
+    kb::ecs::UnsafeHotReadQuery<BehaviourComponent> hotQuery;
+    if (!hotQuery.Rebuild(query, settings)) {
+        return;
+    }
+    hotQuery.ForEachRange(settings.maxBatchSize, [&callbackContext](const auto& batch) {
+        VisitBehaviourBatch(batch, callbackContext);
+    });
 }
 
 } // namespace kb::scene

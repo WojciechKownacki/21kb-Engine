@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/ecs/ComponentId.hpp"
+#include "engine/ecs/ComponentStoragePolicy.hpp"
 
 #include <cstddef>
 #include <string>
@@ -12,6 +13,7 @@ struct ComponentTypeInfo {
     std::string name;
     std::size_t size = 0;
     std::size_t alignment = 0;
+    ComponentStorageClass storageClass = ComponentStorageClass::HotTable;
 };
 
 } // namespace kb::ecs

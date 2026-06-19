@@ -2,7 +2,9 @@
 #include "scene/SceneComponentMutationService.hpp"
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +22,27 @@ MeshRendererComponent* SceneComponentMutationService::TryGetMeshRenderer(Scene& 
 
 void SceneComponentMutationService::SetMeshRenderer(Scene& scene, SceneEntity entity, const MeshRendererComponent& renderer) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.MeshRenderers().Set(entity, renderer);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.MeshRenderers().Set(entity, renderer);
+        SetSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::MeshRenderer);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveMeshRenderer(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.MeshRenderers().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.MeshRenderers().Remove(entity);
+        ClearSceneRenderProxyComponentMask(state, entity, SceneRenderProxyComponentMask::MeshRenderer);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkMeshRendererModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.MeshRenderers().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.MeshRenderers().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

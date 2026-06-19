@@ -56,6 +56,7 @@ struct QueryExecutionSettings {
     std::size_t workerCountOverride = 0;
     WorkerPool* workerPool = nullptr;
     bool telemetryEnabled = false;
+    bool adaptiveGrain = false;
 };
 
 struct QueryWorkerContext {

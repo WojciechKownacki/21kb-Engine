@@ -4,6 +4,7 @@
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -23,7 +24,9 @@ void SceneEntityNameService::SetName(Scene& scene, SceneObject object, std::stri
 
 void SceneEntityNameService::SetName(Scene& scene, SceneEntity entity, std::string_view name) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneEntityNaming::SetName(SceneAccess::State(scene), entity, name);
+        SceneState& state = SceneAccess::State(scene);
+        SceneEntityNaming::SetName(state, entity, name);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

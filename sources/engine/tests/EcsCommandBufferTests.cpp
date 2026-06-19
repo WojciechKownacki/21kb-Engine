@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -58,6 +59,133 @@ void RunCommandBufferDeterministicPlaybackTest() {
     const EcsPosition* position = world.TryGet<EcsPosition>(two);
     kb::tests::Require(position != nullptr && kb::tests::NearlyEqual(position->x, 100.0F), "ECS command buffer did not set deferred component data");
     kb::tests::Require(buffer.Empty(), "ECS command buffer did not clear commands after playback");
+}
+
+void RunCommandBufferTrustedPlaybackBulkStructuralTest() {
+    kb::ecs::World world;
+    std::vector<kb::ecs::Entity> transientEntities;
+    std::vector<kb::ecs::Entity> markerEntities;
+    std::vector<EcsPosition> createdPositions;
+    std::vector<EcsVelocity> createdVelocities;
+    std::vector<EcsQueryMarker> markers;
+    transientEntities.reserve(4U);
+    markerEntities.reserve(8U);
+    createdPositions.reserve(4U);
+    createdVelocities.reserve(4U);
+    markers.reserve(4U);
+
+    for (std::size_t index = 0; index < 4U; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 1.0F });
+        world.Set(entity, EcsVelocity{ .x = 0.5F, .y = 0.25F });
+        transientEntities.push_back(entity);
+    }
+
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(10U + index), .y = 2.0F });
+        if (index >= 4U) {
+            world.Set(entity, EcsQueryMarker{ .value = static_cast<int>(index) });
+        }
+        markerEntities.push_back(entity);
+    }
+
+    for (std::size_t index = 0; index < 4U; ++index) {
+        createdPositions.push_back(EcsPosition{ .x = static_cast<float>(100U + index), .y = 3.0F });
+        createdVelocities.push_back(EcsVelocity{ .x = static_cast<float>(200U + index), .y = 4.0F });
+        markers.push_back(EcsQueryMarker{ .value = static_cast<int>(1000U + index) });
+    }
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    kb::ecs::CommandBuffer::WorkerBuffer worker = buffer.Worker(0);
+    worker.DestroyEntities(std::span<const kb::ecs::Entity>{ transientEntities });
+    const std::vector<kb::ecs::CommandEntity> createdRefs = worker.CreateEntities(std::span<const EcsPosition>{ createdPositions }, std::span<const EcsVelocity>{ createdVelocities });
+    worker.AddMissingBorrowed(std::span<const kb::ecs::Entity>{ markerEntities.data(), 4U }, std::span<const EcsQueryMarker>{ markers });
+    worker.RemoveExisting<EcsQueryMarker>(std::span<const kb::ecs::Entity>{ markerEntities.data() + 4U, 4U });
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.PlaybackTrusted(world);
+    kb::tests::Require(result.CreatedCount() == 4U, "ECS trusted command buffer playback reported invalid created count");
+    kb::tests::Require(result.DestroyedCount() == 4U, "ECS trusted command buffer playback reported invalid destroyed count");
+    kb::tests::Require(buffer.Empty(), "ECS trusted command buffer playback did not clear commands");
+
+    for (kb::ecs::Entity entity : transientEntities) {
+        kb::tests::Require(!world.IsAlive(entity), "ECS trusted command buffer playback failed to destroy a transient entity");
+    }
+    for (std::size_t index = 0; index < createdRefs.size(); ++index) {
+        const kb::ecs::Entity entity = result.Resolve(createdRefs[index]);
+        const EcsPosition* position = world.TryGet<EcsPosition>(entity);
+        const EcsVelocity* velocity = world.TryGet<EcsVelocity>(entity);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "ECS trusted command buffer playback failed to create component payloads");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, createdPositions[index].x), "ECS trusted command buffer playback lost created position data");
+        kb::tests::Require(kb::tests::NearlyEqual(velocity->x, createdVelocities[index].x), "ECS trusted command buffer playback lost created velocity data");
+    }
+    for (std::size_t index = 0; index < 4U; ++index) {
+        const EcsQueryMarker* marker = world.TryGet<EcsQueryMarker>(markerEntities[index]);
+        kb::tests::Require(marker != nullptr && marker->value == markers[index].value, "ECS trusted command buffer playback failed to set marker data");
+        kb::tests::Require(!world.Has<EcsQueryMarker>(markerEntities[index + 4U]), "ECS trusted command buffer playback failed to remove marker data");
+    }
+}
+
+void RunCommandBufferTrustedPlaybackKeepsGenericBulkSetSafeTest() {
+    kb::ecs::World world;
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<EcsPosition> positions;
+    entities.reserve(3U);
+    positions.reserve(3U);
+
+    for (std::size_t index = 0; index < 3U; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = static_cast<float>(index), .y = 1.0F });
+        entities.push_back(entity);
+        positions.push_back(EcsPosition{ .x = static_cast<float>(100U + index), .y = 2.0F });
+    }
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    buffer.Worker(0).SetBorrowed(std::span<const kb::ecs::Entity>{ entities }, std::span<const EcsPosition>{ positions });
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.PlaybackTrusted(world);
+    kb::tests::Require(result.CreatedCount() == 0U, "ECS trusted bulk set safety test reported unexpected creates");
+    kb::tests::Require(result.DestroyedCount() == 0U, "ECS trusted bulk set safety test reported unexpected destroys");
+
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const EcsPosition* position = world.TryGet<EcsPosition>(entities[index]);
+        kb::tests::Require(position != nullptr, "ECS trusted generic bulk set removed an existing component");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, positions[index].x), "ECS trusted generic bulk set failed to update existing data");
+        kb::tests::Require(kb::tests::NearlyEqual(position->y, positions[index].y), "ECS trusted generic bulk set failed to update existing payload");
+    }
+}
+
+void RunCommandBufferTrustedPlaybackHonorsNativeOnlyConfigTest() {
+    kb::ecs::WorldConfig config;
+    config.mirrorEntitiesToBackend = false;
+    config.mirrorNativeComponentChangesToBackend = false;
+    kb::ecs::World world{ config };
+
+    std::vector<EcsPosition> positions{
+        EcsPosition{ .x = 1.0F, .y = 2.0F },
+        EcsPosition{ .x = 3.0F, .y = 4.0F },
+    };
+    std::vector<EcsVelocity> velocities{
+        EcsVelocity{ .x = 5.0F, .y = 6.0F },
+        EcsVelocity{ .x = 7.0F, .y = 8.0F },
+    };
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    const std::vector<kb::ecs::CommandEntity> deferred =
+        buffer.Worker(0).CreateEntities(std::span<const EcsPosition>{ positions }, std::span<const EcsVelocity>{ velocities });
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.PlaybackTrusted(world);
+    kb::tests::Require(result.CreatedCount() == deferred.size(), "ECS trusted native-only playback reported invalid created count");
+    for (std::size_t index = 0; index < deferred.size(); ++index) {
+        const kb::ecs::Entity entity = result.Resolve(deferred[index]);
+        kb::tests::Require(world.IsAlive(entity), "ECS trusted native-only playback failed to create a native entity");
+        kb::tests::Require(!world.BackendEntityAlive(entity), "ECS trusted native-only playback mirrored an entity into the compatibility backend");
+        const EcsPosition* position = world.TryGet<EcsPosition>(entity);
+        const EcsVelocity* velocity = world.TryGet<EcsVelocity>(entity);
+        kb::tests::Require(position != nullptr && velocity != nullptr, "ECS trusted native-only playback failed to write native components");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, positions[index].x), "ECS trusted native-only playback lost position payload");
+        kb::tests::Require(kb::tests::NearlyEqual(velocity->x, velocities[index].x), "ECS trusted native-only playback lost velocity payload");
+    }
 }
 
 struct CommandBufferDeterministicSnapshot {
@@ -243,6 +371,35 @@ void RunCommandBufferKnownAcyclicNewEntityParentChangesTest() {
     kb::tests::Require(world.Parent(firstChild) == root, "ECS command buffer known-acyclic parent batch did not resolve first child parent");
     kb::tests::Require(world.Parent(secondChild) == root, "ECS command buffer known-acyclic parent batch did not resolve second child parent");
     kb::tests::Require(world.Parent(leaf) == secondChild, "ECS command buffer known-acyclic parent batch did not resolve nested parent");
+}
+
+void RunCommandBufferKnownAcyclicMovedParentBatchTest() {
+    kb::ecs::World world;
+    const kb::ecs::Entity existingParent = world.CreateEntity("KnownAcyclicMovedParentRoot");
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    std::vector<kb::ecs::CommandEntity> created = buffer.Worker(0).CreateEntities(3);
+    std::vector<kb::ecs::CommandEntity> children{
+        created[0],
+        created[1],
+        created[2],
+    };
+    std::vector<kb::ecs::CommandEntity> parents{
+        kb::ecs::CommandEntity::Existing(existingParent),
+        created[0],
+        created[1],
+    };
+    buffer.Worker(0).SetParentsForNewEntitiesKnownAcyclic(std::move(children), std::move(parents));
+
+    const kb::ecs::CommandBufferPlaybackResult result = buffer.Playback(world);
+    const kb::ecs::Entity root = result.Resolve(created[0]);
+    const kb::ecs::Entity child = result.Resolve(created[1]);
+    const kb::ecs::Entity leaf = result.Resolve(created[2]);
+
+    kb::tests::Require(result.PlaybackStats().parentCommands == created.size(), "ECS command buffer moved parent batch reported invalid parent telemetry");
+    kb::tests::Require(world.Parent(root) == existingParent, "ECS command buffer moved parent batch did not use existing parent");
+    kb::tests::Require(world.Parent(child) == root, "ECS command buffer moved parent batch did not resolve child parent");
+    kb::tests::Require(world.Parent(leaf) == child, "ECS command buffer moved parent batch did not resolve leaf parent");
 }
 
 void RunCommandBufferBorrowedBulkCreateTest() {
@@ -915,6 +1072,50 @@ void RunCommandBufferBulkComponentMutationTest() {
     }
 }
 
+void RunCommandBufferBorrowedBulkSetSliceTest() {
+    kb::ecs::World world;
+    std::vector<kb::ecs::Entity> entities;
+    std::vector<EcsPosition> positions;
+    entities.reserve(6U);
+    positions.reserve(6U);
+
+    for (int index = 0; index < 6; ++index) {
+        const kb::ecs::Entity entity = world.CreateEntity();
+        world.Set(entity, EcsPosition{ .x = -1.0F, .y = -1.0F });
+        entities.push_back(entity);
+        positions.push_back(EcsPosition{ .x = static_cast<float>(50 + index), .y = static_cast<float>(70 + index) });
+    }
+
+    kb::ecs::CommandBuffer buffer{ 1 };
+    buffer.Worker(0).SetBorrowed(std::span<const kb::ecs::Entity>{ entities }, std::span<const EcsPosition>{ positions });
+
+    kb::ecs::CommandBufferPlaybackBudget budget;
+    budget.maxStructuralCommands = 1U;
+    budget.maxComponentSetCommands = 2U;
+    budget.maxComponentBytesCopied = 2U * sizeof(EcsPosition);
+
+    kb::ecs::CommandBufferPlaybackState state;
+    std::vector<std::size_t> setsPerSlice;
+    while (!state.Complete()) {
+        const kb::ecs::CommandBufferPlaybackSlice slice = buffer.PlaybackSlice(world, budget, state);
+        kb::tests::Require(slice.madeProgress, "ECS command buffer borrowed bulk set slice did not progress");
+        kb::tests::Require(slice.stats.componentSetCommands <= budget.maxComponentSetCommands, "ECS command buffer borrowed bulk set slice exceeded set budget");
+        setsPerSlice.push_back(slice.stats.componentSetCommands);
+    }
+
+    kb::tests::Require(
+        setsPerSlice == std::vector<std::size_t>{ 2U, 2U, 2U },
+        "ECS command buffer borrowed bulk set slice did not split writes by budget");
+    kb::tests::Require(state.Result().PlaybackStats().componentBytesCopied == positions.size() * sizeof(EcsPosition), "ECS command buffer borrowed bulk set reported invalid byte telemetry");
+
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const EcsPosition* position = world.TryGet<EcsPosition>(entities[index]);
+        kb::tests::Require(position != nullptr, "ECS command buffer borrowed bulk set missed a component");
+        kb::tests::Require(kb::tests::NearlyEqual(position->x, positions[index].x), "ECS command buffer borrowed bulk set used an invalid payload offset");
+        kb::tests::Require(kb::tests::NearlyEqual(position->y, positions[index].y), "ECS command buffer borrowed bulk set lost payload data");
+    }
+}
+
 void RunCommandBufferBulkPlaybackOrderGuaranteeTest() {
     kb::ecs::World world;
     std::vector<kb::ecs::Entity> entities;
@@ -1186,6 +1387,10 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferRandomStructuralChangeStressTest();
     RunCommandBufferBulkParentChangesTest();
     RunCommandBufferKnownAcyclicNewEntityParentChangesTest();
+    RunCommandBufferKnownAcyclicMovedParentBatchTest();
+    RunCommandBufferTrustedPlaybackBulkStructuralTest();
+    RunCommandBufferTrustedPlaybackKeepsGenericBulkSetSafeTest();
+    RunCommandBufferTrustedPlaybackHonorsNativeOnlyConfigTest();
     RunCommandBufferBorrowedBulkCreateTest();
     RunCommandBufferBorrowedPatternBulkCreateTest();
     RunCommandBufferStructuralChangesTest();
@@ -1200,6 +1405,7 @@ void RunEcsCommandBufferTests() {
     RunCommandBufferPlaybackSliceBulkParentRangeBudgetTest();
     RunCommandBufferPlaybackSliceBulkClearParentRangeBudgetTest();
     RunCommandBufferBulkComponentMutationTest();
+    RunCommandBufferBorrowedBulkSetSliceTest();
     RunCommandBufferBulkPlaybackOrderGuaranteeTest();
     RunCommandBufferDeferredDestroySyncPointTest();
     RunCommandBufferBulkDestroyBudgetTest();

@@ -1,10 +1,13 @@
 #pragma once
 
 #include "engine/ecs/Entity.hpp"
+#include "engine/ecs/ComponentId.hpp"
 #include "engine/ecs/QueryBatch.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace kb::ecs {
@@ -18,6 +21,8 @@ using QueryRawMutableBatchVisitor = void (*)(const Entity::IdType* entityIds, st
 
 void DestroyQueryState(QueryState* state) noexcept;
 [[nodiscard]] bool IsQueryStateValid(const QueryState* state) noexcept;
+[[nodiscard]] std::span<const ComponentId> QueryStateComponentIds(const QueryState* state) noexcept;
+[[nodiscard]] std::uint64_t QueryStateStructuralVersion(const QueryState* state) noexcept;
 void ForEachQueryState(const QueryState* state, QueryRawVisitor visitor, void* context);
 void PrepareQueryStateBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
 void PrepareQueryStateMutableBatchExecution(const QueryState* state, QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch);
@@ -38,6 +43,8 @@ public:
     Query() noexcept = default;
 
     [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] std::span<const ComponentId> ComponentIds() const noexcept;
+    [[nodiscard]] std::uint64_t StructuralVersion() const noexcept;
     void PrepareBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void PrepareMutableBatchExecution(QueryExecutionSettings settings, QueryBatchExecutionScratch& scratch) const;
     void ForEach(Visitor visitor, void* context) const;
@@ -49,6 +56,8 @@ public:
     void ForEachBatchKernel(Kernel&& kernel) const;
     template <typename Kernel>
     void ForEachBatchKernel(QueryExecutionSettings settings, Kernel&& kernel) const;
+    template <typename Kernel>
+    void ForEachBatchKernel(QueryExecutionSettings settings, Kernel&& kernel, QueryBatchExecutionScratch& scratch) const;
     template <typename Kernel>
     void ForEachMutableBatchKernel(Kernel&& kernel) const;
     template <typename Kernel>

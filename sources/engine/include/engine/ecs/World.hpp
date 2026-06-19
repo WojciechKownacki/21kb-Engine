@@ -3,6 +3,7 @@
 #include "engine/ecs/ComponentId.hpp"
 #include "engine/ecs/ComponentEvent.hpp"
 #include "engine/ecs/ComponentReflection.hpp"
+#include "engine/ecs/ComponentStoragePolicy.hpp"
 #include "engine/ecs/Entity.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/QueryFilter.hpp"
@@ -43,9 +44,12 @@ class Query;
 class World {
 public:
     using BulkComponentRegisterFn = ComponentId (*)(World&);
+    using BulkComponentRegisterWithOptionsFn = ComponentId (*)(World&, ComponentRegistrationOptions);
 
     struct BulkComponentView {
         BulkComponentRegisterFn registerComponent = nullptr;
+        BulkComponentRegisterWithOptionsFn registerComponentWithOptions = nullptr;
+        ComponentRegistrationOptions registrationOptions{};
         std::size_t componentSize = 0;
         std::size_t componentCount = 0;
         std::size_t sourceCount = 0;
@@ -65,10 +69,18 @@ public:
     [[nodiscard]] static BulkComponentView MakeBulkComponentView(std::span<const T> components) noexcept;
 
     template <typename T>
+    [[nodiscard]] static BulkComponentView MakeBulkComponentView(std::span<const T> components, ComponentRegistrationOptions options) noexcept;
+
+    template <typename T>
     [[nodiscard]] static BulkComponentView MakeBulkComponentBroadcastView(const T& component) noexcept;
+
+    template <typename T>
+    [[nodiscard]] static BulkComponentView MakeBulkComponentBroadcastView(const T& component, ComponentRegistrationOptions options) noexcept;
 
     [[nodiscard]] std::vector<Entity> CreateEntities(std::size_t count, std::span<const BulkComponentView> components);
     [[nodiscard]] std::vector<Entity> CreateEntitiesNativeOnly(std::size_t count, std::span<const BulkComponentView> components);
+    void CreateEntitiesInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components);
+    void CreateEntitiesNativeOnlyInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentView> components);
 
 #include "engine/ecs/world/WorldEntityApi.inl"
 #include "engine/ecs/world/WorldComponentApi.inl"
@@ -98,12 +110,16 @@ private:
 #include "engine/ecs/world/WorldPrivateLifecycleApi.inl"
 
     [[nodiscard]] std::vector<Entity> CreateEntitiesWithComponents(std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend = true);
+    void CreateEntitiesWithComponentsInto(std::vector<Entity>& output, std::size_t count, std::span<const BulkComponentData> components, bool mirrorBackend = true);
     void AdoptEntitiesWithComponents(std::span<const Entity::IdType> entityIds, std::span<const BulkComponentData> components);
+    void DestroyEntitiesTrusted(std::span<const Entity> entities);
     void BulkInitFlecsEntities(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void AddComponents(Entity entity, std::span<const BulkComponentData> components);
     void AddComponents(std::span<const Entity> entities, std::span<const BulkComponentData> components);
+    void AddMissingComponentsTrusted(std::span<const Entity> entities, std::span<const BulkComponentData> components);
     void RemoveComponents(Entity entity, std::span<const ComponentId> componentIds);
     void RemoveComponents(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
+    void RemoveExistingComponentsTrusted(std::span<const Entity> entities, std::span<const ComponentId> componentIds);
     void SetParentsForNewEntitiesKnownAcyclic(std::span<const Entity> children, std::span<const Entity> parents);
     void ValidateEntityHandle(Entity entity, std::string_view operation) const;
     void ValidateOptionalEntityHandle(Entity entity, std::string_view operation) const;

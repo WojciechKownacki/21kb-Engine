@@ -3,9 +3,11 @@
 #include "scene/SceneAccess.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneHierarchyService.hpp"
+#include "scene/SceneRenderProxyComponentMask.hpp"
 #include "scene/SceneState.hpp"
 #include "scene/entities/SceneEntityNaming.hpp"
 #include "scene/hierarchy/SceneHierarchyCache.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 #include "scene/prefab/ScenePrefabInstanceRegistry.hpp"
 
 namespace kb::scene {
@@ -28,13 +30,17 @@ void SceneEntityDestructionService::DestroyEntity(Scene& scene, SceneEntity enti
         static_cast<void>(state.prefabInstances.Remove(rootInstance));
     }
 
+    const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
+    MarkScenePrefabTopologyDirty(state, entity);
+    MarkScenePrefabTopologyDirty(state, parent);
+
     for (const SceneEntity child : SceneHierarchyService::ChildEntities(scene, entity)) {
         DestroyEntity(scene, child);
     }
 
-    const SceneEntity parent = SceneHierarchyService::Parent(scene, entity);
     SceneHierarchyCache::Remove(state, entity, parent);
     SceneEntityNaming::ClearName(state, entity);
+    ClearSceneRenderProxyComponentMask(state, entity);
     state.world.DestroyEntity(entity);
 }
 

@@ -84,10 +84,76 @@ void SceneEntityNaming::SetRepeatedNames(SceneState& state, std::span<const Scen
     if (!namesByNode.empty() && (entities.size() % namesByNode.size()) != 0U) {
         throw std::invalid_argument("Scene entity repeated naming requires complete node name cycles");
     }
+
+    std::uint32_t maxDenseIndex = kb::ecs::kInvalidGeneratedEntityIndex;
+    bool denseOnly = true;
+    for (SceneEntity entity : entities) {
+        const std::uint32_t denseIndex = DenseIndex(entity);
+        if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex) {
+            denseOnly = false;
+            break;
+        }
+        maxDenseIndex = maxDenseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex > maxDenseIndex ? denseIndex : maxDenseIndex;
+    }
+    if (denseOnly && maxDenseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+        const std::size_t required = static_cast<std::size_t>(maxDenseIndex) + 1U;
+        if (state.denseEntityNames.size() < required) {
+            state.denseEntityNames.resize(required);
+        }
+        for (std::size_t index = 0; index < entities.size(); ++index) {
+            const std::string& name = namesByNode[index % namesByNode.size()];
+            if (!name.empty()) {
+                state.denseEntityNames[DenseIndex(entities[index])] = name;
+            }
+        }
+        return;
+    }
+
     for (std::size_t index = 0; index < entities.size(); ++index) {
         const std::string& name = namesByNode[index % namesByNode.size()];
         if (!name.empty()) {
             StoreCachedName(state, entities[index], name);
+        }
+    }
+}
+
+void SceneEntityNaming::SetRepeatedNamesForCreatedDenseEntities(
+    SceneState& state,
+    std::span<const SceneEntity> entities,
+    std::span<const std::string> namesByNode,
+    std::uint32_t maxDenseIndex) {
+    if (!entities.empty() && namesByNode.empty()) {
+        throw std::invalid_argument("Scene entity repeated naming requires at least one node name");
+    }
+    if (!namesByNode.empty() && (entities.size() % namesByNode.size()) != 0U) {
+        throw std::invalid_argument("Scene entity repeated naming requires complete node name cycles");
+    }
+    if (entities.empty()) {
+        return;
+    }
+    if (maxDenseIndex == kb::ecs::kInvalidGeneratedEntityIndex) {
+        SetRepeatedNames(state, entities, namesByNode);
+        return;
+    }
+
+    const std::size_t required = static_cast<std::size_t>(maxDenseIndex) + 1U;
+    if (state.denseEntityNames.size() < required) {
+        state.denseEntityNames.resize(required);
+    }
+
+    const std::size_t nodeCount = namesByNode.size();
+    for (std::size_t baseIndex = 0; baseIndex < entities.size(); baseIndex += nodeCount) {
+        for (std::size_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex) {
+            const std::string& name = namesByNode[nodeIndex];
+            if (name.empty()) {
+                continue;
+            }
+            const std::uint32_t denseIndex = DenseIndex(entities[baseIndex + nodeIndex]);
+            if (denseIndex == kb::ecs::kInvalidGeneratedEntityIndex || denseIndex > maxDenseIndex) {
+                SetRepeatedNames(state, entities, namesByNode);
+                return;
+            }
+            state.denseEntityNames[denseIndex] = name;
         }
     }
 }

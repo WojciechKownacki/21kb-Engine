@@ -3,6 +3,7 @@
 #include "scene/SceneComponentQueryService.hpp"
 #include "scene/SceneEntityService.hpp"
 #include "scene/SceneState.hpp"
+#include "scene/prefab/ScenePrefabDirtyTracker.hpp"
 
 namespace kb::scene {
 
@@ -20,19 +21,25 @@ ColliderComponent* SceneComponentMutationService::TryGetCollider(Scene& scene, S
 
 void SceneComponentMutationService::SetCollider(Scene& scene, SceneEntity entity, const ColliderComponent& collider) {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Colliders().Set(entity, collider);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Colliders().Set(entity, collider);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::RemoveCollider(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Colliders().Remove(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Colliders().Remove(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 
 void SceneComponentMutationService::MarkColliderModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
-        SceneAccess::State(scene).componentStorage.Colliders().MarkModified(entity);
+        SceneState& state = SceneAccess::State(scene);
+        state.componentStorage.Colliders().MarkModified(entity);
+        MarkScenePrefabNodeDirty(state, entity);
     }
 }
 

@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,13 @@ using PrefabStatsClock = std::chrono::steady_clock;
     return nanoseconds == 0U ? 1U : nanoseconds;
 }
 
+[[nodiscard]] double UnitsPerSecond(std::size_t units, std::uint64_t elapsedNanoseconds) noexcept {
+    if (units == 0U || elapsedNanoseconds == 0U) {
+        return 0.0;
+    }
+    return (static_cast<double>(units) * 1'000'000'000.0) / static_cast<double>(elapsedNanoseconds);
+}
+
 [[nodiscard]] std::size_t TotalNodeCount(std::size_t instanceCount, std::size_t nodeCount) {
     if (nodeCount != 0 && instanceCount > std::numeric_limits<std::size_t>::max() / nodeCount) {
         throw std::length_error("Scene prefab bulk instantiation node count exceeds addressable size");
@@ -39,6 +47,20 @@ using PrefabStatsClock = std::chrono::steady_clock;
 
 [[nodiscard]] std::size_t EntityIndex(std::size_t instanceIndex, std::size_t nodeIndex, std::size_t nodeCount) noexcept {
     return instanceIndex * nodeCount + nodeIndex;
+}
+
+[[nodiscard]] bool CreatesContiguousPrefabOrderEntityRuns(const ScenePrefabBakedData& baked) noexcept {
+    const std::span<const ScenePrefabBakedArchetype> archetypes = baked.Archetypes();
+    if (archetypes.size() != 1U || archetypes.front().nodeIndices.size() != baked.NodeCount()) {
+        return false;
+    }
+    const std::vector<std::uint32_t>& nodeIndices = archetypes.front().nodeIndices;
+    for (std::size_t index = 0; index < nodeIndices.size(); ++index) {
+        if (nodeIndices[index] != index) {
+            return false;
+        }
+    }
+    return true;
 }
 
 template <typename T>
@@ -120,6 +142,7 @@ struct ScenePrefabArchetypeSpawnPayload {
     std::vector<AudioListenerComponent> audioListeners;
     std::vector<kb::ecs::CommandBuffer::BulkComponentView> views;
     std::vector<kb::ecs::World::BulkComponentView> worldViews;
+    std::vector<kb::ecs::Entity> createdEntities;
 
     void Build(const ScenePrefabBakedArchetype& archetype, std::size_t instanceCount) {
         RepeatComponents(transforms, std::span<const TransformComponent>{ archetype.transforms }, instanceCount);
@@ -229,23 +252,169 @@ struct ScenePrefabArchetypeSpawnPayload {
     }
 };
 
-void AddPrefabHierarchyDense(
+struct ScenePrefabEntityCreateBreakdown {
+    std::uint64_t componentPayloadBuildNanoseconds = 0;
+    std::uint64_t entityBulkCreateNanoseconds = 0;
+    std::uint64_t entityPrefabOrderMapNanoseconds = 0;
+};
+
+void AssignPrefabHierarchyOrderRange(SceneState& state, std::span<const SceneEntity> entities, std::uint32_t knownMaxDenseIndex) {
+    const std::uint64_t firstOrder = state.nextHierarchyOrder;
+    state.nextHierarchyOrder += entities.size();
+    if (entities.empty()) {
+        return;
+    }
+    if (knownMaxDenseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+        const std::size_t required = static_cast<std::size_t>(knownMaxDenseIndex) + 1U;
+        if (state.denseHierarchyOrder.size() < required) {
+            state.denseHierarchyOrder.resize(required);
+        }
+    }
+
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        const SceneEntity entity = entities[index];
+        const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+        if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+            if (denseIndex >= state.denseHierarchyOrder.size()) {
+                state.denseHierarchyOrder.resize(static_cast<std::size_t>(denseIndex) + 1U);
+            }
+            state.denseHierarchyOrder[denseIndex] = firstOrder + index;
+        } else {
+            state.hierarchyOrder[entity.Id()] = firstOrder + index;
+        }
+    }
+}
+
+[[nodiscard]] bool AddPrefabHierarchyCreatedDenseFastPath(
     SceneState& state,
     std::span<const ScenePrefabNodeDesc> nodes,
     std::span<const SceneEntity> entities,
     const ScenePrefabInstantiationSettings& settings,
-    std::size_t instanceCount) {
-    if (nodes.empty() || entities.empty()) {
-        return;
+    std::size_t instanceCount,
+    std::uint32_t maxEntityIndex) {
+    if (maxEntityIndex == kb::ecs::kInvalidGeneratedEntityIndex || nodes.empty() || entities.empty()) {
+        return false;
     }
 
-    std::uint32_t maxEntityIndex = 0;
-    bool hasDenseEntity = false;
-    for (SceneEntity entity : entities) {
-        const std::uint32_t index = kb::ecs::GeneratedEntityIndex(entity);
-        if (index != kb::ecs::kInvalidGeneratedEntityIndex) {
-            maxEntityIndex = hasDenseEntity ? std::max(maxEntityIndex, index) : index;
-            hasDenseEntity = true;
+    const std::size_t required = static_cast<std::size_t>(maxEntityIndex) + 1U;
+    if (state.denseHierarchyParents.size() < required) {
+        state.denseHierarchyParents.resize(required);
+    }
+    if (state.denseHierarchyChildren.size() < required) {
+        state.denseHierarchyChildren.resize(required);
+    }
+    if (state.denseHierarchyOrder.size() < required) {
+        state.denseHierarchyOrder.resize(required);
+    }
+
+    std::vector<std::size_t>& rootNodeIndices = state.prefabHierarchyChildrenPerNodeScratch;
+    rootNodeIndices.clear();
+    rootNodeIndices.reserve(nodes.size());
+    std::vector<std::vector<std::size_t>> childNodesByParentNode(nodes.size());
+    for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+        const ScenePrefabNodeDesc& node = nodes[nodeIndex];
+        if (node.parentNode == ScenePrefabNodeDesc::NoParent) {
+            rootNodeIndices.push_back(nodeIndex);
+        } else if (node.parentNode < childNodesByParentNode.size()) {
+            childNodesByParentNode[node.parentNode].push_back(nodeIndex);
+        }
+    }
+
+    AssignPrefabHierarchyOrderRange(state, entities, maxEntityIndex);
+
+    std::vector<SceneEntity>* rootAppendTarget = nullptr;
+    std::size_t rootWriteCursor = 0U;
+    const std::size_t rootAppendCount = rootNodeIndices.size() * instanceCount;
+    if (!settings.parent.Entity().IsValid()) {
+        const std::size_t oldSize = state.hierarchyRoots.size();
+        state.hierarchyRoots.resize(oldSize + rootAppendCount);
+        rootAppendTarget = &state.hierarchyRoots;
+        rootWriteCursor = oldSize;
+    } else {
+        const SceneEntity rootParent = settings.parent.Entity();
+        const std::uint32_t rootParentIndex = kb::ecs::GeneratedEntityIndex(rootParent);
+        if (rootParentIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+            if (state.denseHierarchyChildren.size() <= rootParentIndex) {
+                state.denseHierarchyChildren.resize(static_cast<std::size_t>(rootParentIndex) + 1U);
+            }
+            std::vector<SceneEntity>& children = state.denseHierarchyChildren[rootParentIndex];
+            const std::size_t oldSize = children.size();
+            children.resize(oldSize + rootAppendCount);
+            rootAppendTarget = &children;
+            rootWriteCursor = oldSize;
+        } else {
+            std::vector<SceneEntity>& children = state.hierarchyChildren[rootParent.Id()];
+            const std::size_t oldSize = children.size();
+            children.resize(oldSize + rootAppendCount);
+            rootAppendTarget = &children;
+            rootWriteCursor = oldSize;
+        }
+    }
+
+    for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+        for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+            const std::size_t entityOffset = EntityIndex(instanceIndex, nodeIndex, nodes.size());
+            const SceneEntity entity = entities[entityOffset];
+            const std::uint32_t entityIndex = kb::ecs::GeneratedEntityIndex(entity);
+            if (entityIndex == kb::ecs::kInvalidGeneratedEntityIndex || entityIndex > maxEntityIndex) {
+                return false;
+            }
+            state.denseHierarchyParents[entityIndex] = nodes[nodeIndex].parentNode == ScenePrefabNodeDesc::NoParent
+                ? settings.parent.Entity()
+                : entities[EntityIndex(instanceIndex, nodes[nodeIndex].parentNode, nodes.size())];
+        }
+
+        for (std::size_t rootNodeIndex : rootNodeIndices) {
+            (*rootAppendTarget)[rootWriteCursor++] = entities[EntityIndex(instanceIndex, rootNodeIndex, nodes.size())];
+        }
+
+        for (std::size_t parentNodeIndex = 0; parentNodeIndex < childNodesByParentNode.size(); ++parentNodeIndex) {
+            const std::vector<std::size_t>& childNodes = childNodesByParentNode[parentNodeIndex];
+            if (childNodes.empty()) {
+                continue;
+            }
+            const SceneEntity parentEntity = entities[EntityIndex(instanceIndex, parentNodeIndex, nodes.size())];
+            const std::uint32_t parentDenseIndex = kb::ecs::GeneratedEntityIndex(parentEntity);
+            if (parentDenseIndex == kb::ecs::kInvalidGeneratedEntityIndex || parentDenseIndex > maxEntityIndex) {
+                return false;
+            }
+            std::vector<SceneEntity>& children = state.denseHierarchyChildren[parentDenseIndex];
+            const std::size_t oldSize = children.size();
+            children.resize(oldSize + childNodes.size());
+            for (std::size_t childOffset = 0; childOffset < childNodes.size(); ++childOffset) {
+                children[oldSize + childOffset] = entities[EntityIndex(instanceIndex, childNodes[childOffset], nodes.size())];
+            }
+        }
+    }
+
+    ++state.hierarchyTopologyVersion;
+    return true;
+}
+
+[[nodiscard]] std::uint32_t AddPrefabHierarchyDense(
+    SceneState& state,
+    std::span<const ScenePrefabNodeDesc> nodes,
+    std::span<const SceneEntity> entities,
+    const ScenePrefabInstantiationSettings& settings,
+    std::size_t instanceCount,
+    std::uint32_t knownMaxDenseIndex = kb::ecs::kInvalidGeneratedEntityIndex) {
+    if (nodes.empty() || entities.empty()) {
+        return kb::ecs::kInvalidGeneratedEntityIndex;
+    }
+
+    if (AddPrefabHierarchyCreatedDenseFastPath(state, nodes, entities, settings, instanceCount, knownMaxDenseIndex)) {
+        return knownMaxDenseIndex;
+    }
+
+    std::uint32_t maxEntityIndex = knownMaxDenseIndex;
+    bool hasDenseEntity = knownMaxDenseIndex != kb::ecs::kInvalidGeneratedEntityIndex;
+    if (!hasDenseEntity) {
+        for (SceneEntity entity : entities) {
+            const std::uint32_t index = kb::ecs::GeneratedEntityIndex(entity);
+            if (index != kb::ecs::kInvalidGeneratedEntityIndex) {
+                maxEntityIndex = hasDenseEntity ? std::max(maxEntityIndex, index) : index;
+                hasDenseEntity = true;
+            }
         }
     }
     if (hasDenseEntity) {
@@ -284,23 +453,16 @@ void AddPrefabHierarchyDense(
         }
     }
 
-    for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-        for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
-            if (childrenPerNode[nodeIndex] == 0U) {
-                continue;
-            }
-            const SceneEntity parent = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
-            const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(parent);
-            if (parentIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
-                state.denseHierarchyChildren[parentIndex].reserve(childrenPerNode[nodeIndex]);
-            }
-        }
-    }
-
-    SceneHierarchyCache::AssignDenseOrderRange(state, entities);
+    AssignPrefabHierarchyOrderRange(state, entities, maxEntityIndex);
     for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
         for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
             const SceneEntity entity = entities[EntityIndex(instanceIndex, nodeIndex, nodes.size())];
+            if (childrenPerNode[nodeIndex] != 0U) {
+                const std::uint32_t parentIndex = kb::ecs::GeneratedEntityIndex(entity);
+                if (parentIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+                    state.denseHierarchyChildren[parentIndex].reserve(childrenPerNode[nodeIndex]);
+                }
+            }
             const SceneEntity parent = nodes[nodeIndex].parentNode == ScenePrefabNodeDesc::NoParent
                 ? settings.parent.Entity()
                 : entities[EntityIndex(instanceIndex, nodes[nodeIndex].parentNode, nodes.size())];
@@ -324,6 +486,7 @@ void AddPrefabHierarchyDense(
         }
     }
     ++state.hierarchyTopologyVersion;
+    return hasDenseEntity ? maxEntityIndex : kb::ecs::kInvalidGeneratedEntityIndex;
 }
 
 void QueueHierarchy(
@@ -353,17 +516,19 @@ void QueueHierarchy(
         }
     }
 
-    worker.SetParentsForNewEntitiesKnownAcyclic(std::span<const kb::ecs::CommandEntity>{ children }, std::span<const kb::ecs::CommandEntity>{ parents });
+    worker.SetParentsForNewEntitiesKnownAcyclic(std::move(children), std::move(parents));
 }
 
 [[nodiscard]] std::vector<kb::ecs::CommandEntity> CreateBakedEntities(
     kb::ecs::CommandBuffer& commandBuffer,
     const ScenePrefabBakedData& baked,
     std::size_t instanceCount,
-    std::vector<ScenePrefabArchetypeSpawnPayload>& payloads) {
+    std::vector<ScenePrefabArchetypeSpawnPayload>& payloads,
+    ScenePrefabEntityCreateBreakdown& breakdown) {
     std::vector<kb::ecs::CommandEntity> entities(TotalNodeCount(instanceCount, baked.NodeCount()));
     payloads.clear();
     payloads.reserve(baked.Archetypes().size());
+    const bool contiguousPrefabOrder = CreatesContiguousPrefabOrderEntityRuns(baked);
 
     std::size_t archetypeIndex = 0U;
     for (const ScenePrefabBakedArchetype& archetype : baked.Archetypes()) {
@@ -371,18 +536,29 @@ void QueueHierarchy(
         kb::ecs::CommandBuffer::WorkerBuffer worker = commandBuffer.Worker(archetypeIndex);
         const std::size_t archetypeNodeCount = archetype.nodeIndices.size();
         const std::size_t archetypeEntityCount = TotalNodeCount(instanceCount, archetypeNodeCount);
+        const auto payloadStart = PrefabStatsClock::now();
         payload.BuildPattern(archetype, instanceCount);
+        breakdown.componentPayloadBuildNanoseconds += ElapsedNanoseconds(payloadStart, PrefabStatsClock::now());
 
+        const auto createStart = PrefabStatsClock::now();
         std::vector<kb::ecs::CommandEntity> created = worker.CreateEntitiesBorrowed(
             archetypeEntityCount,
             std::span<const kb::ecs::CommandBuffer::BulkComponentView>{ payload.views });
-        for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-            for (std::size_t archetypeNodeIndex = 0; archetypeNodeIndex < archetypeNodeCount; ++archetypeNodeIndex) {
-                const std::size_t createdIndex = EntityIndex(instanceIndex, archetypeNodeIndex, archetypeNodeCount);
-                const std::size_t prefabIndex = EntityIndex(instanceIndex, archetype.nodeIndices[archetypeNodeIndex], baked.NodeCount());
-                entities[prefabIndex] = created[createdIndex];
+        breakdown.entityBulkCreateNanoseconds += ElapsedNanoseconds(createStart, PrefabStatsClock::now());
+
+        const auto mapStart = PrefabStatsClock::now();
+        if (contiguousPrefabOrder) {
+            entities = std::move(created);
+        } else {
+            for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+                for (std::size_t archetypeNodeIndex = 0; archetypeNodeIndex < archetypeNodeCount; ++archetypeNodeIndex) {
+                    const std::size_t createdIndex = EntityIndex(instanceIndex, archetypeNodeIndex, archetypeNodeCount);
+                    const std::size_t prefabIndex = EntityIndex(instanceIndex, archetype.nodeIndices[archetypeNodeIndex], baked.NodeCount());
+                    entities[prefabIndex] = created[createdIndex];
+                }
             }
         }
+        breakdown.entityPrefabOrderMapNanoseconds += ElapsedNanoseconds(mapStart, PrefabStatsClock::now());
         ++archetypeIndex;
     }
 
@@ -415,32 +591,54 @@ void QueueHierarchy(
     const ScenePrefabBakedData& baked,
     std::size_t instanceCount,
     std::vector<ScenePrefabArchetypeSpawnPayload>& payloads,
-    bool nativeOnly) {
+    bool nativeOnly,
+    ScenePrefabEntityCreateBreakdown& breakdown) {
     payloads.clear();
     payloads.reserve(baked.Archetypes().size());
     const std::span<const ScenePrefabBakedArchetype> archetypes = baked.Archetypes();
     std::vector<SceneEntity> entities(TotalNodeCount(instanceCount, baked.NodeCount()));
+    const bool contiguousPrefabOrder = CreatesContiguousPrefabOrderEntityRuns(baked);
 
     for (const ScenePrefabBakedArchetype& archetype : archetypes) {
         ScenePrefabArchetypeSpawnPayload& payload = payloads.emplace_back();
         const std::size_t archetypeNodeCount = archetype.nodeIndices.size();
         const std::size_t archetypeEntityCount = TotalNodeCount(instanceCount, archetypeNodeCount);
+        const auto payloadStart = PrefabStatsClock::now();
         payload.BuildPattern(archetype, instanceCount);
+        breakdown.componentPayloadBuildNanoseconds += ElapsedNanoseconds(payloadStart, PrefabStatsClock::now());
 
-        const std::vector<kb::ecs::Entity> created = nativeOnly
-            ? world.CreateEntitiesNativeOnly(archetypeEntityCount, std::span<const kb::ecs::World::BulkComponentView>{ payload.worldViews })
-            : world.CreateEntities(archetypeEntityCount, std::span<const kb::ecs::World::BulkComponentView>{ payload.worldViews });
-        if (created.size() != archetypeEntityCount) {
+        const auto createStart = PrefabStatsClock::now();
+        if (nativeOnly) {
+            world.CreateEntitiesNativeOnlyInto(
+                payload.createdEntities,
+                archetypeEntityCount,
+                std::span<const kb::ecs::World::BulkComponentView>{ payload.worldViews });
+        } else {
+            world.CreateEntitiesInto(
+                payload.createdEntities,
+                archetypeEntityCount,
+                std::span<const kb::ecs::World::BulkComponentView>{ payload.worldViews });
+        }
+        breakdown.entityBulkCreateNanoseconds += ElapsedNanoseconds(createStart, PrefabStatsClock::now());
+
+        if (payload.createdEntities.size() != archetypeEntityCount) {
             throw std::runtime_error("Scene prefab direct bulk spawn created an unexpected entity count");
         }
 
-        for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-            for (std::size_t archetypeNodeIndex = 0; archetypeNodeIndex < archetypeNodeCount; ++archetypeNodeIndex) {
-                const std::size_t createdIndex = EntityIndex(instanceIndex, archetypeNodeIndex, archetypeNodeCount);
-                const std::size_t prefabIndex = EntityIndex(instanceIndex, archetype.nodeIndices[archetypeNodeIndex], baked.NodeCount());
-                entities[prefabIndex] = created[createdIndex];
+        const auto mapStart = PrefabStatsClock::now();
+        if (contiguousPrefabOrder) {
+            entities = std::move(payload.createdEntities);
+        } else {
+            const std::vector<kb::ecs::Entity>& created = payload.createdEntities;
+            for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+                for (std::size_t archetypeNodeIndex = 0; archetypeNodeIndex < archetypeNodeCount; ++archetypeNodeIndex) {
+                    const std::size_t createdIndex = EntityIndex(instanceIndex, archetypeNodeIndex, archetypeNodeCount);
+                    const std::size_t prefabIndex = EntityIndex(instanceIndex, archetype.nodeIndices[archetypeNodeIndex], baked.NodeCount());
+                    entities[prefabIndex] = created[createdIndex];
+                }
             }
         }
+        breakdown.entityPrefabOrderMapNanoseconds += ElapsedNanoseconds(mapStart, PrefabStatsClock::now());
     }
 
     return entities;
@@ -453,17 +651,19 @@ void QueueHierarchy(
     const ScenePrefabInstantiationSettings& settings,
     std::size_t instanceCount,
     bool collectInstances,
+    std::uint64_t& instanceObjectSlabNanoseconds,
     std::uint64_t& hierarchyRecordNanoseconds,
-    std::uint64_t& nameAssignmentNanoseconds) {
+    std::uint64_t& nameAssignmentNanoseconds,
+    std::uint32_t& maxGeneratedEntityIndex) {
     SceneState& state = SceneAccess::State(scene);
     if (!collectInstances) {
         const auto hierarchyStart = PrefabStatsClock::now();
-        AddPrefabHierarchyDense(state, nodes, resolvedEntities, settings, instanceCount);
+        maxGeneratedEntityIndex = AddPrefabHierarchyDense(state, nodes, resolvedEntities, settings, instanceCount);
         hierarchyRecordNanoseconds = ElapsedNanoseconds(hierarchyStart, PrefabStatsClock::now());
         if (settings.assignNames) {
             const std::vector<std::string> nodeNames = BuildNodeNames(nodes, settings);
             const auto nameStart = PrefabStatsClock::now();
-            SceneEntityNaming::SetRepeatedNames(state, resolvedEntities, std::span<const std::string>{ nodeNames });
+            SceneEntityNaming::SetRepeatedNamesForCreatedDenseEntities(state, resolvedEntities, std::span<const std::string>{ nodeNames }, maxGeneratedEntityIndex);
             nameAssignmentNanoseconds = ElapsedNanoseconds(nameStart, PrefabStatsClock::now());
         }
         return {};
@@ -471,27 +671,36 @@ void QueueHierarchy(
 
     std::vector<ScenePrefabInstance> instances;
     instances.reserve(instanceCount);
+    const auto objectSlabStart = PrefabStatsClock::now();
+    auto objectSlab = std::make_shared<std::vector<SceneObject>>();
+    objectSlab->reserve(TotalNodeCount(instanceCount, nodes.size()));
+    std::uint32_t objectSlabMaxGeneratedEntityIndex = kb::ecs::kInvalidGeneratedEntityIndex;
 
     for (std::size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
-        std::vector<SceneObject> objects;
-        objects.reserve(nodes.size());
-
+        const std::size_t objectOffset = objectSlab->size();
         for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
             const std::size_t entityIndex = EntityIndex(instanceIndex, nodeIndex, nodes.size());
             const kb::ecs::Entity entity = resolvedEntities[entityIndex];
-            objects.push_back(SceneAccess::MakeObject(scene, entity));
+            const std::uint32_t denseIndex = kb::ecs::GeneratedEntityIndex(entity);
+            if (denseIndex != kb::ecs::kInvalidGeneratedEntityIndex) {
+                objectSlabMaxGeneratedEntityIndex = objectSlabMaxGeneratedEntityIndex == kb::ecs::kInvalidGeneratedEntityIndex
+                    ? denseIndex
+                    : std::max(objectSlabMaxGeneratedEntityIndex, denseIndex);
+            }
+            objectSlab->push_back(SceneAccess::MakeObject(scene, entity));
         }
 
-        instances.emplace_back(std::move(objects));
+        instances.emplace_back(objectSlab, objectOffset, nodes.size());
     }
+    instanceObjectSlabNanoseconds = ElapsedNanoseconds(objectSlabStart, PrefabStatsClock::now());
 
     const auto hierarchyStart = PrefabStatsClock::now();
-    AddPrefabHierarchyDense(state, nodes, resolvedEntities, settings, instanceCount);
+    maxGeneratedEntityIndex = AddPrefabHierarchyDense(state, nodes, resolvedEntities, settings, instanceCount, objectSlabMaxGeneratedEntityIndex);
     hierarchyRecordNanoseconds = ElapsedNanoseconds(hierarchyStart, PrefabStatsClock::now());
     if (settings.assignNames) {
         const std::vector<std::string> nodeNames = BuildNodeNames(nodes, settings);
         const auto nameStart = PrefabStatsClock::now();
-        SceneEntityNaming::SetRepeatedNames(state, resolvedEntities, std::span<const std::string>{ nodeNames });
+        SceneEntityNaming::SetRepeatedNamesForCreatedDenseEntities(state, resolvedEntities, std::span<const std::string>{ nodeNames }, maxGeneratedEntityIndex);
         nameAssignmentNanoseconds = ElapsedNanoseconds(nameStart, PrefabStatsClock::now());
     }
     return instances;
@@ -505,8 +714,10 @@ void QueueHierarchy(
     const ScenePrefabInstantiationSettings& settings,
     std::size_t instanceCount,
     bool collectInstances,
+    std::uint64_t& instanceObjectSlabNanoseconds,
     std::uint64_t& hierarchyRecordNanoseconds,
-    std::uint64_t& nameAssignmentNanoseconds) {
+    std::uint64_t& nameAssignmentNanoseconds,
+    std::uint32_t& maxGeneratedEntityIndex) {
     std::vector<SceneEntity> resolvedEntities(commandEntities.size());
     for (std::size_t index = 0; index < commandEntities.size(); ++index) {
         resolvedEntities[index] = playback.Resolve(commandEntities[index]);
@@ -518,8 +729,10 @@ void QueueHierarchy(
         settings,
         instanceCount,
         collectInstances,
+        instanceObjectSlabNanoseconds,
         hierarchyRecordNanoseconds,
-        nameAssignmentNanoseconds);
+        nameAssignmentNanoseconds,
+        maxGeneratedEntityIndex);
 }
 
 [[nodiscard]] std::vector<ScenePrefabInstance> InstantiateInternal(
@@ -527,7 +740,8 @@ void QueueHierarchy(
     const ScenePrefab& prefab,
     std::size_t count,
     const ScenePrefabInstantiationSettings& settings,
-    bool collectInstances) {
+    bool collectInstances,
+    const ScenePrefabBakedData* bakedOverride = nullptr) {
     SceneState& state = SceneAccess::State(scene);
     state.lastPrefabInstantiationStats = ScenePrefabInstantiationStats{
         .requestedInstances = count,
@@ -537,8 +751,19 @@ void QueueHierarchy(
     }
 
     const std::span<const ScenePrefabNodeDesc> nodes = prefab.Nodes();
-    const ScenePrefabBakedData baked = ScenePrefabBakedData::Bake(nodes);
-    const std::size_t totalCount = TotalNodeCount(count, baked.NodeCount());
+    ScenePrefabBakedData bakedStorage;
+    const ScenePrefabBakedData* baked = bakedOverride;
+    std::uint64_t prefabBakeNanoseconds = 0;
+    if (baked == nullptr) {
+        const auto bakeStart = PrefabStatsClock::now();
+        bakedStorage = ScenePrefabBakedData::Bake(nodes);
+        prefabBakeNanoseconds = ElapsedNanoseconds(bakeStart, PrefabStatsClock::now());
+        baked = &bakedStorage;
+    }
+    if (baked->NodeCount() != nodes.size()) {
+        throw std::invalid_argument("Scene prefab baked data does not match prefab node count");
+    }
+    const std::size_t totalCount = TotalNodeCount(count, baked->NodeCount());
     if (totalCount == 0) {
         return {};
     }
@@ -546,43 +771,60 @@ void QueueHierarchy(
     const kb::ecs::NativeEcsStorageStats beforeStorage = state.world.NativeStorageStats();
     if (!settings.syncWorldHierarchy) {
         std::vector<ScenePrefabArchetypeSpawnPayload> spawnPayloads;
+        ScenePrefabEntityCreateBreakdown createBreakdown;
         constexpr bool nativeOnlyBatch = true;
         const auto createStart = PrefabStatsClock::now();
-        const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, baked, count, spawnPayloads, nativeOnlyBatch);
+        const std::vector<SceneEntity> entities = CreateBakedEntitiesDirect(state.world, *baked, count, spawnPayloads, nativeOnlyBatch, createBreakdown);
         const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
         const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
+        std::uint64_t instanceObjectSlabNanoseconds = 0;
         std::uint64_t hierarchyRecordNanoseconds = 0;
         std::uint64_t nameAssignmentNanoseconds = 0;
+        std::uint32_t maxGeneratedEntityIndex = kb::ecs::kInvalidGeneratedEntityIndex;
         const std::vector<ScenePrefabInstance> instances =
-            BuildInstances(scene, nodes, std::span<const SceneEntity>{ entities }, settings, count, collectInstances, hierarchyRecordNanoseconds, nameAssignmentNanoseconds);
+            BuildInstances(scene, nodes, std::span<const SceneEntity>{ entities }, settings, count, collectInstances, instanceObjectSlabNanoseconds, hierarchyRecordNanoseconds, nameAssignmentNanoseconds, maxGeneratedEntityIndex);
+        const std::size_t componentBytesCopied = ComponentBytesCopied(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads });
+        const std::size_t componentSourceBytesRead = ComponentSourceBytesRead(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads });
 
         state.lastPrefabInstantiationStats = ScenePrefabInstantiationStats{
             .requestedInstances = count,
             .instantiatedInstances = collectInstances ? instances.size() : count,
-            .nodesPerInstance = baked.NodeCount(),
+            .nodesPerInstance = baked->NodeCount(),
             .entitiesCreated = entities.size(),
-            .prefabArchetypesTouched = baked.Archetypes().size(),
-            .bulkCreateCommands = baked.Archetypes().size(),
+            .prefabArchetypesTouched = baked->Archetypes().size(),
+            .bulkCreateCommands = baked->Archetypes().size(),
             .componentSetCommands = 0,
             .parentCommands = 0,
-            .componentBytesCopied = ComponentBytesCopied(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads }),
-            .componentSourceBytesRead = ComponentSourceBytesRead(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads }),
+            .componentBytesCopied = componentBytesCopied,
+            .componentSourceBytesRead = componentSourceBytesRead,
+            .componentCopyBytesPerSecond = UnitsPerSecond(componentBytesCopied, entityCreateNanoseconds),
+            .componentSourceBytesPerSecond = UnitsPerSecond(componentSourceBytesRead, entityCreateNanoseconds),
+            .entityCreateEntitiesPerSecond = UnitsPerSecond(entities.size(), entityCreateNanoseconds),
             .chunksAllocatedDelta = afterStorage.chunkPoolAllocated >= beforeStorage.chunkPoolAllocated ? afterStorage.chunkPoolAllocated - beforeStorage.chunkPoolAllocated : 0U,
             .chunksReusedDelta = afterStorage.chunkPoolReuseCount >= beforeStorage.chunkPoolReuseCount ? afterStorage.chunkPoolReuseCount - beforeStorage.chunkPoolReuseCount : 0U,
             .entityCreateNanoseconds = entityCreateNanoseconds,
+            .prefabBakeNanoseconds = prefabBakeNanoseconds,
+            .componentPayloadBuildNanoseconds = createBreakdown.componentPayloadBuildNanoseconds,
+            .entityBulkCreateNanoseconds = createBreakdown.entityBulkCreateNanoseconds,
+            .entityPrefabOrderMapNanoseconds = createBreakdown.entityPrefabOrderMapNanoseconds,
+            .instanceObjectSlabNanoseconds = instanceObjectSlabNanoseconds,
             .hierarchyRecordNanoseconds = hierarchyRecordNanoseconds,
             .nameAssignmentNanoseconds = nameAssignmentNanoseconds,
+            .hasGeneratedEntityIndexRange = maxGeneratedEntityIndex != kb::ecs::kInvalidGeneratedEntityIndex,
+            .hasContiguousGeneratedEntityRuns = CreatesContiguousPrefabOrderEntityRuns(*baked),
+            .maxGeneratedEntityIndex = maxGeneratedEntityIndex == kb::ecs::kInvalidGeneratedEntityIndex ? 0U : maxGeneratedEntityIndex,
         };
         return instances;
     }
 
-    const std::size_t hierarchyLane = baked.Archetypes().size();
+    const std::size_t hierarchyLane = baked->Archetypes().size();
     const std::size_t commandLaneCount = hierarchyLane + 1U;
     kb::ecs::CommandBuffer commandBuffer{ commandLaneCount };
     std::vector<ScenePrefabArchetypeSpawnPayload> spawnPayloads;
+    ScenePrefabEntityCreateBreakdown createBreakdown;
     const auto createStart = PrefabStatsClock::now();
     const auto commandBuildStart = PrefabStatsClock::now();
-    std::vector<kb::ecs::CommandEntity> entities = CreateBakedEntities(commandBuffer, baked, count, spawnPayloads);
+    std::vector<kb::ecs::CommandEntity> entities = CreateBakedEntities(commandBuffer, *baked, count, spawnPayloads, createBreakdown);
     kb::ecs::CommandBuffer::WorkerBuffer hierarchyWorker = commandBuffer.Worker(hierarchyLane);
     QueueHierarchy(hierarchyWorker, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, nodes, count, settings.parent);
     const std::uint64_t commandBuildNanoseconds = ElapsedNanoseconds(commandBuildStart, PrefabStatsClock::now());
@@ -592,26 +834,37 @@ void QueueHierarchy(
     const std::uint64_t commandPlaybackNanoseconds = ElapsedNanoseconds(playbackStart, PrefabStatsClock::now());
     const std::uint64_t entityCreateNanoseconds = ElapsedNanoseconds(createStart, PrefabStatsClock::now());
     const kb::ecs::NativeEcsStorageStats afterStorage = state.world.NativeStorageStats();
+    std::uint64_t instanceObjectSlabNanoseconds = 0;
     std::uint64_t hierarchyRecordNanoseconds = 0;
     std::uint64_t nameAssignmentNanoseconds = 0;
+    std::uint32_t maxGeneratedEntityIndex = kb::ecs::kInvalidGeneratedEntityIndex;
     const std::vector<ScenePrefabInstance> instances =
-        BuildInstances(scene, nodes, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, playback, settings, count, collectInstances, hierarchyRecordNanoseconds, nameAssignmentNanoseconds);
+        BuildInstances(scene, nodes, std::span<const kb::ecs::CommandEntity>{ entities.data(), entities.size() }, playback, settings, count, collectInstances, instanceObjectSlabNanoseconds, hierarchyRecordNanoseconds, nameAssignmentNanoseconds, maxGeneratedEntityIndex);
 
     const kb::ecs::CommandBufferPlaybackResult::Stats& playbackStats = playback.PlaybackStats();
+    const std::size_t componentSourceBytesRead = ComponentSourceBytesRead(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads });
     state.lastPrefabInstantiationStats = ScenePrefabInstantiationStats{
         .requestedInstances = count,
         .instantiatedInstances = collectInstances ? instances.size() : count,
-        .nodesPerInstance = baked.NodeCount(),
+        .nodesPerInstance = baked->NodeCount(),
         .entitiesCreated = playback.CreatedCount(),
-        .prefabArchetypesTouched = baked.Archetypes().size(),
+        .prefabArchetypesTouched = baked->Archetypes().size(),
         .bulkCreateCommands = playbackStats.bulkCreateCommands,
         .componentSetCommands = playbackStats.componentSetCommands,
         .parentCommands = playbackStats.parentCommands,
         .componentBytesCopied = playbackStats.componentBytesCopied,
-        .componentSourceBytesRead = ComponentSourceBytesRead(std::span<const ScenePrefabArchetypeSpawnPayload>{ spawnPayloads }),
+        .componentSourceBytesRead = componentSourceBytesRead,
+        .componentCopyBytesPerSecond = UnitsPerSecond(playbackStats.componentBytesCopied, entityCreateNanoseconds),
+        .componentSourceBytesPerSecond = UnitsPerSecond(componentSourceBytesRead, entityCreateNanoseconds),
+        .entityCreateEntitiesPerSecond = UnitsPerSecond(playback.CreatedCount(), entityCreateNanoseconds),
         .chunksAllocatedDelta = afterStorage.chunkPoolAllocated >= beforeStorage.chunkPoolAllocated ? afterStorage.chunkPoolAllocated - beforeStorage.chunkPoolAllocated : 0U,
         .chunksReusedDelta = afterStorage.chunkPoolReuseCount >= beforeStorage.chunkPoolReuseCount ? afterStorage.chunkPoolReuseCount - beforeStorage.chunkPoolReuseCount : 0U,
         .entityCreateNanoseconds = entityCreateNanoseconds,
+        .prefabBakeNanoseconds = prefabBakeNanoseconds,
+        .componentPayloadBuildNanoseconds = createBreakdown.componentPayloadBuildNanoseconds,
+        .entityBulkCreateNanoseconds = createBreakdown.entityBulkCreateNanoseconds,
+        .entityPrefabOrderMapNanoseconds = createBreakdown.entityPrefabOrderMapNanoseconds,
+        .instanceObjectSlabNanoseconds = instanceObjectSlabNanoseconds,
         .commandBuildNanoseconds = commandBuildNanoseconds,
         .commandPlaybackNanoseconds = commandPlaybackNanoseconds,
         .commandPlaybackCreateNanoseconds = playbackStats.createPhaseNanoseconds,
@@ -620,6 +873,9 @@ void QueueHierarchy(
         .commandPlaybackDestroyNanoseconds = playbackStats.destroyPhaseNanoseconds,
         .hierarchyRecordNanoseconds = hierarchyRecordNanoseconds,
         .nameAssignmentNanoseconds = nameAssignmentNanoseconds,
+        .hasGeneratedEntityIndexRange = maxGeneratedEntityIndex != kb::ecs::kInvalidGeneratedEntityIndex,
+        .hasContiguousGeneratedEntityRuns = CreatesContiguousPrefabOrderEntityRuns(*baked),
+        .maxGeneratedEntityIndex = maxGeneratedEntityIndex == kb::ecs::kInvalidGeneratedEntityIndex ? 0U : maxGeneratedEntityIndex,
     };
     return instances;
 }
@@ -634,12 +890,31 @@ std::vector<ScenePrefabInstance> ScenePrefabBulkInstantiationService::Instantiat
     return InstantiateInternal(scene, prefab, count, settings, true);
 }
 
+std::vector<ScenePrefabInstance> ScenePrefabBulkInstantiationService::InstantiateBaked(
+    Scene& scene,
+    const ScenePrefab& prefab,
+    const ScenePrefabBakedData& baked,
+    std::size_t count,
+    const ScenePrefabInstantiationSettings& settings) {
+    return InstantiateInternal(scene, prefab, count, settings, true, &baked);
+}
+
 ScenePrefabInstantiationStats ScenePrefabBulkInstantiationService::InstantiateBatch(
     Scene& scene,
     const ScenePrefab& prefab,
     std::size_t count,
     const ScenePrefabInstantiationSettings& settings) {
     static_cast<void>(InstantiateInternal(scene, prefab, count, settings, false));
+    return SceneAccess::State(scene).lastPrefabInstantiationStats;
+}
+
+ScenePrefabInstantiationStats ScenePrefabBulkInstantiationService::InstantiateBatchBaked(
+    Scene& scene,
+    const ScenePrefab& prefab,
+    const ScenePrefabBakedData& baked,
+    std::size_t count,
+    const ScenePrefabInstantiationSettings& settings) {
+    static_cast<void>(InstantiateInternal(scene, prefab, count, settings, false, &baked));
     return SceneAccess::State(scene).lastPrefabInstantiationStats;
 }
 

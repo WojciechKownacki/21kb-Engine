@@ -1,5 +1,6 @@
 #include "scene/prefab/ScenePrefabRegistry.hpp"
 
+#include "scene/prefab/ScenePrefabBakedData.hpp"
 #include "scene/prefab/ScenePrefabHasher.hpp"
 #include "scene/prefab/ScenePrefabRegistrationService.hpp"
 #include "scene/prefab/ScenePrefabVariantOverrideMutationService.hpp"
@@ -9,6 +10,19 @@
 #include <utility>
 
 namespace kb::scene {
+namespace {
+
+void RefreshBakedPrefabCache(ScenePrefabRecord& record) {
+    if (record.prefab.Empty()) {
+        record.bakedPrefab = ScenePrefabBakedData{};
+        record.bakedContentHash = 0;
+        return;
+    }
+    record.bakedPrefab = ScenePrefabBakedData::Bake(record.prefab.Nodes());
+    record.bakedContentHash = record.contentHash;
+}
+
+} // namespace
 
 ScenePrefabHandle ScenePrefabRegistry::Register(std::string name, ScenePrefab prefab) {
     return ScenePrefabRegistrationService::Register(records_, std::move(name), std::move(prefab));
@@ -68,6 +82,7 @@ void ScenePrefabRegistry::RefreshContentHash(ScenePrefabHandle handle) noexcept 
     ScenePrefabRecord* record = records_.FindMutable(handle);
     if (record != nullptr) {
         record->contentHash = ScenePrefabHasher::Hash(record->prefab);
+        RefreshBakedPrefabCache(*record);
     }
 }
 
