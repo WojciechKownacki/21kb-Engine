@@ -197,6 +197,10 @@ public:
         if (!valid_ || cachedStructuralVersion_ != query.StructuralVersion()) {
             return Rebuild(query, settings_);
         }
+        const std::size_t rangeSize = cachedRangeSize_ == 0U ? DefaultRangeSize() : cachedRangeSize_;
+        query.PrepareBatchExecution(settings_, scratch_);
+        StoreComponentIds(query.ComponentIds());
+        BuildCachedRangePlan(rangeSize);
         return true;
     }
 
@@ -357,7 +361,10 @@ public:
         const std::size_t resolvedRangeSize = ResolveRangeSize(maxRangeSize);
         std::size_t rangeIndex = 0U;
         for (const QueryTableDispatchRecord& record : scratch_.records_) {
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
+                continue;
+            }
+            if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
                 continue;
             }
 
@@ -377,7 +384,7 @@ public:
                     range.count,
                     MakeComponentPointers(record, range.begin),
                     rangeIndex++,
-                    MakeComponentDirtyCounts(record),
+                    MakeCurrentComponentDirtyCounts(storage, record),
                 };
                 std::forward<Kernel>(kernel)(chunk, range.dirtyCount);
             }
@@ -409,7 +416,7 @@ public:
             return stats;
         }
 
-        auto chunkJob = [this, &kernel](WorkerContext workerContext, const WorkerPoolChunk& workerChunk) {
+        auto chunkJob = [this, &storage, &kernel](WorkerContext workerContext, const WorkerPoolChunk& workerChunk) {
             const DirtyRangeWorkItem& item = dirtyWorkItems_[workerChunk.index];
             const QueryTableDispatchRecord& record = scratch_.records_[item.recordIndex];
             Chunk chunk{
@@ -417,7 +424,7 @@ public:
                 item.count,
                 MakeComponentPointers(record, item.offset),
                 workerChunk.index,
-                MakeComponentDirtyCounts(record),
+                MakeCurrentComponentDirtyCounts(storage, record),
             };
             kernel(chunk, item.dirtyCount, workerContext);
         };
@@ -480,20 +487,26 @@ private:
 
         std::size_t estimatedRangeCount = 0U;
         for (const QueryTableDispatchRecord& record : scratch_.records_) {
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
                 continue;
             }
-            estimatedRangeCount += ((record.componentDirtyCounts[DirtyComponentIndex] - 1U) / resolvedRangeSize) + 1U;
+            const std::size_t dirtyCount = storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]);
+            if (dirtyCount == 0U) {
+                continue;
+            }
+            estimatedRangeCount += ((dirtyCount - 1U) / resolvedRangeSize) + 1U;
         }
         dirtyWorkItems_.reserve(estimatedRangeCount);
         dirtyChunks_.reserve(estimatedRangeCount);
 
         for (std::size_t recordIndex = 0U; recordIndex < scratch_.records_.size(); ++recordIndex) {
             const QueryTableDispatchRecord& record = scratch_.records_[recordIndex];
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
                 continue;
             }
-            ++stats.chunks;
+            if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
+                continue;
+            }
 
             dirtyRangeBuildScratch_.clear();
             static_cast<void>(storage.CollectComponentDirtyRanges(
@@ -502,6 +515,9 @@ private:
                 componentIds_[DirtyComponentIndex],
                 resolvedRangeSize,
                 dirtyRangeBuildScratch_));
+            if (!dirtyRangeBuildScratch_.empty()) {
+                ++stats.chunks;
+            }
             for (const NativeComponentDirtyRange& range : dirtyRangeBuildScratch_) {
                 if (range.count == 0U || range.dirtyCount == 0U) {
                     continue;
@@ -607,6 +623,12 @@ private:
         return ComponentDirtyCountsForRecord(record, std::index_sequence_for<ComponentTypes...>{});
     }
 
+    [[nodiscard]] typename Chunk::ComponentDirtyCounts MakeCurrentComponentDirtyCounts(
+        const NativeArchetypeStorage& storage,
+        const QueryTableDispatchRecord& record) const {
+        return CurrentComponentDirtyCountsForRecord(storage, record, std::index_sequence_for<ComponentTypes...>{});
+    }
+
     template <std::size_t... Indices>
     [[nodiscard]] static typename Chunk::ComponentPointers ComponentPointersForRecord(
         const QueryTableDispatchRecord& record,
@@ -622,6 +644,16 @@ private:
         const QueryTableDispatchRecord& record,
         std::index_sequence<Indices...>) noexcept {
         return typename Chunk::ComponentDirtyCounts{ record.componentDirtyCounts[Indices]... };
+    }
+
+    template <std::size_t... Indices>
+    [[nodiscard]] typename Chunk::ComponentDirtyCounts CurrentComponentDirtyCountsForRecord(
+        const NativeArchetypeStorage& storage,
+        const QueryTableDispatchRecord& record,
+        std::index_sequence<Indices...>) const {
+        return typename Chunk::ComponentDirtyCounts{
+            storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[Indices])...,
+        };
     }
 
     QueryExecutionSettings settings_{};
@@ -676,6 +708,10 @@ public:
         if (!valid_ || cachedStructuralVersion_ != query.StructuralVersion()) {
             return Rebuild(query, settings_);
         }
+        const std::size_t rangeSize = cachedRangeSize_ == 0U ? DefaultRangeSize() : cachedRangeSize_;
+        query.PrepareMutableBatchExecution(settings_, scratch_);
+        StoreComponentIds(query.ComponentIds());
+        BuildCachedRangePlan(rangeSize);
         return true;
     }
 
@@ -839,10 +875,12 @@ public:
         stats.requestedRangeSize = maxRangeSize;
         std::size_t rangeIndex = 0U;
         for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
                 continue;
             }
-            ++stats.chunks;
+            if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
+                continue;
+            }
 
             rangesScratch.clear();
             static_cast<void>(storage.CollectComponentDirtyRanges(
@@ -851,6 +889,9 @@ public:
                 componentIds_[DirtyComponentIndex],
                 resolvedRangeSize,
                 rangesScratch));
+            if (!rangesScratch.empty()) {
+                ++stats.chunks;
+            }
             for (const NativeComponentDirtyRange& range : rangesScratch) {
                 if (range.count == 0U || range.dirtyCount == 0U) {
                     continue;
@@ -860,7 +901,7 @@ public:
                     range.count,
                     MakeComponentPointers(record, range.begin),
                     rangeIndex++,
-                    MakeComponentDirtyCounts(record),
+                    MakeCurrentComponentDirtyCounts(storage, record),
                 };
                 std::forward<Kernel>(kernel)(chunk, range.dirtyCount);
                 ++stats.ranges;
@@ -907,7 +948,7 @@ public:
             return stats;
         }
 
-        auto chunkJob = [this, &kernel](WorkerContext workerContext, const WorkerPoolChunk& workerChunk) {
+        auto chunkJob = [this, &storage, &kernel](WorkerContext workerContext, const WorkerPoolChunk& workerChunk) {
             const DirtyRangeWorkItem& item = dirtyWorkItems_[workerChunk.index];
             const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[item.recordIndex];
             MutableChunk chunk{
@@ -915,7 +956,7 @@ public:
                 item.count,
                 MakeComponentPointers(record, item.offset),
                 workerChunk.index,
-                MakeComponentDirtyCounts(record),
+                MakeCurrentComponentDirtyCounts(storage, record),
             };
             kernel(chunk, item.dirtyCount, workerContext);
         };
@@ -1017,20 +1058,26 @@ private:
 
         std::size_t estimatedRangeCount = 0U;
         for (const MutableQueryTableDispatchRecord& record : scratch_.mutableRecords_) {
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
                 continue;
             }
-            estimatedRangeCount += ((record.componentDirtyCounts[DirtyComponentIndex] - 1U) / resolvedRangeSize) + 1U;
+            const std::size_t dirtyCount = storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]);
+            if (dirtyCount == 0U) {
+                continue;
+            }
+            estimatedRangeCount += ((dirtyCount - 1U) / resolvedRangeSize) + 1U;
         }
         dirtyWorkItems_.reserve(estimatedRangeCount);
         dirtyChunks_.reserve(estimatedRangeCount);
 
         for (std::size_t recordIndex = 0U; recordIndex < scratch_.mutableRecords_.size(); ++recordIndex) {
             const MutableQueryTableDispatchRecord& record = scratch_.mutableRecords_[recordIndex];
-            if (record.entityCount == 0U || record.componentDirtyCounts[DirtyComponentIndex] == 0U) {
+            if (record.entityCount == 0U) {
                 continue;
             }
-            ++stats.chunks;
+            if (storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[DirtyComponentIndex]) == 0U) {
+                continue;
+            }
 
             dirtyRangeBuildScratch_.clear();
             static_cast<void>(storage.CollectComponentDirtyRanges(
@@ -1039,6 +1086,9 @@ private:
                 componentIds_[DirtyComponentIndex],
                 resolvedRangeSize,
                 dirtyRangeBuildScratch_));
+            if (!dirtyRangeBuildScratch_.empty()) {
+                ++stats.chunks;
+            }
             for (const NativeComponentDirtyRange& range : dirtyRangeBuildScratch_) {
                 if (range.count == 0U || range.dirtyCount == 0U) {
                     continue;
@@ -1147,6 +1197,12 @@ private:
         return ComponentDirtyCountsForRecord(record, std::index_sequence_for<ComponentTypes...>{});
     }
 
+    [[nodiscard]] typename MutableChunk::ComponentDirtyCounts MakeCurrentComponentDirtyCounts(
+        const NativeArchetypeStorage& storage,
+        const MutableQueryTableDispatchRecord& record) const {
+        return CurrentComponentDirtyCountsForRecord(storage, record, std::index_sequence_for<ComponentTypes...>{});
+    }
+
     template <std::size_t... Indices>
     [[nodiscard]] static typename MutableChunk::ComponentPointers ComponentPointersForRecord(
         const MutableQueryTableDispatchRecord& record,
@@ -1162,6 +1218,16 @@ private:
         const MutableQueryTableDispatchRecord& record,
         std::index_sequence<Indices...>) noexcept {
         return typename MutableChunk::ComponentDirtyCounts{ record.componentDirtyCounts[Indices]... };
+    }
+
+    template <std::size_t... Indices>
+    [[nodiscard]] typename MutableChunk::ComponentDirtyCounts CurrentComponentDirtyCountsForRecord(
+        const NativeArchetypeStorage& storage,
+        const MutableQueryTableDispatchRecord& record,
+        std::index_sequence<Indices...>) const {
+        return typename MutableChunk::ComponentDirtyCounts{
+            storage.ComponentDirtyCount(record.nativeArchetypeIndex, record.nativeChunkIndex, componentIds_[Indices])...,
+        };
     }
 
     QueryExecutionSettings settings_{};
