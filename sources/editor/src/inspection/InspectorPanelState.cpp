@@ -125,6 +125,28 @@ void InspectorPanelState::ClearHover() noexcept {
     static_cast<void>(SetHover(InspectorHitKind::None, InspectorSectionId::None, InspectorPropertyId::None));
 }
 
+void InspectorPanelState::ToggleValueTypeDropdown() noexcept {
+    valueTypeDropdownOpen_ = !valueTypeDropdownOpen_;
+    valueTypeDropdownHover_ = -1;
+}
+
+void InspectorPanelState::CloseValueTypeDropdown() noexcept {
+    valueTypeDropdownOpen_ = false;
+    valueTypeDropdownHover_ = -1;
+}
+
+bool InspectorPanelState::IsValueTypeDropdownOpen() const noexcept {
+    return valueTypeDropdownOpen_;
+}
+
+void InspectorPanelState::SetValueTypeDropdownHover(int index) noexcept {
+    valueTypeDropdownHover_ = index;
+}
+
+int InspectorPanelState::ValueTypeDropdownHover() const noexcept {
+    return valueTypeDropdownHover_;
+}
+
 bool InspectorPanelState::IsHovered(InspectorHitKind kind, InspectorSectionId section, InspectorPropertyId property) const noexcept {
     return hoveredKind_ == kind && hoveredSection_ == section && hoveredProperty_ == property;
 }

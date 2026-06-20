@@ -98,8 +98,7 @@ public:
         std::size_t slotCount = 1U;
         if (settings.workerPool != nullptr &&
             settings.reductionMode == QueryReductionMode::PerWorker &&
-            settings.policy != QueryExecutionPolicy::SingleThread &&
-            settings.policy != QueryExecutionPolicy::Deterministic) {
+            QueryExecutionPolicyUsesParallelism(settings.policy)) {
             const std::size_t poolWorkerCount = settings.workerPool->WorkerCount();
             slotCount = settings.workerCountOverride == 0U
                 ? poolWorkerCount

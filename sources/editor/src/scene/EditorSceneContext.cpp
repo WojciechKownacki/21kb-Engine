@@ -1372,6 +1372,10 @@ bool EditorSceneContext::CreateInputActionAsset(const std::filesystem::path& vir
     return InputActionAuthoring().Create(virtualFolder);
 }
 
+bool EditorSceneContext::CreateInputAxisAsset(const std::filesystem::path& virtualFolder) {
+    return InputActionAuthoring().CreateAxis(virtualFolder);
+}
+
 bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
     return InputMappingContextAuthoring().Create(virtualFolder);
 }
@@ -1412,6 +1416,10 @@ bool EditorSceneContext::SetInputActionName(kb::assets::AssetId id, std::string 
 
 bool EditorSceneContext::CycleInputActionValueType(kb::assets::AssetId id) {
     return InputActionAuthoring().CycleValueType(id);
+}
+
+bool EditorSceneContext::SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType) {
+    return InputActionAuthoring().SetValueType(id, valueType);
 }
 
 bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {

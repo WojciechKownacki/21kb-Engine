@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/ecs/KernelColumn.hpp"
 #include "engine/ecs/Query.hpp"
 #include "engine/ecs/QueryExecutionScratch.hpp"
 #include "engine/ecs/System.hpp"

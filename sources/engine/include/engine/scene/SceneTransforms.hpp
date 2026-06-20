@@ -5,6 +5,8 @@
 #include "engine/scene/SceneVisitors.hpp"
 #include "engine/scene/TransformComponent.hpp"
 
+#include <span>
+
 namespace kb::scene {
 
 class Scene;
@@ -33,6 +35,8 @@ public:
     void Set(SceneObject object, const TransformComponent& transform);
     void Set(SceneEntity entity, const TransformComponent& transform);
     void MarkModified(SceneEntity entity) noexcept;
+    // Bulk dirty signal: marks many transforms modified in one batched pass.
+    void MarkModified(std::span<const SceneEntity> entities) noexcept;
 
     void ForEach(ConstTransformVisitor visitor, void* context = nullptr) const;
     void ForEachMutable(MutableTransformVisitor visitor, void* context = nullptr);

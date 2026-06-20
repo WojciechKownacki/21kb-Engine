@@ -16,7 +16,9 @@ std::type_index InputActionAssetLoader::PayloadType() const noexcept {
 }
 
 std::vector<std::string> InputActionAssetLoader::Extensions() const {
-    return {std::string{InputAssetFormat::ActionExtension}};
+    // Input Axis assets reuse the action format + this loader; only the file
+    // extension (and the editor's default value type) differ.
+    return {std::string{InputAssetFormat::ActionExtension}, std::string{InputAssetFormat::AxisExtension}};
 }
 
 kb::assets::AssetLoadResult InputActionAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {

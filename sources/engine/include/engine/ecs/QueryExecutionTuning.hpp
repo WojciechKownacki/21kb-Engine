@@ -73,20 +73,20 @@ inline constexpr std::size_t kDenseMatrixWriteSingleThreadEntityLimit = 64U * 10
 [[nodiscard]] constexpr QueryExecutionPolicy ResolveQueryExecutionPolicy(
     QueryExecutionSettings settings,
     QueryExecutionTuningInput input) noexcept {
+    // Small parallel workloads pay more in scheduling overhead than they gain;
+    // collapse them to serial execution. The kernel backend (not the policy)
+    // drives SIMD in the hot path, so SingleThread keeps the measured fast path
+    // intact while remaining vectorized.
     if (input.workload == QueryExecutionWorkloadClass::LinearWrite &&
         input.entityCount != 0U &&
         input.entityCount <= kLinearWriteSingleThreadEntityLimit &&
-        (settings.policy == QueryExecutionPolicy::SIMDPreferred ||
-         settings.policy == QueryExecutionPolicy::ParallelChunks ||
-         settings.policy == QueryExecutionPolicy::ParallelRanges)) {
+        QueryExecutionPolicyUsesParallelism(settings.policy)) {
         return QueryExecutionPolicy::SingleThread;
     }
     if (input.workload == QueryExecutionWorkloadClass::DenseMatrixWrite &&
         input.entityCount != 0U &&
         input.entityCount <= kDenseMatrixWriteSingleThreadEntityLimit &&
-        (settings.policy == QueryExecutionPolicy::SIMDPreferred ||
-         settings.policy == QueryExecutionPolicy::ParallelChunks ||
-         settings.policy == QueryExecutionPolicy::ParallelRanges)) {
+        QueryExecutionPolicyUsesParallelism(settings.policy)) {
         return QueryExecutionPolicy::SingleThread;
     }
     return settings.policy;

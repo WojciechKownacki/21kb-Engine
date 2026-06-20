@@ -16,6 +16,8 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 
+#include <array>
+#include <span>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -158,6 +160,8 @@ public:
         lastFixedDeltaSeconds_ = context.DeltaSeconds();
     }
 
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
+
     [[nodiscard]] float LastVariableDeltaSeconds() const noexcept { return lastVariableDeltaSeconds_; }
     [[nodiscard]] float LastFixedDeltaSeconds() const noexcept { return lastFixedDeltaSeconds_; }
 
@@ -178,6 +182,8 @@ public:
         transform.localPosition = targetPosition_;
         context.Transforms().Set(entity_, transform);
     }
+
+    [[nodiscard]] bool RequiresFixedStep() const override { return true; }
 
 private:
     kb::scene::SceneEntity entity_{};
@@ -644,6 +650,63 @@ void RunSceneSystemPhysicsBodyQueryAccessTest() {
 
 namespace kb::tests {
 
+void RunSceneBulkMarkModifiedTest() {
+    kb::scene::Scene scene;
+    const std::array<kb::scene::SceneObject, 3U> objects{
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "A", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 1.0F, 0.0F, 0.0F } } }),
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "B", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 2.0F, 0.0F } } }),
+        scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "C", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 3.0F } } }),
+    };
+    static_cast<void>(scene.Runtime().Update(0.016F)); // compute world, clear dirty
+
+    // Mutate local transforms directly, then signal them all with one bulk call.
+    std::array<kb::scene::SceneEntity, 3U> entities{};
+    for (std::size_t index = 0; index < objects.size(); ++index) {
+        entities[index] = objects[index].Entity();
+        kb::scene::TransformComponent* transform = scene.Transforms().TryGet(entities[index]);
+        kb::tests::Require(transform != nullptr, "Bulk mark test could not fetch a transform");
+        transform->localPosition = kb::scene::Vec3{ static_cast<float>(index) + 10.0F, 0.0F, 0.0F };
+    }
+    scene.Transforms().MarkModified(std::span<const kb::scene::SceneEntity>{ entities });
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    for (std::size_t index = 0; index < objects.size(); ++index) {
+        const kb::scene::TransformComponent transform = scene.Transforms().Get(objects[index]);
+        kb::tests::Require(kb::tests::NearlyEqual(transform.worldPosition.x, static_cast<float>(index) + 10.0F), "Bulk mark did not propagate the mutated local position to world");
+        kb::tests::Require(!transform.worldDirty, "Bulk mark left a transform dirty after update");
+    }
+    kb::tests::Require(scene.Runtime().TransformRenderProxyUpdateEntities().size() >= objects.size(), "Bulk mark did not emit render proxy updates for the marked entities");
+}
+
+void RunSceneBulkCreateObjectsTest() {
+    // H8: bulk scene spawn creates one object per descriptor in one call; the
+    // structural changes batch through the world's lazy query-plan invalidation.
+    kb::scene::Scene scene;
+    std::array<kb::scene::SceneObjectDesc, 4U> descs{
+        kb::scene::SceneObjectDesc{ .name = "Bulk0", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 10.0F, 0.0F, 0.0F } } },
+        kb::scene::SceneObjectDesc{ .name = "Bulk1", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 20.0F, 0.0F, 0.0F } } },
+        kb::scene::SceneObjectDesc{ .name = "Bulk2", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 30.0F, 0.0F, 0.0F } } },
+        kb::scene::SceneObjectDesc{ .name = "Bulk3", .transform = kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 40.0F, 0.0F, 0.0F } } },
+    };
+
+    const std::vector<kb::scene::SceneObject> created = scene.Entities().CreateObjects(std::span<const kb::scene::SceneObjectDesc>{ descs });
+    kb::tests::Require(created.size() == descs.size(), "Bulk create did not create one object per descriptor");
+    for (const kb::scene::SceneObject object : created) {
+        kb::tests::Require(scene.Entities().IsAlive(object), "Bulk-created object is not alive");
+    }
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    for (std::size_t index = 0; index < created.size(); ++index) {
+        const kb::scene::TransformComponent transform = scene.Transforms().Get(created[index]);
+        kb::tests::Require(kb::tests::NearlyEqual(transform.worldPosition.x, 10.0F * static_cast<float>(index + 1U)), "Bulk-created object world transform was not computed");
+    }
+
+    scene.Entities().Destroy(std::span<const kb::scene::SceneObject>{ created });
+    for (const kb::scene::SceneObject object : created) {
+        kb::tests::Require(!scene.Entities().IsAlive(object), "Bulk-destroyed object is still alive");
+    }
+}
+
 void RunSceneSystemTransformSyncTests() {
     RunSceneSystemTransformSyncTest();
     RunSceneRuntimeFixedStepTest();
@@ -655,6 +718,8 @@ void RunSceneSystemTransformSyncTests() {
     RunSceneTransformIterationUsesUnsafeHotQueryTest();
     RunSceneRuntimeTransformHierarchyUsesUnsafeQueryPlanTest();
     RunSceneSystemPhysicsBodyQueryAccessTest();
+    RunSceneBulkMarkModifiedTest();
+    RunSceneBulkCreateObjectsTest();
 }
 
 } // namespace kb::tests

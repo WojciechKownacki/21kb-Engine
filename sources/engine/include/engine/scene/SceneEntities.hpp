@@ -34,6 +34,10 @@ public:
 
     [[nodiscard]] SceneObject CreateObject();
     [[nodiscard]] SceneObject CreateObject(SceneObjectDesc desc);
+    // Bulk spawn: creates one object per descriptor in a single call. Structural
+    // changes batch through the world's version-based query-plan invalidation, so
+    // the query cache rebuilds lazily once rather than per spawned object.
+    [[nodiscard]] std::vector<SceneObject> CreateObjects(std::span<const SceneObjectDesc> descs);
     [[nodiscard]] SceneEntity CreateEntity();
     [[nodiscard]] SceneEntity CreateEntity(SceneObjectDesc desc);
     [[nodiscard]] SceneObject Duplicate(SceneObject object);

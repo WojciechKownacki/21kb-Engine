@@ -878,6 +878,40 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return "(missing)";
 }
 
+// --- Inline Value Type dropdown (shared geometry for paint + hit-test) ---
+constexpr int kValueTypeOptionCount = 4;
+constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ "Bool", "Axis1D", "Axis2D", "Axis3D" };
+
+[[nodiscard]] RECT ValueTypeRowRect(const RECT& content) noexcept {
+    // The Input Action section is the first section; Value Type is its 2nd field.
+    const int top = content.top + kHeaderHeight + kPanelPadTop + kSectionHeaderHeight
+        + 2 * kDividerHeight + kFieldRowHeight;
+    return Rect(content.left, top, content.right, top + kFieldRowHeight);
+}
+
+[[nodiscard]] RECT ValueTypeOptionRect(const RECT& content, int index) noexcept {
+    const RECT row = ValueTypeRowRect(content);
+    const int labelRight = row.left + ((row.right - row.left) * 36 / 100);
+    const int top = row.bottom + index * kFieldRowHeight;
+    return Rect(labelRight, top, row.right - kRowPadX, top + kFieldRowHeight);
+}
+
+void PaintValueTypeDropdown(HDC dc, const RECT& content, const EditorTheme& theme, const InspectorPanelState& inspector) {
+    if (!inspector.IsValueTypeDropdownOpen()) {
+        return;
+    }
+    for (int index = 0; index < kValueTypeOptionCount; ++index) {
+        const RECT option = ValueTypeOptionRect(content, index);
+        const bool hovered = inspector.ValueTypeDropdownHover() == index;
+        GdiDrawing::FillRectColor(dc, option, hovered ? HoverFill(theme) : Color(theme.chrome));
+        DrawFrame(dc, option, Color(theme.borderPanel), Color(theme.borderPanel));
+        RECT text = Rect(option.left + 10, option.top, option.right - 6, option.bottom);
+        ScopedFont labelFont(12, FW_SEMIBOLD);
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, text, kValueTypeLabels[static_cast<std::size_t>(index)], Color(theme.textPrimary));
+    }
+}
+
 void PaintInputActionAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::input::InputActionAsset action = sceneContext.ReadInputActionAsset(metadata.id).value_or(kb::input::InputActionAsset{});
@@ -896,6 +930,8 @@ void PaintInputActionAsset(HDC dc, RECT content, const EditorTheme& theme, const
         section.Field("Id", FormatUInt64(metadata.id.value));
         section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
     }
+    // Drawn last so the open dropdown overlays the rows beneath the Value Type field.
+    PaintValueTypeDropdown(dc, content, theme, inspector);
 }
 
 void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -1333,6 +1369,21 @@ void AdvanceRow(int& y) noexcept {
     }
     if (state.IsCollapsed(InspectorSectionId::InputAction)) {
         return {};
+    }
+    // Open Value Type dropdown options overlay the rows beneath, so test them first.
+    if (state.IsValueTypeDropdownOpen()) {
+        for (int option = 0; option < kValueTypeOptionCount; ++option) {
+            const RECT rect = ValueTypeOptionRect(content, option);
+            if (x >= rect.left && x < rect.right && yPoint >= rect.top && yPoint < rect.bottom) {
+                return InspectorPanelRenderer::Hit{
+                    .kind = InspectorHitKind::ValueTypeOption,
+                    .section = InspectorSectionId::InputAction,
+                    .property = InspectorPropertyId::InputActionValueType,
+                    .index = option,
+                    .rect = rect,
+                };
+            }
+        }
     }
     const std::array<std::pair<InspectorPropertyId, bool>, 3> rows{ {
         { InspectorPropertyId::InputActionName, false },

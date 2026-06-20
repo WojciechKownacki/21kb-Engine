@@ -22,6 +22,9 @@ struct InputAssetFormat {
     static constexpr std::uint32_t MaxStackCount = 64U; // modifiers/triggers per mapping
     static constexpr std::uint32_t MaxNameBytes = 1U << 16U;
     static constexpr std::string_view ActionExtension = ".21kbinputaction";
+    // An Input Axis is an Input Action whose value type is an analog axis; it
+    // shares the action binary format + loader, distinguished by file extension.
+    static constexpr std::string_view AxisExtension = ".21kbinputaxis";
     static constexpr std::string_view ContextExtension = ".21kbinputcontext";
 };
 

@@ -39,6 +39,7 @@ namespace kb::input {
 struct InputActionAsset;
 struct InputMappingContextAsset;
 enum class InputKey : std::uint16_t;
+enum class InputActionValueType : std::uint8_t;
 
 } // namespace kb::input
 
@@ -209,12 +210,14 @@ public:
     [[nodiscard]] bool ReparentEntities(std::span<const kb::scene::SceneEntity> children, kb::scene::SceneEntity parent);
     [[nodiscard]] bool CreatePrefabAsset(kb::scene::SceneEntity entity, const std::filesystem::path& path);
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetInputActionName(kb::assets::AssetId id, std::string name);
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
+    [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;

@@ -466,6 +466,121 @@ template <
     return checksum;
 }
 
+// 2D transform variant: LocalTransform2D (translation xy, z-rotation, scale xy)
+// -> WorldTransform2D as a packed 2x3 affine [m00, m10, m01, m11, tx, ty]. This
+// is the no-hierarchy 2D fast path; it never touches a parent or a third axis.
+[[nodiscard]] constexpr HotKernelMemoryTraffic EstimateDenseTransform2DToAffine2x3Traffic(
+    std::size_t count,
+    std::size_t localTransformBytes,
+    std::size_t worldTransformBytes) noexcept {
+    return HotKernelMemoryTraffic{
+        .bytesRead = count * localTransformBytes,
+        .bytesWritten = count * worldTransformBytes,
+    };
+}
+
+template <typename LocalTransform, typename WorldTransform>
+[[nodiscard]] constexpr HotKernelMemoryTraffic EstimateDenseTransform2DToAffine2x3Traffic(std::size_t count) noexcept {
+    return EstimateDenseTransform2DToAffine2x3Traffic(count, sizeof(LocalTransform), sizeof(WorldTransform));
+}
+
+template <
+    typename LocalTransform,
+    typename WorldTransform,
+    float LocalTransform::*TranslationX,
+    float LocalTransform::*TranslationY,
+    float LocalTransform::*RotationZ,
+    float LocalTransform::*ScaleX,
+    float LocalTransform::*ScaleY,
+    float (WorldTransform::*WorldAffine)[6]>
+void ApplyDenseTransform2DToAffine2x3Scalar(
+    const LocalTransform* localTransforms,
+    WorldTransform* worldTransforms,
+    std::size_t count,
+    TransformTrigPolicy trigPolicy = TransformTrigPolicy::Exact) noexcept {
+    assert((count == 0U || localTransforms != nullptr) && "ECS 2D transform hot kernel received null input column");
+    assert((count == 0U || worldTransforms != nullptr) && "ECS 2D transform hot kernel received null output column");
+
+    for (std::size_t index = 0U; index < count; ++index) {
+        const LocalTransform& local = localTransforms[index];
+        float (&affine)[6] = worldTransforms[index].*WorldAffine;
+        const TransformSinCos sinCos = detail::ResolveSinCos(local.*RotationZ, trigPolicy);
+        affine[0] = sinCos.cos * (local.*ScaleX);
+        affine[1] = sinCos.sin * (local.*ScaleX);
+        affine[2] = -sinCos.sin * (local.*ScaleY);
+        affine[3] = sinCos.cos * (local.*ScaleY);
+        affine[4] = local.*TranslationX;
+        affine[5] = local.*TranslationY;
+    }
+}
+
+template <
+    typename LocalTransform,
+    typename WorldTransform,
+    float LocalTransform::*TranslationX,
+    float LocalTransform::*TranslationY,
+    float LocalTransform::*RotationZ,
+    float LocalTransform::*ScaleX,
+    float LocalTransform::*ScaleY,
+    float (WorldTransform::*WorldAffine)[6]>
+[[nodiscard]] double ApplyDenseTransform2DToAffine2x3ScalarAndReduce(
+    const LocalTransform* localTransforms,
+    WorldTransform* worldTransforms,
+    std::size_t count,
+    TransformTrigPolicy trigPolicy = TransformTrigPolicy::Exact) noexcept {
+    assert((count == 0U || localTransforms != nullptr) && "ECS 2D transform hot kernel received null input column");
+    assert((count == 0U || worldTransforms != nullptr) && "ECS 2D transform hot kernel received null output column");
+
+    double checksum = 0.0;
+    for (std::size_t index = 0U; index < count; ++index) {
+        const LocalTransform& local = localTransforms[index];
+        float (&affine)[6] = worldTransforms[index].*WorldAffine;
+        const TransformSinCos sinCos = detail::ResolveSinCos(local.*RotationZ, trigPolicy);
+        const float m0 = sinCos.cos * (local.*ScaleX);
+        const float m3 = sinCos.cos * (local.*ScaleY);
+        const float tx = local.*TranslationX;
+        affine[0] = m0;
+        affine[1] = sinCos.sin * (local.*ScaleX);
+        affine[2] = -sinCos.sin * (local.*ScaleY);
+        affine[3] = m3;
+        affine[4] = tx;
+        affine[5] = local.*TranslationY;
+        checksum += static_cast<double>(m0) + static_cast<double>(m3) + static_cast<double>(tx);
+    }
+    return checksum;
+}
+
+template <
+    typename LocalTransform,
+    typename WorldTransform,
+    float LocalTransform::*TranslationX,
+    float LocalTransform::*TranslationY,
+    float LocalTransform::*RotationZ,
+    float LocalTransform::*ScaleX,
+    float LocalTransform::*ScaleY,
+    float (WorldTransform::*WorldAffine)[6]>
+void ApplyDenseTransform2DToAffine2x3(
+    const LocalTransform* localTransforms,
+    WorldTransform* worldTransforms,
+    HotKernelRange range,
+    TransformTrigPolicy trigPolicy = TransformTrigPolicy::Exact) noexcept {
+    assert((range.count == 0U || localTransforms != nullptr) && "ECS 2D transform hot kernel received null input column");
+    assert((range.count == 0U || worldTransforms != nullptr) && "ECS 2D transform hot kernel received null output column");
+    ApplyDenseTransform2DToAffine2x3Scalar<
+        LocalTransform,
+        WorldTransform,
+        TranslationX,
+        TranslationY,
+        RotationZ,
+        ScaleX,
+        ScaleY,
+        WorldAffine>(
+        localTransforms + range.begin,
+        worldTransforms + range.begin,
+        range.count,
+        trigPolicy);
+}
+
 template <
     typename LocalTransform,
     typename WorldTransform,

@@ -2,6 +2,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/CommandBuffer.hpp"
+#include "engine/ecs/HotArchetypeLayoutAdvisor.hpp"
 #include "engine/ecs/NativeArchetypeStorage.hpp"
 #include "engine/ecs/World.hpp"
 
@@ -645,6 +646,55 @@ void RunMemoryCountersPerArchetypeAndChunkTest() {
     kb::tests::Require(
         movingArchetype->coldTableCapacityBytes == movingArchetype->capacity * sizeof(Velocity),
         "native ECS memory counters reported invalid cold table capacity bytes");
+}
+
+void RunStructuralChurnOccupancyTest() {
+    // Roadmap P5 acceptance: after random structural churn, move-last compaction
+    // must keep occupancy above 85% without an explicit defrag pass (only the
+    // tail chunk is ever permitted to be sparse).
+    kb::ecs::WorldConfig config;
+    config.chunkSizeProfile = kb::ecs::ChunkSizeProfile::Chunk16KB;
+    config.reserveEntities = 8192;
+    kb::ecs::NativeArchetypeStorage storage{ config };
+
+    constexpr std::size_t kEntityCount = 20000U;
+    std::vector<Position> positions;
+    positions.reserve(kEntityCount);
+    for (std::size_t index = 0; index < kEntityCount; ++index) {
+        positions.push_back(Position{ .x = static_cast<float>(index), .y = static_cast<float>(index) });
+    }
+    const std::array columns{
+        kb::ecs::NativeBulkComponentColumn{
+            .type = ComponentType<Position>(kPositionId),
+            .data = positions.data(),
+            .stride = sizeof(Position),
+            .sourceCount = positions.size(),
+        },
+    };
+    std::vector<kb::ecs::Entity> entities = storage.CreateEntities(kEntityCount, std::span<const kb::ecs::NativeBulkComponentColumn>{ columns });
+
+    // Deterministic pseudo-random churn: destroy ~40% via a fixed-seed walk.
+    std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+    const auto nextRandom = [&state]() noexcept {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    std::size_t destroyed = 0U;
+    for (kb::ecs::Entity entity : entities) {
+        if ((nextRandom() % 5U) < 2U) {
+            storage.DestroyEntity(entity);
+            ++destroyed;
+        }
+    }
+
+    const kb::ecs::NativeEcsStorageStats stats = storage.Stats();
+    kb::tests::Require(stats.liveEntities == kEntityCount - destroyed, "structural churn occupancy test lost live entity accounting");
+    kb::tests::Require(stats.capacity > 0U, "structural churn occupancy test reported zero capacity");
+    const double occupancy = static_cast<double>(stats.liveEntities) / static_cast<double>(stats.capacity);
+    kb::tests::Require(occupancy > 0.85, "structural churn left occupancy below the 85% compaction target");
+    kb::tests::Require(stats.sparseChunks <= 1U, "structural churn left more than the tail chunk sparse");
 }
 
 void RunMultiComponentMigrationTest() {
@@ -2185,6 +2235,57 @@ void RunNativeStorageStructuralVersionTest() {
     }
 }
 
+void RunHotArchetypeLayoutAdvisorTest() {
+    kb::ecs::NativeEcsStorageStats stats;
+
+    // Wide hot archetype that also carries cold columns and runs at low occupancy.
+    kb::ecs::NativeEcsArchetypeMemoryCounters wide;
+    wide.archetypeIndex = 1U;
+    wide.componentIds = std::vector<kb::ecs::ComponentId>(10U, kb::ecs::ComponentId{ 1 });
+    wide.liveEntities = 100U;
+    wide.chunks = 4U;
+    wide.capacity = 400U;
+    wide.hotTableComponents = 9U;
+    wide.coldTableComponents = 1U;
+    wide.hotTableCapacityBytes = 400U * 300U; // 300 hot bytes per entity
+    stats.archetypeCounters.push_back(wide);
+
+    // Healthy compact archetype: should not trigger any advisory.
+    kb::ecs::NativeEcsArchetypeMemoryCounters healthy;
+    healthy.archetypeIndex = 2U;
+    healthy.componentIds = std::vector<kb::ecs::ComponentId>(2U, kb::ecs::ComponentId{ 2 });
+    healthy.liveEntities = 1000U;
+    healthy.chunks = 2U;
+    healthy.capacity = 1000U;
+    healthy.hotTableComponents = 2U;
+    healthy.hotTableCapacityBytes = 1000U * 16U;
+    stats.archetypeCounters.push_back(healthy);
+
+    const kb::ecs::HotArchetypeLayoutReport report = kb::ecs::AnalyzeHotArchetypeLayout(stats);
+    kb::tests::Require(report.analyzedArchetypes == 2U, "advisor analyzed the wrong archetype count");
+    kb::tests::Require(report.CountOfKind(kb::ecs::HotArchetypeAdvisoryKind::SplitLargeHotArchetype) == 1U, "advisor missed wide hot archetype");
+    kb::tests::Require(report.CountOfKind(kb::ecs::HotArchetypeAdvisoryKind::ColdComponentsInHotArchetype) == 1U, "advisor missed cold-in-hot archetype");
+    kb::tests::Require(report.CountOfKind(kb::ecs::HotArchetypeAdvisoryKind::LowOccupancyArchetype) == 1U, "advisor missed low-occupancy archetype");
+
+    // Tag explosion: many near-empty tag-bearing archetypes.
+    kb::ecs::NativeEcsStorageStats tagStats;
+    for (std::size_t index = 0U; index < 32U; ++index) {
+        kb::ecs::NativeEcsArchetypeMemoryCounters tagArchetype;
+        tagArchetype.archetypeIndex = index;
+        tagArchetype.componentIds = std::vector<kb::ecs::ComponentId>(1U, kb::ecs::ComponentId{ 3 });
+        tagArchetype.liveEntities = 1U;
+        tagArchetype.chunks = 1U;
+        tagArchetype.capacity = 64U;
+        tagArchetype.sparseTagComponents = 1U;
+        tagStats.archetypeCounters.push_back(tagArchetype);
+    }
+    const kb::ecs::HotArchetypeLayoutReport tagReport = kb::ecs::AnalyzeHotArchetypeLayout(tagStats);
+    kb::tests::Require(tagReport.CountOfKind(kb::ecs::HotArchetypeAdvisoryKind::TagArchetypeExplosion) == 1U, "advisor missed tag archetype explosion");
+    kb::tests::Require(
+        kb::ecs::HotArchetypeAdvisoryKindName(kb::ecs::HotArchetypeAdvisoryKind::TagArchetypeExplosion) == "tag_archetype_explosion",
+        "advisor kind name mismatch");
+}
+
 } // namespace
 
 namespace kb::tests {
@@ -2203,6 +2304,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunBulkColumnSourceCountValidationTest();
     RunSwapDeleteAndGenerationTest();
     RunMoveLastCompactionAcrossChunksTest();
+    RunStructuralChurnOccupancyTest();
     RunArchetypeSignatureMatchingTest();
     RunNativeBulkCreateAdoptColumnAppendTest();
     RunWorldNativeStorageMirrorTest();
@@ -2224,6 +2326,7 @@ void RunEcsNativeArchetypeStorageTests() {
     RunBulkDestroyAllFastPathTest();
     RunClearRetainingCapacityTest();
     RunNativeStorageStructuralVersionTest();
+    RunHotArchetypeLayoutAdvisorTest();
 }
 
 } // namespace kb::tests

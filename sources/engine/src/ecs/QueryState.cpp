@@ -86,11 +86,14 @@ private:
 [[nodiscard]] bool CanExecuteInParallel(QueryExecutionSettings settings) noexcept {
     return settings.workerPool != nullptr
         && !IsDeterministicExecution(settings)
-        && settings.policy != QueryExecutionPolicy::SingleThread;
+        && QueryExecutionPolicyUsesParallelism(settings.policy);
 }
 
 [[nodiscard]] bool ShouldSplitParallelRanges(QueryExecutionSettings settings) noexcept {
-    return settings.policy == QueryExecutionPolicy::ParallelRanges || settings.policy == QueryExecutionPolicy::SIMDPreferred;
+    // Range-based splitting for every parallel policy except the chunk policy,
+    // which dispatches whole chunks.
+    return QueryExecutionPolicyUsesParallelism(settings.policy)
+        && settings.policy != QueryExecutionPolicy::ParallelChunks;
 }
 
 [[nodiscard]] std::size_t ResolveQueryWorkerCount(QueryExecutionSettings settings) noexcept {
@@ -153,15 +156,18 @@ void RecordQueryExecutionTelemetry(
     counters->queryPrefetchDistanceTotal += settings.prefetchDistance;
     switch (settings.policy) {
     case QueryExecutionPolicy::SingleThread:
+    case QueryExecutionPolicy::SingleThreadSIMD:
         ++counters->querySingleThreadExecutions;
         break;
     case QueryExecutionPolicy::ParallelChunks:
         ++counters->queryParallelChunkExecutions;
         break;
     case QueryExecutionPolicy::ParallelRanges:
+    case QueryExecutionPolicy::StreamingLargeWorld:
         ++counters->queryParallelRangeExecutions;
         break;
     case QueryExecutionPolicy::SIMDPreferred:
+    case QueryExecutionPolicy::ParallelSIMD:
         ++counters->querySimdPreferredExecutions;
         break;
     case QueryExecutionPolicy::Deterministic:

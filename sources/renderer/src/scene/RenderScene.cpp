@@ -40,6 +40,8 @@ RenderSceneStats RenderScene::Stats() const noexcept {
         .cameraProxyCapacity = static_cast<std::uint32_t>(cameras_.bucket_count()),
         .lightProxyCapacity = static_cast<std::uint32_t>(lights_.bucket_count()),
         .drawGroupLookupCapacity = static_cast<std::uint32_t>(drawGroupLookupScratch_.bucket_count()),
+        .transformInPlaceUpdateCount = transformInPlaceUpdateCount_,
+        .transformFallbackUpdateCount = transformFallbackUpdateCount_,
     };
 }
 
@@ -292,6 +294,8 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
 
     drawGroupLookupScratch_.clear();
     drawGroupLookupScratch_.reserve(meshes_.size());
+    // A fresh build version invalidates every previously stamped instance location.
+    ++drawGroupBuildVersion_;
     std::size_t writeGroupCount = 0U;
     for (const auto& [entityId, proxy] : meshes_) {
         const MeshRenderProxyDesc& mesh = proxy.desc;
@@ -316,12 +320,71 @@ void RenderScene::RebuildDrawGroupsIfNeeded() const {
             ++writeGroupCount;
         }
 
-        SceneRenderDrawGroup& group = drawGroups_[lookupIt->second];
+        const std::size_t groupIndex = lookupIt->second;
+        SceneRenderDrawGroup& group = drawGroups_[groupIndex];
+        // Stamp the instance location directly on the proxy (mutable) so a later
+        // transform-only update needs a single proxy lookup, no second map.
+        proxy.instanceGroupIndex = static_cast<std::uint32_t>(groupIndex);
+        proxy.instanceIndexInGroup = static_cast<std::uint32_t>(group.instances.size());
+        proxy.instanceLocationVersion = drawGroupBuildVersion_;
         group.instances.push_back(RenderSceneMeshInstanceBuilder::Build(mesh));
     }
 
     drawGroups_.resize(writeGroupCount);
     drawGroupsDirty_ = false;
+}
+
+RenderScene::TransformUpdateOutcome RenderScene::ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
+    const auto proxyIt = meshes_.find(entityId);
+    if (proxyIt == meshes_.end()) {
+        return TransformUpdateOutcome::NotFound;
+    }
+
+    MeshRenderProxy& proxy = proxyIt->second;
+    proxy.desc.model = model; // source of truth, always current
+
+    // Fast path: clean cache + a location stamped by the current build. Single
+    // proxy lookup, instance refreshed in place. No invalidation, no telemetry.
+    if (!drawGroupsDirty_ && proxy.instanceLocationVersion == drawGroupBuildVersion_ &&
+        proxy.instanceGroupIndex < drawGroups_.size()) {
+        SceneRenderDrawGroup& group = drawGroups_[proxy.instanceGroupIndex];
+        if (proxy.instanceIndexInGroup < group.instances.size() &&
+            group.instances[proxy.instanceIndexInGroup].entityId == entityId) {
+            group.instances[proxy.instanceIndexInGroup].model = model;
+            proxy.dirty |= RenderProxyDirtyFlag::Transform;
+            return TransformUpdateOutcome::InPlace;
+        }
+    }
+
+    proxy.dirty |= RenderProxyDirtyFlag::Transform;
+    return TransformUpdateOutcome::Fallback;
+}
+
+void RenderScene::InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept {
+    if (outcome == TransformUpdateOutcome::Fallback) {
+        InvalidateDrawGroups();
+    }
+}
+
+void RenderScene::AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept {
+    transformInPlaceUpdateCount_ += inPlace;
+    transformFallbackUpdateCount_ += fallback;
+}
+
+bool RenderScene::UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model) {
+    const TransformUpdateOutcome outcome = ApplyMeshTransform(entityId, model);
+    switch (outcome) {
+    case TransformUpdateOutcome::NotFound:
+        return false;
+    case TransformUpdateOutcome::InPlace:
+        ++transformInPlaceUpdateCount_;
+        return true;
+    case TransformUpdateOutcome::Fallback:
+        ++transformFallbackUpdateCount_;
+        InvalidateDrawGroups();
+        return true;
+    }
+    return false;
 }
 
 } // namespace kb::render

@@ -14,6 +14,10 @@ SceneObject SceneEntities::CreateObject(SceneObjectDesc desc) {
     return SceneEntityService::CreateObject(scene_, std::move(desc));
 }
 
+std::vector<SceneObject> SceneEntities::CreateObjects(std::span<const SceneObjectDesc> descs) {
+    return SceneEntityService::CreateObjects(scene_, descs);
+}
+
 SceneEntity SceneEntities::CreateEntity() {
     return SceneEntityService::CreateEntity(scene_);
 }

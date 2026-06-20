@@ -48,6 +48,23 @@ void SceneTransformService::MarkModified(Scene& scene, SceneEntity entity) noexc
     }
 }
 
+void SceneTransformService::MarkModified(Scene& scene, std::span<const SceneEntity> entities) noexcept {
+    SceneState& state = SceneAccess::State(scene);
+    // Resolve the prefab-tracking decision once for the whole batch: a scene with
+    // no prefab instances skips all per-entity prefab containment lookups.
+    const bool trackPrefab = !state.suppressPrefabDirtyTracking && state.prefabInstances.Count() > 0U;
+    for (const SceneEntity entity : entities) {
+        if (!SceneEntityService::IsAlive(scene, entity)) {
+            continue;
+        }
+        state.componentStorage.Transforms().MarkModified(entity);
+        EnqueueSceneTransformDirtyFrontier(state, entity);
+        if (trackPrefab) {
+            MarkScenePrefabNodeDirty(state, entity);
+        }
+    }
+}
+
 void SceneTransformService::MarkParentModified(Scene& scene, SceneEntity entity) noexcept {
     if (SceneEntityService::IsAlive(scene, entity)) {
         SceneState& state = SceneAccess::State(scene);
