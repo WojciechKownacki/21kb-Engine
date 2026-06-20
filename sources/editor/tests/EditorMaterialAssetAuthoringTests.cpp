@@ -9,15 +9,21 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -36,6 +42,88 @@ void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
     std::filesystem::create_directories(path.parent_path(), error);
     std::ofstream output{ path, std::ios::binary | std::ios::trunc };
     output << text;
+}
+
+void WriteTexture(const std::filesystem::path& path, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream output{ path, std::ios::trunc };
+    output
+        << "size 1 1\n"
+        << "rgba8 "
+        << static_cast<std::uint32_t>(r) << " "
+        << static_cast<std::uint32_t>(g) << " "
+        << static_cast<std::uint32_t>(b) << " 255\n";
+}
+
+void WriteEmbeddedMaterialGltfFixture(const std::filesystem::path& folder) {
+    std::error_code error;
+    std::filesystem::create_directories(folder, error);
+    const std::filesystem::path binPath = folder / "mesh.bin";
+    {
+        const std::vector<float> positions{
+            0.0F, 0.0F, 0.0F,
+            1.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F,
+        };
+        const std::vector<float> normals{
+            0.0F, 0.0F, 1.0F,
+            0.0F, 0.0F, 1.0F,
+            0.0F, 0.0F, 1.0F,
+        };
+        const std::vector<float> texCoords{
+            0.0F, 0.0F,
+            1.0F, 0.0F,
+            0.0F, 1.0F,
+        };
+        const std::uint16_t indices[]{ 0U, 1U, 2U };
+
+        std::ofstream output{ binPath, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(positions.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(normals.data()), static_cast<std::streamsize>(normals.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(texCoords.data()), static_cast<std::streamsize>(texCoords.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(indices), static_cast<std::streamsize>(sizeof(indices)));
+        const std::uint16_t padding = 0U;
+        output.write(reinterpret_cast<const char*>(&padding), static_cast<std::streamsize>(sizeof(padding)));
+    }
+
+    std::ofstream output{ folder / "embedded.gltf", std::ios::trunc };
+    output
+        << "{\n"
+        << "  \"asset\": { \"version\": \"2.0\" },\n"
+        << "  \"scene\": 0,\n"
+        << "  \"scenes\": [{ \"nodes\": [0] }],\n"
+        << "  \"nodes\": [{ \"mesh\": 0 }],\n"
+        << "  \"materials\": [{\n"
+        << "    \"name\": \"painted metal\",\n"
+        << "    \"pbrMetallicRoughness\": {\n"
+        << "      \"baseColorFactor\": [0.2, 0.4, 0.8, 0.6],\n"
+        << "      \"metallicFactor\": 0.7,\n"
+        << "      \"roughnessFactor\": 0.35,\n"
+        << "      \"baseColorTexture\": { \"index\": 0 }\n"
+        << "    },\n"
+        << "    \"normalTexture\": { \"index\": 1, \"scale\": 0.75 },\n"
+        << "    \"emissiveFactor\": [0.1, 0.2, 0.3],\n"
+        << "    \"alphaMode\": \"BLEND\",\n"
+        << "    \"doubleSided\": true\n"
+        << "  }],\n"
+        << "  \"textures\": [{ \"source\": 0 }, { \"source\": 1 }],\n"
+        << "  \"images\": [{ \"uri\": \"Textures/albedo.kbtex\" }, { \"uri\": \"Textures/missing_normal.kbtex\" }],\n"
+        << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0, \"NORMAL\": 1, \"TEXCOORD_0\": 2 }, \"indices\": 3, \"material\": 0 }] }],\n"
+        << "  \"buffers\": [{ \"uri\": \"mesh.bin\", \"byteLength\": 102 }],\n"
+        << "  \"bufferViews\": [\n"
+        << "    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 36, \"target\": 34962 },\n"
+        << "    { \"buffer\": 0, \"byteOffset\": 36, \"byteLength\": 36, \"target\": 34962 },\n"
+        << "    { \"buffer\": 0, \"byteOffset\": 72, \"byteLength\": 24, \"target\": 34962 },\n"
+        << "    { \"buffer\": 0, \"byteOffset\": 96, \"byteLength\": 6, \"target\": 34963 }\n"
+        << "  ],\n"
+        << "  \"accessors\": [\n"
+        << "    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\", \"min\": [0, 0, 0], \"max\": [1, 1, 0] },\n"
+        << "    { \"bufferView\": 1, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\" },\n"
+        << "    { \"bufferView\": 2, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC2\" },\n"
+        << "    { \"bufferView\": 3, \"componentType\": 5123, \"count\": 3, \"type\": \"SCALAR\" }\n"
+        << "  ]\n"
+        << "}\n";
 }
 
 [[nodiscard]] kb::assets::AssetMetadata Metadata(std::string name, std::string type, std::filesystem::path path) {
@@ -207,6 +295,60 @@ void RunMaterialTextureSlotAuthoringTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunExtractEmbeddedMaterialToMaterialAssetTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "Embedded material extraction test could not mount project assets");
+
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()), "Embedded material extraction test could not register mesh loader");
+    kb::editor::tests::Require(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()), "Embedded material extraction test could not register texture loader");
+
+    const std::filesystem::path meshFolder = TempRoot() / "Project" / "Assets" / "Meshes";
+    WriteEmbeddedMaterialGltfFixture(meshFolder);
+    WriteTexture(meshFolder / "Textures" / "albedo.kbtex", 20U, 40U, 80U);
+    kb::editor::tests::Require(scene.Assets().Discover() >= 2U, "Embedded material extraction test did not discover mesh and texture assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/Meshes/embedded.gltf");
+    const kb::assets::AssetMetadata* albedoMetadata = manager.Registry().FindByPath("/Game/Meshes/Textures/albedo.kbtex");
+    kb::editor::tests::Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Embedded material extraction test did not discover glTF mesh");
+    kb::editor::tests::Require(albedoMetadata != nullptr && albedoMetadata->type == "RenderTexture", "Embedded material extraction test did not discover albedo texture");
+    const kb::assets::AssetId meshAssetId = meshMetadata->id;
+    const kb::assets::AssetId albedoAssetId = albedoMetadata->id;
+
+    kb::editor::EditorEmbeddedMaterialExtractor extractor{ scene, browser, console };
+    const kb::editor::EditorEmbeddedMaterialExtractionResult result = extractor.Extract(meshAssetId);
+    kb::editor::tests::Require(result.Succeeded(), "Embedded material extraction did not produce a material asset");
+    kb::editor::tests::Require(result.slots.size() == 1U && result.slots[0].slotIndex == 0U, "Embedded material extraction returned wrong slot mapping");
+    kb::editor::tests::Require(result.diagnostics.size() == 1U, "Embedded material extraction should report one unresolved texture path");
+    kb::editor::tests::Require(console.Count(kb::editor::EditorConsoleLevel::Info) == 1U, "Embedded material extraction should log one success message");
+    kb::editor::tests::Require(console.Count(kb::editor::EditorConsoleLevel::Warning) == 1U, "Embedded material extraction should log one unresolved texture warning");
+    kb::editor::tests::Require(browser.SelectedAsset() == result.slots[0].materialAssetId, "Embedded material extraction did not select the extracted material");
+
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().Find(result.slots[0].materialAssetId);
+    kb::editor::tests::Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Embedded material extraction did not register a RenderMaterial asset");
+    kb::editor::tests::Require(materialMetadata->virtualPath == "/Game/Meshes/painted_metal.kbmat", "Embedded material extraction wrote an unexpected material filename");
+
+    const std::optional<kb::render::RenderMaterialAssetData> material = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialMetadata->physicalPath);
+    kb::editor::tests::Require(material.has_value(), "Extracted material could not be loaded from disk");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(material->desc.baseColor[0], 0.2F), "Extracted material lost base color");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(material->desc.baseColor[3], 0.6F), "Extracted material lost alpha");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(material->desc.metallicFactor, 0.7F), "Extracted material lost metallic factor");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(material->desc.roughnessFactor, 0.35F), "Extracted material lost roughness factor");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(material->desc.normalScale, 0.75F), "Extracted material lost normal scale");
+    kb::editor::tests::Require(material->desc.alphaMode == kb::render::RenderMaterialAlphaMode::Blend, "Extracted material lost alpha mode");
+    kb::editor::tests::Require(material->desc.doubleSided, "Extracted material lost double-sided flag");
+    kb::editor::tests::Require(material->desc.albedoTextureAssetId == albedoAssetId.value, "Extracted material did not map albedo texture path to asset id");
+    kb::editor::tests::Require(material->albedoTexturePath.empty(), "Extracted material kept resolved albedo texture path");
+    kb::editor::tests::Require(material->normalTexturePath == "Textures/missing_normal.kbtex", "Extracted material did not preserve unresolved normal texture path");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -215,6 +357,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
     RunMaterialTextureSlotAuthoringTest();
+    RunExtractEmbeddedMaterialToMaterialAssetTest();
 }
 
 } // namespace kb::editor::tests

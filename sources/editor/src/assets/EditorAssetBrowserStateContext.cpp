@@ -6,7 +6,14 @@ namespace kb::editor {
 
 std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItems(const kb::assets::AssetManager& manager) const {
     const bool assetExists = manager.Registry().Find(contextMenu_.TargetAsset()) != nullptr;
-    return contextMenu_.Items(assetExists, ContextMenuTargetFolderCanMutate(manager));
+    std::vector<EditorAssetContextMenuItem> items = contextMenu_.Items(assetExists, ContextMenuTargetFolderCanMutate(manager));
+    if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
+        if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Materials", .separatorAfter = true });
+        }
+    }
+    return items;
 }
 
 void EditorAssetBrowserState::OpenContextMenuForBackground(int x, int y) {
