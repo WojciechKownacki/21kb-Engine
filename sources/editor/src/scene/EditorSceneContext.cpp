@@ -1435,6 +1435,54 @@ bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {
     return InputActionAuthoring().ToggleConsume(id);
 }
 
+std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMaterialAsset(kb::assets::AssetId id) const {
+    return EditorMaterialAssetGateway::Read(*scene_, id);
+}
+
+bool EditorSceneContext::SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value) {
+    return MaterialAssetAuthoring().SetBaseColor(id, channel, value);
+}
+
+bool EditorSceneContext::SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value) {
+    return MaterialAssetAuthoring().SetEmissiveColor(id, channel, value);
+}
+
+bool EditorSceneContext::SetMaterialMetallicFactor(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetMetallicFactor(id, value);
+}
+
+bool EditorSceneContext::SetMaterialRoughnessFactor(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetRoughnessFactor(id, value);
+}
+
+bool EditorSceneContext::SetMaterialNormalScale(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetNormalScale(id, value);
+}
+
+bool EditorSceneContext::SetMaterialOcclusionStrength(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetOcclusionStrength(id, value);
+}
+
+bool EditorSceneContext::SetMaterialEmissiveStrength(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetEmissiveStrength(id, value);
+}
+
+bool EditorSceneContext::SetMaterialAlphaCutoff(kb::assets::AssetId id, float value) {
+    return MaterialAssetAuthoring().SetAlphaCutoff(id, value);
+}
+
+bool EditorSceneContext::SetMaterialAlphaMode(kb::assets::AssetId id, kb::render::RenderMaterialAlphaMode mode) {
+    return MaterialAssetAuthoring().SetAlphaMode(id, mode);
+}
+
+bool EditorSceneContext::CycleMaterialAlphaMode(kb::assets::AssetId id) {
+    return MaterialAssetAuthoring().CycleAlphaMode(id);
+}
+
+bool EditorSceneContext::ToggleMaterialDoubleSided(kb::assets::AssetId id) {
+    return MaterialAssetAuthoring().ToggleDoubleSided(id);
+}
+
 bool EditorSceneContext::ToggleProjectInputEnabled() {
     project_.inputEnabled = !project_.inputEnabled;
     return SaveProjectDescriptor();

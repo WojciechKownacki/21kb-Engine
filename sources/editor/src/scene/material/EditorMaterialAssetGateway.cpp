@@ -23,6 +23,10 @@ EditorMaterialAssetGateway::EditorMaterialAssetGateway(kb::scene::Scene& scene, 
     : scene_(scene)
     , browser_(browser) {}
 
+kb::scene::Scene& EditorMaterialAssetGateway::Scene() const noexcept {
+    return scene_;
+}
+
 std::optional<std::filesystem::path> EditorMaterialAssetGateway::ResolveFolder(const std::filesystem::path& virtualFolder) const {
     if (virtualFolder.empty()) {
         return std::nullopt;
@@ -41,6 +45,23 @@ std::filesystem::path EditorMaterialAssetGateway::UniqueFilePath(const std::file
     return candidate;
 }
 
+std::optional<std::filesystem::path> EditorMaterialAssetGateway::ResolveFile(const kb::scene::Scene& scene, kb::assets::AssetId id) {
+    const kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        return std::nullopt;
+    }
+    if (!metadata->physicalPath.empty()) {
+        return metadata->physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata->virtualPath);
+}
+
+std::optional<kb::render::RenderMaterialAssetData> EditorMaterialAssetGateway::Read(const kb::scene::Scene& scene, kb::assets::AssetId id) {
+    const std::optional<std::filesystem::path> path = ResolveFile(scene, id);
+    return path.has_value() ? kb::render::RenderMaterialAssetLoader::LoadMaterial(*path) : std::nullopt;
+}
+
 void EditorMaterialAssetGateway::EnsureMaterialLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
 }
@@ -56,11 +77,33 @@ void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& 
     }
 }
 
+void EditorMaterialAssetGateway::RefreshAfterWrite(kb::assets::AssetId id) {
+    static_cast<void>(scene_.Assets().Manager().Unload(id));
+    static_cast<void>(scene_.Assets().Discover());
+}
+
 bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset) {
     if (!kb::render::RenderMaterialAssetWriter::Save(path, asset)) {
         return false;
     }
     DiscoverAndSelect(path);
+    return true;
+}
+
+bool EditorMaterialAssetGateway::Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate) {
+    const std::optional<std::filesystem::path> path = ResolveFile(scene_, id);
+    if (!path.has_value()) {
+        return false;
+    }
+    std::optional<kb::render::RenderMaterialAssetData> asset = kb::render::RenderMaterialAssetLoader::LoadMaterial(*path);
+    if (!asset.has_value()) {
+        return false;
+    }
+    mutate(*asset);
+    if (!kb::render::RenderMaterialAssetWriter::Save(*path, *asset)) {
+        return false;
+    }
+    RefreshAfterWrite(id);
     return true;
 }
 
