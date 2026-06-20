@@ -221,6 +221,19 @@ void WriteMaterialWithTexturePaths(
         << "emissiveTexture " << emissiveTexturePath << "\n";
 }
 
+void WriteReloadableMaterial(
+    const std::filesystem::path& path,
+    float red,
+    float roughness,
+    std::uint64_t albedoTextureId) {
+    std::ofstream output{ path, std::ios::trunc };
+    output
+        << "baseColor " << red << " 0.25 0.5 1\n"
+        << "roughnessFactor " << roughness << "\n"
+        << "alphaMode OPAQUE\n"
+        << "albedoTextureAssetId " << albedoTextureId << "\n";
+}
+
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
@@ -405,6 +418,146 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererReloadsChangedRuntimeMaterialAssetTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_material_reload";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Runtime material reload test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path texturePath = root / "albedo.kbtex";
+    const std::filesystem::path materialPath = root / "reloadable.kbmat";
+    WriteTriangleObj(meshPath);
+    WriteTexture(texturePath, 180U, 160U, 140U);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Runtime material reload test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Runtime material reload test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Runtime material reload test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Runtime material reload test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Runtime material reload test did not discover mesh and texture assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* textureMetadata = manager.Registry().FindByPath("/Game/albedo.kbtex");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Runtime material reload test discovered wrong mesh metadata");
+    Require(textureMetadata != nullptr && textureMetadata->type == "RenderTexture", "Runtime material reload test discovered wrong texture metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+    const std::uint64_t textureAssetId = textureMetadata->id.value;
+
+    WriteReloadableMaterial(materialPath, 0.2F, 0.7F, textureAssetId);
+    Require(manager.DiscoverMountedAssets() >= 3U, "Runtime material reload test did not discover material asset");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/reloadable.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Runtime material reload test discovered wrong material metadata");
+    const std::uint64_t materialAssetId = materialMetadata->id.value;
+    const std::uint64_t firstContentHash = materialMetadata->contentHash;
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Reloadable Runtime Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshAssetId,
+        .materialAssetId = materialAssetId,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 2U,
+        .cachedMaterials = 2U,
+        .cachedTextures = 2U,
+        .frameReferencedMeshes = 2U,
+        .frameReferencedMaterials = 2U,
+        .frameReferencedTextures = 2U,
+        .scenePassSubmitStats = 1U,
+        .renderSceneMeshProxies = 2U,
+        .renderSceneDrawGroupKeys = 2U,
+        .meshResourceSlots = 2U,
+        .materialResourceSlots = 2U,
+        .textureResourceSlots = 2U,
+        .meshBindings = 2U,
+        .materialBindings = 2U,
+        .textureBindings = 2U,
+        .syncMeshProxies = 2U,
+        .syncTransformCacheEntries = 2U,
+        .syncTransformResolvingEntries = 2U,
+    });
+    Require(renderer.Initialize(surface, &config), "Renderer did not initialize in runtime material reload test");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 4U,
+            .maxVisibleInstances = 8U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Renderer did not begin first material reload frame");
+    Require(renderer.SubmitScene(scene, desc), "Renderer did not submit first material reload frame");
+    const SceneRenderSubmitStats firstSubmitStats = renderer.LastSceneSubmitStats();
+    Require(firstSubmitStats.meshDrawCommandCacheMissCount == 1U, "First material reload submit did not build one draw command cache entry");
+    Require(firstSubmitStats.meshDrawCommandCacheBuildCount == 1U, "First material reload submit did not report one cache build");
+    Require(firstSubmitStats.meshDrawCommandCacheHitCount == 0U, "First material reload submit unexpectedly hit draw command cache");
+
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Runtime material reload test could not access scene resources");
+    const RenderMaterialHandle firstHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* firstMaterial = resources->FindMaterial(firstHandle);
+    Require(firstHandle.IsValid() && firstMaterial != nullptr, "Runtime material reload test did not bind initial material resource");
+    const std::uint64_t firstVersion = firstMaterial->version;
+    Require(firstVersion != 0U, "Initial material resource did not receive a version");
+    Require(NearlyEqual(firstMaterial->baseColor[0], 0.2F), "Initial runtime material resource did not use first asset color");
+    Require(NearlyEqual(firstMaterial->roughnessFactor, 0.7F), "Initial runtime material resource did not use first asset roughness");
+    renderer.EndFrame();
+
+    WriteReloadableMaterial(materialPath, 0.9F, 0.35F, textureAssetId);
+    Require(manager.DiscoverMountedAssets() >= 3U, "Runtime material reload test did not rediscover changed material asset");
+    materialMetadata = manager.Registry().FindByPath("/Game/reloadable.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Runtime material reload test lost material metadata after rediscovery");
+    Require(materialMetadata->id.value == materialAssetId, "Runtime material reload test changed material asset id after rediscovery");
+    Require(materialMetadata->contentHash != firstContentHash, "Runtime material reload test did not update material content hash");
+
+    Require(renderer.BeginFrame(), "Renderer did not begin second material reload frame");
+    Require(renderer.SubmitScene(scene, desc), "Renderer did not submit second material reload frame");
+    const SceneRenderSubmitStats secondSubmitStats = renderer.LastSceneSubmitStats();
+    Require(secondSubmitStats.meshDrawCommandCacheMissCount == 1U, "Changed material did not invalidate draw command cache");
+    Require(secondSubmitStats.meshDrawCommandCacheBuildCount == 1U, "Changed material did not rebuild draw command cache");
+    Require(secondSubmitStats.meshDrawCommandCachePruneCount == 1U, "Changed material did not prune the stale draw command cache entry");
+
+    const RenderMaterialHandle secondHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* secondMaterial = resources->FindMaterial(secondHandle);
+    Require(secondHandle.IsValid() && secondMaterial != nullptr, "Runtime material reload test did not bind reloaded material resource");
+    Require(secondHandle != firstHandle, "Runtime material reload test reused stale material handle after content change");
+    Require(resources->FindMaterial(firstHandle) == nullptr, "Runtime material reload test kept stale material handle resolvable");
+    Require(secondMaterial->version != firstVersion, "Reloaded material resource did not receive a new version");
+    Require(NearlyEqual(secondMaterial->baseColor[0], 0.9F), "Reloaded runtime material resource did not use changed asset color");
+    Require(NearlyEqual(secondMaterial->roughnessFactor, 0.35F), "Reloaded runtime material resource did not use changed asset roughness");
+    Require(renderer.RuntimeResourceStats().cachedMaterialCount == 1U, "Runtime material reload test cached duplicate material resources after reload");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_embedded_material";
     std::error_code error;
@@ -568,6 +721,7 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 
 void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
+    RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
