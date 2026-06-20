@@ -10,6 +10,7 @@ void RunEditorViewportPreviewTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
 void RunEditorInspectorTests();
+void RunEditorMaterialAssetAuthoringTests();
 void RunScriptEditorTests();
 void RunSvgPathTests();
 
