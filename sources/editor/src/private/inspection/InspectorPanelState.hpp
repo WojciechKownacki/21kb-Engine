@@ -22,6 +22,7 @@ enum class InspectorSectionId : std::uint8_t {
     Folder,
     InputAction,
     InputMappings,
+    Material,
     Script,
     AddComponent,
 };
@@ -67,6 +68,21 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    MaterialBaseColorR,
+    MaterialBaseColorG,
+    MaterialBaseColorB,
+    MaterialBaseColorA,
+    MaterialMetallicFactor,
+    MaterialRoughnessFactor,
+    MaterialNormalScale,
+    MaterialOcclusionStrength,
+    MaterialEmissiveColorR,
+    MaterialEmissiveColorG,
+    MaterialEmissiveColorB,
+    MaterialEmissiveStrength,
+    MaterialAlphaCutoff,
+    MaterialAlphaMode,
+    MaterialDoubleSided,
     ScriptName,
     ScriptEnabled,
     AudioSourceClip,
@@ -170,6 +186,7 @@ private:
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
+    bool materialCollapsed_ = false;
     bool scriptCollapsed_ = false;
     bool addComponentBrowserOpen_ = false;
     bool scriptComponentMenuOpen_ = false;

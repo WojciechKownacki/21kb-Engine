@@ -21,6 +21,7 @@
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "app/EditorPlayModeSceneSession.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 
 #include <string>
 #include <string_view>
@@ -221,6 +222,18 @@ public:
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
     [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
+    [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] bool SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value);
+    [[nodiscard]] bool SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value);
+    [[nodiscard]] bool SetMaterialMetallicFactor(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialRoughnessFactor(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialNormalScale(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialOcclusionStrength(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialEmissiveStrength(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialAlphaCutoff(kb::assets::AssetId id, float value);
+    [[nodiscard]] bool SetMaterialAlphaMode(kb::assets::AssetId id, kb::render::RenderMaterialAlphaMode mode);
+    [[nodiscard]] bool CycleMaterialAlphaMode(kb::assets::AssetId id);
+    [[nodiscard]] bool ToggleMaterialDoubleSided(kb::assets::AssetId id);
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
