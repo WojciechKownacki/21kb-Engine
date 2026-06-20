@@ -7,16 +7,21 @@
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
+#include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
+#include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -158,6 +163,74 @@ void RunEditorMaterialSlotOverrideSyncTest() {
     kb::editor::tests::Require(groups[0].instances[0].materialSlotAssetIds[1] == 303U, "Editor material slot override sync did not propagate override asset id");
 }
 
+void RunMaterialPreviewMeshFactoryTest() {
+    const kb::render::RenderMeshAssetData sphere = kb::editor::EditorMaterialPreviewMeshFactory::BuildSphere();
+    kb::editor::tests::Require(sphere.desc.vertexCount > 0U, "Material preview sphere did not generate vertices");
+    kb::editor::tests::Require(sphere.desc.indexCount > 0U, "Material preview sphere did not generate indices");
+    kb::editor::tests::Require(sphere.desc.materialSlotCount == 1U, "Material preview sphere should expose one material slot");
+    kb::editor::tests::Require(sphere.bounds.radius > 0.0F, "Material preview sphere did not produce bounds");
+
+    const kb::render::RenderMeshAssetData cube = kb::editor::EditorMaterialPreviewMeshFactory::BuildCube();
+    kb::editor::tests::Require(cube.desc.vertexCount == 24U, "Material preview cube should generate one quad per face");
+    kb::editor::tests::Require(cube.desc.indexCount == 36U, "Material preview cube should generate two triangles per face");
+    kb::editor::tests::Require(cube.desc.materialSlotCount == 1U, "Material preview cube should expose one material slot");
+}
+
+void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
+    const std::filesystem::path materialFile = std::filesystem::temp_directory_path() / "21kb_editor_material_preview_scene.kbmat";
+    std::error_code cleanupError;
+    std::filesystem::remove(materialFile, cleanupError);
+
+    kb::render::RenderMaterialAssetData material{};
+    material.desc.albedoTextureAssetId = 999U;
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(materialFile, material), "Material preview test could not write material fixture");
+
+    const kb::assets::AssetId materialId{ 5151U };
+    kb::scene::Scene source;
+    static_cast<void>(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = materialId,
+        .type = "RenderMaterial",
+        .name = "PreviewMaterial",
+        .virtualPath = "/Game/Materials/PreviewMaterial.kbmat",
+        .physicalPath = materialFile,
+        .contentHash = 1U,
+        .runtimeLoadable = true,
+    }));
+
+    kb::editor::EditorMaterialPreviewScene preview;
+    const kb::scene::Scene& previewScene = preview.SceneFor(source, materialId);
+    const kb::editor::EditorMaterialPreviewTelemetry& telemetry = preview.Telemetry();
+    kb::editor::tests::Require(telemetry.materialAssetId == materialId, "Material preview telemetry did not preserve material id");
+    kb::editor::tests::Require(telemetry.materialMetadataFound, "Material preview telemetry did not find material metadata");
+    kb::editor::tests::Require(telemetry.materialLoaded, "Material preview telemetry did not report loaded material");
+    kb::editor::tests::Require(telemetry.previewSceneReady, "Material preview telemetry did not report a ready scene");
+    kb::editor::tests::Require(telemetry.missingTextureCount == 1U, "Material preview telemetry did not diagnose the missing texture");
+
+    kb::render::RenderScene renderScene;
+    kb::render::EcsRenderSceneSynchronizer{}.Sync(previewScene, renderScene);
+    std::vector<kb::render::SceneRenderDrawGroup> groups;
+    renderScene.BuildDrawGroups(groups);
+    kb::editor::tests::Require(groups.size() == 1U, "Material preview scene should produce one draw group");
+    kb::editor::tests::Require(groups[0].meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value, "Material preview scene did not use the preview mesh asset");
+    kb::editor::tests::Require(groups[0].materialAssetId == materialId.value, "Material preview scene did not assign the inspected material");
+    kb::editor::tests::Require(groups[0].instances.size() == 1U, "Material preview scene should render one mesh instance");
+
+    const std::uint64_t firstRevision = preview.Revision();
+    static_cast<void>(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = materialId,
+        .type = "RenderMaterial",
+        .name = "PreviewMaterial",
+        .virtualPath = "/Game/Materials/PreviewMaterial.kbmat",
+        .physicalPath = materialFile,
+        .contentHash = 2U,
+        .runtimeLoadable = true,
+    }));
+    static_cast<void>(preview.SceneFor(source, materialId));
+    kb::editor::tests::Require(preview.Revision() > firstRevision, "Material preview scene did not rebuild after material content hash changed");
+
+    std::filesystem::remove(materialFile, cleanupError);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -169,6 +242,8 @@ void RunEditorInspectorTests() {
     RunAudioAssetAssignmentTest();
     RunMaterialAssetAssignmentSavesInSceneTest();
     RunEditorMaterialSlotOverrideSyncTest();
+    RunMaterialPreviewMeshFactoryTest();
+    RunMaterialPreviewSceneBuildsRenderableMaterialTest();
 }
 
 } // namespace kb::editor::tests

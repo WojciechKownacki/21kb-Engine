@@ -63,6 +63,8 @@ class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
 class EditorMaterialAssetAuthoring;
+class EditorMaterialPreviewScene;
+struct EditorMaterialPreviewTelemetry;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -224,6 +226,9 @@ public:
     [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
+    [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
+    [[nodiscard]] std::uint64_t MaterialPreviewRevision() const noexcept;
     [[nodiscard]] bool SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialMetallicFactor(kb::assets::AssetId id, float value);
@@ -322,6 +327,7 @@ private:
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
+    std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
