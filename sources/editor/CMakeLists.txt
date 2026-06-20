@@ -527,6 +527,10 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorViewportPreviewState.hpp
     src/private/scene/material/EditorMaterialAssetAuthoring.hpp
     src/private/scene/material/EditorMaterialAssetGateway.hpp
+    src/private/scene/material/EditorEmbeddedMaterialAssetWriter.hpp
+    src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
+    src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
+    src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
     src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
@@ -705,6 +709,9 @@ add_executable(kb_editor WIN32
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
+    src/scene/material/EditorEmbeddedMaterialExtractor.cpp
+    src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
     src/scene/material_preview/EditorMaterialPreviewScene.cpp
@@ -932,9 +939,12 @@ if(BUILD_TESTING)
         src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
-        src/scene/material/EditorMaterialAssetAuthoring.cpp
-        src/scene/material/EditorMaterialAssetGateway.cpp
-        src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
+    src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
+    src/scene/material/EditorEmbeddedMaterialExtractor.cpp
+    src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
         src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
         src/scene/material_preview/EditorMaterialPreviewScene.cpp
         src/scene/material_preview/EditorMaterialPreviewTelemetry.cpp

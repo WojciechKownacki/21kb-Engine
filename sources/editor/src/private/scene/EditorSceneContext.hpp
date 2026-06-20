@@ -218,6 +218,7 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;

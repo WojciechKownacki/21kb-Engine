@@ -48,6 +48,7 @@ enum class EditorAssetContextCommand {
     NewInputAction,
     NewInputAxis,
     NewInputMappingContext,
+    ExtractMaterials,
     AddLighting,
     AddDirectionalLight,
     AddPointLight,
