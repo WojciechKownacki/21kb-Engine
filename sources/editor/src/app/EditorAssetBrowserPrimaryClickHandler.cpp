@@ -209,6 +209,10 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
         return state.SelectContentFolderAt(hit.index, manager, KeyDown(VK_CONTROL), KeyDown(VK_SHIFT));
     }
     case EditorAssetBrowserHitKind::Asset: {
+        const std::optional<kb::assets::AssetMetadata> metadata = EditorAssetBrowserHitPayloadResolver::AssetMetadataAt(hit, state, manager);
+        if (metadata.has_value() && !sceneContext.PrepareMaterialAssetSelectionChange(metadata->id)) {
+            return true;
+        }
         PrepareBrowserAction(state);
         // Ctrl/Shift multi-select stays on press. A plain click defers selection
         // to pointer-up, so press-and-drag (e.g. dropping a script onto an object)
@@ -217,7 +221,6 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
             state.ClearPendingPreviewAsset();
             return state.SelectAssetAt(hit.index, manager, KeyDown(VK_CONTROL), KeyDown(VK_SHIFT));
         }
-        const std::optional<kb::assets::AssetMetadata> metadata = EditorAssetBrowserHitPayloadResolver::AssetMetadataAt(hit, state, manager);
         state.SetPendingPreviewAsset(metadata.has_value() ? metadata->id : kb::assets::AssetId{});
         return true;
     }

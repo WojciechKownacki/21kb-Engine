@@ -2,6 +2,7 @@
 #include "EditorTestSuites.hpp"
 
 #include "assets/EditorAssetBrowserState.hpp"
+#include "commands/EditorCommandStack.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "engine/assets/AssetImportService.hpp"
 #include "engine/assets/AssetMetadata.hpp"
@@ -13,6 +14,8 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorMaterialAssetEditCommand.hpp"
+#include "scene/material/EditorMaterialAssetGateway.hpp"
 
 #include <array>
 #include <cstdint>
@@ -295,6 +298,66 @@ void RunMaterialTextureSlotAuthoringTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialAssetEditCommandUndoRedoTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "Material command test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material command test could not create a material asset");
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(metadata != nullptr, "Material command test did not discover created material metadata");
+    const kb::assets::AssetId materialId = metadata->id;
+    const std::filesystem::path materialPath = TempRoot() / "Project" / "Assets" / "Materials" / "NewMaterial.kbmat";
+
+    kb::editor::EditorCommandStack stack;
+    std::unique_ptr<kb::editor::EditorMaterialAssetEditCommand> command = kb::editor::EditorMaterialAssetEditCommand::Create(
+        scene,
+        materialId,
+        std::make_unique<kb::editor::EditorMaterialMetallicFactorEdit>(2.0F));
+    kb::editor::tests::Require(command != nullptr, "Material command test could not create edit command");
+    kb::editor::tests::Require(stack.Execute(std::move(command)), "Material command test could not execute material edit command");
+    kb::editor::tests::Require(!stack.LastCompletedCommandAffectsSceneDocument(), "Material command should not dirty the scene document");
+    kb::editor::tests::Require(!stack.LastCompletedCommandAffectsHierarchySelection(), "Material command should not normalize hierarchy selection");
+
+    std::optional<kb::render::RenderMaterialAssetData> edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material command test wrote an unreadable edited material file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.metallicFactor, 1.0F), "Material command test did not clamp/persist metallic factor");
+
+    kb::editor::tests::Require(stack.Undo(), "Material command test could not undo material edit");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material command test wrote an unreadable undo material file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.metallicFactor, 0.0F), "Material command undo did not restore metallic factor");
+
+    kb::editor::tests::Require(stack.Redo(), "Material command test could not redo material edit");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material command test wrote an unreadable redo material file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.metallicFactor, 1.0F), "Material command redo did not restore edited metallic factor");
+
+    const std::optional<kb::render::RenderMaterialAssetData> beforeDrag = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(beforeDrag.has_value(), "Material command drag test could not read pre-drag material");
+    kb::render::RenderMaterialAssetData liveDrag = *beforeDrag;
+    liveDrag.desc.roughnessFactor = 0.25F;
+    kb::editor::tests::Require(kb::editor::EditorMaterialAssetGateway::WriteExisting(scene, materialId, liveDrag), "Material command drag test could not write live drag material");
+    const std::optional<kb::render::RenderMaterialAssetData> afterDrag = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(afterDrag.has_value(), "Material command drag test could not read post-drag material");
+    stack.PushExecuted(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Drag Material", *beforeDrag, *afterDrag));
+    kb::editor::tests::Require(stack.Undo(), "Material command drag test could not undo grouped drag edit");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material command drag undo wrote an unreadable material file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.roughnessFactor, beforeDrag->desc.roughnessFactor), "Material command drag undo did not restore roughness");
+    kb::editor::tests::Require(stack.Redo(), "Material command drag test could not redo grouped drag edit");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material command drag redo wrote an unreadable material file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.roughnessFactor, 0.25F), "Material command drag redo did not restore grouped roughness edit");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
 void RunExtractEmbeddedMaterialToMaterialAssetTest() {
     CleanTempRoot();
 
@@ -357,6 +420,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
     RunMaterialTextureSlotAuthoringTest();
+    RunMaterialAssetEditCommandUndoRedoTest();
     RunExtractEmbeddedMaterialToMaterialAssetTest();
 }
 

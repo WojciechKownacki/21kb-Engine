@@ -62,6 +62,19 @@ std::optional<kb::render::RenderMaterialAssetData> EditorMaterialAssetGateway::R
     return path.has_value() ? kb::render::RenderMaterialAssetLoader::LoadMaterial(*path) : std::nullopt;
 }
 
+bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset) {
+    const std::optional<std::filesystem::path> path = ResolveFile(scene, id);
+    if (!path.has_value()) {
+        return false;
+    }
+    if (!kb::render::RenderMaterialAssetWriter::Save(*path, asset)) {
+        return false;
+    }
+    static_cast<void>(scene.Assets().Manager().Unload(id));
+    static_cast<void>(scene.Assets().Discover());
+    return true;
+}
+
 void EditorMaterialAssetGateway::EnsureMaterialLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
 }
@@ -77,11 +90,6 @@ void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& 
     }
 }
 
-void EditorMaterialAssetGateway::RefreshAfterWrite(kb::assets::AssetId id) {
-    static_cast<void>(scene_.Assets().Manager().Unload(id));
-    static_cast<void>(scene_.Assets().Discover());
-}
-
 bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset) {
     if (!kb::render::RenderMaterialAssetWriter::Save(path, asset)) {
         return false;
@@ -91,20 +99,12 @@ bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& p
 }
 
 bool EditorMaterialAssetGateway::Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate) {
-    const std::optional<std::filesystem::path> path = ResolveFile(scene_, id);
-    if (!path.has_value()) {
-        return false;
-    }
-    std::optional<kb::render::RenderMaterialAssetData> asset = kb::render::RenderMaterialAssetLoader::LoadMaterial(*path);
+    std::optional<kb::render::RenderMaterialAssetData> asset = Read(scene_, id);
     if (!asset.has_value()) {
         return false;
     }
     mutate(*asset);
-    if (!kb::render::RenderMaterialAssetWriter::Save(*path, *asset)) {
-        return false;
-    }
-    RefreshAfterWrite(id);
-    return true;
+    return WriteExisting(scene_, id, *asset);
 }
 
 } // namespace kb::editor

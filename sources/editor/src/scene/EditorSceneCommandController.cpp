@@ -51,8 +51,10 @@ bool EditorSceneCommandController::Undo() {
         return false;
     }
 
-    NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged(true);
+    if (commandStack_.LastCompletedCommandAffectsHierarchySelection()) {
+        NormalizeHierarchySelectionAfterSceneRestore();
+    }
+    NotifySceneChanged(commandStack_.LastCompletedCommandAffectsSceneDocument());
     console_.Info("Edit", "Undo.");
     return true;
 }
@@ -63,8 +65,10 @@ bool EditorSceneCommandController::Redo() {
         return false;
     }
 
-    NormalizeHierarchySelectionAfterSceneRestore();
-    NotifySceneChanged(true);
+    if (commandStack_.LastCompletedCommandAffectsHierarchySelection()) {
+        NormalizeHierarchySelectionAfterSceneRestore();
+    }
+    NotifySceneChanged(commandStack_.LastCompletedCommandAffectsSceneDocument());
     console_.Info("Edit", "Redo.");
     return true;
 }

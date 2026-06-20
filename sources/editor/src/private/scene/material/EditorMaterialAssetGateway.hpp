@@ -25,13 +25,13 @@ public:
     [[nodiscard]] static std::filesystem::path UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName);
     [[nodiscard]] static std::optional<std::filesystem::path> ResolveFile(const kb::scene::Scene& scene, kb::assets::AssetId id);
     [[nodiscard]] static std::optional<kb::render::RenderMaterialAssetData> Read(const kb::scene::Scene& scene, kb::assets::AssetId id);
+    [[nodiscard]] static bool WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset);
     [[nodiscard]] bool WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset);
     [[nodiscard]] bool Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate);
 
 private:
     void DiscoverAndSelect(const std::filesystem::path& path);
     void EnsureMaterialLoader();
-    void RefreshAfterWrite(kb::assets::AssetId id);
 
     kb::scene::Scene& scene_;
     EditorAssetBrowserState& browser_;

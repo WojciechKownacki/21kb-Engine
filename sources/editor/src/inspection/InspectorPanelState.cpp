@@ -197,6 +197,10 @@ bool InspectorPanelState::IsTextEditing() const noexcept {
     return editedProperty_ != InspectorPropertyId::None;
 }
 
+bool InspectorPanelState::IsTextEditDirty() const noexcept {
+    return IsTextEditing() && editBuffer_ != editOriginalBuffer_;
+}
+
 InspectorPropertyId InspectorPanelState::EditedProperty() const noexcept {
     return editedProperty_;
 }
@@ -215,6 +219,7 @@ void InspectorPanelState::SetEditIndex(int index) noexcept {
 
 void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::string value) {
     editedProperty_ = property;
+    editOriginalBuffer_ = value;
     editBuffer_ = std::move(value);
     editIndex_ = -1;
     editSelectingAll_ = false;
@@ -266,6 +271,7 @@ void InspectorPanelState::SelectAllText() noexcept {
 
 void InspectorPanelState::EndTextEdit() noexcept {
     editedProperty_ = InspectorPropertyId::None;
+    editOriginalBuffer_.clear();
     editBuffer_.clear();
     editIndex_ = -1;
     editSelectingAll_ = false;

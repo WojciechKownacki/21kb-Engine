@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace kb::render::tests {
@@ -964,6 +965,34 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
     Require(loaded->layerMaskTexturePath == source.layerMaskTexturePath, "Material writer roundtrip lost layer mask path");
 }
 
+void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
+    {
+        std::istringstream input{
+            "metallicFactor nope\n"
+            "unknownMaterialField 1\n"
+            "alphaMode TRANSPARENT\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Invalid material parser diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 3U, "Invalid material parser diagnostics should report each invalid line");
+        Require(result.diagnostics[0].line == 1U, "Invalid material parser diagnostics lost the invalid value line number");
+        Require(result.diagnostics[0].field == "metallicFactor", "Invalid material parser diagnostics lost the invalid value field name");
+        Require(result.diagnostics[0].message.find("Invalid value") != std::string::npos, "Invalid material parser diagnostics did not identify an invalid field value");
+        Require(result.diagnostics[1].line == 2U, "Invalid material parser diagnostics lost the unknown field line number");
+        Require(result.diagnostics[1].field == "unknownMaterialField", "Invalid material parser diagnostics lost the unknown field name");
+        Require(result.diagnostics[1].message.find("Unknown material field") != std::string::npos, "Invalid material parser diagnostics did not identify an unknown field");
+        Require(result.ErrorMessage().find("line 1") != std::string::npos, "Invalid material parser error message did not include line numbers");
+        Require(result.ErrorMessage().find("metallicFactor nope") != std::string::npos, "Invalid material parser error message did not include source text");
+    }
+    {
+        std::istringstream input{ "# comment only\n\n" };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Empty material parser diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 1U, "Empty material parser diagnostics should report one error");
+        Require(result.diagnostics[0].message.find("does not contain any material properties") != std::string::npos, "Empty material parser diagnostics should explain the missing material properties");
+    }
+}
+
 void RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_texture_asset_loader";
     std::error_code error;
@@ -1102,6 +1131,7 @@ void RunRenderResourceRegistryTests() {
     RunGltfImporterKeepsUint32IndicesForLargeTangentMeshesTest();
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
+    RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();

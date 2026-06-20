@@ -28,7 +28,42 @@ namespace {
     return ParseUint64(rest, output) ? RenderMaterialFieldParseResult::Parsed : RenderMaterialFieldParseResult::Invalid;
 }
 
+[[nodiscard]] bool IsTextureField(std::string_view keyword) noexcept {
+    return keyword == "albedoTextureAssetId" ||
+        keyword == "baseColorTextureAssetId" ||
+        keyword == "albedoTexture" ||
+        keyword == "baseColorTexture" ||
+        keyword == "normalTextureAssetId" ||
+        keyword == "normalTexture" ||
+        keyword == "metallicRoughnessTextureAssetId" ||
+        keyword == "metallicRoughnessTexture" ||
+        keyword == "occlusionTextureAssetId" ||
+        keyword == "occlusionTexture" ||
+        keyword == "emissiveTextureAssetId" ||
+        keyword == "emissiveTexture" ||
+        keyword == "clearcoatTextureAssetId" ||
+        keyword == "clearcoatTexture" ||
+        keyword == "clearcoatRoughnessTextureAssetId" ||
+        keyword == "clearcoatRoughnessTexture" ||
+        keyword == "sheenColorTextureAssetId" ||
+        keyword == "sheenColorTexture" ||
+        keyword == "transmissionTextureAssetId" ||
+        keyword == "transmissionTexture" ||
+        keyword == "thicknessTextureAssetId" ||
+        keyword == "thicknessTexture" ||
+        keyword == "anisotropyTextureAssetId" ||
+        keyword == "anisotropyTexture" ||
+        keyword == "decalTextureAssetId" ||
+        keyword == "decalTexture" ||
+        keyword == "layerMaskTextureAssetId" ||
+        keyword == "layerMaskTexture";
+}
+
 } // namespace
+
+bool RenderMaterialTextureFieldParser::IsKnown(std::string_view keyword) noexcept {
+    return IsTextureField(keyword);
+}
 
 RenderMaterialFieldParseResult RenderMaterialTextureFieldParser::Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset) {
     if (keyword == "albedoTextureAssetId" || keyword == "baseColorTextureAssetId") {

@@ -62,6 +62,7 @@ namespace kb::editor {
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
+class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
 struct EditorMaterialPreviewTelemetry;
@@ -221,6 +222,8 @@ public:
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
+    [[nodiscard]] bool HasDirtyMaterialAssetEdit() const noexcept;
+    [[nodiscard]] bool PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetInputActionName(kb::assets::AssetId id, std::string name);
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
@@ -243,6 +246,11 @@ public:
     [[nodiscard]] bool ToggleMaterialDoubleSided(kb::assets::AssetId id);
     [[nodiscard]] bool SetMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId);
     [[nodiscard]] bool CycleMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot);
+    [[nodiscard]] bool BeginMaterialAssetFloatEdit(kb::assets::AssetId id, InspectorPropertyId property);
+    [[nodiscard]] bool ApplyActiveMaterialAssetFloatEdit(float value);
+    [[nodiscard]] bool CommitActiveMaterialAssetEdit();
+    void CancelActiveMaterialAssetEdit() noexcept;
+    [[nodiscard]] bool HasActiveMaterialAssetEdit() const noexcept;
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
@@ -297,6 +305,7 @@ public:
 private:
     [[nodiscard]] EditorSceneCommandController SceneCommands() noexcept;
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
+    [[nodiscard]] bool ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit);
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
     [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
@@ -341,6 +350,9 @@ private:
     bool hierarchyRenameSelectingAll_ = false;
     std::optional<std::string> pendingSceneTransactionLabel_;
     EditorSceneTransformEditSession activeTransformEdit_;
+    kb::assets::AssetId activeMaterialEditAsset_{};
+    InspectorPropertyId activeMaterialEditProperty_ = InspectorPropertyId::None;
+    std::optional<kb::render::RenderMaterialAssetData> activeMaterialEditBefore_;
     std::uint64_t sceneRenderRevision_ = 1U;
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;

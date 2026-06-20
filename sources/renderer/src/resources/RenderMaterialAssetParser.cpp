@@ -7,6 +7,8 @@
 #include <istream>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -29,19 +31,40 @@ namespace {
 } // namespace
 
 std::optional<RenderMaterialAssetData> RenderMaterialAssetParser::Load(const std::filesystem::path& path) {
-    std::ifstream input{ path };
-    if (!input) {
-        return std::nullopt;
-    }
-    return Parse(input);
+    return LoadWithDiagnostics(path).asset;
 }
 
 std::optional<RenderMaterialAssetData> RenderMaterialAssetParser::Parse(std::istream& input) {
+    return ParseWithDiagnostics(input).asset;
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetParser::LoadWithDiagnostics(const std::filesystem::path& path) {
+    std::ifstream input{ path };
+    if (!input) {
+        return RenderMaterialAssetParseResult{
+            .asset = std::nullopt,
+            .diagnostics = {
+                RenderMaterialAssetParseDiagnostic{
+                    .line = 0U,
+                    .field = {},
+                    .message = "Material file could not be opened: " + path.generic_string(),
+                    .text = {},
+                },
+            },
+        };
+    }
+    return ParseWithDiagnostics(input);
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(std::istream& input) {
     RenderMaterialAssetData asset{};
+    std::vector<RenderMaterialAssetParseDiagnostic> diagnostics;
     bool sawMaterialProperty = false;
 
     std::string line;
+    std::size_t lineNumber = 0U;
     while (std::getline(input, line)) {
+        ++lineNumber;
         std::string_view trimmed = Trim(StripComment(line));
         if (trimmed.empty()) {
             continue;
@@ -51,12 +74,32 @@ std::optional<RenderMaterialAssetData> RenderMaterialAssetParser::Parse(std::ist
         const std::string_view keyword = keywordEnd == std::string_view::npos ? trimmed : trimmed.substr(0U, keywordEnd);
         const std::string_view rest = keywordEnd == std::string_view::npos ? std::string_view{} : Trim(trimmed.substr(keywordEnd + 1U));
         if (!RenderMaterialAssetFieldParser::Apply(keyword, rest, asset)) {
-            return std::nullopt;
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .line = lineNumber,
+                .field = std::string{ keyword },
+                .message = RenderMaterialAssetFieldParser::IsKnown(keyword)
+                    ? "Invalid value for material field '" + std::string{ keyword } + "'."
+                    : "Unknown material field '" + std::string{ keyword } + "'.",
+                .text = std::string{ trimmed },
+            });
+            continue;
         }
         sawMaterialProperty = true;
     }
 
-    return sawMaterialProperty ? std::optional<RenderMaterialAssetData>{ asset } : std::nullopt;
+    if (!sawMaterialProperty && diagnostics.empty()) {
+        diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .line = 0U,
+            .field = {},
+            .message = "Material asset does not contain any material properties.",
+            .text = {},
+        });
+    }
+
+    return RenderMaterialAssetParseResult{
+        .asset = diagnostics.empty() && sawMaterialProperty ? std::optional<RenderMaterialAssetData>{ asset } : std::nullopt,
+        .diagnostics = std::move(diagnostics),
+    };
 }
 
 } // namespace kb::render
