@@ -201,6 +201,23 @@ namespace {
     }
 }
 
+[[nodiscard]] std::optional<EditorMaterialTextureSlot> MaterialTextureSlotForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MaterialAlbedoTexture:
+        return EditorMaterialTextureSlot::Albedo;
+    case InspectorPropertyId::MaterialNormalTexture:
+        return EditorMaterialTextureSlot::Normal;
+    case InspectorPropertyId::MaterialMetallicRoughnessTexture:
+        return EditorMaterialTextureSlot::MetallicRoughness;
+    case InspectorPropertyId::MaterialOcclusionTexture:
+        return EditorMaterialTextureSlot::Occlusion;
+    case InspectorPropertyId::MaterialEmissiveTexture:
+        return EditorMaterialTextureSlot::Emissive;
+    default:
+        return std::nullopt;
+    }
+}
+
 [[nodiscard]] bool EvaluateMath(std::string_view text, float currentValue, float& output) noexcept {
     text = Trim(text);
     if (text.empty()) {
@@ -268,6 +285,14 @@ namespace {
         sceneContext.Inspector().EndTextEdit();
         static_cast<void>(sceneContext.CycleMaterialAlphaMode(asset));
         return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField) {
+        const std::optional<EditorMaterialTextureSlot> slot = MaterialTextureSlotForProperty(hit.property);
+        if (slot.has_value()) {
+            sceneContext.Inspector().EndTextEdit();
+            static_cast<void>(sceneContext.CycleMaterialTextureAsset(asset, *slot));
+            return true;
+        }
     }
     if (hit.kind == InspectorHitKind::FloatField && IsMaterialFloatProperty(hit.property)) {
         const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(asset);

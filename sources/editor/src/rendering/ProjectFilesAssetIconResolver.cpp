@@ -30,7 +30,7 @@ namespace {
 } // namespace
 
 bool ProjectFilesAssetIconResolver::IsTexture(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == "Texture" || metadata.importCategory == "Texture";
+    return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
 }
 
 bool ProjectFilesAssetIconResolver::IsMesh(const kb::assets::AssetMetadata& metadata) noexcept {
