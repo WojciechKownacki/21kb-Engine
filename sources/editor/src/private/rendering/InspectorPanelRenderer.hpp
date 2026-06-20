@@ -10,6 +10,8 @@
 #include <Windows.h>
 #endif
 
+#include <optional>
+
 namespace kb::editor {
 
 class InspectorPanelRenderer {
@@ -31,6 +33,7 @@ public:
     [[nodiscard]] static Hit HitTest(const RECT& content, const EditorSceneContext& sceneContext, int x, int y) noexcept;
     [[nodiscard]] static int ContentHeight(const RECT& content, const EditorSceneContext& sceneContext);
     [[nodiscard]] static int MaxScrollOffset(const RECT& content, const EditorSceneContext& sceneContext);
+    [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static RECT ScrollbarTrackRect(const RECT& content) noexcept;
     [[nodiscard]] static RECT ScrollbarThumbRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
 #endif
