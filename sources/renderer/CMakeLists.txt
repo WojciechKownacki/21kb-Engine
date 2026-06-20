@@ -36,6 +36,7 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/RenderHandles.hpp
     include/kb/render/resources/NativeWindowFramebuffer.hpp
     include/kb/render/resources/RenderMaterialAssetLoader.hpp
+    include/kb/render/resources/RenderMaterialAssetWriter.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
     include/kb/render/resources/RenderResourceRegistry.hpp
@@ -134,6 +135,7 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialAssetFieldParser.hpp
     src/resources/RenderMaterialAssetParser.cpp
     src/resources/RenderMaterialAssetParser.hpp
+    src/resources/RenderMaterialAssetWriter.cpp
     src/resources/RenderMaterialTextureFieldParser.cpp
     src/resources/RenderMaterialTextureFieldParser.hpp
     src/resources/RenderMaterialResourceBuilder.cpp

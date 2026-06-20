@@ -521,6 +521,8 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
+    src/private/scene/material/EditorMaterialAssetAuthoring.hpp
+    src/private/scene/material/EditorMaterialAssetGateway.hpp
     src/private/scene/transform_edit/EditorSceneTransformChange.hpp
     src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp
     src/private/scene/transform_edit/EditorSceneTransformEditApplier.hpp
@@ -691,6 +693,8 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
+    src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/transform_edit/EditorSceneTransformCommitBuilder.cpp
     src/scene/transform_edit/EditorSceneTransformEditApplier.cpp
     src/scene/transform_edit/EditorSceneTransformEditController.cpp

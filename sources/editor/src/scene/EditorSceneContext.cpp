@@ -43,6 +43,7 @@
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditController.hpp"
@@ -1368,6 +1369,10 @@ EditorInputMappingContextAuthoring EditorSceneContext::InputMappingContextAuthor
     return EditorInputMappingContextAuthoring{ *scene_, assetBrowser_, console_ };
 }
 
+EditorMaterialAssetAuthoring EditorSceneContext::MaterialAssetAuthoring() noexcept {
+    return EditorMaterialAssetAuthoring{ *scene_, assetBrowser_, console_ };
+}
+
 bool EditorSceneContext::CreateInputActionAsset(const std::filesystem::path& virtualFolder) {
     return InputActionAuthoring().Create(virtualFolder);
 }
@@ -1378,6 +1383,10 @@ bool EditorSceneContext::CreateInputAxisAsset(const std::filesystem::path& virtu
 
 bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder) {
     return InputMappingContextAuthoring().Create(virtualFolder);
+}
+
+bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtualFolder) {
+    return MaterialAssetAuthoring().Create(virtualFolder);
 }
 
 bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtualFolder) {
