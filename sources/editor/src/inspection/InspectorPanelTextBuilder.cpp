@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <sstream>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -76,7 +77,12 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
          << "Emissive Strength: " << FormatFloat(material->desc.emissiveStrength) << '\n'
          << "Alpha Cutoff: " << FormatFloat(material->desc.alphaCutoff) << '\n'
          << "Alpha Mode: " << AlphaModeName(material->desc.alphaMode) << '\n'
-         << "Double Sided: " << (material->desc.doubleSided ? "true" : "false") << '\n';
+         << "Double Sided: " << (material->desc.doubleSided ? "true" : "false") << '\n'
+         << "Albedo Texture: " << (material->desc.albedoTextureAssetId == 0U ? "None" : std::to_string(material->desc.albedoTextureAssetId)) << '\n'
+         << "Normal Texture: " << (material->desc.normalTextureAssetId == 0U ? "None" : std::to_string(material->desc.normalTextureAssetId)) << '\n'
+         << "Metallic-Roughness Texture: " << (material->desc.metallicRoughnessTextureAssetId == 0U ? "None" : std::to_string(material->desc.metallicRoughnessTextureAssetId)) << '\n'
+         << "Occlusion Texture: " << (material->desc.occlusionTextureAssetId == 0U ? "None" : std::to_string(material->desc.occlusionTextureAssetId)) << '\n'
+         << "Emissive Texture: " << (material->desc.emissiveTextureAssetId == 0U ? "None" : std::to_string(material->desc.emissiveTextureAssetId)) << '\n';
 }
 
 [[nodiscard]] std::optional<std::string> BuildAssetInspectorText(const EditorSceneContext& sceneContext) {

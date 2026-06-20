@@ -1483,6 +1483,14 @@ bool EditorSceneContext::ToggleMaterialDoubleSided(kb::assets::AssetId id) {
     return MaterialAssetAuthoring().ToggleDoubleSided(id);
 }
 
+bool EditorSceneContext::SetMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId) {
+    return MaterialAssetAuthoring().SetTextureAsset(id, slot, textureId);
+}
+
+bool EditorSceneContext::CycleMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot) {
+    return MaterialAssetAuthoring().CycleTextureAsset(id, slot);
+}
+
 bool EditorSceneContext::ToggleProjectInputEnabled() {
     project_.inputEnabled = !project_.inputEnabled;
     return SaveProjectDescriptor();

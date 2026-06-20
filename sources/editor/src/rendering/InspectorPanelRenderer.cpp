@@ -998,6 +998,11 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
         section.Float("Alpha Cutoff", FormatFloat(material.desc.alphaCutoff), InspectorPropertyId::MaterialAlphaCutoff);
         section.Field("Alpha Mode", AlphaModeName(material.desc.alphaMode), InspectorPropertyId::MaterialAlphaMode);
         section.Bool("Double Sided", material.desc.doubleSided, InspectorPropertyId::MaterialDoubleSided);
+        section.Field("Albedo", AssetDisplayName(sceneContext, material.desc.albedoTextureAssetId), InspectorPropertyId::MaterialAlbedoTexture);
+        section.Field("Normal", AssetDisplayName(sceneContext, material.desc.normalTextureAssetId), InspectorPropertyId::MaterialNormalTexture);
+        section.Field("Metallic-Roughness", AssetDisplayName(sceneContext, material.desc.metallicRoughnessTextureAssetId), InspectorPropertyId::MaterialMetallicRoughnessTexture);
+        section.Field("Occlusion", AssetDisplayName(sceneContext, material.desc.occlusionTextureAssetId), InspectorPropertyId::MaterialOcclusionTexture);
+        section.Field("Emissive", AssetDisplayName(sceneContext, material.desc.emissiveTextureAssetId), InspectorPropertyId::MaterialEmissiveTexture);
         y = section.Bottom() + kSectionGap;
     }
     {
@@ -1208,7 +1213,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
 }
 
 [[nodiscard]] int MaterialRows() noexcept {
-    return 15;
+    return 20;
 }
 
 [[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -1532,6 +1537,19 @@ void AdvanceRow(int& y) noexcept {
         return hit;
     }
     AdvanceRow(y);
+    const std::array<InspectorPropertyId, 5> textureRows{ {
+        InspectorPropertyId::MaterialAlbedoTexture,
+        InspectorPropertyId::MaterialNormalTexture,
+        InspectorPropertyId::MaterialMetallicRoughnessTexture,
+        InspectorPropertyId::MaterialOcclusionTexture,
+        InspectorPropertyId::MaterialEmissiveTexture,
+    } };
+    for (const InspectorPropertyId property : textureRows) {
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Material, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
     return {};
 }
 

@@ -17,6 +17,7 @@
 #include "scene/EditorScriptEditorState.hpp"
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
+#include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -234,6 +235,8 @@ public:
     [[nodiscard]] bool SetMaterialAlphaMode(kb::assets::AssetId id, kb::render::RenderMaterialAlphaMode mode);
     [[nodiscard]] bool CycleMaterialAlphaMode(kb::assets::AssetId id);
     [[nodiscard]] bool ToggleMaterialDoubleSided(kb::assets::AssetId id);
+    [[nodiscard]] bool SetMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId);
+    [[nodiscard]] bool CycleMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot);
 
     [[nodiscard]] std::vector<std::string> ProjectInputMappingContextOptions() const;
     [[nodiscard]] bool SetProjectInputMappingContext(std::string virtualPath);
