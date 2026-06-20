@@ -45,6 +45,7 @@
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditController.hpp"
@@ -170,7 +171,8 @@ EditorSceneContext::EditorSceneContext()
     : projectBootstrap_(EditorProjectBootstrap::BootstrapDefaultProject())
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
-    , scene_(std::make_unique<kb::scene::Scene>(project_)) {
+    , scene_(std::make_unique<kb::scene::Scene>(project_))
+    , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>()) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
     } else {
@@ -1469,6 +1471,18 @@ bool EditorSceneContext::ToggleInputActionConsume(kb::assets::AssetId id) {
 
 std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMaterialAsset(kb::assets::AssetId id) const {
     return EditorMaterialAssetGateway::Read(*scene_, id);
+}
+
+const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
+    return materialPreviewScene_->SceneFor(*scene_, id);
+}
+
+const EditorMaterialPreviewTelemetry& EditorSceneContext::MaterialPreviewTelemetry() const noexcept {
+    return materialPreviewScene_->Telemetry();
+}
+
+std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
+    return materialPreviewScene_->Revision();
 }
 
 bool EditorSceneContext::SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value) {

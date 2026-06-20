@@ -24,6 +24,7 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #include <algorithm>
 #include <array>
@@ -58,6 +59,10 @@ constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 constexpr int kAssetPreviewMaxHeight = 214;
 constexpr int kAssetPreviewMinHeight = 142;
+constexpr int kMaterialPreviewHeight = 160;
+constexpr int kMaterialPreviewPadding = 12;
+constexpr int kMaterialPreviewGap = 8;
+constexpr std::size_t kMaterialPreviewMaxMissingRows = 2U;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
@@ -975,6 +980,111 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return "Opaque";
 }
 
+[[nodiscard]] EditorMaterialPreviewTelemetry MaterialPreviewTelemetryFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(metadata.id);
+    return EditorMaterialPreviewTelemetryBuilder::Build(
+        sceneContext.Scene().Assets().Manager(),
+        metadata.id,
+        material.has_value() ? &*material : nullptr,
+        true);
+}
+
+[[nodiscard]] int MaterialPreviewTelemetryRows(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    return 4 + static_cast<int>(std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows));
+}
+
+[[nodiscard]] int MaterialPreviewBodyHeight(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    return kDividerHeight
+        + kMaterialPreviewGap
+        + kMaterialPreviewHeight
+        + kMaterialPreviewGap
+        + MaterialPreviewTelemetryRows(telemetry) * (kFieldRowHeight + kDividerHeight);
+}
+
+[[nodiscard]] int MaterialPreviewSectionHeight(const InspectorPanelState& inspector, const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return kSectionHeaderHeight;
+    }
+    return kSectionHeaderHeight + MaterialPreviewBodyHeight(telemetry);
+}
+
+[[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content, int y) noexcept {
+    return Rect(
+        content.left + kMaterialPreviewPadding,
+        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap,
+        content.right - kMaterialPreviewPadding,
+        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap + kMaterialPreviewHeight);
+}
+
+[[nodiscard]] std::optional<RECT> MaterialPreviewRectInContent(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    const EditorAssetBrowserState& browser = sceneContext.AssetBrowser();
+    if (!browser.InspectorAsset().IsValid()) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(browser.InspectorAsset());
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        return std::nullopt;
+    }
+    if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return std::nullopt;
+    }
+
+    const int y = content.top + kHeaderHeight + kPanelPadTop;
+    RECT frame = MaterialPreviewFrameRect(content, y);
+    return Shrink(frame, 1, 1, 1, 1);
+}
+
+void DrawTelemetryRow(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    std::string_view label,
+    std::string_view value) {
+    DrawFieldRow(dc, Rect(content.left, y, content.right, y + kFieldRowHeight), theme, inspector, InspectorSectionId::MaterialPreview, InspectorPropertyId::None, label, value);
+    y += kFieldRowHeight;
+    DrawDivider(dc, content.left, content.right, y);
+    y += kDividerHeight;
+}
+
+[[nodiscard]] int DrawMaterialPreview(
+    HDC dc,
+    RECT content,
+    int y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::assets::AssetMetadata& metadata) {
+    const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
+    DrawSectionHeader(dc, Rect(content.left, y, content.right, y + kSectionHeaderHeight), theme, inspector, InspectorSectionId::MaterialPreview, HeroIconKind::Eye, "Preview");
+    y += kSectionHeaderHeight;
+    if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return y + kSectionGap;
+    }
+
+    DrawDivider(dc, content.left, content.right, y);
+    y += kDividerHeight;
+    const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
+    DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
+    {
+        ScopedFont font(12, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, frame, telemetry.materialLoaded ? "Material preview" : "Material fallback preview", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    y = frame.bottom + kMaterialPreviewGap;
+
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Missing Textures", FormatUInt64(telemetry.missingTextureCount));
+    const std::size_t shown = std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows);
+    for (std::size_t index = 0; index < shown; ++index) {
+        DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? "Diagnostic" : "", telemetry.missingTextures[index]);
+    }
+    return y + kSectionGap;
+}
+
 // --- Inline Value Type dropdown (shared geometry for paint + hit-test) ---
 constexpr int kValueTypeOptionCount = 4;
 constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ "Bool", "Axis1D", "Axis2D", "Axis3D" };
@@ -1062,6 +1172,7 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
 
     DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "Render Material");
     int y = content.top + kHeaderHeight + kPanelPadTop;
+    y = DrawMaterialPreview(dc, content, y, theme, inspector, sceneContext, metadata);
     {
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Material, HeroIconKind::AdjustmentsHorizontal, "Material");
         section.Float("Base R", FormatFloat(material.desc.baseColor[0]), InspectorPropertyId::MaterialBaseColorR);
@@ -1352,6 +1463,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         return height;
     }
     if (metadata.type == "RenderMaterial") {
+        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata)) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Material, MaterialRows()) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
         return height;
@@ -1612,6 +1724,24 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestMaterialPreviewSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    const EditorSceneContext& sceneContext,
+    const kb::assets::AssetMetadata& metadata,
+    int x,
+    int yPoint,
+    int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::MaterialPreview, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
+        y += MaterialPreviewBodyHeight(telemetry) - kDividerHeight;
+    }
+    return {};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestMaterialSection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Material, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
@@ -1723,6 +1853,26 @@ int InspectorPanelRenderer::MaxScrollOffset(const RECT& content, const EditorSce
     const RECT viewport = ContentViewportRect(content, false);
     const int contentHeight = ContentHeight(ContentViewportRect(content, true), sceneContext);
     return std::max(0, contentHeight - RectHeight(viewport));
+}
+
+std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    const int maxScroll = MaxScrollOffset(content, sceneContext);
+    const bool scrollable = maxScroll > 0;
+    const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
+    RECT inner = ContentViewportRect(content, scrollable);
+    OffsetRect(&inner, 0, -scroll);
+
+    const std::optional<RECT> preview = MaterialPreviewRectInContent(inner, sceneContext);
+    if (!preview.has_value()) {
+        return std::nullopt;
+    }
+
+    const RECT viewport = ContentViewportRect(content, scrollable);
+    RECT clipped{};
+    if (IntersectRect(&clipped, &*preview, &viewport) == 0 || RectWidth(clipped) <= 2 || RectHeight(clipped) <= 2) {
+        return std::nullopt;
+    }
+    return clipped;
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
@@ -1848,6 +1998,10 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
         }
         if (metadata != nullptr && metadata->type == "RenderMaterial") {
+            if (InspectorPanelRenderer::Hit hit = HitTestMaterialPreviewSection(viewport, state, sceneContext, *metadata, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            y += kSectionGap;
             if (InspectorPanelRenderer::Hit hit = HitTestMaterialSection(viewport, state, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
