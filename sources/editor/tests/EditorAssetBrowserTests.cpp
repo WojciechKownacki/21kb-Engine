@@ -385,6 +385,7 @@ void RunImportCommandHitTestTest() {
 void RunMaterialContextMenuCommandTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("Stone", "ScenePrefab", "/Game/Environment/Stone.kbprefab")));
+    static_cast<void>(manager.RegisterAsset(Metadata("Character", "RenderMesh", "/Game/Environment/Character.gltf")));
     kb::editor::EditorAssetBrowserState state;
 
     state.OpenContextMenuForBackground(220, 70);
@@ -400,6 +401,12 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
     kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material");
+
+    const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
+    kb::editor::tests::Require(mesh != nullptr, "Asset browser material command test did not register mesh asset");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, mesh->id, manager), "Asset browser should open a mesh asset context menu");
+    const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = state.ContextMenuItems(manager);
+    kb::editor::tests::Require(!meshItems.empty() && meshItems.front().command == kb::editor::EditorAssetContextCommand::ExtractMaterials, "Mesh asset context menu should expose Extract Materials first");
 }
 #endif
 
