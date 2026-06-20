@@ -3,6 +3,7 @@
 #include "engine/assets/IAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 
+#include <cstddef>
 #include <filesystem>
 #include <iosfwd>
 #include <optional>
@@ -29,6 +30,21 @@ struct RenderMaterialAssetData {
     std::string layerMaskTexturePath;
 };
 
+struct RenderMaterialAssetParseDiagnostic {
+    std::size_t line = 0U;
+    std::string field;
+    std::string message;
+    std::string text;
+};
+
+struct RenderMaterialAssetParseResult {
+    std::optional<RenderMaterialAssetData> asset;
+    std::vector<RenderMaterialAssetParseDiagnostic> diagnostics;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
+    [[nodiscard]] std::string ErrorMessage() const;
+};
+
 class RenderMaterialAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;
@@ -38,6 +54,8 @@ public:
 
     [[nodiscard]] static std::optional<RenderMaterialAssetData> LoadMaterial(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderMaterialAssetData> LoadMaterial(std::istream& input);
+    [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(const std::filesystem::path& path);
+    [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(std::istream& input);
 };
 
 } // namespace kb::render

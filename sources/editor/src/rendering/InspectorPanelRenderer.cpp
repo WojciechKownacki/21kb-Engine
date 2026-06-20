@@ -1170,7 +1170,7 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const kb::render::RenderMaterialAssetData material = sceneContext.ReadMaterialAsset(metadata.id).value_or(kb::render::RenderMaterialAssetData{});
 
-    DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, "Render Material");
+    DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, sceneContext.HasDirtyMaterialAssetEdit() ? "Render Material *" : "Render Material");
     int y = content.top + kHeaderHeight + kPanelPadTop;
     y = DrawMaterialPreview(dc, content, y, theme, inspector, sceneContext, metadata);
     {

@@ -526,6 +526,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
     src/private/scene/material/EditorMaterialAssetAuthoring.hpp
+    src/private/scene/material/EditorMaterialAssetEditCommand.hpp
     src/private/scene/material/EditorMaterialAssetGateway.hpp
     src/private/scene/material/EditorEmbeddedMaterialAssetWriter.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
@@ -708,6 +709,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
@@ -940,6 +942,7 @@ if(BUILD_TESTING)
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
@@ -959,6 +962,7 @@ if(BUILD_TESTING)
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
+        src/inspection/InspectorPanelState.cpp
     )
 
     target_include_directories(kb_editor_tests

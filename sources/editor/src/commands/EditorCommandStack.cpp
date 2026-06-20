@@ -9,6 +9,7 @@ bool EditorCommandStack::Execute(std::unique_ptr<IEditorCommand> command) {
         return false;
     }
 
+    CaptureCompletedCommandMetadata(*command);
     PushExecuted(std::move(command));
     return true;
 }
@@ -42,6 +43,7 @@ bool EditorCommandStack::Undo() {
         return false;
     }
 
+    CaptureCompletedCommandMetadata(*command);
     redoStack_.push_back(std::move(command));
     return true;
 }
@@ -58,6 +60,7 @@ bool EditorCommandStack::Redo() {
         return false;
     }
 
+    CaptureCompletedCommandMetadata(*command);
     undoStack_.push_back(std::move(command));
     return true;
 }
@@ -73,6 +76,19 @@ std::size_t EditorCommandStack::UndoCount() const noexcept {
 
 std::size_t EditorCommandStack::RedoCount() const noexcept {
     return redoStack_.size();
+}
+
+bool EditorCommandStack::LastCompletedCommandAffectsSceneDocument() const noexcept {
+    return lastCompletedCommandAffectsSceneDocument_;
+}
+
+bool EditorCommandStack::LastCompletedCommandAffectsHierarchySelection() const noexcept {
+    return lastCompletedCommandAffectsHierarchySelection_;
+}
+
+void EditorCommandStack::CaptureCompletedCommandMetadata(const IEditorCommand& command) noexcept {
+    lastCompletedCommandAffectsSceneDocument_ = command.AffectsSceneDocument();
+    lastCompletedCommandAffectsHierarchySelection_ = command.AffectsHierarchySelection();
 }
 
 } // namespace kb::editor

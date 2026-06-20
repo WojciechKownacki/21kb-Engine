@@ -139,6 +139,7 @@ struct InspectorPanelState {
     void BeginKeyCapture(int mappingIndex) noexcept;
     void EndKeyCapture() noexcept;
     [[nodiscard]] bool IsTextEditing() const noexcept;
+    [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
     // Row index the current text edit targets in a dynamic list (e.g. which
@@ -212,6 +213,7 @@ private:
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
+    std::string editOriginalBuffer_;
     std::string editBuffer_;
     int editIndex_ = -1;
     bool valueTypeDropdownOpen_ = false;

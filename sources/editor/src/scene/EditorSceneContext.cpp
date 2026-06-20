@@ -45,6 +45,8 @@
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorMaterialAssetEditCommand.hpp"
+#include "scene/material/EditorMaterialAssetGateway.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
@@ -100,6 +102,122 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
     }
     const auto nextIt = std::next(currentIt);
     return nextIt == materials.end() ? kb::assets::AssetId{} : *nextIt;
+}
+
+[[nodiscard]] kb::render::RenderMaterialAlphaMode NextAlphaMode(kb::render::RenderMaterialAlphaMode mode) noexcept {
+    switch (mode) {
+    case kb::render::RenderMaterialAlphaMode::Opaque:
+        return kb::render::RenderMaterialAlphaMode::Mask;
+    case kb::render::RenderMaterialAlphaMode::Mask:
+        return kb::render::RenderMaterialAlphaMode::Blend;
+    case kb::render::RenderMaterialAlphaMode::Blend:
+        return kb::render::RenderMaterialAlphaMode::Opaque;
+    }
+    return kb::render::RenderMaterialAlphaMode::Opaque;
+}
+
+[[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
+}
+
+[[nodiscard]] std::uint64_t MaterialTextureSlotValue(const kb::render::RenderMaterialAssetData& asset, EditorMaterialTextureSlot slot) noexcept {
+    switch (slot) {
+    case EditorMaterialTextureSlot::Albedo:
+        return asset.desc.albedoTextureAssetId;
+    case EditorMaterialTextureSlot::Normal:
+        return asset.desc.normalTextureAssetId;
+    case EditorMaterialTextureSlot::MetallicRoughness:
+        return asset.desc.metallicRoughnessTextureAssetId;
+    case EditorMaterialTextureSlot::Occlusion:
+        return asset.desc.occlusionTextureAssetId;
+    case EditorMaterialTextureSlot::Emissive:
+        return asset.desc.emissiveTextureAssetId;
+    }
+    return 0U;
+}
+
+[[nodiscard]] std::vector<kb::assets::AssetId> TextureAssetIds(const kb::assets::AssetManager& manager) {
+    std::vector<kb::assets::AssetId> textures;
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (IsTextureAsset(metadata)) {
+            textures.push_back(metadata.id);
+        }
+    }
+    std::ranges::sort(textures, [](kb::assets::AssetId lhs, kb::assets::AssetId rhs) {
+        return lhs.value < rhs.value;
+    });
+    return textures;
+}
+
+[[nodiscard]] kb::assets::AssetId NextTextureAssetId(std::span<const kb::assets::AssetId> textures, std::uint64_t current) {
+    if (textures.empty()) {
+        return {};
+    }
+    if (current == 0U) {
+        return textures.front();
+    }
+    const auto currentIt = std::ranges::find_if(textures, [current](kb::assets::AssetId candidate) {
+        return candidate.value == current;
+    });
+    if (currentIt == textures.end()) {
+        return {};
+    }
+    const auto nextIt = std::next(currentIt);
+    return nextIt == textures.end() ? kb::assets::AssetId{} : *nextIt;
+}
+
+[[nodiscard]] bool IsMaterialFloatProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MaterialBaseColorR:
+    case InspectorPropertyId::MaterialBaseColorG:
+    case InspectorPropertyId::MaterialBaseColorB:
+    case InspectorPropertyId::MaterialBaseColorA:
+    case InspectorPropertyId::MaterialMetallicFactor:
+    case InspectorPropertyId::MaterialRoughnessFactor:
+    case InspectorPropertyId::MaterialNormalScale:
+    case InspectorPropertyId::MaterialOcclusionStrength:
+    case InspectorPropertyId::MaterialEmissiveColorR:
+    case InspectorPropertyId::MaterialEmissiveColorG:
+    case InspectorPropertyId::MaterialEmissiveColorB:
+    case InspectorPropertyId::MaterialEmissiveStrength:
+    case InspectorPropertyId::MaterialAlphaCutoff:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] std::unique_ptr<IEditorMaterialAssetPropertyEdit> MaterialFloatEditForProperty(InspectorPropertyId property, float value) {
+    switch (property) {
+    case InspectorPropertyId::MaterialBaseColorR:
+        return std::make_unique<EditorMaterialBaseColorChannelEdit>(0, value);
+    case InspectorPropertyId::MaterialBaseColorG:
+        return std::make_unique<EditorMaterialBaseColorChannelEdit>(1, value);
+    case InspectorPropertyId::MaterialBaseColorB:
+        return std::make_unique<EditorMaterialBaseColorChannelEdit>(2, value);
+    case InspectorPropertyId::MaterialBaseColorA:
+        return std::make_unique<EditorMaterialBaseColorChannelEdit>(3, value);
+    case InspectorPropertyId::MaterialMetallicFactor:
+        return std::make_unique<EditorMaterialMetallicFactorEdit>(value);
+    case InspectorPropertyId::MaterialRoughnessFactor:
+        return std::make_unique<EditorMaterialRoughnessFactorEdit>(value);
+    case InspectorPropertyId::MaterialNormalScale:
+        return std::make_unique<EditorMaterialNormalScaleEdit>(value);
+    case InspectorPropertyId::MaterialOcclusionStrength:
+        return std::make_unique<EditorMaterialOcclusionStrengthEdit>(value);
+    case InspectorPropertyId::MaterialEmissiveColorR:
+        return std::make_unique<EditorMaterialEmissiveColorChannelEdit>(0, value);
+    case InspectorPropertyId::MaterialEmissiveColorG:
+        return std::make_unique<EditorMaterialEmissiveColorChannelEdit>(1, value);
+    case InspectorPropertyId::MaterialEmissiveColorB:
+        return std::make_unique<EditorMaterialEmissiveColorChannelEdit>(2, value);
+    case InspectorPropertyId::MaterialEmissiveStrength:
+        return std::make_unique<EditorMaterialEmissiveStrengthEdit>(value);
+    case InspectorPropertyId::MaterialAlphaCutoff:
+        return std::make_unique<EditorMaterialAlphaCutoffEdit>(value);
+    default:
+        return {};
+    }
 }
 
 [[nodiscard]] bool HasSelectedAncestor(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::span<const kb::scene::SceneEntity> selected) noexcept {
@@ -1455,6 +1573,22 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
     return true;
 }
 
+bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
+    if (!inspector_.IsTextEditDirty() || !IsMaterialFloatProperty(inspector_.EditedProperty())) {
+        return false;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetBrowser_.InspectorAsset());
+    return metadata != nullptr && metadata->type == "RenderMaterial";
+}
+
+bool EditorSceneContext::PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset) {
+    if (!HasDirtyMaterialAssetEdit() || nextAsset == assetBrowser_.InspectorAsset()) {
+        return true;
+    }
+    console_.Warning("Materials", "Unsaved material value edit. Press Enter to save it or Escape to discard it before selecting another asset.");
+    return false;
+}
+
 std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {
     return EditorInputAssetGateway::ReadAction(*scene_, id);
 }
@@ -1492,55 +1626,163 @@ std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
 }
 
 bool EditorSceneContext::SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value) {
-    return MaterialAssetAuthoring().SetBaseColor(id, channel, value);
+    if (channel < 0 || channel >= 4) {
+        return false;
+    }
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialBaseColorChannelEdit>(channel, value));
 }
 
 bool EditorSceneContext::SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value) {
-    return MaterialAssetAuthoring().SetEmissiveColor(id, channel, value);
+    if (channel < 0 || channel >= 3) {
+        return false;
+    }
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialEmissiveColorChannelEdit>(channel, value));
 }
 
 bool EditorSceneContext::SetMaterialMetallicFactor(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetMetallicFactor(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialMetallicFactorEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialRoughnessFactor(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetRoughnessFactor(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialRoughnessFactorEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialNormalScale(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetNormalScale(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialNormalScaleEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialOcclusionStrength(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetOcclusionStrength(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialOcclusionStrengthEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialEmissiveStrength(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetEmissiveStrength(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialEmissiveStrengthEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialAlphaCutoff(kb::assets::AssetId id, float value) {
-    return MaterialAssetAuthoring().SetAlphaCutoff(id, value);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialAlphaCutoffEdit>(value));
 }
 
 bool EditorSceneContext::SetMaterialAlphaMode(kb::assets::AssetId id, kb::render::RenderMaterialAlphaMode mode) {
-    return MaterialAssetAuthoring().SetAlphaMode(id, mode);
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialAlphaModeEdit>(mode));
 }
 
 bool EditorSceneContext::CycleMaterialAlphaMode(kb::assets::AssetId id) {
-    return MaterialAssetAuthoring().CycleAlphaMode(id);
+    const std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialAsset(id);
+    if (!material.has_value()) {
+        console_.Error("Materials", "Material alpha mode could not be read.");
+        return false;
+    }
+    return SetMaterialAlphaMode(id, NextAlphaMode(material->desc.alphaMode));
 }
 
 bool EditorSceneContext::ToggleMaterialDoubleSided(kb::assets::AssetId id) {
-    return MaterialAssetAuthoring().ToggleDoubleSided(id);
+    const std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialAsset(id);
+    if (!material.has_value()) {
+        console_.Error("Materials", "Material double-sided flag could not be read.");
+        return false;
+    }
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialDoubleSidedEdit>(!material->desc.doubleSided));
 }
 
 bool EditorSceneContext::SetMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId) {
-    return MaterialAssetAuthoring().SetTextureAsset(id, slot, textureId);
+    if (textureId.IsValid()) {
+        const kb::assets::AssetMetadata* texture = scene_->Assets().Manager().Registry().Find(textureId);
+        if (texture == nullptr || !IsTextureAsset(*texture)) {
+            console_.Error("Materials", "Material texture slot rejected a non-texture asset.");
+            return false;
+        }
+    }
+    return ExecuteMaterialAssetEdit(id, std::make_unique<EditorMaterialTextureAssetEdit>(slot, textureId));
 }
 
 bool EditorSceneContext::CycleMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot) {
-    return MaterialAssetAuthoring().CycleTextureAsset(id, slot);
+    const std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialAsset(id);
+    if (!material.has_value()) {
+        console_.Error("Materials", "Material texture slot could not be read.");
+        return false;
+    }
+
+    const std::vector<kb::assets::AssetId> textures = TextureAssetIds(scene_->Assets().Manager());
+    return SetMaterialTextureAsset(id, slot, NextTextureAssetId(textures, MaterialTextureSlotValue(*material, slot)));
+}
+
+bool EditorSceneContext::BeginMaterialAssetFloatEdit(kb::assets::AssetId id, InspectorPropertyId property) {
+    if (HasActiveMaterialAssetEdit() || !IsMaterialFloatProperty(property)) {
+        return false;
+    }
+    std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialAsset(id);
+    if (!material.has_value()) {
+        console_.Error("Materials", "Material drag edit could not read the material asset.");
+        return false;
+    }
+
+    activeMaterialEditAsset_ = id;
+    activeMaterialEditProperty_ = property;
+    activeMaterialEditBefore_ = std::move(material);
+    return true;
+}
+
+bool EditorSceneContext::ApplyActiveMaterialAssetFloatEdit(float value) {
+    if (!HasActiveMaterialAssetEdit()) {
+        return false;
+    }
+
+    std::optional<kb::render::RenderMaterialAssetData> current = ReadMaterialAsset(activeMaterialEditAsset_);
+    if (!current.has_value()) {
+        return false;
+    }
+    std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit = MaterialFloatEditForProperty(activeMaterialEditProperty_, value);
+    if (edit == nullptr) {
+        return false;
+    }
+    edit->Apply(*current);
+    if (!EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *current)) {
+        return false;
+    }
+
+    MarkSceneRenderDirty();
+    return true;
+}
+
+bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
+    if (!HasActiveMaterialAssetEdit()) {
+        return false;
+    }
+
+    std::optional<kb::render::RenderMaterialAssetData> after = ReadMaterialAsset(activeMaterialEditAsset_);
+    if (!after.has_value()) {
+        CancelActiveMaterialAssetEdit();
+        return false;
+    }
+
+    std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
+        *scene_,
+        activeMaterialEditAsset_,
+        "Edit Material",
+        std::move(*activeMaterialEditBefore_),
+        std::move(*after));
+    activeMaterialEditAsset_ = {};
+    activeMaterialEditProperty_ = InspectorPropertyId::None;
+    activeMaterialEditBefore_.reset();
+    commandStack_.PushExecuted(std::move(command));
+    MarkSceneRenderDirty();
+    return true;
+}
+
+void EditorSceneContext::CancelActiveMaterialAssetEdit() noexcept {
+    if (!HasActiveMaterialAssetEdit()) {
+        return;
+    }
+    static_cast<void>(EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *activeMaterialEditBefore_));
+    activeMaterialEditAsset_ = {};
+    activeMaterialEditProperty_ = InspectorPropertyId::None;
+    activeMaterialEditBefore_.reset();
+    MarkSceneRenderDirty();
+}
+
+bool EditorSceneContext::HasActiveMaterialAssetEdit() const noexcept {
+    return activeMaterialEditAsset_.IsValid() && activeMaterialEditBefore_.has_value() && IsMaterialFloatProperty(activeMaterialEditProperty_);
 }
 
 bool EditorSceneContext::ToggleProjectInputEnabled() {
@@ -2164,6 +2406,23 @@ bool EditorSceneContext::ExecuteSceneCommand(std::string label, std::function<bo
     return SceneCommands().Execute(std::move(label), std::move(mutation));
 }
 
+bool EditorSceneContext::ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit) {
+    std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::Create(*scene_, id, std::move(edit));
+    if (command == nullptr) {
+        console_.Warning("Materials", "Material edit command could not be created.");
+        return false;
+    }
+
+    const std::string label{ command->Label() };
+    if (!commandStack_.Execute(std::move(command))) {
+        console_.Warning("Materials", "Material edit failed: " + label);
+        return false;
+    }
+
+    MarkSceneRenderDirty();
+    return true;
+}
+
 void EditorSceneContext::ClearSceneDocumentDirty() noexcept {
     sceneDocumentDirty_ = false;
 }
@@ -2185,6 +2444,9 @@ void EditorSceneContext::ResetSceneEditState() {
     commandStack_.Clear();
     pendingSceneTransactionLabel_.reset();
     activeTransformEdit_.Clear();
+    activeMaterialEditAsset_ = {};
+    activeMaterialEditProperty_ = InspectorPropertyId::None;
+    activeMaterialEditBefore_.reset();
     CancelHierarchyRename();
     inspector_.EndTextEdit();
     MarkSceneRenderDirty();
