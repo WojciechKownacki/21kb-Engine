@@ -3,14 +3,21 @@
 
 #include "assets/EditorAssetBrowserState.hpp"
 #include "console/EditorConsoleState.hpp"
+#include "engine/assets/AssetImportService.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 
+#include <array>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace {
 
@@ -22,6 +29,28 @@ void CleanTempRoot() {
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
     std::filesystem::create_directories(TempRoot() / "Project" / "Assets" / "Materials", error);
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output << text;
+}
+
+[[nodiscard]] kb::assets::AssetMetadata Metadata(std::string name, std::string type, std::filesystem::path path) {
+    return kb::assets::AssetMetadata{
+        .type = std::move(type),
+        .name = std::move(name),
+        .virtualPath = std::move(path),
+        .runtimeLoadable = true,
+    };
+}
+
+[[nodiscard]] kb::assets::AssetId RequireAssetId(kb::assets::AssetManager& manager, const std::filesystem::path& path, const char* message) {
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(path);
+    kb::editor::tests::Require(metadata != nullptr, message);
+    return metadata->id;
 }
 
 void RunCreateMaterialAssetThroughEditorAuthoringTest() {
@@ -108,6 +137,73 @@ void RunEditMaterialAssetThroughEditorAuthoringTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialTextureSlotAuthoringTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "Material texture slot test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material texture slot test could not create a material asset");
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(material != nullptr, "Material texture slot test did not discover created material metadata");
+    const kb::assets::AssetId materialId = material->id;
+
+    const std::filesystem::path sourceRoot = TempRoot() / "Sources";
+    WriteTextFile(sourceRoot / "Albedo.png", "albedo");
+    WriteTextFile(sourceRoot / "Normal.png", "normal");
+    WriteTextFile(sourceRoot / "MR.png", "metallic roughness");
+    WriteTextFile(sourceRoot / "AO.png", "occlusion");
+    WriteTextFile(sourceRoot / "Emissive.png", "emissive");
+    const std::array<std::filesystem::path, 5U> sourceTextures{
+        sourceRoot / "Albedo.png",
+        sourceRoot / "Normal.png",
+        sourceRoot / "MR.png",
+        sourceRoot / "AO.png",
+        sourceRoot / "Emissive.png",
+    };
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceTextures, "/Game/Textures");
+    kb::editor::tests::Require(imported.Succeeded(), "Material texture slot test could not import source textures");
+    static_cast<void>(manager.RegisterAsset(Metadata("Cube", "RenderMesh", "/Game/Meshes/Cube.21kb")));
+
+    const kb::assets::AssetId albedo = RequireAssetId(manager, imported.items[0].virtualPath, "Material texture slot test did not register albedo texture");
+    const kb::assets::AssetId normal = RequireAssetId(manager, imported.items[1].virtualPath, "Material texture slot test did not register normal texture");
+    const kb::assets::AssetId metallicRoughness = RequireAssetId(manager, imported.items[2].virtualPath, "Material texture slot test did not register metallic-roughness texture");
+    const kb::assets::AssetId occlusion = RequireAssetId(manager, imported.items[3].virtualPath, "Material texture slot test did not register occlusion texture");
+    const kb::assets::AssetId emissive = RequireAssetId(manager, imported.items[4].virtualPath, "Material texture slot test did not register emissive texture");
+    const kb::assets::AssetId mesh = RequireAssetId(manager, "/Game/Meshes/Cube.21kb", "Material texture slot test did not register mesh asset");
+
+    kb::editor::tests::Require(!authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Albedo, mesh), "Material texture slot test accepted a non-texture asset");
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Albedo, albedo), "Material texture slot test could not set albedo texture");
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Normal, normal), "Material texture slot test could not set normal texture");
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::MetallicRoughness, metallicRoughness), "Material texture slot test could not set metallic-roughness texture");
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Occlusion, occlusion), "Material texture slot test could not set occlusion texture");
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Emissive, emissive), "Material texture slot test could not set emissive texture");
+
+    const std::filesystem::path materialPath = TempRoot() / "Project" / "Assets" / "Materials" / "NewMaterial.kbmat";
+    std::optional<kb::render::RenderMaterialAssetData> edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value(), "Material texture slot test wrote an unreadable material file");
+    kb::editor::tests::Require(edited->desc.albedoTextureAssetId == albedo.value, "Material texture slot test did not persist albedo texture id");
+    kb::editor::tests::Require(edited->desc.normalTextureAssetId == normal.value, "Material texture slot test did not persist normal texture id");
+    kb::editor::tests::Require(edited->desc.metallicRoughnessTextureAssetId == metallicRoughness.value, "Material texture slot test did not persist metallic-roughness texture id");
+    kb::editor::tests::Require(edited->desc.occlusionTextureAssetId == occlusion.value, "Material texture slot test did not persist occlusion texture id");
+    kb::editor::tests::Require(edited->desc.emissiveTextureAssetId == emissive.value, "Material texture slot test did not persist emissive texture id");
+
+    kb::editor::tests::Require(authoring.SetTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Emissive, {}), "Material texture slot test could not clear emissive texture");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value() && edited->desc.emissiveTextureAssetId == 0U, "Material texture slot test did not clear emissive texture id");
+
+    kb::editor::tests::Require(authoring.CycleTextureAsset(materialId, kb::editor::EditorMaterialTextureSlot::Emissive), "Material texture slot test could not cycle emissive texture picker");
+    edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
+    kb::editor::tests::Require(edited.has_value() && edited->desc.emissiveTextureAssetId != 0U, "Material texture slot picker did not assign an available texture");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -115,6 +211,7 @@ namespace kb::editor::tests {
 void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
+    RunMaterialTextureSlotAuthoringTest();
 }
 
 } // namespace kb::editor::tests
