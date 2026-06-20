@@ -14,6 +14,7 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
+#include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
@@ -33,6 +34,20 @@
 #include <vector>
 
 namespace {
+
+void RunInspectorTextEditDirtyStateTest() {
+    kb::editor::InspectorPanelState state;
+    state.BeginTextEdit(kb::editor::InspectorPropertyId::MaterialMetallicFactor, "0.25");
+    kb::editor::tests::Require(!state.IsTextEditDirty(), "Inspector text edit should start clean");
+    state.AppendText('1');
+    kb::editor::tests::Require(state.IsTextEditDirty(), "Inspector text edit should become dirty after buffer mutation");
+    state.BackspaceText();
+    kb::editor::tests::Require(!state.IsTextEditDirty(), "Inspector text edit should become clean when buffer returns to original value");
+    state.ClearText();
+    kb::editor::tests::Require(state.IsTextEditDirty(), "Inspector text edit clear should mark a non-empty original value dirty");
+    state.EndTextEdit();
+    kb::editor::tests::Require(!state.IsTextEditDirty(), "Inspector text edit should not remain dirty after ending edit");
+}
 
 void RunAudioComponentCatalogTest() {
     const std::vector<const kb::editor::InspectorComponentTile*> audioTiles = kb::editor::InspectorComponentCatalog::Search("audio");
@@ -236,6 +251,7 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
 namespace kb::editor::tests {
 
 void RunEditorInspectorTests() {
+    RunInspectorTextEditDirtyStateTest();
     RunAudioComponentCatalogTest();
     RunAudioInspectorTextTest();
     RunMaterialTextureSlotDiagnosticTest();

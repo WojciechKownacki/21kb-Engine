@@ -77,7 +77,9 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         // selection now (preview in the Inspector). A real drag changes nothing.
         if (!wasDragging) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
-            if (pending.IsValid() && sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
+            if (pending.IsValid() &&
+                sceneContext_.PrepareMaterialAssetSelectionChange(pending) &&
+                sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }
         } else {
