@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -869,6 +870,92 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     std::filesystem::remove_all(root, error);
 }
 
+void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
+    RenderMaterialAssetData source{};
+    source.desc.baseColor[0] = 0.12F;
+    source.desc.baseColor[1] = 0.34F;
+    source.desc.baseColor[2] = 0.56F;
+    source.desc.baseColor[3] = 0.78F;
+    source.desc.emissiveColor[0] = 0.9F;
+    source.desc.emissiveColor[1] = 0.8F;
+    source.desc.emissiveColor[2] = 0.7F;
+    source.desc.metallicFactor = 0.25F;
+    source.desc.roughnessFactor = 0.65F;
+    source.desc.normalScale = 1.5F;
+    source.desc.occlusionStrength = 0.45F;
+    source.desc.emissiveStrength = 3.0F;
+    source.desc.alphaCutoff = 0.33F;
+    source.desc.clearcoatFactor = 0.22F;
+    source.desc.clearcoatRoughnessFactor = 0.44F;
+    source.desc.sheenColor[0] = 0.11F;
+    source.desc.sheenColor[1] = 0.22F;
+    source.desc.sheenColor[2] = 0.33F;
+    source.desc.sheenRoughnessFactor = 0.58F;
+    source.desc.transmissionFactor = 0.18F;
+    source.desc.thicknessFactor = 0.27F;
+    source.desc.attenuationColor[0] = 0.66F;
+    source.desc.attenuationColor[1] = 0.77F;
+    source.desc.attenuationColor[2] = 0.88F;
+    source.desc.attenuationDistance = 12.0F;
+    source.desc.subsurfaceColor[0] = 0.19F;
+    source.desc.subsurfaceColor[1] = 0.29F;
+    source.desc.subsurfaceColor[2] = 0.39F;
+    source.desc.subsurfaceFactor = 0.49F;
+    source.desc.anisotropyStrength = 0.59F;
+    source.desc.anisotropyRotation = 0.69F;
+    source.desc.layerWeight = 0.79F;
+    source.desc.alphaMode = RenderMaterialAlphaMode::Blend;
+    source.desc.decalBlendMode = RenderMaterialDecalBlendMode::Normal;
+    source.desc.layerBlendMode = RenderMaterialLayerBlendMode::Add;
+    source.desc.doubleSided = true;
+    source.desc.albedoTextureAssetId = 101U;
+    source.desc.normalTextureAssetId = 102U;
+    source.desc.metallicRoughnessTextureAssetId = 103U;
+    source.desc.occlusionTextureAssetId = 104U;
+    source.desc.emissiveTextureAssetId = 105U;
+    source.desc.clearcoatTextureAssetId = 106U;
+    source.desc.clearcoatRoughnessTextureAssetId = 107U;
+    source.desc.sheenColorTextureAssetId = 108U;
+    source.desc.transmissionTextureAssetId = 109U;
+    source.desc.thicknessTextureAssetId = 110U;
+    source.desc.anisotropyTextureAssetId = 111U;
+    source.desc.decalTextureAssetId = 112U;
+    source.desc.layerMaskTextureAssetId = 113U;
+    source.albedoTexturePath = "Textures/albedo.kbtex";
+    source.normalTexturePath = "Textures/normal.kbtex";
+    source.metallicRoughnessTexturePath = "Textures/mr.kbtex";
+    source.occlusionTexturePath = "Textures/ao.kbtex";
+    source.emissiveTexturePath = "Textures/emissive.kbtex";
+    source.clearcoatTexturePath = "Textures/clearcoat.kbtex";
+    source.clearcoatRoughnessTexturePath = "Textures/clearcoat-roughness.kbtex";
+    source.sheenColorTexturePath = "Textures/sheen.kbtex";
+    source.transmissionTexturePath = "Textures/transmission.kbtex";
+    source.thicknessTexturePath = "Textures/thickness.kbtex";
+    source.anisotropyTexturePath = "Textures/anisotropy.kbtex";
+    source.decalTexturePath = "Textures/decal.kbtex";
+    source.layerMaskTexturePath = "Textures/layer.kbtex";
+
+    std::ostringstream output;
+    RenderMaterialAssetWriter::Write(output, source);
+    std::istringstream input{ output.str() };
+    const std::optional<RenderMaterialAssetData> loaded = RenderMaterialAssetLoader::LoadMaterial(input);
+    Require(loaded.has_value(), "RenderMaterialAssetWriter produced material text the parser rejected");
+    Require(NearlyEqual(loaded->desc.baseColor[2], source.desc.baseColor[2]), "Material writer roundtrip lost base color");
+    Require(NearlyEqual(loaded->desc.emissiveColor[0], source.desc.emissiveColor[0]), "Material writer roundtrip lost emissive color");
+    Require(NearlyEqual(loaded->desc.roughnessFactor, source.desc.roughnessFactor), "Material writer roundtrip lost roughness");
+    Require(NearlyEqual(loaded->desc.clearcoatRoughnessFactor, source.desc.clearcoatRoughnessFactor), "Material writer roundtrip lost clearcoat roughness");
+    Require(NearlyEqual(loaded->desc.attenuationColor[2], source.desc.attenuationColor[2]), "Material writer roundtrip lost attenuation color");
+    Require(NearlyEqual(loaded->desc.layerWeight, source.desc.layerWeight), "Material writer roundtrip lost layer weight");
+    Require(loaded->desc.alphaMode == RenderMaterialAlphaMode::Blend, "Material writer roundtrip lost alpha mode");
+    Require(loaded->desc.decalBlendMode == RenderMaterialDecalBlendMode::Normal, "Material writer roundtrip lost decal mode");
+    Require(loaded->desc.layerBlendMode == RenderMaterialLayerBlendMode::Add, "Material writer roundtrip lost layer mode");
+    Require(loaded->desc.doubleSided, "Material writer roundtrip lost double-sided state");
+    Require(loaded->desc.decalTextureAssetId == source.desc.decalTextureAssetId, "Material writer roundtrip lost decal texture asset id");
+    Require(loaded->desc.layerMaskTextureAssetId == source.desc.layerMaskTextureAssetId, "Material writer roundtrip lost layer mask texture asset id");
+    Require(loaded->clearcoatRoughnessTexturePath == source.clearcoatRoughnessTexturePath, "Material writer roundtrip lost clearcoat roughness path");
+    Require(loaded->layerMaskTexturePath == source.layerMaskTexturePath, "Material writer roundtrip lost layer mask path");
+}
+
 void RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_texture_asset_loader";
     std::error_code error;
@@ -1006,6 +1093,7 @@ void RunRenderResourceRegistryTests() {
     RunGltfImporterRejectsOutOfRangeIndicesTest();
     RunGltfImporterKeepsUint32IndicesForLargeTangentMeshesTest();
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
+    RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();

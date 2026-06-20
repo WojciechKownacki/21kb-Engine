@@ -60,6 +60,7 @@ namespace kb::editor {
 class EditorSceneCommandController;
 class EditorInputActionAuthoring;
 class EditorInputMappingContextAuthoring;
+class EditorMaterialAssetAuthoring;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -212,6 +213,7 @@ public:
     [[nodiscard]] bool CreateInputActionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
@@ -271,6 +273,7 @@ private:
     [[nodiscard]] bool ExecuteSceneCommand(std::string label, std::function<bool()> mutation);
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
+    [[nodiscard]] EditorMaterialAssetAuthoring MaterialAssetAuthoring() noexcept;
     void ActivateProjectInput();
     void EnsureScriptRuntime();
     void ResetScriptRuntimeStateForPlayMode();
