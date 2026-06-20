@@ -953,6 +953,11 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
     Require(loaded->desc.decalBlendMode == RenderMaterialDecalBlendMode::Normal, "Material writer roundtrip lost decal mode");
     Require(loaded->desc.layerBlendMode == RenderMaterialLayerBlendMode::Add, "Material writer roundtrip lost layer mode");
     Require(loaded->desc.doubleSided, "Material writer roundtrip lost double-sided state");
+    Require(loaded->desc.albedoTextureAssetId == source.desc.albedoTextureAssetId, "Material writer roundtrip lost albedo texture asset id");
+    Require(loaded->desc.normalTextureAssetId == source.desc.normalTextureAssetId, "Material writer roundtrip lost normal texture asset id");
+    Require(loaded->desc.metallicRoughnessTextureAssetId == source.desc.metallicRoughnessTextureAssetId, "Material writer roundtrip lost metallic-roughness texture asset id");
+    Require(loaded->desc.occlusionTextureAssetId == source.desc.occlusionTextureAssetId, "Material writer roundtrip lost occlusion texture asset id");
+    Require(loaded->desc.emissiveTextureAssetId == source.desc.emissiveTextureAssetId, "Material writer roundtrip lost emissive texture asset id");
     Require(loaded->desc.decalTextureAssetId == source.desc.decalTextureAssetId, "Material writer roundtrip lost decal texture asset id");
     Require(loaded->desc.layerMaskTextureAssetId == source.desc.layerMaskTextureAssetId, "Material writer roundtrip lost layer mask texture asset id");
     Require(loaded->clearcoatRoughnessTexturePath == source.clearcoatRoughnessTexturePath, "Material writer roundtrip lost clearcoat roughness path");

@@ -4,12 +4,21 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 
 namespace kb::editor {
 
 class EditorConsoleState;
+
+enum class EditorMaterialTextureSlot : std::uint8_t {
+    Albedo,
+    Normal,
+    MetallicRoughness,
+    Occlusion,
+    Emissive,
+};
 
 class EditorMaterialAssetAuthoring {
 public:
@@ -28,6 +37,8 @@ public:
     [[nodiscard]] bool SetAlphaMode(kb::assets::AssetId id, kb::render::RenderMaterialAlphaMode mode);
     [[nodiscard]] bool CycleAlphaMode(kb::assets::AssetId id);
     [[nodiscard]] bool ToggleDoubleSided(kb::assets::AssetId id);
+    [[nodiscard]] bool SetTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId);
+    [[nodiscard]] bool CycleTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot);
 
 private:
     EditorMaterialAssetGateway gateway_;
