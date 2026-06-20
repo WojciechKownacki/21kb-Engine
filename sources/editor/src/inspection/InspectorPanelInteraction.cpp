@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -216,6 +217,45 @@ namespace {
     default:
         return std::nullopt;
     }
+}
+
+[[nodiscard]] std::optional<std::uint32_t> MeshRendererMaterialSlotForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MeshRendererMaterialSlot0:
+        return 0U;
+    case InspectorPropertyId::MeshRendererMaterialSlot1:
+        return 1U;
+    case InspectorPropertyId::MeshRendererMaterialSlot2:
+        return 2U;
+    case InspectorPropertyId::MeshRendererMaterialSlot3:
+        return 3U;
+    case InspectorPropertyId::MeshRendererMaterialSlot4:
+        return 4U;
+    case InspectorPropertyId::MeshRendererMaterialSlot5:
+        return 5U;
+    case InspectorPropertyId::MeshRendererMaterialSlot6:
+        return 6U;
+    case InspectorPropertyId::MeshRendererMaterialSlot7:
+        return 7U;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.kind != InspectorHitKind::TextField) {
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::MeshRendererMaterial) {
+        static_cast<void>(sceneContext.CycleMeshRendererMaterialAsset(entity));
+        return true;
+    }
+    if (const std::optional<std::uint32_t> slot = MeshRendererMaterialSlotForProperty(hit.property)) {
+        static_cast<void>(sceneContext.CycleMeshRendererMaterialSlotAsset(entity, *slot));
+        return true;
+    }
+    return true;
 }
 
 [[nodiscard]] bool EvaluateMath(std::string_view text, float currentValue, float& output) noexcept {
@@ -444,6 +484,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::MeshRenderer) {
+        return HandleMeshRendererClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::AddComponent) {
         return HandleAddComponentClick(sceneContext, entity, hit);

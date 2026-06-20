@@ -1404,6 +1404,12 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     const std::uint32_t rootNode = prefab.AddNode(kb::scene::ScenePrefabNodeDesc{
         .name = "Full Component Root",
         .components = kb::scene::ScenePrefabNodeComponents{
+            .meshRenderer = kb::scene::MeshRendererComponent{
+                .meshAssetId = 40,
+                .materialAssetId = 41,
+                .materialSlotAssetIds = { 42 },
+                .materialSlotOverrideCount = 1,
+            },
             .input = kb::scene::InputComponent{
                 .mappingContextAssetId = 10,
                 .priority = 1,
@@ -1449,6 +1455,7 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     kb::scene::SetTagsText(changedTags, "Prefab, Changed");
     scene.Components().Tags().Set(entity, changedTags);
     scene.Components().Behaviours().Set(entity, kb::scene::BehaviourComponent{ .behaviourAssetId = 20, .backend = kb::scene::BehaviourBackend::Lua, .enabled = false, .tickGroup = kb::scene::BehaviourTickGroup::Camera, .executionOrder = -8 });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 40, .materialAssetId = 55, .materialSlotAssetIds = { 42, 66 }, .materialSlotOverrideCount = 2 });
     scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{ .clipAssetId = 30, .volume = 0.2F, .enabled = false, .mute = true });
     scene.Components().AudioListeners().Set(entity, kb::scene::AudioListenerComponent{ .primary = false, .enabled = false });
 
@@ -1460,26 +1467,35 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::Collider), "Prefab override detector missed collider override");
     kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::Tags), "Prefab override detector missed tags override");
     kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::Behaviour), "Prefab override detector missed behaviour override");
+    kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::MeshRenderer), "Prefab override detector missed mesh renderer override");
     kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::AudioSource), "Prefab override detector missed audio source override");
     kb::tests::Require(kb::scene::HasPrefabOverride(flags, kb::scene::ScenePrefabOverrideFlag::AudioListener), "Prefab override detector missed audio listener override");
 
     bool foundAudioVolume = false;
     bool foundColliderRemoval = false;
+    bool foundMeshMaterial = false;
+    bool foundMeshMaterialSlot = false;
     for (const kb::scene::ScenePrefabPropertyOverride& property : report.properties) {
         foundAudioVolume = foundAudioVolume || property.propertyPath == "audioSource.volume";
         foundColliderRemoval = foundColliderRemoval || (property.propertyPath == "collider" && property.value == "null");
+        foundMeshMaterial = foundMeshMaterial || (property.propertyPath == "meshRenderer.materialAssetId" && property.value == "55");
+        foundMeshMaterialSlot = foundMeshMaterialSlot || (property.propertyPath == "meshRenderer.materialSlotAssetId.1" && property.value == "66");
     }
     kb::tests::Require(foundAudioVolume, "Prefab override detector missed audio source property delta");
     kb::tests::Require(foundColliderRemoval, "Prefab override detector missed collider removal delta");
+    kb::tests::Require(foundMeshMaterial, "Prefab override detector missed mesh renderer material property delta");
+    kb::tests::Require(foundMeshMaterialSlot, "Prefab override detector missed mesh renderer material slot property delta");
 
     kb::tests::Require(scene.Prefabs().RevertOverrides(instance.Handle()), "Full component prefab override revert failed");
     const kb::scene::InputComponent* revertedInput = scene.Components().Inputs().TryGet(entity);
     const kb::scene::ColliderComponent* revertedCollider = scene.Components().Colliders().TryGet(entity);
     const kb::scene::TagsComponent* revertedTags = scene.Components().Tags().TryGet(entity);
+    const kb::scene::MeshRendererComponent* revertedMeshRenderer = scene.Components().MeshRenderers().TryGet(entity);
     const kb::scene::AudioSourceComponent* revertedAudioSource = scene.Components().AudioSources().TryGet(entity);
     kb::tests::Require(revertedInput != nullptr && revertedInput->priority == 1 && revertedInput->enabled, "Full component prefab revert did not restore input");
     kb::tests::Require(revertedCollider != nullptr && revertedCollider->shape == kb::scene::ColliderShape::Box, "Full component prefab revert did not restore collider");
     kb::tests::Require(revertedTags != nullptr && kb::scene::TagsText(*revertedTags) == "Prefab, Base", "Full component prefab revert did not restore tags");
+    kb::tests::Require(revertedMeshRenderer != nullptr && revertedMeshRenderer->materialAssetId == 41 && revertedMeshRenderer->materialSlotOverrideCount == 1 && revertedMeshRenderer->materialSlotAssetIds[0] == 42, "Full component prefab revert did not restore mesh renderer material");
     kb::tests::Require(revertedAudioSource != nullptr && kb::tests::NearlyEqual(revertedAudioSource->volume, 0.75F) && !revertedAudioSource->mute, "Full component prefab revert did not restore audio source");
 
     scene.Components().AudioSources().Set(entity, kb::scene::AudioSourceComponent{ .clipAssetId = 30, .volume = 0.15F, .enabled = true });

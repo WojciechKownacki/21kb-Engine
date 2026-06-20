@@ -39,6 +39,7 @@
 #include "scene/EditorSceneCommandController.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneHierarchyActions.hpp"
+#include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/EditorSceneObjectEditCommands.hpp"
 #include "scene/EditorScenePrefabActions.hpp"
@@ -53,6 +54,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <span>
@@ -66,6 +68,36 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
 
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
     return std::ranges::find(entities, entity) != entities.end();
+}
+
+[[nodiscard]] std::vector<kb::assets::AssetId> MaterialAssetIds(const kb::assets::AssetManager& manager) {
+    std::vector<kb::assets::AssetId> materials;
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (EditorSceneMaterialAssetActions::IsMaterialAsset(metadata)) {
+            materials.push_back(metadata.id);
+        }
+    }
+    std::ranges::sort(materials, [](kb::assets::AssetId lhs, kb::assets::AssetId rhs) {
+        return lhs.value < rhs.value;
+    });
+    return materials;
+}
+
+[[nodiscard]] kb::assets::AssetId NextMaterialAssetId(std::span<const kb::assets::AssetId> materials, std::uint64_t current) {
+    if (materials.empty()) {
+        return {};
+    }
+    if (current == 0U) {
+        return materials.front();
+    }
+    const auto currentIt = std::ranges::find_if(materials, [current](kb::assets::AssetId candidate) {
+        return candidate.value == current;
+    });
+    if (currentIt == materials.end()) {
+        return {};
+    }
+    const auto nextIt = std::next(currentIt);
+    return nextIt == materials.end() ? kb::assets::AssetId{} : *nextIt;
 }
 
 [[nodiscard]] bool HasSelectedAncestor(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::span<const kb::scene::SceneEntity> selected) noexcept {
@@ -1759,6 +1791,73 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     }
     console_.Info("Scripts", "Behaviour asset assigned: " + metadata->name);
     return true;
+}
+
+bool EditorSceneContext::SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
+        console_.Warning("Inspector", "Material assignment ignored for invalid entity.");
+        return false;
+    }
+    if (!scene_->Components().MeshRenderers().Has(entity)) {
+        console_.Warning("Inspector", "Selected entity does not have a Mesh Renderer component.");
+        return false;
+    }
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+            console_.Warning("Inspector", "Only material assets can be assigned to a Mesh Renderer.");
+            return false;
+        }
+    }
+
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material" : "Clear Mesh Material", [this, entity, assetId]() {
+        return EditorSceneMaterialAssetActions::AssignMaterial(*scene_, entity, assetId);
+    });
+}
+
+bool EditorSceneContext::CycleMeshRendererMaterialAsset(kb::scene::SceneEntity entity) {
+    const kb::scene::MeshRendererComponent* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr) {
+        return false;
+    }
+    const std::vector<kb::assets::AssetId> materials = MaterialAssetIds(scene_->Assets().Manager());
+    return SetMeshRendererMaterialAsset(entity, NextMaterialAssetId(materials, renderer->materialAssetId));
+}
+
+bool EditorSceneContext::SetMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
+        console_.Warning("Inspector", "Material slot assignment ignored for invalid entity.");
+        return false;
+    }
+    if (slotIndex >= kb::scene::kMaxMeshRendererMaterialSlotOverrides) {
+        console_.Warning("Inspector", "Material slot assignment ignored for invalid slot.");
+        return false;
+    }
+    if (!scene_->Components().MeshRenderers().Has(entity)) {
+        console_.Warning("Inspector", "Selected entity does not have a Mesh Renderer component.");
+        return false;
+    }
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+            console_.Warning("Inspector", "Only material assets can be assigned to a Mesh Renderer slot.");
+            return false;
+        }
+    }
+
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material Slot" : "Clear Mesh Material Slot", [this, entity, slotIndex, assetId]() {
+        return EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(*scene_, entity, slotIndex, assetId);
+    });
+}
+
+bool EditorSceneContext::CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex) {
+    const kb::scene::MeshRendererComponent* renderer = scene_->Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr || slotIndex >= kb::scene::kMaxMeshRendererMaterialSlotOverrides) {
+        return false;
+    }
+    const std::uint64_t current = slotIndex < renderer->materialSlotOverrideCount ? renderer->materialSlotAssetIds[slotIndex] : 0U;
+    const std::vector<kb::assets::AssetId> materials = MaterialAssetIds(scene_->Assets().Manager());
+    return SetMeshRendererMaterialSlotAsset(entity, slotIndex, NextMaterialAssetId(materials, current));
 }
 
 bool EditorSceneContext::HasEntityScript(kb::scene::SceneEntity entity) const {

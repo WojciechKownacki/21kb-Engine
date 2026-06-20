@@ -10,13 +10,16 @@
 #include "inspection/InspectorColliderTextBuilder.hpp"
 #include "inspection/InspectorEntitySummaryTextBuilder.hpp"
 #include "inspection/InspectorLightTextBuilder.hpp"
+#include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 
+#include <array>
 #include <cstdio>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 namespace kb::editor {
 namespace {
@@ -52,12 +55,25 @@ namespace {
     return "Opaque";
 }
 
+struct MaterialTextureTextSlot {
+    std::string_view label;
+    std::uint64_t assetId = 0U;
+};
+
 void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneContext& sceneContext, kb::assets::AssetId id) {
     const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(id);
     if (!material.has_value()) {
         text << '\n' << "Material: failed to load" << '\n';
         return;
     }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const std::array<MaterialTextureTextSlot, 5U> textureSlots{ {
+        { "Albedo", material->desc.albedoTextureAssetId },
+        { "Normal", material->desc.normalTextureAssetId },
+        { "Metallic-Roughness", material->desc.metallicRoughnessTextureAssetId },
+        { "Occlusion", material->desc.occlusionTextureAssetId },
+        { "Emissive", material->desc.emissiveTextureAssetId },
+    } };
 
     text << '\n'
          << "Material" << '\n'
@@ -77,12 +93,21 @@ void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneCont
          << "Emissive Strength: " << FormatFloat(material->desc.emissiveStrength) << '\n'
          << "Alpha Cutoff: " << FormatFloat(material->desc.alphaCutoff) << '\n'
          << "Alpha Mode: " << AlphaModeName(material->desc.alphaMode) << '\n'
-         << "Double Sided: " << (material->desc.doubleSided ? "true" : "false") << '\n'
-         << "Albedo Texture: " << (material->desc.albedoTextureAssetId == 0U ? "None" : std::to_string(material->desc.albedoTextureAssetId)) << '\n'
-         << "Normal Texture: " << (material->desc.normalTextureAssetId == 0U ? "None" : std::to_string(material->desc.normalTextureAssetId)) << '\n'
-         << "Metallic-Roughness Texture: " << (material->desc.metallicRoughnessTextureAssetId == 0U ? "None" : std::to_string(material->desc.metallicRoughnessTextureAssetId)) << '\n'
-         << "Occlusion Texture: " << (material->desc.occlusionTextureAssetId == 0U ? "None" : std::to_string(material->desc.occlusionTextureAssetId)) << '\n'
-         << "Emissive Texture: " << (material->desc.emissiveTextureAssetId == 0U ? "None" : std::to_string(material->desc.emissiveTextureAssetId)) << '\n';
+         << "Double Sided: " << (material->desc.doubleSided ? "true" : "false") << '\n';
+
+    bool hasMissingTexture = false;
+    for (const MaterialTextureTextSlot& slot : textureSlots) {
+        text << slot.label << " Texture: " << InspectorMaterialTextureSlotFormatter::DisplayName(manager, slot.assetId) << '\n';
+        hasMissingTexture = hasMissingTexture || InspectorMaterialTextureSlotFormatter::IsMissing(manager, slot.assetId);
+    }
+    if (hasMissingTexture) {
+        text << "Material Texture Diagnostics" << '\n';
+        for (const MaterialTextureTextSlot& slot : textureSlots) {
+            if (InspectorMaterialTextureSlotFormatter::IsMissing(manager, slot.assetId)) {
+                text << "- " << InspectorMaterialTextureSlotFormatter::Diagnostic(slot.label, slot.assetId) << '\n';
+            }
+        }
+    }
 }
 
 [[nodiscard]] std::optional<std::string> BuildAssetInspectorText(const EditorSceneContext& sceneContext) {

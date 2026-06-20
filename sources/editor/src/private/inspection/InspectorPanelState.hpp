@@ -68,6 +68,16 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    MeshRendererMesh,
+    MeshRendererMaterial,
+    MeshRendererMaterialSlot0,
+    MeshRendererMaterialSlot1,
+    MeshRendererMaterialSlot2,
+    MeshRendererMaterialSlot3,
+    MeshRendererMaterialSlot4,
+    MeshRendererMaterialSlot5,
+    MeshRendererMaterialSlot6,
+    MeshRendererMaterialSlot7,
     MaterialBaseColorR,
     MaterialBaseColorG,
     MaterialBaseColorB,
@@ -188,6 +198,7 @@ private:
     bool detailsCollapsed_ = false;
     bool audioSourceCollapsed_ = false;
     bool audioListenerCollapsed_ = false;
+    bool meshRendererCollapsed_ = false;
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
