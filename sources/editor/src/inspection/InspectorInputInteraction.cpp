@@ -37,15 +37,24 @@ namespace {
 bool InspectorInputInteraction::HandleActionAssetClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
     const kb::assets::AssetId asset = sceneContext.AssetBrowser().InspectorAsset();
     if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputActionName) {
+        sceneContext.Inspector().CloseValueTypeDropdown();
         const std::optional<kb::input::InputActionAsset> current = sceneContext.ReadInputActionAsset(asset);
         sceneContext.Inspector().BeginTextEdit(InspectorPropertyId::InputActionName, current.has_value() ? current->name : std::string{});
         return true;
     }
     sceneContext.Inspector().EndTextEdit();
-    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputActionValueType) {
-        static_cast<void>(sceneContext.CycleInputActionValueType(asset));
+    if (hit.kind == InspectorHitKind::ValueTypeOption) {
+        // hit.index maps directly to InputActionValueType (Bool, Axis1D, Axis2D, Axis3D).
+        const auto valueType = static_cast<kb::input::InputActionValueType>(hit.index);
+        static_cast<void>(sceneContext.SetInputActionValueType(asset, valueType));
+        sceneContext.Inspector().CloseValueTypeDropdown();
+    } else if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::InputActionValueType) {
+        sceneContext.Inspector().ToggleValueTypeDropdown();
     } else if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::InputActionConsume) {
+        sceneContext.Inspector().CloseValueTypeDropdown();
         static_cast<void>(sceneContext.ToggleInputActionConsume(asset));
+    } else {
+        sceneContext.Inspector().CloseValueTypeDropdown();
     }
     return true;
 }

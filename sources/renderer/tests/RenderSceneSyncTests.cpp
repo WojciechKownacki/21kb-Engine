@@ -17,6 +17,8 @@
 #include "kb/render/post/SceneExposureMeter.hpp"
 #include "kb/render/scene/RenderInstanceBuffer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "engine/ecs/WorkerPool.hpp"
+#include "kb/render/scene/RenderBridgeTelemetry.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/shadow/DirectionalShadowPassPlanner.hpp"
@@ -1554,12 +1556,217 @@ void RunSyncComposesHierarchyWithoutRuntimeUpdateTest() {
     Require(NearlyEqual(childProxy->desc.model[14], 4.0F), "RenderScene did not compose parent and child local Z without runtime update");
 }
 
+void RunUpdateMeshTransformRefreshesInstanceInPlaceTest() {
+    // H2/H7: a transform-only update refreshes the cached instance matrix in
+    // place when the draw-group cache is clean, with no rebuild.
+    RenderScene renderScene;
+    MeshRenderProxyDesc desc{};
+    desc.entityId = 5U;
+    desc.meshAssetId = 42U;
+    desc.materialAssetId = 7U;
+    desc.model[12] = 1.0F;
+    static_cast<void>(renderScene.UpsertMesh(desc));
+
+    const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
+    Require(groups.size() == 1U && groups[0].instances.size() == 1U, "RenderScene did not build a single draw group instance");
+    Require(NearlyEqual(groups[0].instances[0].model[12], 1.0F), "RenderScene draw group did not carry initial transform");
+
+    std::array<float, 16> model{};
+    model[12] = 9.0F;
+    Require(renderScene.UpdateMeshTransform(5U, model), "UpdateMeshTransform did not find the mesh proxy");
+    const std::vector<SceneRenderDrawGroup>& refreshed = renderScene.DrawGroups();
+    Require(NearlyEqual(refreshed[0].instances[0].model[12], 9.0F), "UpdateMeshTransform did not refresh the instance in place");
+    Require(renderScene.Stats().transformInPlaceUpdateCount == 1U, "UpdateMeshTransform did not take the in-place fast path");
+    Require(renderScene.Stats().transformFallbackUpdateCount == 0U, "UpdateMeshTransform fell back unexpectedly");
+    Require(!renderScene.UpdateMeshTransform(999U, model), "UpdateMeshTransform should return false for a missing entity");
+
+    // After a structural change (new proxy) the cache is dirty, so the next
+    // transform update falls back to invalidation.
+    MeshRenderProxyDesc second{};
+    second.entityId = 6U;
+    second.meshAssetId = 42U;
+    second.materialAssetId = 7U;
+    static_cast<void>(renderScene.UpsertMesh(second));
+    Require(renderScene.UpdateMeshTransform(5U, model), "UpdateMeshTransform did not find the mesh proxy after structural change");
+    Require(renderScene.Stats().transformFallbackUpdateCount == 1U, "UpdateMeshTransform did not fall back when the cache was dirty");
+}
+
+void RunSyncMeshWorldAffinesPushesColumnarTransformTest() {
+    // H2: the columnar world-affine path pushes a precomputed affine straight into
+    // the render instance stream, matching the column-major model layout.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Mesh",
+        .transform = LocalOnlyTransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    static_cast<void>(renderScene.DrawGroups()); // ensure the cache is clean with stable instance locations
+
+    kb::scene::WorldTransformAffine3x4 affine;
+    affine.values[0] = 2.0F; // scale x
+    affine.values[4] = 2.0F; // scale y
+    affine.values[8] = 2.0F; // scale z
+    affine.values[9] = 5.0F; // translation x
+    affine.values[10] = 6.0F; // translation y
+    affine.values[11] = 7.0F; // translation z
+    const std::array<kb::scene::SceneEntity, 1U> entities{ mesh };
+    const std::array<kb::scene::WorldTransformAffine3x4, 1U> affines{ affine };
+    synchronizer.SyncMeshWorldAffines(
+        renderScene,
+        std::span<const kb::scene::SceneEntity>{ entities },
+        std::span<const kb::scene::WorldTransformAffine3x4>{ affines });
+
+    const std::vector<SceneRenderDrawGroup>& groups = renderScene.DrawGroups();
+    Require(groups.size() == 1U && groups[0].instances.size() == 1U, "Columnar affine sync lost the draw group instance");
+    const std::array<float, 16>& model = groups[0].instances[0].model;
+    Require(NearlyEqual(model[0], 2.0F) && NearlyEqual(model[5], 2.0F) && NearlyEqual(model[10], 2.0F), "Columnar affine sync did not apply scale");
+    Require(NearlyEqual(model[12], 5.0F) && NearlyEqual(model[13], 6.0F) && NearlyEqual(model[14], 7.0F), "Columnar affine sync did not apply translation");
+    Require(NearlyEqual(model[15], 1.0F), "Columnar affine sync produced a non-affine homogeneous row");
+    Require(renderScene.Stats().transformInPlaceUpdateCount >= 1U, "Columnar affine sync did not refresh the instance in place");
+}
+
+void RunSyncMeshWorldAffinesParallelTest() {
+    // H6: the columnar affine sync runs over a shared WorkerPool; distinct
+    // entities update their distinct proxies/instances concurrently.
+    constexpr std::size_t kCount = 5000U;
+    kb::scene::Scene scene;
+    std::vector<kb::scene::SceneEntity> entities;
+    entities.reserve(kCount);
+    for (std::size_t index = 0; index < kCount; ++index) {
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+        entities.push_back(entity);
+    }
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    static_cast<void>(renderScene.DrawGroups()); // clean cache + stamp instance locations
+
+    std::vector<kb::scene::WorldTransformAffine3x4> affines(kCount);
+    for (std::size_t index = 0; index < kCount; ++index) {
+        affines[index].values[0] = 1.0F;
+        affines[index].values[4] = 1.0F;
+        affines[index].values[8] = 1.0F;
+        affines[index].values[9] = static_cast<float>(index); // distinct translation x
+    }
+
+    kb::ecs::WorkerPool pool{ kb::ecs::WorkerPoolConfig{} };
+    if (!pool.Running()) {
+        pool.Start(kb::ecs::WorkerPoolConfig{});
+    }
+    synchronizer.SyncMeshWorldAffinesParallel(
+        renderScene,
+        std::span<const kb::scene::SceneEntity>{ entities },
+        std::span<const kb::scene::WorldTransformAffine3x4>{ affines },
+        pool);
+    pool.Stop();
+
+    Require(renderScene.Stats().transformInPlaceUpdateCount == kCount, "Parallel affine sync did not update every instance in place");
+    Require(renderScene.Stats().transformFallbackUpdateCount == 0U, "Parallel affine sync fell back unexpectedly");
+    for (std::size_t index = 0; index < kCount; ++index) {
+        const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(entities[index].Id());
+        Require(proxy != nullptr, "Parallel affine sync lost a mesh proxy");
+        Require(NearlyEqual(proxy->desc.model[12], static_cast<float>(index)), "Parallel affine sync applied the wrong translation");
+    }
+}
+
+void RunRenderBridgeTelemetryAggregatesBridgeStatsTest() {
+    // H9: bridge telemetry aggregates synchronizer + render-scene stats into one
+    // report with fast-path ratios, and exports to JSON.
+    EcsRenderSceneSynchronizerStats syncStats{};
+    syncStats.transformPrecomputedReadCount = 90U;
+    syncStats.transformResolvedFallbackCount = 10U;
+    RenderSceneStats sceneStats{};
+    sceneStats.transformInPlaceUpdateCount = 75U;
+    sceneStats.transformFallbackUpdateCount = 25U;
+    sceneStats.meshProxyCount = 4U;
+    sceneStats.cameraProxyCount = 1U;
+    sceneStats.lightProxyCount = 2U;
+
+    const RenderBridgeTelemetry telemetry = BuildRenderBridgeTelemetry(syncStats, sceneStats);
+    Require(telemetry.worldTransformPrecomputedReads == 90U, "Bridge telemetry lost precomputed read count");
+    Require(telemetry.transformInPlaceUpdates == 75U, "Bridge telemetry lost in-place update count");
+    Require(telemetry.meshProxies == 4U, "Bridge telemetry lost mesh proxy count");
+    Require(NearlyEqual(static_cast<float>(telemetry.PrecomputedReadRatio()), 0.9F), "Bridge telemetry computed the wrong precomputed read ratio");
+    Require(NearlyEqual(static_cast<float>(telemetry.InPlaceUpdateRatio()), 0.75F), "Bridge telemetry computed the wrong in-place update ratio");
+
+    const std::string json = RenderBridgeTelemetryToJsonString(telemetry);
+    Require(json.find("\"schema\": \"kb.render.bridge_telemetry.v1\"") != std::string::npos, "Bridge telemetry JSON omitted schema");
+    Require(json.find("\"world_transform_precomputed_reads\": 90") != std::string::npos, "Bridge telemetry JSON omitted precomputed reads");
+    Require(json.find("\"transform_in_place_updates\": 75") != std::string::npos, "Bridge telemetry JSON omitted in-place updates");
+
+    // Empty bridge reports a 1.0 (fully optimal / nothing to fall back on) ratio.
+    const RenderBridgeTelemetry empty = BuildRenderBridgeTelemetry(EcsRenderSceneSynchronizerStats{}, RenderSceneStats{});
+    Require(NearlyEqual(static_cast<float>(empty.PrecomputedReadRatio()), 1.0F), "Empty bridge telemetry should report a neutral ratio");
+}
+
 void RunScenesHaveStableUniqueIdsTest() {
     kb::scene::Scene first;
     kb::scene::Scene second;
     Require(first.Id() != 0U, "Scene id must be non-zero");
     Require(second.Id() != 0U, "Second scene id must be non-zero");
     Require(first.Id() != second.Id(), "Scenes must not share render cache ids");
+}
+
+void RunSyncConsumesPrecomputedWorldTransformTest() {
+    // H3: when the batched transform system has already produced world transforms
+    // (worldDirty == false), the render bridge consumes them directly without a
+    // recursive resolve.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Camera",
+        .transform = TransformAt(0.0F, 2.0F, -6.0F),
+    });
+    scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{ .primary = true });
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Mesh",
+        .transform = LocalOnlyTransformAt(7.0F, 8.0F, 9.0F),
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+
+    // Run the batched transform hierarchy so world transforms are computed once
+    // and worldDirty is cleared; the render bridge must then consume them.
+    scene.Runtime().SynchronizeTransforms();
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+
+    const MeshRenderProxy* meshProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(meshProxy != nullptr, "RenderScene did not sync precomputed mesh transform");
+    Require(NearlyEqual(meshProxy->desc.model[12], 7.0F), "Render bridge did not consume precomputed world X");
+    Require(NearlyEqual(meshProxy->desc.model[13], 8.0F), "Render bridge did not consume precomputed world Y");
+    Require(NearlyEqual(meshProxy->desc.model[14], 9.0F), "Render bridge did not consume precomputed world Z");
+
+    const EcsRenderSceneSynchronizerStats stats = synchronizer.Stats();
+    Require(stats.transformPrecomputedReadCount >= 2U, "Render bridge did not take the precomputed fast path for clean transforms");
+    Require(stats.transformResolvedFallbackCount == 0U, "Render bridge fell back to resolve for already-computed transforms");
+}
+
+void RunSyncFallsBackToResolveForDirtyTransformTest() {
+    // H3 fallback: an entity whose world transform was not yet computed
+    // (worldDirty == true) is resolved on demand, preserving correctness.
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Mesh",
+        .transform = LocalOnlyTransformAt(3.0F, 4.0F, 5.0F),
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+
+    const MeshRenderProxy* meshProxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(meshProxy != nullptr, "RenderScene did not sync dirty mesh transform");
+    Require(NearlyEqual(meshProxy->desc.model[12], 3.0F), "Render bridge resolve fallback lost world X");
+    const EcsRenderSceneSynchronizerStats stats = synchronizer.Stats();
+    Require(stats.transformResolvedFallbackCount >= 1U, "Render bridge did not fall back to resolve for a dirty transform");
 }
 
 } // namespace
@@ -1609,6 +1816,12 @@ void RunRenderSceneSyncTests() {
     RunSceneRenderDiagnosticsAggregateFrameSubmissionsTest();
     RunSyncUsesFreshLocalTransformsWithoutRuntimeUpdateTest();
     RunSyncComposesHierarchyWithoutRuntimeUpdateTest();
+    RunSyncConsumesPrecomputedWorldTransformTest();
+    RunSyncFallsBackToResolveForDirtyTransformTest();
+    RunUpdateMeshTransformRefreshesInstanceInPlaceTest();
+    RunSyncMeshWorldAffinesPushesColumnarTransformTest();
+    RunSyncMeshWorldAffinesParallelTest();
+    RunRenderBridgeTelemetryAggregatesBridgeStatsTest();
     RunScenesHaveStableUniqueIdsTest();
 }
 

@@ -4,7 +4,9 @@
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -307,6 +309,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RenderScene& renderScene = RenderSceneFor(scene);
     if (desc.synchronizeScene) {
         renderSceneSynchronizer_->Sync(scene, renderScene);
+    } else if (desc.transformAffineSync) {
+        const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+        const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
+        // Above a threshold the columnar affine sync is worth dispatching across
+        // the shared render-sync worker pool (H6); below it the serial path wins.
+        constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
+        if (affineEntities.size() >= kParallelAffineSyncThreshold) {
+            if (renderSyncWorkerPool_ == nullptr) {
+                renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+            }
+            if (!renderSyncWorkerPool_->Running()) {
+                renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
+            }
+            renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
+        } else {
+            renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
+        }
     } else if (!desc.dirtySceneEntityIds.empty()) {
         renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
     }
