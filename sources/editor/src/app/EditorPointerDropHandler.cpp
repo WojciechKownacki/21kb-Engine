@@ -8,6 +8,7 @@
 #include "app/EditorBehaviourAssetSceneDropHandler.hpp"
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
+#include "app/EditorMaterialAssetInspectorDropHandler.hpp"
 #include "app/EditorMeshAssetSceneDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
@@ -37,6 +38,7 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetAddsBehaviour && EditorBehaviourAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsAudioClip && EditorAudioAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAssignsMaterial && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);
