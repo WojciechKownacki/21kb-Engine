@@ -36,6 +36,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputActionAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewInputAxis: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateInputAxisAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewInputMappingContext: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputMappingContextAsset(destinationFolder);

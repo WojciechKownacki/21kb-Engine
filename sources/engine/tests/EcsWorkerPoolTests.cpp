@@ -1,6 +1,7 @@
 #include "EcsTestSuites.hpp"
 #include "TestSupport.hpp"
 
+#include "engine/ecs/JobGraph.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 
 #include <atomic>
@@ -775,11 +776,62 @@ void RunWorkerPoolReusesBatchQueuesAcrossDispatchesTest() {
     }
 }
 
+void RunJobGraphResolvesDependencyWavesTest() {
+    // Diamond: a -> {b, c} -> d
+    kb::ecs::JobGraph graph;
+    const auto a = graph.AddJob();
+    const auto b = graph.AddJob();
+    const auto c = graph.AddJob();
+    const auto d = graph.AddJob();
+    graph.AddDependency(a, b);
+    graph.AddDependency(a, c);
+    graph.AddDependency(b, d);
+    graph.AddDependency(c, d);
+
+    kb::tests::Require(!graph.HasCycle(), "JobGraph reported a cycle in a DAG");
+
+    const std::vector<std::vector<kb::ecs::JobGraph::JobIndex>> waves = graph.ReadyBatches();
+    kb::tests::Require(waves.size() == 3U, "JobGraph produced the wrong number of dependency waves");
+    kb::tests::Require(waves[0].size() == 1U && waves[0][0] == a, "JobGraph first wave should be the root only");
+    kb::tests::Require(waves[1].size() == 2U, "JobGraph middle wave should hold both parallel jobs");
+    kb::tests::Require(waves[2].size() == 1U && waves[2][0] == d, "JobGraph final wave should be the sink only");
+    kb::tests::Require(graph.TopologicalOrder().size() == 4U, "JobGraph topological order dropped jobs");
+
+    // Runtime completion frontier.
+    std::vector<kb::ecs::JobGraph::JobIndex> ready = graph.InitialReadyJobs();
+    kb::tests::Require(ready.size() == 1U && ready[0] == a, "JobGraph initial frontier should be the root");
+    std::vector<kb::ecs::JobGraph::JobIndex> afterA = graph.OnCompleted(a);
+    kb::tests::Require(afterA.size() == 2U, "JobGraph did not release both children after the root completed");
+    std::vector<kb::ecs::JobGraph::JobIndex> afterB = graph.OnCompleted(b);
+    kb::tests::Require(afterB.empty(), "JobGraph released the sink before its second dependency cleared");
+    std::vector<kb::ecs::JobGraph::JobIndex> afterC = graph.OnCompleted(c);
+    kb::tests::Require(afterC.size() == 1U && afterC[0] == d, "JobGraph did not release the sink after both deps cleared");
+    static_cast<void>(graph.OnCompleted(d));
+    kb::tests::Require(graph.IsComplete(), "JobGraph did not report completion");
+    kb::tests::Require(graph.CompletedCount() == 4U, "JobGraph completion counter mismatch");
+
+    // Cycle detection.
+    kb::ecs::JobGraph cyclic;
+    const auto x = cyclic.AddJob();
+    const auto y = cyclic.AddJob();
+    cyclic.AddDependency(x, y);
+    cyclic.AddDependency(y, x);
+    kb::tests::Require(cyclic.HasCycle(), "JobGraph failed to detect a dependency cycle");
+    bool threw = false;
+    try {
+        static_cast<void>(cyclic.ReadyBatches());
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    kb::tests::Require(threw, "JobGraph ReadyBatches did not throw on a cycle");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsWorkerPoolTests() {
+    RunJobGraphResolvesDependencyWavesTest();
     RunWorkerPoolExecutesConcurrentJobsTest();
     RunWorkerPoolPropagatesJobExceptionTest();
     RunWorkerPoolCancelsPendingJobsAfterExceptionTest();

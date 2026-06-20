@@ -196,6 +196,37 @@ void WriteChromeTraceEvent(std::ostream& output, const SystemSchedulerTraceEvent
     output << "    }";
 }
 
+void WriteCsvField(std::ostream& output, std::string_view value) {
+    const bool mustQuote = value.find_first_of(",\"\n\r") != std::string_view::npos;
+    if (!mustQuote) {
+        output << value;
+        return;
+    }
+    output << '"';
+    for (const char character : value) {
+        if (character == '"') {
+            output << "\"\"";
+        } else {
+            output << character;
+        }
+    }
+    output << '"';
+}
+
+[[nodiscard]] std::ofstream OpenTraceExportFile(const std::filesystem::path& path, std::string_view kind) {
+    if (path.empty()) {
+        throw std::invalid_argument("ECS scheduler " + std::string(kind) + " export path is empty");
+    }
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path());
+    }
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        throw std::runtime_error("Failed to open ECS scheduler " + std::string(kind) + " export file: " + path.string());
+    }
+    return output;
+}
+
 } // namespace
 
 void ExportSystemSchedulerTraceToJsonFile(const SystemSchedulerTrace& trace, const std::filesystem::path& path) {
@@ -257,6 +288,50 @@ void ExportSystemSchedulerTraceToJsonFile(const SystemSchedulerTrace& trace, con
 
     if (!output.good()) {
         throw std::runtime_error("Failed to write ECS scheduler trace export file: " + path.string());
+    }
+}
+
+void ExportSystemSchedulerTraceToChromeTraceFile(const SystemSchedulerTrace& trace, const std::filesystem::path& path) {
+    std::ofstream output = OpenTraceExportFile(path, "chrome trace");
+
+    output << "{\n";
+    output << "  \"displayTimeUnit\": \"ms\",\n";
+    output << "  \"otherData\": {\n";
+    output << "    \"schema\": \"kb.ecs.scheduler_trace.chrome.v1\",\n";
+    output << "    \"frame_index\": " << trace.frameIndex << ",\n";
+    output << "    \"frame_duration_ns\": " << trace.frameDurationNanoseconds << "\n";
+    output << "  },\n";
+    output << "  \"traceEvents\": [\n";
+    for (std::size_t index = 0; index < trace.events.size(); ++index) {
+        WriteChromeTraceEvent(output, trace.events[index]);
+        output << (index + 1U == trace.events.size() ? "\n" : ",\n");
+    }
+    output << "  ]\n";
+    output << "}\n";
+
+    if (!output.good()) {
+        throw std::runtime_error("Failed to write ECS scheduler chrome trace export file: " + path.string());
+    }
+}
+
+void ExportSystemSchedulerTraceToCsvFile(const SystemSchedulerTrace& trace, const std::filesystem::path& path) {
+    std::ofstream output = OpenTraceExportFile(path, "csv");
+
+    output << "system_index,system_name,execution_path,cpu_time_ns,jobs_count,chunk_jobs_count,entities_processed,bytes_touched\n";
+    for (const SystemSchedulerSystemCounters& counters : trace.systemCounters) {
+        output << counters.systemIndex << ',';
+        WriteCsvField(output, counters.systemName);
+        output << ',';
+        WriteCsvField(output, counters.executionPath);
+        output << ',' << counters.cpuTimeNanoseconds
+               << ',' << counters.jobsCount
+               << ',' << counters.chunkJobsCount
+               << ',' << counters.entitiesProcessed
+               << ',' << counters.bytesTouched << '\n';
+    }
+
+    if (!output.good()) {
+        throw std::runtime_error("Failed to write ECS scheduler csv export file: " + path.string());
     }
 }
 

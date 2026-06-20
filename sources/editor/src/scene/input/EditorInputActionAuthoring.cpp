@@ -30,6 +30,26 @@ bool EditorInputActionAuthoring::Create(const std::filesystem::path& virtualFold
     return true;
 }
 
+bool EditorInputActionAuthoring::CreateAxis(const std::filesystem::path& virtualFolder) {
+    const std::optional<std::filesystem::path> folder = gateway_.ResolveFolder(virtualFolder);
+    if (!folder.has_value()) {
+        console_.Error("Input", "Could not resolve a physical folder for the new input axis.");
+        return false;
+    }
+
+    const std::filesystem::path path =
+        EditorInputAssetGateway::UniqueFilePath(*folder, "NewInputAxis", kb::input::InputAssetFormat::AxisExtension);
+    kb::input::InputActionAsset asset;
+    asset.name = path.stem().string();
+    asset.valueType = kb::input::InputActionValueType::Axis1D; // an axis defaults to a single analog axis
+    if (!gateway_.WriteNewAction(path, asset)) {
+        console_.Error("Input", "Input axis asset could not be written: " + path.generic_string());
+        return false;
+    }
+    console_.Info("Input", "Input axis asset created: " + path.generic_string());
+    return true;
+}
+
 bool EditorInputActionAuthoring::SetName(kb::assets::AssetId id, std::string name) {
     return gateway_.MutateAction(id, [&name](kb::input::InputActionAsset& asset) {
         asset.name = name.empty() ? std::string{ "Action" } : name;
@@ -52,6 +72,12 @@ bool EditorInputActionAuthoring::CycleValueType(kb::assets::AssetId id) {
             asset.valueType = kb::input::InputActionValueType::Bool;
             break;
         }
+    });
+}
+
+bool EditorInputActionAuthoring::SetValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType) {
+    return gateway_.MutateAction(id, [valueType](kb::input::InputActionAsset& asset) {
+        asset.valueType = valueType;
     });
 }
 

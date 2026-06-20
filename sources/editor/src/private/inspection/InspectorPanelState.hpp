@@ -38,6 +38,7 @@ enum class InspectorHitKind : std::uint8_t {
     ComponentMenuButton,
     ScrollbarTrack,
     ScrollbarThumb,
+    ValueTypeOption,
 };
 
 enum class InspectorPropertyId : std::uint8_t {
@@ -119,6 +120,12 @@ struct InspectorPanelState {
     void ClearText() noexcept;
     void SelectAllText() noexcept;
     void EndTextEdit() noexcept;
+    // Inline Value Type dropdown (Input Action / Input Axis value-type picker).
+    void ToggleValueTypeDropdown() noexcept;
+    void CloseValueTypeDropdown() noexcept;
+    [[nodiscard]] bool IsValueTypeDropdownOpen() const noexcept;
+    void SetValueTypeDropdownHover(int index) noexcept;
+    [[nodiscard]] int ValueTypeDropdownHover() const noexcept;
     [[nodiscard]] bool IsDraggingFloat() const noexcept;
     [[nodiscard]] InspectorPropertyId DraggedProperty() const noexcept;
     [[nodiscard]] float DragStartValue() const noexcept;
@@ -172,6 +179,8 @@ private:
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
     std::string editBuffer_;
     int editIndex_ = -1;
+    bool valueTypeDropdownOpen_ = false;
+    int valueTypeDropdownHover_ = -1;
     bool editSelectingAll_ = false;
     bool listeningForKey_ = false;
     int keyCaptureMappingIndex_ = -1;
