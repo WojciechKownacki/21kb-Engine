@@ -79,6 +79,10 @@ public:
     SceneSystemScheduler sceneSystemScheduler;
     SceneRuntimeFixedStepSettings fixedStepSettings;
     SceneTransformPropagationBudget transformPropagationBudget;
+    // True once a fixed-step system (e.g. physics) has been added. Scenes without
+    // one skip the fixed-step substep loop and its per-substep interpolation
+    // sampling, which otherwise rebuilds a map of every transform each substep.
+    bool requiresFixedStep = false;
     float fixedStepAccumulatorSeconds = 0.0F;
     float fixedInterpolationAlpha = 0.0F;
     std::size_t lastFixedStepCount = 0U;

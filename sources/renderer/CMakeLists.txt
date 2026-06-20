@@ -48,6 +48,7 @@ add_library(kb_renderer STATIC
     include/kb/render/runtime/RuntimeRenderResourceCache.hpp
     include/kb/render/runtime/RuntimeRenderResourceCacheTypes.hpp
     include/kb/render/scene/EcsRenderSceneSynchronizer.hpp
+    include/kb/render/scene/RenderBridgeTelemetry.hpp
     include/kb/render/scene/SceneGpuDrivenCullingPass.hpp
     include/kb/render/scene/SceneGpuDrivenFeatureState.hpp
     include/kb/render/scene/SceneGpuDrivenFrameResources.hpp
@@ -183,6 +184,8 @@ add_library(kb_renderer STATIC
     src/scene/EcsRenderSceneSynchronizer.cpp
     src/scene/EcsRenderTransformResolver.cpp
     src/scene/EcsRenderTransformResolver.hpp
+    src/scene/SceneRenderWorldTransformReader.cpp
+    src/scene/SceneRenderWorldTransformReader.hpp
     src/scene/SceneGpuDrivenCullingPass.cpp
     src/scene/SceneGpuDrivenFrameResources.cpp
     src/scene/MeshPipeline.cpp

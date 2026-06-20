@@ -3,6 +3,8 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/Kernel.hpp"
+#include "engine/ecs/KernelApi.hpp"
+#include "engine/ecs/KernelColumn.hpp"
 #include "engine/ecs/KernelVectorMath.hpp"
 #include "engine/ecs/HotKernel.hpp"
 #include "engine/ecs/MemoryTrafficEstimator.hpp"
@@ -2743,8 +2745,15 @@ void RunEcsHotPathSourceGuardTest() {
 
     constexpr std::array guardedFiles{
         std::string_view{ "sources/engine/include/engine/ecs/HotKernel.hpp" },
+        std::string_view{ "sources/engine/include/engine/ecs/KernelApi.hpp" },
+        std::string_view{ "sources/engine/include/engine/ecs/KernelColumn.hpp" },
+        std::string_view{ "sources/engine/include/engine/ecs/UnsafeHotQuery.hpp" },
         std::string_view{ "sources/engine/src/private/scene/transform/SceneTransformRootHotKernel.hpp" },
         std::string_view{ "sources/engine/src/private/scene/transform/SceneTransformDirtyFrontier.hpp" },
+        // H5 - render<->ECS bridge hot path. The full synchronizer becomes
+        // guardable once H1/H2 remove its per-entity lookups and proxy hashmap.
+        std::string_view{ "sources/renderer/src/scene/SceneRenderWorldTransformReader.hpp" },
+        std::string_view{ "sources/renderer/src/scene/SceneRenderWorldTransformReader.cpp" },
     };
 
     for (std::string_view relativePath : guardedFiles) {
@@ -2820,11 +2829,164 @@ void RunEcsReleaseNativeVectorBuildContractTest() {
 #endif
 }
 
+struct EcsLocalTransform2D {
+    float tx = 0.0F;
+    float ty = 0.0F;
+    float rotation = 0.0F;
+    float sx = 1.0F;
+    float sy = 1.0F;
+};
+
+struct EcsWorldTransform2D {
+    float affine[6]{};
+};
+
+void RunEcsHotKernelTransform2DAffineTest() {
+    std::array<EcsLocalTransform2D, 2U> locals{
+        EcsLocalTransform2D{ .tx = 3.0F, .ty = -4.0F, .rotation = 0.0F, .sx = 2.0F, .sy = 5.0F },
+        EcsLocalTransform2D{ .tx = 1.0F, .ty = 2.0F, .rotation = kb::ecs::detail::kHotKernelHalfPi, .sx = 1.0F, .sy = 1.0F },
+    };
+    std::array<EcsWorldTransform2D, 2U> worlds{};
+
+    const double checksum = kb::ecs::ApplyDenseTransform2DToAffine2x3ScalarAndReduce<
+        EcsLocalTransform2D,
+        EcsWorldTransform2D,
+        &EcsLocalTransform2D::tx,
+        &EcsLocalTransform2D::ty,
+        &EcsLocalTransform2D::rotation,
+        &EcsLocalTransform2D::sx,
+        &EcsLocalTransform2D::sy,
+        &EcsWorldTransform2D::affine>(locals.data(), worlds.data(), locals.size());
+
+    // Entity 0: zero rotation -> diagonal scale plus translation.
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[0], 2.0F), "2D transform m00 mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[1], 0.0F), "2D transform m10 mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[2], 0.0F), "2D transform m01 mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[3], 5.0F), "2D transform m11 mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[4], 3.0F), "2D transform tx mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[0].affine[5], -4.0F), "2D transform ty mismatch");
+
+    // Entity 1: 90 degree rotation, unit scale.
+    kb::tests::Require(std::fabs(worlds[1].affine[0]) < 1e-5F, "2D transform 90deg m00 should be ~0");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[1].affine[1], 1.0F), "2D transform 90deg m10 should be ~1");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[1].affine[2], -1.0F), "2D transform 90deg m01 should be ~-1");
+    kb::tests::Require(std::fabs(worlds[1].affine[3]) < 1e-5F, "2D transform 90deg m11 should be ~0");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[1].affine[4], 1.0F), "2D transform 90deg tx mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(worlds[1].affine[5], 2.0F), "2D transform 90deg ty mismatch");
+
+    // Range dispatch over a sub-range must match the scalar path.
+    std::array<EcsWorldTransform2D, 2U> rangeWorlds{};
+    kb::ecs::ApplyDenseTransform2DToAffine2x3<
+        EcsLocalTransform2D,
+        EcsWorldTransform2D,
+        &EcsLocalTransform2D::tx,
+        &EcsLocalTransform2D::ty,
+        &EcsLocalTransform2D::rotation,
+        &EcsLocalTransform2D::sx,
+        &EcsLocalTransform2D::sy,
+        &EcsWorldTransform2D::affine>(locals.data(), rangeWorlds.data(), kb::ecs::HotKernelRange{ .begin = 0U, .count = locals.size() });
+    kb::tests::Require(kb::tests::NearlyEqual(rangeWorlds[0].affine[3], 5.0F), "2D transform range dispatch diverged from scalar");
+
+    const kb::ecs::HotKernelMemoryTraffic traffic =
+        kb::ecs::EstimateDenseTransform2DToAffine2x3Traffic<EcsLocalTransform2D, EcsWorldTransform2D>(locals.size());
+    kb::tests::Require(traffic.bytesRead == locals.size() * sizeof(EcsLocalTransform2D), "2D transform traffic read estimate mismatch");
+    kb::tests::Require(traffic.bytesWritten == locals.size() * sizeof(EcsWorldTransform2D), "2D transform traffic write estimate mismatch");
+    kb::tests::Require(checksum != 0.0, "2D transform reduce produced an empty checksum");
+}
+
+struct EcsKernelApiPosition {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+struct EcsKernelApiVelocity {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+void EcsKernelApiIntegrate(kb::ecs::KernelContext context, kb::ecs::KernelRange range, kb::ecs::ColumnBundle columns) noexcept {
+    EcsKernelApiPosition* positions = columns.Column<EcsKernelApiPosition>(0);
+    const EcsKernelApiVelocity* velocities = columns.Column<EcsKernelApiVelocity>(1);
+    for (std::size_t index = range.begin; index < range.End(); ++index) {
+        positions[index].x += velocities[index].x * context.dt;
+        positions[index].y += velocities[index].y * context.dt;
+    }
+}
+
+void RunEcsKernelApiContractTest() {
+    static_assert(kb::ecs::KernelRange{ .begin = 4U, .count = 6U }.End() == 10U);
+    static_assert(kb::ecs::KernelRange{ .begin = 0U, .count = 0U }.Empty());
+
+    constexpr std::size_t kCount = 8U;
+    alignas(kb::ecs::kKernelColumnAlignment) std::array<EcsKernelApiPosition, kCount> positions{};
+    alignas(kb::ecs::kKernelColumnAlignment) std::array<EcsKernelApiVelocity, kCount> velocities{};
+    for (std::size_t index = 0; index < kCount; ++index) {
+        positions[index] = EcsKernelApiPosition{ .x = static_cast<float>(index), .y = 0.0F };
+        velocities[index] = EcsKernelApiVelocity{ .x = 2.0F, .y = 3.0F };
+    }
+
+    kb::ecs::ColumnBundle columns;
+    columns.Add(positions.data());
+    columns.Add(velocities.data());
+    kb::tests::Require(columns.Count() == 2U, "ColumnBundle reported the wrong column count");
+    kb::tests::Require(columns.Raw(0) == positions.data(), "ColumnBundle returned the wrong raw column");
+
+    const kb::ecs::KernelFn kernel = &EcsKernelApiIntegrate;
+    kernel(kb::ecs::KernelContext{ .workerIndex = 0U, .workerCount = 1U, .dt = 0.5F }, kb::ecs::KernelRange{ .begin = 0U, .count = kCount }, columns);
+
+    for (std::size_t index = 0; index < kCount; ++index) {
+        kb::tests::Require(kb::tests::NearlyEqual(positions[index].x, static_cast<float>(index) + 1.0F), "KernelFn did not integrate position x");
+        kb::tests::Require(kb::tests::NearlyEqual(positions[index].y, 1.5F), "KernelFn did not integrate position y");
+    }
+
+    // The aligned accessor exposes the same column with the alignment contract.
+    const kb::ecs::AlignedColumn<EcsKernelApiVelocity> aligned = columns.Aligned<EcsKernelApiVelocity>(1, kCount);
+    kb::tests::Require(aligned.Count() == kCount, "ColumnBundle aligned view reported the wrong count");
+}
+
+void RunEcsKernelColumnContractTest() {
+    static_assert(kb::ecs::IsPowerOfTwo(64U), "ECS column alignment helper must accept powers of two");
+    static_assert(!kb::ecs::IsPowerOfTwo(48U), "ECS column alignment helper must reject non powers of two");
+    static_assert(kb::ecs::AlignedColumn<float>::kAlignment == kb::ecs::kKernelColumnAlignment);
+    static_assert(kb::ecs::AlignedColumn<float, 32U>::kAlignment == 32U);
+
+    constexpr std::size_t kCount = 64U;
+    alignas(kb::ecs::kKernelColumnAlignment) std::array<float, kCount> values{};
+    for (std::size_t index = 0; index < kCount; ++index) {
+        values[index] = static_cast<float>(index);
+    }
+
+    kb::ecs::AlignedColumn<float> column{ values.data(), kCount };
+    kb::tests::Require(column.Count() == kCount, "ECS aligned column reported wrong count");
+    kb::tests::Require(!column.Empty(), "ECS aligned column should not be empty");
+    kb::tests::Require(kb::ecs::IsPointerAligned(column.Data(), kb::ecs::kKernelColumnAlignment), "ECS aligned column base is not aligned");
+
+    float sum = 0.0F;
+    const kb::ecs::RestrictPtr<float> restricted = column.Restrict();
+    kb::tests::Require(static_cast<bool>(restricted), "ECS restrict pointer should be non-null");
+    for (std::size_t index = 0; index < column.Count(); ++index) {
+        kb::tests::Require(kb::tests::NearlyEqual(column[index], restricted[index]), "ECS aligned column and restrict view diverged");
+        sum += restricted[index];
+    }
+    kb::tests::Require(kb::tests::NearlyEqual(sum, static_cast<float>(kCount * (kCount - 1U) / 2U)), "ECS aligned column sum mismatch");
+
+    // A 16-element aligned sub-offset preserves 64B alignment for float columns.
+    const kb::ecs::AlignedColumn<float> tail = column.Subrange(16U, 16U);
+    kb::tests::Require(tail.Count() == 16U, "ECS aligned column subrange count mismatch");
+    kb::tests::Require(kb::tests::NearlyEqual(tail[0], 16.0F), "ECS aligned column subrange offset mismatch");
+
+    kb::ecs::AlignedColumn<float> empty{};
+    kb::tests::Require(empty.Empty(), "ECS default aligned column should be empty");
+}
+
 } // namespace
 
 namespace kb::tests {
 
 void RunEcsKernelTests() {
+    RunEcsKernelApiContractTest();
+    RunEcsKernelColumnContractTest();
+    RunEcsHotKernelTransform2DAffineTest();
     RunEcsKernelContractScalarExecutionTest();
     RunEcsKernelRequestedSimdFallsBackToScalarTest();
     RunEcsKernelSse2AndAvx2DispatchTest();
