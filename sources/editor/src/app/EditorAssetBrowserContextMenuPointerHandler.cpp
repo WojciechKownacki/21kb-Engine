@@ -23,6 +23,7 @@ constexpr UINT_PTR kAssetMenuSpotLight = 2103;
 constexpr UINT_PTR kAssetMenuRename = 2201;
 constexpr UINT_PTR kAssetMenuDelete = 2202;
 constexpr UINT_PTR kAssetMenuRefresh = 2203;
+constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
 
 [[nodiscard]] UINT_PTR CommandId(EditorAssetContextCommand command) noexcept {
     switch (command) {
@@ -40,6 +41,8 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return kAssetMenuNewInputAxis;
     case EditorAssetContextCommand::NewInputMappingContext:
         return kAssetMenuNewInputMappingContext;
+    case EditorAssetContextCommand::ExtractMaterials:
+        return kAssetMenuExtractMaterials;
     case EditorAssetContextCommand::AddDirectionalLight:
         return kAssetMenuDirectionalLight;
     case EditorAssetContextCommand::AddPointLight:
@@ -75,6 +78,8 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return EditorAssetContextCommand::NewInputAxis;
     case kAssetMenuNewInputMappingContext:
         return EditorAssetContextCommand::NewInputMappingContext;
+    case kAssetMenuExtractMaterials:
+        return EditorAssetContextCommand::ExtractMaterials;
     case kAssetMenuDirectionalLight:
         return EditorAssetContextCommand::AddDirectionalLight;
     case kAssetMenuPointLight:

@@ -45,6 +45,7 @@
 #include "scene/EditorScenePrefabActions.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
@@ -1421,6 +1422,11 @@ bool EditorSceneContext::CreateInputMappingContextAsset(const std::filesystem::p
 
 bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtualFolder) {
     return MaterialAssetAuthoring().Create(virtualFolder);
+}
+
+bool EditorSceneContext::ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId) {
+    EditorEmbeddedMaterialExtractor extractor{ *scene_, assetBrowser_, console_ };
+    return extractor.Extract(meshAssetId).Succeeded();
 }
 
 bool EditorSceneContext::CreateLuaScriptAsset(const std::filesystem::path& virtualFolder) {
