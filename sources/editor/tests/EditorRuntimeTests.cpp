@@ -9,6 +9,7 @@ int main() {
     kb::editor::tests::RunEditorDockingTests();
     kb::editor::tests::RunEditorProjectTests();
     kb::editor::tests::RunEditorInspectorTests();
+    kb::editor::tests::RunEditorMaterialAssetAuthoringTests();
     kb::editor::tests::RunScriptEditorTests();
     kb::editor::tests::RunSvgPathTests();
     return 0;

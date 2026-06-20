@@ -826,6 +826,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorInspectorTests.cpp
+        tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
@@ -916,6 +917,8 @@ if(BUILD_TESTING)
         src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
+        src/scene/material/EditorMaterialAssetAuthoring.cpp
+        src/scene/material/EditorMaterialAssetGateway.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorPlayModeSceneSession.cpp
         src/app/EditorShellInteractionState.cpp
@@ -938,6 +941,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_editor_tests
         PRIVATE
             kb_engine
+            kb_renderer
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
