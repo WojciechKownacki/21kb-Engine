@@ -4,9 +4,35 @@
 
 #include <memory>
 #include <optional>
+#include <sstream>
+#include <string>
 #include <string_view>
 
 namespace kb::render {
+
+bool RenderMaterialAssetParseResult::Succeeded() const noexcept {
+    return asset.has_value() && diagnostics.empty();
+}
+
+std::string RenderMaterialAssetParseResult::ErrorMessage() const {
+    if (diagnostics.empty()) {
+        return {};
+    }
+
+    std::ostringstream output;
+    output << "Render material asset load failed";
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : diagnostics) {
+        output << "; ";
+        if (diagnostic.line > 0U) {
+            output << "line " << diagnostic.line << ": ";
+        }
+        output << diagnostic.message;
+        if (!diagnostic.text.empty()) {
+            output << " [" << diagnostic.text << "]";
+        }
+    }
+    return output.str();
+}
 
 std::string_view RenderMaterialAssetLoader::Type() const noexcept {
     return "RenderMaterial";
@@ -21,12 +47,12 @@ std::vector<std::string> RenderMaterialAssetLoader::Extensions() const {
 }
 
 kb::assets::AssetLoadResult RenderMaterialAssetLoader::Load(const kb::assets::AssetLoadRequest& request) {
-    std::optional<RenderMaterialAssetData> material = LoadMaterial(request.resolvedPath);
-    if (!material.has_value()) {
-        return kb::assets::AssetLoadResult{ .asset = {}, .error = "Render material asset load failed" };
+    RenderMaterialAssetParseResult material = LoadMaterialWithDiagnostics(request.resolvedPath);
+    if (!material.asset.has_value()) {
+        return kb::assets::AssetLoadResult{ .asset = {}, .error = material.ErrorMessage() };
     }
     return kb::assets::AssetLoadResult{
-        .asset = std::make_shared<RenderMaterialAssetData>(*material),
+        .asset = std::make_shared<RenderMaterialAssetData>(*material.asset),
         .error = {},
     };
 }
@@ -37,6 +63,14 @@ std::optional<RenderMaterialAssetData> RenderMaterialAssetLoader::LoadMaterial(c
 
 std::optional<RenderMaterialAssetData> RenderMaterialAssetLoader::LoadMaterial(std::istream& input) {
     return RenderMaterialAssetParser::Parse(input);
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(const std::filesystem::path& path) {
+    return RenderMaterialAssetParser::LoadWithDiagnostics(path);
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(std::istream& input) {
+    return RenderMaterialAssetParser::ParseWithDiagnostics(input);
 }
 
 } // namespace kb::render

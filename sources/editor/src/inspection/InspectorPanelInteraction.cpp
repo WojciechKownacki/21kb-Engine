@@ -314,7 +314,7 @@ namespace {
     return true;
 }
 
-[[nodiscard]] bool HandleMaterialClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) {
+[[nodiscard]] bool HandleMaterialClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) {
     const kb::assets::AssetId asset = sceneContext.AssetBrowser().InspectorAsset();
     if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::MaterialDoubleSided) {
         sceneContext.Inspector().EndTextEdit();
@@ -338,7 +338,11 @@ namespace {
         const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(asset);
         float value = 0.0F;
         if (material.has_value() && ReadMaterialFloat(*material, hit.property, value)) {
-            sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+            if (sceneContext.BeginMaterialAssetFloatEdit(asset, hit.property)) {
+                sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y);
+            } else {
+                sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+            }
         }
         return true;
     }
@@ -476,7 +480,7 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
         return InspectorInputInteraction::HandleMappingClick(sceneContext, hit);
     }
     if (assetSelected && hit.section == InspectorSectionId::Material) {
-        return HandleMaterialClick(sceneContext, hit);
+        return HandleMaterialClick(sceneContext, hit, x, y);
     }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
@@ -523,13 +527,28 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     if (!sceneContext.Inspector().IsDraggingFloat()) {
         return false;
     }
+    const InspectorPropertyId property = sceneContext.Inspector().DraggedProperty();
+    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset && IsMaterialFloatProperty(property)) {
+        if (!sceneContext.HasActiveMaterialAssetEdit()) {
+            sceneContext.Inspector().EndFloatDrag();
+            return true;
+        }
+        const int dx = x - sceneContext.Inspector().DragStartX();
+        const int dy = y - sceneContext.Inspector().DragStartY();
+        if (std::abs(dx) + std::abs(dy) < 2) {
+            return true;
+        }
+        sceneContext.Inspector().MarkFloatDragMoved();
+        const float delta = static_cast<float>(dx - dy) * StepFor(property) * 0.08F;
+        static_cast<void>(sceneContext.ApplyActiveMaterialAssetFloatEdit(sceneContext.Inspector().DragStartValue() + delta));
+        return true;
+    }
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         sceneContext.CancelActiveTransformEdit();
         sceneContext.Inspector().EndFloatDrag();
         return true;
     }
-    const InspectorPropertyId property = sceneContext.Inspector().DraggedProperty();
     const int dx = x - sceneContext.Inspector().DragStartX();
     const int dy = y - sceneContext.Inspector().DragStartY();
     if (std::abs(dx) + std::abs(dy) < 2) {
@@ -554,6 +573,17 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const bool moved = inspector.FloatDragMoved();
     const float startValue = inspector.DragStartValue();
     inspector.EndFloatDrag();
+    if (IsMaterialFloatProperty(property)) {
+        if (moved) {
+            static_cast<void>(sceneContext.CommitActiveMaterialAssetEdit());
+        } else {
+            sceneContext.CancelActiveMaterialAssetEdit();
+        }
+        if (!moved && property != InspectorPropertyId::None) {
+            inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+        }
+        return true;
+    }
     if (moved) {
         static_cast<void>(sceneContext.CommitActiveTransformEdit());
     } else {

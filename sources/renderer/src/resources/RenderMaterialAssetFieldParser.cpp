@@ -146,6 +146,37 @@ namespace {
 
 } // namespace
 
+bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept {
+    return RenderMaterialTextureFieldParser::IsKnown(keyword) ||
+        keyword == "baseColor" ||
+        keyword == "baseColorFactor" ||
+        keyword == "emissiveColor" ||
+        keyword == "emissiveFactor" ||
+        keyword == "metallicFactor" ||
+        keyword == "roughnessFactor" ||
+        keyword == "normalScale" ||
+        keyword == "occlusionStrength" ||
+        keyword == "emissiveStrength" ||
+        keyword == "alphaCutoff" ||
+        keyword == "clearcoatFactor" ||
+        keyword == "clearcoatRoughnessFactor" ||
+        keyword == "sheenColor" ||
+        keyword == "sheenRoughnessFactor" ||
+        keyword == "transmissionFactor" ||
+        keyword == "thicknessFactor" ||
+        keyword == "attenuationColor" ||
+        keyword == "attenuationDistance" ||
+        keyword == "subsurfaceColor" ||
+        keyword == "subsurfaceFactor" ||
+        keyword == "anisotropyStrength" ||
+        keyword == "anisotropyRotation" ||
+        keyword == "layerWeight" ||
+        keyword == "alphaMode" ||
+        keyword == "decalBlendMode" ||
+        keyword == "layerBlendMode" ||
+        keyword == "doubleSided";
+}
+
 bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset) {
     const RenderMaterialFieldParseResult textureField = RenderMaterialTextureFieldParser::Apply(keyword, rest, asset);
     if (textureField != RenderMaterialFieldParseResult::Unknown) {

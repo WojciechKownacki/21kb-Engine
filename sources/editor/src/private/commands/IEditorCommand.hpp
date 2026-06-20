@@ -9,6 +9,12 @@ public:
     virtual ~IEditorCommand() = default;
 
     [[nodiscard]] virtual std::string_view Label() const noexcept = 0;
+    [[nodiscard]] virtual bool AffectsSceneDocument() const noexcept {
+        return true;
+    }
+    [[nodiscard]] virtual bool AffectsHierarchySelection() const noexcept {
+        return true;
+    }
     [[nodiscard]] virtual bool Execute() = 0;
     [[nodiscard]] virtual bool Undo() = 0;
     [[nodiscard]] virtual bool Redo() = 0;

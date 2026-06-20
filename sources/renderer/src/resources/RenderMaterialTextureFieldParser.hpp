@@ -15,6 +15,7 @@ enum class RenderMaterialFieldParseResult {
 class RenderMaterialTextureFieldParser final {
 public:
     [[nodiscard]] static RenderMaterialFieldParseResult Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset);
+    [[nodiscard]] static bool IsKnown(std::string_view keyword) noexcept;
 };
 
 } // namespace kb::render
