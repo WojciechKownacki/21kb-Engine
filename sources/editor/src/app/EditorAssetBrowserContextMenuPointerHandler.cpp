@@ -14,6 +14,7 @@ constexpr UINT_PTR kAssetMenuImport = 2001;
 constexpr UINT_PTR kAssetMenuNewFolder = 2002;
 constexpr UINT_PTR kAssetMenuNewLuaScript = 2003;
 constexpr UINT_PTR kAssetMenuNewInputAction = 2004;
+constexpr UINT_PTR kAssetMenuNewInputAxis = 2006;
 constexpr UINT_PTR kAssetMenuNewInputMappingContext = 2005;
 constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
 constexpr UINT_PTR kAssetMenuPointLight = 2102;
@@ -32,6 +33,8 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return kAssetMenuNewLuaScript;
     case EditorAssetContextCommand::NewInputAction:
         return kAssetMenuNewInputAction;
+    case EditorAssetContextCommand::NewInputAxis:
+        return kAssetMenuNewInputAxis;
     case EditorAssetContextCommand::NewInputMappingContext:
         return kAssetMenuNewInputMappingContext;
     case EditorAssetContextCommand::AddDirectionalLight:
@@ -63,6 +66,8 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return EditorAssetContextCommand::NewLuaScript;
     case kAssetMenuNewInputAction:
         return EditorAssetContextCommand::NewInputAction;
+    case kAssetMenuNewInputAxis:
+        return EditorAssetContextCommand::NewInputAxis;
     case kAssetMenuNewInputMappingContext:
         return EditorAssetContextCommand::NewInputMappingContext;
     case kAssetMenuDirectionalLight:

@@ -45,6 +45,7 @@ enum class EditorAssetContextCommand {
     NewFolder,
     NewLuaScript,
     NewInputAction,
+    NewInputAxis,
     NewInputMappingContext,
     AddLighting,
     AddDirectionalLight,

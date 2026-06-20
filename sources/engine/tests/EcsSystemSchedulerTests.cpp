@@ -4,13 +4,17 @@
 
 #include "engine/ecs/System.hpp"
 #include "engine/ecs/RuntimeAccessValidator.hpp"
+#include "engine/ecs/SystemFusionPlanner.hpp"
 #include "engine/ecs/SystemScheduler.hpp"
 #include "engine/ecs/SystemSchedulerTraceExport.hpp"
 #include "engine/ecs/World.hpp"
 
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <span>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -549,6 +553,28 @@ void RunProfilerTraceExportWritesExternalJsonFileTest() {
 
     input.close();
     std::filesystem::remove(outputPath);
+
+    const std::filesystem::path chromePath = std::filesystem::temp_directory_path() / "kb_ecs_scheduler_trace_test.chrome.json";
+    kb::ecs::ExportSystemSchedulerTraceToChromeTraceFile(scheduler.LastProfilerTrace(), chromePath);
+    std::ifstream chromeInput(chromePath, std::ios::binary);
+    kb::tests::Require(chromeInput.is_open(), "ECS profiler chrome trace export did not create an output file");
+    const std::string chromeContent{ std::istreambuf_iterator<char>{ chromeInput }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(chromeContent.find("\"traceEvents\"") != std::string::npos, "ECS chrome trace export omitted traceEvents array");
+    kb::tests::Require(chromeContent.find("\"displayTimeUnit\": \"ms\"") != std::string::npos, "ECS chrome trace export omitted displayTimeUnit");
+    kb::tests::Require(chromeContent.find("\"ph\": \"X\"") != std::string::npos, "ECS chrome trace export omitted duration events");
+    chromeInput.close();
+    std::filesystem::remove(chromePath);
+
+    const std::filesystem::path csvPath = std::filesystem::temp_directory_path() / "kb_ecs_scheduler_trace_test.csv";
+    kb::ecs::ExportSystemSchedulerTraceToCsvFile(scheduler.LastProfilerTrace(), csvPath);
+    std::ifstream csvInput(csvPath, std::ios::binary);
+    kb::tests::Require(csvInput.is_open(), "ECS profiler csv export did not create an output file");
+    const std::string csvContent{ std::istreambuf_iterator<char>{ csvInput }, std::istreambuf_iterator<char>{} };
+    kb::tests::Require(csvContent.find("system_index,system_name,execution_path") != std::string::npos, "ECS csv export omitted header row");
+    kb::tests::Require(csvContent.find("ProfilingProbe") != std::string::npos, "ECS csv export omitted system row");
+    csvInput.close();
+    std::filesystem::remove(csvPath);
+
     scheduler.Shutdown(world);
 }
 
@@ -594,7 +620,43 @@ void RunDebugTraceCapturesSystemExecutionTest() {
 
 namespace kb::tests {
 
+void RunSystemFusionPlannerReducesChunkPassesTest() {
+    constexpr std::uint64_t kMovementArchetype = 0xA1ULL;
+    constexpr std::uint64_t kRenderArchetype = 0xB2ULL;
+    const std::array systems{
+        kb::ecs::SystemFusionDescriptor{ .name = "ReadVelocity", .archetypeSignature = kMovementArchetype, .estimatedCostNanoseconds = 50'000, .entityCount = 100'000 },
+        kb::ecs::SystemFusionDescriptor{ .name = "UpdatePosition", .archetypeSignature = kMovementArchetype, .estimatedCostNanoseconds = 60'000, .entityCount = 100'000 },
+        kb::ecs::SystemFusionDescriptor{ .name = "UpdateBounds", .archetypeSignature = kMovementArchetype, .estimatedCostNanoseconds = 40'000, .entityCount = 100'000 },
+        kb::ecs::SystemFusionDescriptor{ .name = "Cull", .archetypeSignature = kRenderArchetype, .estimatedCostNanoseconds = 30'000, .entityCount = 100'000 },
+        kb::ecs::SystemFusionDescriptor{ .name = "Structural", .archetypeSignature = kMovementArchetype, .estimatedCostNanoseconds = 10'000, .entityCount = 100'000, .hasSyncPoint = true },
+    };
+
+    const kb::ecs::SystemFusionPlan plan = kb::ecs::PlanSystemFusion(
+        std::span<const kb::ecs::SystemFusionDescriptor>{ systems },
+        kb::ecs::SystemFusionPlannerConfig{ .workerCount = 8 });
+
+    // Baseline = 5 systems each its own pass. Fused = movement family (1) +
+    // render family (1) + structural sync system (1) = 3 passes.
+    kb::tests::Require(plan.baselineChunkPasses == 5U, "fusion planner miscounted baseline passes");
+    kb::tests::Require(plan.fusedChunkPasses == 3U, "fusion planner did not fuse compatible systems");
+    kb::tests::Require(plan.ReducedChunkPasses() == 2U, "fusion planner reported the wrong pass reduction");
+    kb::tests::Require(plan.fusionGroups.size() == 1U, "fusion planner produced an unexpected number of fusion groups");
+    kb::tests::Require(plan.fusionGroups.front().archetypeSignature == kMovementArchetype, "fusion planner fused the wrong archetype family");
+    kb::tests::Require(plan.fusionGroups.front().systemIndices.size() == 3U, "fusion planner left a fusible system out of the group");
+
+    // A heavy system on a large archetype should be recommended for splitting.
+    const std::array heavySystem{
+        kb::ecs::SystemFusionDescriptor{ .name = "HeavyTransform", .archetypeSignature = 0xC3ULL, .estimatedCostNanoseconds = 4'000'000, .entityCount = 10'000'000 },
+    };
+    const kb::ecs::SystemFusionPlan heavyPlan = kb::ecs::PlanSystemFusion(
+        std::span<const kb::ecs::SystemFusionDescriptor>{ heavySystem },
+        kb::ecs::SystemFusionPlannerConfig{ .workerCount = 8 });
+    kb::tests::Require(heavyPlan.splits.size() == 1U, "fusion planner did not recommend splitting a heavy system");
+    kb::tests::Require(heavyPlan.splits.front().suggestedRangeCount >= 2U && heavyPlan.splits.front().suggestedRangeCount <= 8U, "fusion planner produced an invalid split range count");
+}
+
 void RunEcsSystemSchedulerTests() {
+    RunSystemFusionPlannerReducesChunkPassesTest();
     RunExplicitOrderingReordersSystemsTest();
     RunReadWriteDependencyCycleTest();
     RunDeterministicModeOrdersIndependentSystemsByNameTest();

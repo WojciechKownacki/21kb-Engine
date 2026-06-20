@@ -2,6 +2,7 @@
 #include "TestSupport.hpp"
 
 #include "engine/ecs/ChunkSizeAutoTuner.hpp"
+#include "engine/ecs/PerArchetypeChunkSizeAdvisor.hpp"
 #include "engine/ecs/QueryExecutionScratch.hpp"
 #include "engine/ecs/QueryExecutionSettings.hpp"
 #include "engine/ecs/QueryExecutionTuning.hpp"
@@ -77,9 +78,21 @@ void RunWorldConfigTest() {
     static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::ParallelRanges) == "parallel_ranges");
     static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::SIMDPreferred) == "simd_preferred");
     static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::Deterministic) == "deterministic");
+    static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::SingleThreadSIMD) == "single_thread_simd");
+    static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::ParallelSIMD) == "parallel_simd");
+    static_assert(kb::ecs::QueryExecutionPolicyName(kb::ecs::QueryExecutionPolicy::StreamingLargeWorld) == "streaming_large_world");
     static_assert(kb::ecs::ParseQueryExecutionPolicy("parallel_chunks") == kb::ecs::QueryExecutionPolicy::ParallelChunks);
     static_assert(kb::ecs::ParseQueryExecutionPolicy("parallel-ranges") == kb::ecs::QueryExecutionPolicy::ParallelRanges);
     static_assert(kb::ecs::ParseQueryExecutionPolicy("simd") == kb::ecs::QueryExecutionPolicy::SIMDPreferred);
+    static_assert(kb::ecs::ParseQueryExecutionPolicy("single_thread_simd") == kb::ecs::QueryExecutionPolicy::SingleThreadSIMD);
+    static_assert(kb::ecs::ParseQueryExecutionPolicy("parallel_simd") == kb::ecs::QueryExecutionPolicy::ParallelSIMD);
+    static_assert(kb::ecs::ParseQueryExecutionPolicy("streaming") == kb::ecs::QueryExecutionPolicy::StreamingLargeWorld);
+    static_assert(kb::ecs::QueryExecutionPolicyUsesParallelism(kb::ecs::QueryExecutionPolicy::ParallelSIMD));
+    static_assert(kb::ecs::QueryExecutionPolicyUsesParallelism(kb::ecs::QueryExecutionPolicy::StreamingLargeWorld));
+    static_assert(!kb::ecs::QueryExecutionPolicyUsesParallelism(kb::ecs::QueryExecutionPolicy::SingleThreadSIMD));
+    static_assert(kb::ecs::QueryExecutionPolicyPrefersSimd(kb::ecs::QueryExecutionPolicy::SingleThreadSIMD));
+    static_assert(kb::ecs::QueryExecutionPolicyPrefersSimd(kb::ecs::QueryExecutionPolicy::ParallelSIMD));
+    static_assert(kb::ecs::QueryExecutionPolicyPrefersRanges(kb::ecs::QueryExecutionPolicy::StreamingLargeWorld));
     static_assert(kb::ecs::ParseQueryExecutionPolicyWithDiagnostics("deterministic").HasValue());
     static_assert(kb::ecs::ParseQueryExecutionPolicyWithDiagnostics("deterministic").policy == kb::ecs::QueryExecutionPolicy::Deterministic);
     static_assert(!kb::ecs::ParseQueryExecutionPolicyWithDiagnostics("").HasValue());
@@ -232,6 +245,45 @@ void RunChunkSizeAutoTunerTest() {
     kb::tests::Require(
         kb::ecs::ChunkPayloadBytes(tunedConfig.config.chunkSizeProfile) <= 16U * 1024U,
         "ECS chunk tuner applied a config outside the requested mobile payload budget");
+}
+
+void RunPerArchetypeChunkSizeAdvisorTest() {
+    const std::array components{
+        TuneComponent<TunePosition>(601),
+        TuneComponent<TuneVelocity>(602),
+    };
+
+    const std::array requests{
+        kb::ecs::ArchetypeChunkSizeRequest{
+            .archetypeIndex = 0,
+            .components = components,
+            .entityCount = 4'000'000,
+            .workload = kb::ecs::ChunkSizeTuningWorkload::Streaming,
+        },
+        kb::ecs::ArchetypeChunkSizeRequest{
+            .archetypeIndex = 1,
+            .components = components,
+            .entityCount = 2'000,
+            .workload = kb::ecs::ChunkSizeTuningWorkload::MobileThermal,
+            .maxChunkPayloadBytes = 16U * 1024U,
+        },
+    };
+
+    const kb::ecs::PerArchetypeChunkSizePlan plan =
+        kb::ecs::PlanPerArchetypeChunkSizes(std::span<const kb::ecs::ArchetypeChunkSizeRequest>{ requests });
+    kb::tests::Require(plan.recommendations.size() == 2U, "per-archetype chunk planner skipped an archetype");
+    kb::tests::Require(plan.recommendations[0].applied && plan.recommendations[1].applied, "per-archetype chunk planner produced an invalid recommendation");
+    kb::tests::Require(
+        kb::ecs::ChunkPayloadBytes(plan.recommendations[1].profile) <= 16U * 1024U,
+        "per-archetype chunk planner ignored the mobile payload budget");
+    kb::tests::Require(
+        plan.recommendations[0].profile != plan.recommendations[1].profile,
+        "per-archetype chunk planner failed to diverge profiles per archetype family");
+    kb::tests::Require(!plan.uniform, "per-archetype chunk planner reported uniform profiles for divergent archetypes");
+    // Dominant profile is entity-weighted: the 4M streaming archetype dominates.
+    kb::tests::Require(
+        plan.dominantProfile == plan.recommendations[0].profile,
+        "per-archetype chunk planner chose the wrong entity-weighted dominant profile");
 }
 
 void RunChunkProfileCapacityMatrixTest() {
@@ -427,6 +479,7 @@ namespace kb::tests {
 void RunEcsConfigTests() {
     RunWorldConfigTest();
     RunChunkSizeAutoTunerTest();
+    RunPerArchetypeChunkSizeAdvisorTest();
     RunChunkProfileCapacityMatrixTest();
     RunQueryReductionSlotLayoutTest();
     RunQueryExecutionTuningTest();

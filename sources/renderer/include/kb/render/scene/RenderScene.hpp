@@ -90,6 +90,13 @@ struct MeshRenderProxy {
     RenderProxyId id{};
     MeshRenderProxyDesc desc{};
     RenderProxyDirtyFlag dirty = RenderProxyDirtyFlag::None;
+    // Cached draw-group instance location, stamped with the draw-group build
+    // version so a transform-only update can refresh the instance in place with a
+    // single proxy lookup (no second entity->location map). A stale stamp falls
+    // back to a full rebuild.
+    mutable std::uint32_t instanceGroupIndex = 0;
+    mutable std::uint32_t instanceIndexInGroup = 0;
+    mutable std::uint64_t instanceLocationVersion = 0;
 };
 
 struct CameraRenderProxy {
@@ -119,6 +126,10 @@ struct RenderSceneStats {
     std::uint32_t cameraProxyCapacity = 0;
     std::uint32_t lightProxyCapacity = 0;
     std::uint32_t drawGroupLookupCapacity = 0;
+    // H2/H7 telemetry: transform-only updates that refreshed an instance in place
+    // (no draw-group rebuild) versus those that fell back to a full invalidation.
+    std::uint64_t transformInPlaceUpdateCount = 0;
+    std::uint64_t transformFallbackUpdateCount = 0;
 };
 
 class RenderScene {
@@ -132,6 +143,27 @@ public:
     [[nodiscard]] RenderProxyId UpsertMesh(const MeshRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertCamera(const CameraRenderProxyDesc& desc);
     [[nodiscard]] RenderProxyId UpsertLight(const LightRenderProxyDesc& desc);
+
+    enum class TransformUpdateOutcome {
+        NotFound,
+        InPlace,
+        Fallback,
+    };
+
+    // H2/H7 - transform-only fast update. When the draw-group cache is clean it
+    // refreshes the cached instance's model matrix in place (no regrouping, no
+    // rebuild); otherwise it updates the proxy and invalidates so the next
+    // rebuild picks it up. Returns false only when the entity has no mesh proxy.
+    [[nodiscard]] bool UpdateMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+
+    // H6 - shared core for the single-entity and parallel batch paths. Updates
+    // the proxy's source-of-truth model and, when the cache is clean, the cached
+    // instance in place. Never invalidates or touches telemetry, so it is safe to
+    // call concurrently for distinct entity ids (each owns a distinct proxy and
+    // instance slot). The caller applies invalidation/telemetry once per batch.
+    [[nodiscard]] TransformUpdateOutcome ApplyMeshTransform(std::uint64_t entityId, const std::array<float, 16>& model);
+    void InvalidateDrawGroupsIfFallback(TransformUpdateOutcome outcome) noexcept;
+    void AddTransformUpdateCounts(std::uint64_t inPlace, std::uint64_t fallback) noexcept;
 
     [[nodiscard]] bool RemoveMesh(std::uint64_t entityId) noexcept;
     [[nodiscard]] bool RemoveCamera(std::uint64_t entityId) noexcept;
@@ -186,6 +218,9 @@ private:
     mutable std::unordered_map<DrawGroupKey, std::size_t, DrawGroupKeyHash> drawGroupLookupScratch_;
     std::uint64_t nextProxyId_ = 1U;
     mutable bool drawGroupsDirty_ = true;
+    mutable std::uint64_t drawGroupBuildVersion_ = 1U;
+    std::uint64_t transformInPlaceUpdateCount_ = 0;
+    std::uint64_t transformFallbackUpdateCount_ = 0;
 };
 
 } // namespace kb::render

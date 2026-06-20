@@ -14,11 +14,14 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "engine/ecs/WorkerPool.hpp"
 #include "scene/EcsRenderTransformResolver.hpp"
+#include "scene/SceneRenderWorldTransformReader.hpp"
 #include "scene/SceneTransformMatrices.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <span>
 
@@ -82,10 +85,24 @@ namespace {
     return RenderLightKind::Point;
 }
 
+// Converts the batched transform system's column-major 3x4 world affine into the
+// column-major 4x4 model matrix the render instance stream expects. This mapping
+// is identical, element for element, to SceneTransformMatrices::Model, so the
+// columnar path renders bit-identically to the per-entity path.
+[[nodiscard]] std::array<float, 16> ModelFromWorldAffine3x4(const kb::scene::WorldTransformAffine3x4& affine) noexcept {
+    return std::array<float, 16>{
+        affine.values[0], affine.values[1], affine.values[2], 0.0F,
+        affine.values[3], affine.values[4], affine.values[5], 0.0F,
+        affine.values[6], affine.values[7], affine.values[8], 0.0F,
+        affine.values[9], affine.values[10], affine.values[11], 1.0F,
+    };
+}
+
 struct SyncContext {
     const kb::scene::Scene* scene = nullptr;
     RenderScene* renderScene = nullptr;
     EcsRenderTransformResolver* transforms = nullptr;
+    SceneRenderWorldTransformReader* worldReader = nullptr;
     std::vector<std::uint64_t>* meshes = nullptr;
     std::vector<std::uint64_t>* cameras = nullptr;
     std::vector<std::uint64_t>* lights = nullptr;
@@ -94,7 +111,7 @@ struct SyncContext {
 
 void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::CameraComponent& camera, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    const kb::scene::TransformComponent renderTransform = sync->transforms->Resolve(entity);
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
     sync->cameras->push_back(entity.Id());
     static_cast<void>(sync->renderScene->UpsertCamera(CameraRenderProxyDesc{
         .entityId = entity.Id(),
@@ -113,7 +130,7 @@ void SyncCamera(kb::scene::SceneEntity entity, const kb::scene::TransformCompone
 
 void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    const kb::scene::TransformComponent renderTransform = sync->transforms->Resolve(entity);
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
     std::array<std::uint64_t, kMaxSceneMaterialSlotOverrides> materialSlotAssetIds{};
     const std::uint32_t materialSlotOverrideCount = CopyMaterialSlotOverrides(renderer, materialSlotAssetIds);
     sync->meshes->push_back(entity.Id());
@@ -134,7 +151,7 @@ void SyncMesh(kb::scene::SceneEntity entity, const kb::scene::TransformComponent
 
 void SyncLight(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
     auto* sync = static_cast<SyncContext*>(context);
-    const kb::scene::TransformComponent renderTransform = sync->transforms->Resolve(entity);
+    const kb::scene::TransformComponent renderTransform = sync->worldReader->Read(entity, transform);
     sync->lights->push_back(entity.Id());
     static_cast<void>(sync->renderScene->UpsertLight(LightRenderProxyDesc{
         .entityId = entity.Id(),
@@ -226,10 +243,12 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     transformResolving_.clear();
 
     EcsRenderTransformResolver transforms{ scene, transformCache_, transformResolving_ };
+    SceneRenderWorldTransformReader worldReader{ transforms };
     SyncContext context{
         .scene = &scene,
         .renderScene = &renderScene,
         .transforms = &transforms,
+        .worldReader = &worldReader,
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
@@ -242,6 +261,8 @@ void EcsRenderSceneSynchronizer::Sync(const kb::scene::Scene& scene, RenderScene
     if (context.basicLightingEnabled) {
         visitors.ForEachLight(&SyncLight, &context);
     }
+    transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
+    transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
 
     std::ranges::sort(seenMeshes_);
     std::ranges::sort(seenCameras_);
@@ -262,10 +283,12 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     transformResolving_.clear();
 
     EcsRenderTransformResolver transforms{ scene, transformCache_, transformResolving_ };
+    SceneRenderWorldTransformReader worldReader{ transforms };
     SyncContext context{
         .scene = &scene,
         .renderScene = &renderScene,
         .transforms = &transforms,
+        .worldReader = &worldReader,
         .meshes = &seenMeshes_,
         .cameras = &seenCameras_,
         .lights = &seenLights_,
@@ -275,6 +298,63 @@ void EcsRenderSceneSynchronizer::SyncEntities(
     for (const std::uint64_t entityId : entityIds) {
         SyncEntity(kb::scene::SceneEntity{ entityId }, context);
     }
+    transformPrecomputedReadCount_ = worldReader.PrecomputedReadCount();
+    transformResolvedFallbackCount_ = worldReader.ResolvedFallbackCount();
+}
+
+void EcsRenderSceneSynchronizer::SyncMeshWorldAffines(
+    RenderScene& renderScene,
+    std::span<const kb::scene::SceneEntity> entities,
+    std::span<const kb::scene::WorldTransformAffine3x4> worldAffines) const {
+    const std::size_t count = std::min(entities.size(), worldAffines.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+        // Returns false for entities without a mesh proxy (cameras, lights); those
+        // are handled by the structural sync, so skipping them here is correct.
+        static_cast<void>(renderScene.UpdateMeshTransform(entities[index].Id(), model));
+    }
+}
+
+void EcsRenderSceneSynchronizer::SyncMeshWorldAffinesParallel(
+    RenderScene& renderScene,
+    std::span<const kb::scene::SceneEntity> entities,
+    std::span<const kb::scene::WorldTransformAffine3x4> worldAffines,
+    kb::ecs::WorkerPool& workerPool,
+    std::size_t grainSize) const {
+    const std::size_t count = std::min(entities.size(), worldAffines.size());
+    if (count == 0U) {
+        return;
+    }
+
+    std::atomic<std::uint64_t> inPlace{ 0U };
+    std::atomic<std::uint64_t> fallback{ 0U };
+    const std::size_t resolvedGrain = grainSize == 0U ? count : grainSize;
+    workerPool.ParallelForChunks(count, resolvedGrain, [&renderScene, entities, worldAffines, &inPlace, &fallback](
+        kb::ecs::WorkerContext, const kb::ecs::WorkerPoolChunk& chunk) {
+        std::uint64_t localInPlace = 0U;
+        std::uint64_t localFallback = 0U;
+        const std::size_t end = chunk.begin + chunk.count;
+        for (std::size_t index = chunk.begin; index < end; ++index) {
+            const std::array<float, 16> model = ModelFromWorldAffine3x4(worldAffines[index]);
+            switch (renderScene.ApplyMeshTransform(entities[index].Id(), model)) {
+            case RenderScene::TransformUpdateOutcome::InPlace:
+                ++localInPlace;
+                break;
+            case RenderScene::TransformUpdateOutcome::Fallback:
+                ++localFallback;
+                break;
+            case RenderScene::TransformUpdateOutcome::NotFound:
+                break;
+            }
+        }
+        inPlace.fetch_add(localInPlace, std::memory_order_relaxed);
+        fallback.fetch_add(localFallback, std::memory_order_relaxed);
+    });
+
+    const std::uint64_t fallbackCount = fallback.load(std::memory_order_relaxed);
+    renderScene.InvalidateDrawGroupsIfFallback(
+        fallbackCount > 0U ? RenderScene::TransformUpdateOutcome::Fallback : RenderScene::TransformUpdateOutcome::InPlace);
+    renderScene.AddTransformUpdateCounts(inPlace.load(std::memory_order_relaxed), fallbackCount);
 }
 
 void EcsRenderSceneSynchronizer::SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
@@ -301,6 +381,8 @@ EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexce
         .transformCacheCapacity = static_cast<std::uint32_t>(transformCache_.bucket_count()),
         .transformResolvingCapacity = static_cast<std::uint32_t>(transformResolving_.bucket_count()),
         .transformUpdateEntityCapacity = static_cast<std::uint32_t>(transformUpdateEntities_.capacity()),
+        .transformPrecomputedReadCount = static_cast<std::uint32_t>(transformPrecomputedReadCount_),
+        .transformResolvedFallbackCount = static_cast<std::uint32_t>(transformResolvedFallbackCount_),
     };
 }
 

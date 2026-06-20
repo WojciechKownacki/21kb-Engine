@@ -16,4 +16,8 @@ void SceneTransforms::MarkModified(SceneEntity entity) noexcept {
     SceneTransformService::MarkModified(scene_, entity);
 }
 
+void SceneTransforms::MarkModified(std::span<const SceneEntity> entities) noexcept {
+    SceneTransformService::MarkModified(scene_, entities);
+}
+
 } // namespace kb::scene

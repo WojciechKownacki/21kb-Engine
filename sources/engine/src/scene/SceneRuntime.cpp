@@ -113,6 +113,7 @@ void SceneRuntimeService::AddSceneSystem(Scene& scene, std::unique_ptr<SceneSyst
     if (state.mode == SceneMode::PrefabPrivate) {
         throw std::logic_error("Cannot register scene runtime systems in a prefab private scene");
     }
+    state.requiresFixedStep = state.requiresFixedStep || system->RequiresFixedStep();
     state.sceneSystemScheduler.Add(std::move(system), scene);
 }
 
@@ -272,7 +273,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SynchronizeTransformHierarchy(state);
     state.sceneSystemScheduler.Update(scene, deltaSeconds);
 
-    if (fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
+    if (state.requiresFixedStep && fixed.fixedDeltaSeconds > 0.0F && fixed.maxFixedStepsPerFrame > 0U) {
         const float clampedDelta = std::clamp(deltaSeconds, 0.0F, std::max(0.0F, fixed.maxFrameDeltaSeconds));
         state.fixedStepAccumulatorSeconds += clampedDelta;
         while (state.fixedStepAccumulatorSeconds >= fixed.fixedDeltaSeconds &&

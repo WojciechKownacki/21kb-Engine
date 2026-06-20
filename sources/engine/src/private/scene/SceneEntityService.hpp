@@ -20,6 +20,7 @@ public:
 
     [[nodiscard]] static SceneObject CreateObject(Scene& scene);
     [[nodiscard]] static SceneObject CreateObject(Scene& scene, SceneObjectDesc desc);
+    [[nodiscard]] static std::vector<SceneObject> CreateObjects(Scene& scene, std::span<const SceneObjectDesc> descs);
     [[nodiscard]] static SceneEntity CreateEntity(Scene& scene);
     [[nodiscard]] static SceneEntity CreateEntity(Scene& scene, SceneObjectDesc desc);
     [[nodiscard]] static SceneObject DuplicateObject(Scene& scene, SceneObject object);

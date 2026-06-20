@@ -19,11 +19,62 @@ enum class QueryIterationOrder {
 
 enum class QueryExecutionPolicy {
     SingleThread,
+    SingleThreadSIMD,
     ParallelChunks,
     ParallelRanges,
     SIMDPreferred,
+    ParallelSIMD,
     Deterministic,
+    StreamingLargeWorld,
 };
+
+// Behavioral classifiers for execution policies. New policies plug in here once,
+// keeping the executor open for extension and closed for modification: call
+// sites query intent (parallel? simd? ranges? deterministic?) instead of
+// enumerating concrete policies.
+[[nodiscard]] constexpr bool QueryExecutionPolicyUsesParallelism(QueryExecutionPolicy policy) noexcept {
+    switch (policy) {
+    case QueryExecutionPolicy::ParallelChunks:
+    case QueryExecutionPolicy::ParallelRanges:
+    case QueryExecutionPolicy::SIMDPreferred:
+    case QueryExecutionPolicy::ParallelSIMD:
+    case QueryExecutionPolicy::StreamingLargeWorld:
+        return true;
+    case QueryExecutionPolicy::SingleThread:
+    case QueryExecutionPolicy::SingleThreadSIMD:
+    case QueryExecutionPolicy::Deterministic:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] constexpr bool QueryExecutionPolicyPrefersSimd(QueryExecutionPolicy policy) noexcept {
+    switch (policy) {
+    case QueryExecutionPolicy::SingleThreadSIMD:
+    case QueryExecutionPolicy::SIMDPreferred:
+    case QueryExecutionPolicy::ParallelSIMD:
+        return true;
+    case QueryExecutionPolicy::SingleThread:
+    case QueryExecutionPolicy::ParallelChunks:
+    case QueryExecutionPolicy::ParallelRanges:
+    case QueryExecutionPolicy::Deterministic:
+    case QueryExecutionPolicy::StreamingLargeWorld:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] constexpr bool QueryExecutionPolicyPrefersRanges(QueryExecutionPolicy policy) noexcept {
+    return policy == QueryExecutionPolicy::ParallelRanges || policy == QueryExecutionPolicy::StreamingLargeWorld;
+}
+
+[[nodiscard]] constexpr bool QueryExecutionPolicyIsDeterministic(QueryExecutionPolicy policy) noexcept {
+    return policy == QueryExecutionPolicy::Deterministic;
+}
+
+[[nodiscard]] constexpr bool QueryExecutionPolicyStreamsLargeWorld(QueryExecutionPolicy policy) noexcept {
+    return policy == QueryExecutionPolicy::StreamingLargeWorld;
+}
 
 enum class QueryExecutionPolicyParseError : std::uint8_t {
     None,
@@ -87,14 +138,20 @@ struct QueryWorkerContext {
     switch (policy) {
     case QueryExecutionPolicy::SingleThread:
         return "single_thread";
+    case QueryExecutionPolicy::SingleThreadSIMD:
+        return "single_thread_simd";
     case QueryExecutionPolicy::ParallelChunks:
         return "parallel_chunks";
     case QueryExecutionPolicy::ParallelRanges:
         return "parallel_ranges";
     case QueryExecutionPolicy::SIMDPreferred:
         return "simd_preferred";
+    case QueryExecutionPolicy::ParallelSIMD:
+        return "parallel_simd";
     case QueryExecutionPolicy::Deterministic:
         return "deterministic";
+    case QueryExecutionPolicy::StreamingLargeWorld:
+        return "streaming_large_world";
     }
     return "parallel_chunks";
 }
@@ -110,6 +167,19 @@ struct QueryWorkerContext {
         QueryExecutionPolicyTokenEquals(value, "single_thread") ||
         QueryExecutionPolicyTokenEquals(value, "single-thread")) {
         return QueryExecutionPolicyParseResult{ .policy = QueryExecutionPolicy::SingleThread };
+    }
+    if (QueryExecutionPolicyTokenEquals(value, "single_thread_simd") ||
+        QueryExecutionPolicyTokenEquals(value, "single-thread-simd")) {
+        return QueryExecutionPolicyParseResult{ .policy = QueryExecutionPolicy::SingleThreadSIMD };
+    }
+    if (QueryExecutionPolicyTokenEquals(value, "parallel_simd") ||
+        QueryExecutionPolicyTokenEquals(value, "parallel-simd")) {
+        return QueryExecutionPolicyParseResult{ .policy = QueryExecutionPolicy::ParallelSIMD };
+    }
+    if (QueryExecutionPolicyTokenEquals(value, "streaming") ||
+        QueryExecutionPolicyTokenEquals(value, "streaming_large_world") ||
+        QueryExecutionPolicyTokenEquals(value, "streaming-large-world")) {
+        return QueryExecutionPolicyParseResult{ .policy = QueryExecutionPolicy::StreamingLargeWorld };
     }
     if (QueryExecutionPolicyTokenEquals(value, "parallel") ||
         QueryExecutionPolicyTokenEquals(value, "parallel_chunks") ||

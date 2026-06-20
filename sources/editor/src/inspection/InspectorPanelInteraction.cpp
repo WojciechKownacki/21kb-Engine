@@ -473,7 +473,11 @@ bool InspectorPanelInteraction::HandleKeyCapture(EditorSceneContext& sceneContex
 }
 
 bool InspectorPanelInteraction::UpdateHover(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit) noexcept {
-    return sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property);
+    const int dropdownHover = hit.kind == InspectorHitKind::ValueTypeOption ? hit.index : -1;
+    const int previousDropdownHover = sceneContext.Inspector().ValueTypeDropdownHover();
+    sceneContext.Inspector().SetValueTypeDropdownHover(dropdownHover);
+    const bool hoverChanged = sceneContext.Inspector().SetHover(hit.kind, hit.section, hit.property);
+    return hoverChanged || previousDropdownHover != dropdownHover;
 }
 
 bool InspectorPanelInteraction::HandleMouseWheel(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int wheelDelta) noexcept {

@@ -28,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace kb::render {
@@ -42,6 +43,10 @@ class SceneRenderer;
 
 namespace kb::scene {
 class Scene;
+}
+
+namespace kb::ecs {
+class WorkerPool;
 }
 
 namespace kb::render {
@@ -208,6 +213,8 @@ private:
     [[nodiscard]] TemporalViewportState& TemporalStateFor(RenderViewportId viewportId, std::uint32_t viewportIndex);
     std::unique_ptr<BgfxContext> context_;
     std::unique_ptr<EcsRenderSceneSynchronizer> renderSceneSynchronizer_;
+    // Lazily created worker pool that parallelizes the columnar render-sync (H6).
+    std::unique_ptr<kb::ecs::WorkerPool> renderSyncWorkerPool_;
     RenderSceneStore renderSceneStore_;
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
