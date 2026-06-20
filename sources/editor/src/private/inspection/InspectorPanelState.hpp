@@ -23,6 +23,7 @@ enum class InspectorSectionId : std::uint8_t {
     InputAction,
     InputMappings,
     Material,
+    MaterialPreview,
     Script,
     AddComponent,
 };
@@ -203,6 +204,7 @@ private:
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
     bool materialCollapsed_ = false;
+    bool materialPreviewCollapsed_ = false;
     bool scriptCollapsed_ = false;
     bool addComponentBrowserOpen_ = false;
     bool scriptComponentMenuOpen_ = false;

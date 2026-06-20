@@ -29,6 +29,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 
     EditorMainWindow::EnableDarkMode(state.window);
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
+    state.materialPreviewViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 
@@ -42,6 +43,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
+    state.materialPreviewViewport.Shutdown();
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 

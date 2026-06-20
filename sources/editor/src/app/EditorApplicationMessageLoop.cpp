@@ -5,7 +5,10 @@
 #include "docking/EditorFloatingWindowManager.hpp"
 #include "console/EditorConsoleState.hpp"
 #include "engine/input/InputSubsystem.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "kb/render/SceneDepthPolicy.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -16,6 +19,8 @@
 #include <chrono>
 #include <optional>
 
+#include <bx/math.h>
+
 namespace kb::editor {
 namespace {
 
@@ -24,6 +29,7 @@ constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
 constexpr double kEditorTargetFrameRate = 180.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
 constexpr int kMaxMessagesPerPump = 128;
+constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
 
 [[nodiscard]] float RuntimeDeltaSeconds(std::chrono::steady_clock::time_point previous, std::chrono::steady_clock::time_point current) noexcept {
     const std::chrono::duration<float> delta = current - previous;
@@ -48,6 +54,63 @@ constexpr int kMaxMessagesPerPump = 128;
         .top = rect.y,
         .right = rect.x + rect.width,
         .bottom = rect.y + rect.height,
+    };
+}
+
+[[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
+    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.right - rect.left));
+}
+
+[[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
+    return static_cast<std::uint32_t>(std::max<LONG>(0, rect.bottom - rect.top));
+}
+
+[[nodiscard]] float Aspect(std::uint32_t width, std::uint32_t height) noexcept {
+    return height == 0U ? 1.0F : static_cast<float>(std::max(1U, width)) / static_cast<float>(height);
+}
+
+[[nodiscard]] kb::render::SceneRenderCamera BuildMaterialPreviewCamera(std::uint32_t renderWidth, std::uint32_t renderHeight) noexcept {
+    kb::render::SceneRenderCamera camera{};
+    bx::mtxLookAt(camera.view.data(), bx::Vec3{0.0F, 0.0F, -4.0F}, bx::Vec3{0.0F, 0.0F, 0.0F}, bx::Vec3{0.0F, 1.0F, 0.0F});
+    kb::render::SceneDepthPolicy::MakePerspective(
+        camera.projection.data(),
+        38.0F,
+        Aspect(renderWidth, renderHeight),
+        0.05F,
+        50.0F,
+        kb::render::SceneDepthPolicy::HomogeneousDepth());
+    return camera;
+}
+
+[[nodiscard]] const kb::assets::AssetMetadata* SelectedMaterialMetadata(const EditorSceneContext& sceneContext) noexcept {
+    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+    if (!assetId.IsValid()) {
+        return nullptr;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
+    return metadata != nullptr && metadata->type == "RenderMaterial" ? metadata : nullptr;
+}
+
+[[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect) {
+    const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
+    const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
+    return EditorSceneBgfxViewport::PresentSettings{
+        .renderWidth = renderWidth,
+        .renderHeight = renderHeight,
+        .fitMode = EditorViewportFitMode::Fit,
+        .cameraOverride = BuildMaterialPreviewCamera(renderWidth, renderHeight),
+        .viewportKey = kMaterialPreviewViewportKey,
+        .editorSceneOverlaysEnabled = false,
+        .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = true,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+        .gpuDrivenRuntimeDispatchEnabled = false,
+        .drawSafeArea = false,
+        .sceneRevision = sceneContext.MaterialPreviewRevision(),
+        .sceneDirtyBaseRevision = sceneContext.MaterialPreviewRevision(),
+        .sceneFullSyncRequired = true,
     };
 }
 
@@ -197,6 +260,80 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return presented;
 }
 
+[[nodiscard]] bool PresentMaterialPreview(EditorApplicationState& state, HWND host, const RECT& inspectorContent) {
+    if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
+        return false;
+    }
+
+    const kb::assets::AssetMetadata* metadata = SelectedMaterialMetadata(state.sceneContext);
+    const std::optional<RECT> previewRect = metadata == nullptr
+        ? std::nullopt
+        : InspectorPanelRenderer::MaterialPreviewRect(inspectorContent, state.sceneContext);
+
+    state.materialPreviewViewport.BeginPaintLayout(host);
+    bool presented = false;
+    if (metadata != nullptr && previewRect.has_value()) {
+        const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(metadata->id);
+        const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *previewRect);
+        state.materialPreviewViewport.Present(host, *previewRect, previewScene, settings);
+        presented = true;
+    }
+    state.materialPreviewViewport.EndPaintLayout();
+    if (presented) {
+        state.materialPreviewViewport.ClearPresentRequest();
+    }
+    return presented;
+}
+
+[[nodiscard]] bool PresentMainMaterialPreview(EditorApplicationState& state) {
+    if (state.window == nullptr || IsWindowVisible(state.window) == 0) {
+        return false;
+    }
+    const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
+        DockPanelKind::Inspector,
+        state.window,
+        state.window,
+        state.dockModel,
+        state.floatingWindows,
+        state.metrics);
+    if (!inspector.has_value()) {
+        state.materialPreviewViewport.BeginPaintLayout(state.window);
+        state.materialPreviewViewport.EndPaintLayout();
+        return false;
+    }
+    return PresentMaterialPreview(state, state.window, *inspector);
+}
+
+[[nodiscard]] bool PresentFloatingMaterialPreviews(EditorApplicationState& state) {
+    bool presented = false;
+    const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
+    for (HWND window : queries.Windows()) {
+        if (window == nullptr || IsWindow(window) == 0 || IsWindowVisible(window) == 0) {
+            continue;
+        }
+        const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
+            DockPanelKind::Inspector,
+            window,
+            state.window,
+            state.dockModel,
+            state.floatingWindows,
+            state.metrics);
+        if (!inspector.has_value()) {
+            state.materialPreviewViewport.BeginPaintLayout(window);
+            state.materialPreviewViewport.EndPaintLayout();
+            continue;
+        }
+        presented = PresentMaterialPreview(state, window, *inspector) || presented;
+    }
+    return presented;
+}
+
+[[nodiscard]] bool PresentVisibleMaterialPreviews(EditorApplicationState& state) {
+    const bool mainPresented = PresentMainMaterialPreview(state);
+    const bool floatingPresented = PresentFloatingMaterialPreviews(state);
+    return mainPresented || floatingPresented;
+}
+
 void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
     if (!state.playMode.IsPlaying()) {
         return;
@@ -240,7 +377,9 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         InvalidateInspectorPanels(state);
     }
 
-    return PresentVisibleScenePanels(state) || navigationChanged || gizmoChanged;
+    const bool scenePresented = PresentVisibleScenePanels(state);
+    const bool materialPreviewPresented = PresentVisibleMaterialPreviews(state);
+    return scenePresented || materialPreviewPresented || navigationChanged || gizmoChanged;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {

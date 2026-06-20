@@ -527,6 +527,10 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorViewportPreviewState.hpp
     src/private/scene/material/EditorMaterialAssetAuthoring.hpp
     src/private/scene/material/EditorMaterialAssetGateway.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewTelemetry.hpp
     src/private/scene/transform_edit/EditorSceneTransformChange.hpp
     src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp
     src/private/scene/transform_edit/EditorSceneTransformEditApplier.hpp
@@ -701,6 +705,10 @@ add_executable(kb_editor WIN32
     src/scene/EditorViewportPreviewState.cpp
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
+    src/scene/material_preview/EditorMaterialPreviewScene.cpp
+    src/scene/material_preview/EditorMaterialPreviewTelemetry.cpp
     src/scene/transform_edit/EditorSceneTransformCommitBuilder.cpp
     src/scene/transform_edit/EditorSceneTransformEditApplier.cpp
     src/scene/transform_edit/EditorSceneTransformEditController.cpp
@@ -926,6 +934,10 @@ if(BUILD_TESTING)
         src/scene/EditorViewportPreviewState.cpp
         src/scene/material/EditorMaterialAssetAuthoring.cpp
         src/scene/material/EditorMaterialAssetGateway.cpp
+        src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
+        src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
+        src/scene/material_preview/EditorMaterialPreviewScene.cpp
+        src/scene/material_preview/EditorMaterialPreviewTelemetry.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorPlayModeSceneSession.cpp
         src/app/EditorShellInteractionState.cpp
