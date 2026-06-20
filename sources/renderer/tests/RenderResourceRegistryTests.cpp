@@ -827,7 +827,10 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     Require(NearlyEqual(asset->desc.baseColor[0], 0.2F), "Loaded material did not preserve baseColor red");
     Require(NearlyEqual(asset->desc.baseColor[1], 0.4F), "Loaded material did not preserve baseColor green");
     Require(NearlyEqual(asset->desc.baseColor[2], 0.8F), "Loaded material did not preserve baseColor blue");
-    Require(NearlyEqual(asset->desc.emissiveColor[2], 0.3F), "Loaded material did not preserve emissive color");
+    Require(NearlyEqual(asset->desc.baseColor[3], 1.0F), "Loaded material did not preserve baseColor alpha");
+    Require(NearlyEqual(asset->desc.emissiveColor[0], 0.1F), "Loaded material did not preserve emissive color red");
+    Require(NearlyEqual(asset->desc.emissiveColor[1], 0.2F), "Loaded material did not preserve emissive color green");
+    Require(NearlyEqual(asset->desc.emissiveColor[2], 0.3F), "Loaded material did not preserve emissive color blue");
     Require(NearlyEqual(asset->desc.metallicFactor, 0.6F), "Loaded material did not preserve metallic factor");
     Require(NearlyEqual(asset->desc.roughnessFactor, 0.35F), "Loaded material did not preserve roughness factor");
     Require(NearlyEqual(asset->desc.normalScale, 0.75F), "Loaded material did not preserve normal scale");

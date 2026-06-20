@@ -14,6 +14,7 @@
 #include "inspection/InspectorMultiSelectionTextBuilder.hpp"
 #include "inspection/InspectorRigidbodyTextBuilder.hpp"
 
+#include <cstdio>
 #include <sstream>
 
 namespace kb::editor {
@@ -21,6 +22,61 @@ namespace {
 
 [[nodiscard]] std::string Normalize(const std::filesystem::path& path) {
     return kb::assets::NormalizeAssetPath(path);
+}
+
+[[nodiscard]] std::string FormatFloat(float value) {
+    char buffer[32]{};
+    std::snprintf(buffer, sizeof(buffer), "%.3f", static_cast<double>(value));
+    std::string text = buffer;
+    if (text.find('.') != std::string::npos) {
+        while (!text.empty() && text.back() == '0') {
+            text.pop_back();
+        }
+        if (!text.empty() && text.back() == '.') {
+            text.pop_back();
+        }
+    }
+    return text == "-0" ? "0" : text;
+}
+
+[[nodiscard]] std::string AlphaModeName(kb::render::RenderMaterialAlphaMode mode) {
+    switch (mode) {
+    case kb::render::RenderMaterialAlphaMode::Opaque:
+        return "Opaque";
+    case kb::render::RenderMaterialAlphaMode::Mask:
+        return "Mask";
+    case kb::render::RenderMaterialAlphaMode::Blend:
+        return "Blend";
+    }
+    return "Opaque";
+}
+
+void AppendMaterialInspectorText(std::ostringstream& text, const EditorSceneContext& sceneContext, kb::assets::AssetId id) {
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(id);
+    if (!material.has_value()) {
+        text << '\n' << "Material: failed to load" << '\n';
+        return;
+    }
+
+    text << '\n'
+         << "Material" << '\n'
+         << "Base Color: "
+         << FormatFloat(material->desc.baseColor[0]) << ", "
+         << FormatFloat(material->desc.baseColor[1]) << ", "
+         << FormatFloat(material->desc.baseColor[2]) << ", "
+         << FormatFloat(material->desc.baseColor[3]) << '\n'
+         << "Metallic: " << FormatFloat(material->desc.metallicFactor) << '\n'
+         << "Roughness: " << FormatFloat(material->desc.roughnessFactor) << '\n'
+         << "Normal Scale: " << FormatFloat(material->desc.normalScale) << '\n'
+         << "Occlusion Strength: " << FormatFloat(material->desc.occlusionStrength) << '\n'
+         << "Emissive Color: "
+         << FormatFloat(material->desc.emissiveColor[0]) << ", "
+         << FormatFloat(material->desc.emissiveColor[1]) << ", "
+         << FormatFloat(material->desc.emissiveColor[2]) << '\n'
+         << "Emissive Strength: " << FormatFloat(material->desc.emissiveStrength) << '\n'
+         << "Alpha Cutoff: " << FormatFloat(material->desc.alphaCutoff) << '\n'
+         << "Alpha Mode: " << AlphaModeName(material->desc.alphaMode) << '\n'
+         << "Double Sided: " << (material->desc.doubleSided ? "true" : "false") << '\n';
 }
 
 [[nodiscard]] std::optional<std::string> BuildAssetInspectorText(const EditorSceneContext& sceneContext) {
@@ -48,6 +104,9 @@ namespace {
         text << "Content hash: " << metadata->contentHash << '\n'
              << "Runtime loadable: " << (metadata->runtimeLoadable ? "true" : "false") << '\n'
              << "Loaded: " << (manager.IsLoaded(metadata->id) ? "true" : "false");
+        if (metadata->type == "RenderMaterial") {
+            AppendMaterialInspectorText(text, sceneContext, metadata->id);
+        }
         return text.str();
     }
 

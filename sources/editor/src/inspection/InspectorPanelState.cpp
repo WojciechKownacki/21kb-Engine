@@ -31,6 +31,8 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return inputActionCollapsed_;
     case InspectorSectionId::InputMappings:
         return inputMappingsCollapsed_;
+    case InspectorSectionId::Material:
+        return materialCollapsed_;
     case InspectorSectionId::Script:
         return scriptCollapsed_;
     default:
@@ -67,6 +69,9 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::InputMappings:
         target = &inputMappingsCollapsed_;
+        break;
+    case InspectorSectionId::Material:
+        target = &materialCollapsed_;
         break;
     case InspectorSectionId::Script:
         target = &scriptCollapsed_;
