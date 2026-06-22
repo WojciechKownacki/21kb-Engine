@@ -68,6 +68,13 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 ? EditorAssetBrowserDoubleClickResult::ScriptEditorOpened
                 : EditorAssetBrowserDoubleClickResult::None;
         }
+        if (metadata->type == "RenderMaterial") {
+            // KBMAT-0202: double-clicking a Material Instance selects it for inspection
+            // (so the Material Editor panel shows it) and the router activates that panel.
+            return state.SelectAsset(metadata->id, manager)
+                ? EditorAssetBrowserDoubleClickResult::MaterialEditorOpened
+                : EditorAssetBrowserDoubleClickResult::None;
+        }
         if (!IsSceneDocumentAsset(*metadata)) {
             return EditorAssetBrowserDoubleClickResult::None;
         }

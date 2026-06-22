@@ -70,13 +70,23 @@ void AddPreviewCamera(kb::scene::Scene& scene) {
 }
 
 void AddPreviewLighting(kb::scene::Scene& scene) {
+    kb::scene::SceneObjectDesc directionalDesc{.name = "Material Preview Directional Key"};
+    directionalDesc.transform.localRotation = kb::scene::Quat{ -0.28F, 0.20F, 0.06F, 0.94F };
+    const kb::scene::SceneEntity directionalLight = scene.Entities().CreateEntity(directionalDesc);
+    scene.Components().Lights().Set(directionalLight, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Directional,
+        .color = kb::scene::Vec3{1.0F, 0.96F, 0.90F},
+        .intensity = 0.45F,
+        .castsShadow = false,
+    });
+
     kb::scene::SceneObjectDesc keyLightDesc{.name = "Material Preview Key Light"};
     keyLightDesc.transform.localPosition = kb::scene::Vec3{-2.0F, 2.0F, -3.0F};
     const kb::scene::SceneEntity keyLight = scene.Entities().CreateEntity(keyLightDesc);
     scene.Components().Lights().Set(keyLight, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Point,
         .color = kb::scene::Vec3{1.0F, 0.96F, 0.90F},
-        .intensity = 4.0F,
+        .intensity = 1.35F,
         .range = 10.0F,
         .castsShadow = false,
     });
@@ -87,7 +97,7 @@ void AddPreviewLighting(kb::scene::Scene& scene) {
     scene.Components().Lights().Set(fillLight, kb::scene::LightComponent{
         .kind = kb::scene::LightKind::Point,
         .color = kb::scene::Vec3{0.72F, 0.82F, 1.0F},
-        .intensity = 1.2F,
+        .intensity = 0.35F,
         .range = 8.0F,
         .castsShadow = false,
     });

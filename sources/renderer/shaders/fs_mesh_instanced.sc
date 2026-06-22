@@ -157,9 +157,12 @@ void main()
         discard;
     }
 
-    vec3 normalSample = texture2D(s_normal, v_texcoord0).xyz * 2.0 - 1.0;
-    normalSample.xy *= u_materialParams.z;
-    vec3 normal = normalize(v_tangent * normalSample.x + v_bitangent * normalSample.y + normalize(v_normal) * normalSample.z);
+    vec3 normal = normalize(v_normal);
+    if (u_materialParams.z > 0.0) {
+        vec3 normalSample = texture2D(s_normal, v_texcoord0).xyz * 2.0 - 1.0;
+        normalSample.xy *= u_materialParams.z;
+        normal = normalize(v_tangent * normalSample.x + v_bitangent * normalSample.y + normal * normalSample.z);
+    }
     vec4 metallicRoughness = texture2D(s_metallicRoughness, v_texcoord0);
     float metallic = clamp(u_materialParams.x * metallicRoughness.b, 0.0, 1.0);
     float roughness = clamp(u_materialParams.y * metallicRoughness.g, 0.04, 1.0);

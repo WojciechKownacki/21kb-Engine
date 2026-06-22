@@ -8,6 +8,7 @@
 #include "project/EditorProjectBootstrap.hpp"
 #include "project/EditorProjectPaths.hpp"
 #include "scene/EditorDefaultSceneFactory.hpp"
+#include "scene/EditorPluginCatalog.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -44,6 +45,13 @@ private:
     });
 }
 
+[[nodiscard]] std::string BinaryPathFor(const kb::project::ProjectDescriptor& descriptor, std::string_view name) {
+    const auto iter = std::ranges::find_if(descriptor.plugins, [name](const kb::project::ProjectPluginReference& plugin) {
+        return plugin.name == name;
+    });
+    return iter == descriptor.plugins.end() ? std::string{} : iter->binaryPath;
+}
+
 void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -62,6 +70,9 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Physics.Jolt"), "Editor project default physics plugin was not configured");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Audio.Miniaudio"), "Editor project default audio plugin was not configured");
     kb::editor::tests::Require(HasEnabledPlugin(created.descriptor, "Rendering.BasicLighting"), "Editor project default lighting plugin was not configured");
+    kb::editor::tests::Require(BinaryPathFor(created.descriptor, "Physics.Jolt") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), "Editor project bootstrap should persist a config-agnostic physics plugin path");
+    kb::editor::tests::Require(BinaryPathFor(created.descriptor, "Audio.Miniaudio") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), "Editor project bootstrap should persist a config-agnostic audio plugin path");
+    kb::editor::tests::Require(BinaryPathFor(created.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Editor project bootstrap should persist a config-agnostic lighting plugin path");
 
     const kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
     kb::editor::tests::Require(loaded.succeeded, "Created editor project descriptor did not load");
@@ -70,6 +81,9 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Physics.Jolt"), "Created editor project descriptor did not persist the default physics plugin");
     kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Audio.Miniaudio"), "Created editor project descriptor did not persist the default audio plugin");
     kb::editor::tests::Require(HasEnabledPlugin(loaded.descriptor, "Rendering.BasicLighting"), "Created editor project descriptor did not persist the default lighting plugin");
+    kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Physics.Jolt") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"), "Persisted physics plugin path should stay config-agnostic");
+    kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Audio.Miniaudio") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"), "Persisted audio plugin path should stay config-agnostic");
+    kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Persisted lighting plugin path should stay config-agnostic");
 
     const kb::editor::EditorProjectBootstrapResult reopened = kb::editor::EditorProjectBootstrap::BootstrapDefaultProject();
     kb::editor::tests::Require(reopened.succeeded, "Editor project bootstrap did not reopen an existing project descriptor");

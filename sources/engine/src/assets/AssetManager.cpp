@@ -184,6 +184,10 @@ std::size_t AssetManager::LoadedCount() const noexcept {
     return cache_.size();
 }
 
+bool AssetManager::HasLoaderForType(std::string_view type) const noexcept {
+    return LoaderForType(type) != nullptr;
+}
+
 std::string AssetManager::LastError() const {
     return lastError_;
 }

@@ -14,10 +14,15 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
+#include "inspection/EditorValueFormatter.hpp"
+#include "inspection/MaterialAssetFormatter.hpp"
 #include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/Renderer.hpp"
+#include "kb/render/RenderSurface.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
 #include "kb/render/scene/RenderScene.hpp"
+#include "kb/render/scene/SceneRenderer.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
@@ -29,11 +34,52 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bgfx/bgfx.h>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace {
+
+class MaterialPreviewHeadlessSurface final : public kb::render::RenderSurface {
+public:
+    [[nodiscard]] std::uint32_t Width() const noexcept override {
+        return 128U;
+    }
+
+    [[nodiscard]] std::uint32_t Height() const noexcept override {
+        return 128U;
+    }
+
+    [[nodiscard]] void* NativeWindowHandle() const noexcept override {
+        return nullptr;
+    }
+
+    [[nodiscard]] void* NativeDisplayHandle() const noexcept override {
+        return nullptr;
+    }
+};
+
+[[nodiscard]] float TriangleOutwardDot(const kb::render::RenderMeshAssetData& mesh, std::size_t indexOffset) {
+    const auto& a = mesh.vertices[mesh.indices32[indexOffset]];
+    const auto& b = mesh.vertices[mesh.indices32[indexOffset + 1U]];
+    const auto& c = mesh.vertices[mesh.indices32[indexOffset + 2U]];
+    const std::array<float, 3U> ab{ b.x - a.x, b.y - a.y, b.z - a.z };
+    const std::array<float, 3U> ac{ c.x - a.x, c.y - a.y, c.z - a.z };
+    const std::array<float, 3U> normal{
+        (ab[1] * ac[2]) - (ab[2] * ac[1]),
+        (ab[2] * ac[0]) - (ab[0] * ac[2]),
+        (ab[0] * ac[1]) - (ab[1] * ac[0]),
+    };
+    const std::array<float, 3U> center{
+        (a.x + b.x + c.x) / 3.0F,
+        (a.y + b.y + c.y) / 3.0F,
+        (a.z + b.z + c.z) / 3.0F,
+    };
+    return (normal[0] * center[0]) + (normal[1] * center[1]) + (normal[2] * center[2]);
+}
 
 void RunInspectorTextEditDirtyStateTest() {
     kb::editor::InspectorPanelState state;
@@ -184,6 +230,9 @@ void RunMaterialPreviewMeshFactoryTest() {
     kb::editor::tests::Require(sphere.desc.indexCount > 0U, "Material preview sphere did not generate indices");
     kb::editor::tests::Require(sphere.desc.materialSlotCount == 1U, "Material preview sphere should expose one material slot");
     kb::editor::tests::Require(sphere.bounds.radius > 0.0F, "Material preview sphere did not produce bounds");
+    for (std::size_t index = 0U; index < sphere.indices32.size(); index += 3U) {
+        kb::editor::tests::Require(TriangleOutwardDot(sphere, index) > 0.0F, "Material preview sphere triangle winding should face outward");
+    }
 
     const kb::render::RenderMeshAssetData cube = kb::editor::EditorMaterialPreviewMeshFactory::BuildCube();
     kb::editor::tests::Require(cube.desc.vertexCount == 24U, "Material preview cube should generate one quad per face");
@@ -229,6 +278,81 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     kb::editor::tests::Require(groups[0].meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value, "Material preview scene did not use the preview mesh asset");
     kb::editor::tests::Require(groups[0].materialAssetId == materialId.value, "Material preview scene did not assign the inspected material");
     kb::editor::tests::Require(groups[0].instances.size() == 1U, "Material preview scene should render one mesh instance");
+    kb::editor::tests::Require(renderScene.LightProxyCount() >= 2U, "Material preview scene should provide studio lighting for a visible preview sphere");
+
+    kb::render::SceneRenderer renderer;
+    renderer.SetDefaultLightingConfig(kb::render::SceneRenderLightingConfig{
+        .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
+        .environmentDiffuseIntensity = 0.55F,
+        .environmentSpecularIntensity = 0.04F,
+    });
+    const kb::render::SceneRenderSubmitStats lightingStats = renderer.ValidateSceneResources(renderScene);
+    kb::editor::tests::Require(lightingStats.sceneLightCount >= 2U, "Material preview renderer validation did not see preview lights");
+    kb::editor::tests::Require(lightingStats.submittedForwardLightCount >= 1U, "Material preview renderer validation did not select a forward light");
+    kb::editor::tests::Require(lightingStats.submittedEnvironmentLightingCount == 1U, "Material preview renderer validation should keep environment lighting active");
+    kb::editor::tests::Require(lightingStats.environmentLightingMode == static_cast<std::uint32_t>(kb::render::SceneRenderEnvironmentMode::Hemisphere) + 1U, "Material preview renderer validation should use hemisphere environment lighting");
+
+    MaterialPreviewHeadlessSurface surface;
+    kb::render::DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    kb::render::Renderer submitRenderer;
+    submitRenderer.ReserveRuntimeSceneResources(kb::render::Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .scenePassSubmitStats = 2U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneLightProxies = 3U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncLightProxies = 3U,
+        .syncTransformCacheEntries = 8U,
+        .syncTransformResolvingEntries = 8U,
+    });
+    kb::editor::tests::Require(submitRenderer.Initialize(surface, &config), "Material preview headless renderer did not initialize");
+    kb::editor::tests::Require(submitRenderer.BeginFrame(), "Material preview headless renderer did not begin a frame");
+    const kb::render::RenderSceneSubmitDesc submitDesc{
+        .target = kb::render::RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = kb::render::RenderViewportDesc{
+                .id = kb::render::RenderViewportId{ 1U },
+                .extent = kb::render::RenderExtent{ 128U, 128U },
+                .viewportIndex = 0U,
+            },
+        },
+        .lightingConfig = kb::render::SceneRenderLightingConfig{
+            .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
+            .environmentDiffuseIntensity = 0.55F,
+            .environmentSpecularIntensity = 0.04F,
+        },
+        .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+        .gpuDrivenRuntimeDispatchEnabled = false,
+    };
+    kb::editor::tests::Require(submitRenderer.SubmitScene(previewScene, submitDesc), "Material preview headless renderer rejected the preview scene");
+    const kb::render::SceneRenderSubmitStats submitStats = submitRenderer.LastSceneSubmitStats();
+    kb::editor::tests::Require(submitStats.visibleMeshCount >= 1U, "Material preview headless submit did not keep the sphere visible");
+    kb::editor::tests::Require(submitStats.missingMeshBindingCount == 0U, "Material preview headless submit is missing the preview mesh binding");
+    kb::editor::tests::Require(submitStats.missingMeshResourceCount == 0U, "Material preview headless submit is missing the preview mesh resource");
+    kb::editor::tests::Require(submitStats.unsupportedMeshVertexFormatCount == 0U, "Material preview headless submit rejected the preview mesh vertex format");
+    kb::editor::tests::Require(submitStats.missingMaterialBindingCount == 0U, "Material preview headless submit is missing the preview material binding");
+    kb::editor::tests::Require(submitStats.missingMaterialResourceCount == 0U, "Material preview headless submit is missing the preview material resource");
+    kb::editor::tests::Require(submitStats.submittedMeshCount >= 1U, "Material preview headless submit did not submit the sphere");
+    kb::editor::tests::Require(submitStats.submittedDrawCallCount >= 1U, "Material preview headless submit did not issue a draw call");
+    submitRenderer.EndFrame();
+    submitRenderer.Shutdown();
 
     const std::uint64_t firstRevision = preview.Revision();
     static_cast<void>(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -246,6 +370,20 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     std::filesystem::remove(materialFile, cleanupError);
 }
 
+void RunMaterialValueFormatterTest() {
+    // KBMAT-0201: shared material/value formatters used by both the Inspector and the
+    // dedicated Material Editor panel.
+    using kb::editor::EditorValueFormatter;
+    using kb::editor::MaterialAssetFormatter;
+    kb::editor::tests::Require(EditorValueFormatter::FormatFloat(1.0F) == "1", "FormatFloat should trim trailing zeros");
+    kb::editor::tests::Require(EditorValueFormatter::FormatFloat(0.25F) == "0.25", "FormatFloat should keep significant decimals");
+    kb::editor::tests::Require(EditorValueFormatter::FormatFloat(-0.0F) == "0", "FormatFloat should normalize -0 to 0");
+    kb::editor::tests::Require(EditorValueFormatter::FormatUInt64(123ULL) == "123", "FormatUInt64 should render a plain integer");
+    kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Opaque) == "Opaque", "AlphaModeName should render Opaque");
+    kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Mask) == "Mask", "AlphaModeName should render Mask");
+    kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Blend) == "Blend", "AlphaModeName should render Blend");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -260,6 +398,7 @@ void RunEditorInspectorTests() {
     RunEditorMaterialSlotOverrideSyncTest();
     RunMaterialPreviewMeshFactoryTest();
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
+    RunMaterialValueFormatterTest();
 }
 
 } // namespace kb::editor::tests

@@ -311,10 +311,7 @@ void ScenePanelContentRenderer::PresentViewport(
     const SceneViewportToolbarRects sceneRects = SceneViewportToolbarRenderer::Resolve(content, viewportState);
     const EditorSceneBgfxViewport::PresentSettings settings = BuildViewportPresentSettings(sceneContext, panel.id, panel.kind, viewportState, renderBackendSettings, sceneRects);
 
-    sceneViewport.BeginPaintLayout(sceneViewportHost);
     sceneViewport.Present(sceneViewportHost, sceneRects.renderArea, sceneContext.Scene(), settings);
-    sceneViewport.EndPaintLayout();
-    sceneViewport.ClearPresentRequest();
 }
 
 void ScenePanelContentRenderer::Paint(

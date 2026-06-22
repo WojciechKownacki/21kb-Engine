@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <typeindex>
 #include <unordered_map>
 #include <vector>
@@ -64,6 +65,7 @@ public:
     [[nodiscard]] bool Unload(AssetId id) noexcept;
     [[nodiscard]] bool IsLoaded(AssetId id) const noexcept;
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
+    [[nodiscard]] bool HasLoaderForType(std::string_view type) const noexcept;
     [[nodiscard]] std::string LastError() const;
     void ClearRuntimeCache() noexcept;
     void Clear() noexcept;

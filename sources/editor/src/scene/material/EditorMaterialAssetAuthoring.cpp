@@ -78,18 +78,18 @@ EditorMaterialAssetAuthoring::EditorMaterialAssetAuthoring(kb::scene::Scene& sce
 bool EditorMaterialAssetAuthoring::Create(const std::filesystem::path& virtualFolder) {
     const std::optional<std::filesystem::path> folder = gateway_.ResolveFolder(virtualFolder);
     if (!folder.has_value()) {
-        console_.Error("Materials", "Could not resolve a physical folder for the new material.");
+        console_.Error("Materials", "Could not resolve a physical folder for the new material instance.");
         return false;
     }
 
     const std::filesystem::path path = EditorMaterialAssetGateway::UniqueFilePath(*folder, "NewMaterial");
     kb::render::RenderMaterialAssetData material{};
     if (!gateway_.WriteNewMaterial(path, material)) {
-        console_.Error("Materials", "Material asset could not be written: " + path.generic_string());
+        console_.Error("Materials", "Material instance asset could not be written: " + path.generic_string());
         return false;
     }
 
-    console_.Info("Materials", "Material asset created: " + path.generic_string());
+    console_.Info("Materials", "Material instance asset created: " + path.generic_string());
     return true;
 }
 

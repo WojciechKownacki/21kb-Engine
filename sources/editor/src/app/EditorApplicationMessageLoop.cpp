@@ -9,6 +9,7 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -30,6 +31,7 @@ constexpr double kEditorTargetFrameRate = 180.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
 constexpr int kMaxMessagesPerPump = 128;
 constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
+constexpr std::uint64_t kMaterialEditorPreviewViewportKey = 0x4D41545052455631ULL;
 
 [[nodiscard]] float RuntimeDeltaSeconds(std::chrono::steady_clock::time_point previous, std::chrono::steady_clock::time_point current) noexcept {
     const std::chrono::duration<float> delta = current - previous;
@@ -82,6 +84,19 @@ constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
     return camera;
 }
 
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig() noexcept {
+    kb::render::SceneRenderLightingConfig lighting{};
+    lighting.ambientColor = {0.30F, 0.31F, 0.33F};
+    lighting.ambientIntensity = 0.75F;
+    lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;
+    lighting.environmentZenithColor = {0.38F, 0.42F, 0.48F};
+    lighting.environmentGroundColor = {0.16F, 0.15F, 0.14F};
+    lighting.environmentDiffuseIntensity = 0.55F;
+    lighting.environmentSpecularIntensity = 0.04F;
+    lighting.shadowsEnabled = false;
+    return lighting;
+}
+
 [[nodiscard]] const kb::assets::AssetMetadata* SelectedMaterialMetadata(const EditorSceneContext& sceneContext) noexcept {
     const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
     if (!assetId.IsValid()) {
@@ -91,7 +106,7 @@ constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
     return metadata != nullptr && metadata->type == "RenderMaterial" ? metadata : nullptr;
 }
 
-[[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect) {
+[[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
     const std::uint32_t renderWidth = std::max<std::uint32_t>(1U, RectWidth(previewRect));
     const std::uint32_t renderHeight = std::max<std::uint32_t>(1U, RectHeight(previewRect));
     return EditorSceneBgfxViewport::PresentSettings{
@@ -99,11 +114,12 @@ constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
         .renderHeight = renderHeight,
         .fitMode = EditorViewportFitMode::Fit,
         .cameraOverride = BuildMaterialPreviewCamera(renderWidth, renderHeight),
-        .viewportKey = kMaterialPreviewViewportKey,
+        .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .lightingConfig = BuildMaterialPreviewLightingConfig(),
         .shadowPassEnabled = false,
-        .postProcessEnabled = true,
+        .postProcessEnabled = false,
         .selectionMaskEnabled = false,
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
@@ -201,13 +217,54 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
     return true;
 }
 
-[[nodiscard]] bool PresentMainScenePanels(EditorApplicationState& state, bool refreshToolbar) {
+[[nodiscard]] bool PresentMaterialPreview(EditorApplicationState& state, HWND host,
+        const std::optional<RECT>& inspectorContent,
+        const std::optional<RECT>& materialEditorContent) {
+    if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
+        return false;
+    }
+
+    const kb::assets::AssetMetadata* metadata = SelectedMaterialMetadata(state.sceneContext);
+
+    struct PreviewTarget {
+        std::optional<RECT> rect;
+        std::uint64_t viewportKey;
+    };
+    const PreviewTarget targets[2] = {
+        PreviewTarget{
+            metadata != nullptr && inspectorContent.has_value()
+                ? InspectorPanelRenderer::MaterialPreviewRect(*inspectorContent, state.sceneContext)
+                : std::nullopt,
+            kMaterialPreviewViewportKey},
+        PreviewTarget{
+            metadata != nullptr && materialEditorContent.has_value()
+                ? MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditorContent, state.sceneContext)
+                : std::nullopt,
+            kMaterialEditorPreviewViewportKey},
+    };
+
+    bool presented = false;
+    if (metadata != nullptr) {
+        const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(metadata->id);
+        for (const PreviewTarget& target : targets) {
+            if (target.rect.has_value()) {
+                const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *target.rect, target.viewportKey);
+                state.sceneViewport.Present(host, *target.rect, previewScene, settings);
+                presented = true;
+            }
+        }
+    }
+    return presented;
+}
+
+[[nodiscard]] bool PresentMainHost(EditorApplicationState& state, bool refreshToolbar) {
     if (state.window == nullptr || IsWindowVisible(state.window) == 0) {
         return false;
     }
 
-    bool presented = false;
+    bool scenePresented = false;
     const DockLayout layout = BuildMainLayout(state);
+    state.sceneViewport.BeginPaintLayout(state.window);
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) {
             continue;
@@ -216,79 +273,9 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
             continue;
         }
-        presented = PresentScenePanel(state, state.window, *panel, ToRect(panelLayout.content), refreshToolbar) || presented;
+        scenePresented = PresentScenePanel(state, state.window, *panel, ToRect(panelLayout.content), refreshToolbar) || scenePresented;
     }
 
-    if (!presented) {
-        // No Scene panel is the active tab in the main window (e.g. Inspector or
-        // Project Settings is shown in the leaf that hosts Scene View). Run an empty
-        // paint-layout cycle so the bgfx child surface is hidden instead of staying
-        // on top of the GDI-painted panel that is now active.
-        state.sceneViewport.BeginPaintLayout(state.window);
-        state.sceneViewport.EndPaintLayout();
-    }
-    return presented;
-}
-
-[[nodiscard]] bool PresentFloatingScenePanels(EditorApplicationState& state, bool refreshToolbar) {
-    bool presented = false;
-    const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
-    for (HWND window : queries.Windows()) {
-        if (window == nullptr || IsWindow(window) == 0 || IsWindowVisible(window) == 0) {
-            continue;
-        }
-        const DockPanel* panel = state.dockModel.Queries().FindPanel(queries.PanelId(window));
-        if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
-            continue;
-        }
-        RECT content{};
-        GetClientRect(window, &content);
-        content.top += state.metrics.floatingChromeHeight;
-        presented = PresentScenePanel(state, window, *panel, content, refreshToolbar) || presented;
-    }
-    return presented;
-}
-
-[[nodiscard]] bool PresentVisibleScenePanels(EditorApplicationState& state) {
-    const bool refreshToolbar = ShouldRefreshSceneToolbars();
-    const bool mainPresented = PresentMainScenePanels(state, refreshToolbar);
-    const bool floatingPresented = PresentFloatingScenePanels(state, refreshToolbar);
-    const bool presented = mainPresented || floatingPresented;
-    if (presented) {
-        state.sceneContext.AcknowledgeSceneRenderSubmitted();
-    }
-    return presented;
-}
-
-[[nodiscard]] bool PresentMaterialPreview(EditorApplicationState& state, HWND host, const RECT& inspectorContent) {
-    if (host == nullptr || IsWindow(host) == 0 || IsWindowVisible(host) == 0) {
-        return false;
-    }
-
-    const kb::assets::AssetMetadata* metadata = SelectedMaterialMetadata(state.sceneContext);
-    const std::optional<RECT> previewRect = metadata == nullptr
-        ? std::nullopt
-        : InspectorPanelRenderer::MaterialPreviewRect(inspectorContent, state.sceneContext);
-
-    state.materialPreviewViewport.BeginPaintLayout(host);
-    bool presented = false;
-    if (metadata != nullptr && previewRect.has_value()) {
-        const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(metadata->id);
-        const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *previewRect);
-        state.materialPreviewViewport.Present(host, *previewRect, previewScene, settings);
-        presented = true;
-    }
-    state.materialPreviewViewport.EndPaintLayout();
-    if (presented) {
-        state.materialPreviewViewport.ClearPresentRequest();
-    }
-    return presented;
-}
-
-[[nodiscard]] bool PresentMainMaterialPreview(EditorApplicationState& state) {
-    if (state.window == nullptr || IsWindowVisible(state.window) == 0) {
-        return false;
-    }
     const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
         DockPanelKind::Inspector,
         state.window,
@@ -296,21 +283,42 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         state.dockModel,
         state.floatingWindows,
         state.metrics);
-    if (!inspector.has_value()) {
-        state.materialPreviewViewport.BeginPaintLayout(state.window);
-        state.materialPreviewViewport.EndPaintLayout();
-        return false;
+    const std::optional<RECT> materialEditor = EditorPanelContentResolver::Resolve(
+        DockPanelKind::MaterialEditor,
+        state.window,
+        state.window,
+        state.dockModel,
+        state.floatingWindows,
+        state.metrics);
+    const bool previewPresented = PresentMaterialPreview(state, state.window, inspector, materialEditor);
+    state.sceneViewport.EndPaintLayout();
+    if (scenePresented || previewPresented) {
+        state.sceneViewport.ClearPresentRequest();
     }
-    return PresentMaterialPreview(state, state.window, *inspector);
+    if (scenePresented) {
+        state.sceneContext.AcknowledgeSceneRenderSubmitted();
+    }
+    return scenePresented || previewPresented;
 }
 
-[[nodiscard]] bool PresentFloatingMaterialPreviews(EditorApplicationState& state) {
+[[nodiscard]] bool PresentFloatingHosts(EditorApplicationState& state, bool refreshToolbar) {
     bool presented = false;
     const EditorFloatingWindowQueries queries = state.floatingWindows.Queries();
     for (HWND window : queries.Windows()) {
         if (window == nullptr || IsWindow(window) == 0 || IsWindowVisible(window) == 0) {
             continue;
         }
+
+        bool scenePresented = false;
+        state.sceneViewport.BeginPaintLayout(window);
+        const DockPanel* panel = state.dockModel.Queries().FindPanel(queries.PanelId(window));
+        if (panel != nullptr && panel->kind == DockPanelKind::Scene) {
+            RECT content{};
+            GetClientRect(window, &content);
+            content.top += state.metrics.floatingChromeHeight;
+            scenePresented = PresentScenePanel(state, window, *panel, content, refreshToolbar);
+        }
+
         const std::optional<RECT> inspector = EditorPanelContentResolver::Resolve(
             DockPanelKind::Inspector,
             window,
@@ -318,19 +326,30 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             state.dockModel,
             state.floatingWindows,
             state.metrics);
-        if (!inspector.has_value()) {
-            state.materialPreviewViewport.BeginPaintLayout(window);
-            state.materialPreviewViewport.EndPaintLayout();
-            continue;
+        const std::optional<RECT> materialEditor = EditorPanelContentResolver::Resolve(
+            DockPanelKind::MaterialEditor,
+            window,
+            state.window,
+            state.dockModel,
+            state.floatingWindows,
+            state.metrics);
+        const bool previewPresented = PresentMaterialPreview(state, window, inspector, materialEditor);
+        state.sceneViewport.EndPaintLayout();
+        if (scenePresented || previewPresented) {
+            state.sceneViewport.ClearPresentRequest();
         }
-        presented = PresentMaterialPreview(state, window, *inspector) || presented;
+        if (scenePresented) {
+            state.sceneContext.AcknowledgeSceneRenderSubmitted();
+        }
+        presented = scenePresented || previewPresented || presented;
     }
     return presented;
 }
 
-[[nodiscard]] bool PresentVisibleMaterialPreviews(EditorApplicationState& state) {
-    const bool mainPresented = PresentMainMaterialPreview(state);
-    const bool floatingPresented = PresentFloatingMaterialPreviews(state);
+[[nodiscard]] bool PresentVisibleViewports(EditorApplicationState& state) {
+    const bool refreshToolbar = ShouldRefreshSceneToolbars();
+    const bool mainPresented = PresentMainHost(state, refreshToolbar);
+    const bool floatingPresented = PresentFloatingHosts(state, refreshToolbar);
     return mainPresented || floatingPresented;
 }
 
@@ -377,9 +396,8 @@ void TickPlayMode(EditorApplicationState& state, float deltaSeconds) {
         InvalidateInspectorPanels(state);
     }
 
-    const bool scenePresented = PresentVisibleScenePanels(state);
-    const bool materialPreviewPresented = PresentVisibleMaterialPreviews(state);
-    return scenePresented || materialPreviewPresented || navigationChanged || gizmoChanged;
+    const bool viewportsPresented = PresentVisibleViewports(state);
+    return viewportsPresented || navigationChanged || gizmoChanged;
 }
 
 [[nodiscard]] bool TickPointerDragFrame(EditorApplicationState& state) {
