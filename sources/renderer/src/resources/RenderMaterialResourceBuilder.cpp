@@ -14,6 +14,8 @@ RenderMaterialResource RenderMaterialResourceBuilder::Build(const RenderMaterial
     resource.occlusionStrength = desc.occlusionStrength;
     resource.emissiveStrength = desc.emissiveStrength;
     resource.alphaCutoff = desc.alphaCutoff;
+    std::memcpy(resource.uvTiling, desc.uvTiling, sizeof(resource.uvTiling));
+    std::memcpy(resource.uvOffset, desc.uvOffset, sizeof(resource.uvOffset));
     resource.clearcoatFactor = desc.clearcoatFactor;
     resource.clearcoatRoughnessFactor = desc.clearcoatRoughnessFactor;
     std::memcpy(resource.sheenColor, desc.sheenColor, sizeof(resource.sheenColor));

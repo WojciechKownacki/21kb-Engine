@@ -30,6 +30,14 @@ void WriteVec3(std::ostream& output, const char* name, const float (&values)[3])
     output << '\n';
 }
 
+void WriteVec2(std::ostream& output, const char* name, const float (&values)[2]) {
+    output << name << ' ';
+    WriteFloat(output, values[0]);
+    output << ' ';
+    WriteFloat(output, values[1]);
+    output << '\n';
+}
+
 void WriteScalar(std::ostream& output, const char* name, float value) {
     output << name << ' ';
     WriteFloat(output, value);
@@ -269,6 +277,20 @@ public:
     }
 };
 
+class UvTilingPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
+public:
+    void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
+        WriteVec2(output, "tiling", asset.desc.uvTiling);
+    }
+};
+
+class UvOffsetPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
+public:
+    void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
+        WriteVec2(output, "offset", asset.desc.uvOffset);
+    }
+};
+
 class AlbedoTextureAssetIdPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
 public:
     void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
@@ -451,7 +473,7 @@ public:
     }
 };
 
-const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters() {
+const std::array<const IRenderMaterialAssetPropertyWriter*, 53>& PropertyWriters() {
     static const BaseColorPropertyWriter baseColor;
     static const EmissiveColorPropertyWriter emissiveColor;
     static const MetallicFactorPropertyWriter metallicFactor;
@@ -477,6 +499,8 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters
     static const DecalBlendModePropertyWriter decalBlendMode;
     static const LayerBlendModePropertyWriter layerBlendMode;
     static const DoubleSidedPropertyWriter doubleSided;
+    static const UvTilingPropertyWriter uvTiling;
+    static const UvOffsetPropertyWriter uvOffset;
     static const AlbedoTextureAssetIdPropertyWriter albedoTextureAssetId;
     static const NormalTextureAssetIdPropertyWriter normalTextureAssetId;
     static const MetallicRoughnessTextureAssetIdPropertyWriter metallicRoughnessTextureAssetId;
@@ -504,15 +528,29 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters
     static const DecalTexturePathPropertyWriter decalTexturePath;
     static const LayerMaskTexturePathPropertyWriter layerMaskTexturePath;
 
-    static const std::array<const IRenderMaterialAssetPropertyWriter*, 51> writers{
+    static const std::array<const IRenderMaterialAssetPropertyWriter*, 53> writers{
         &baseColor,
-        &emissiveColor,
         &metallicFactor,
         &roughnessFactor,
         &normalScale,
         &occlusionStrength,
+        &emissiveColor,
         &emissiveStrength,
+        &alphaMode,
         &alphaCutoff,
+        &doubleSided,
+        &uvTiling,
+        &uvOffset,
+        &albedoTextureAssetId,
+        &normalTextureAssetId,
+        &metallicRoughnessTextureAssetId,
+        &occlusionTextureAssetId,
+        &emissiveTextureAssetId,
+        &albedoTexturePath,
+        &normalTexturePath,
+        &metallicRoughnessTexturePath,
+        &occlusionTexturePath,
+        &emissiveTexturePath,
         &clearcoatFactor,
         &clearcoatRoughnessFactor,
         &sheenColor,
@@ -526,15 +564,8 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters
         &anisotropyStrength,
         &anisotropyRotation,
         &layerWeight,
-        &alphaMode,
         &decalBlendMode,
         &layerBlendMode,
-        &doubleSided,
-        &albedoTextureAssetId,
-        &normalTextureAssetId,
-        &metallicRoughnessTextureAssetId,
-        &occlusionTextureAssetId,
-        &emissiveTextureAssetId,
         &clearcoatTextureAssetId,
         &clearcoatRoughnessTextureAssetId,
         &sheenColorTextureAssetId,
@@ -543,11 +574,6 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters
         &anisotropyTextureAssetId,
         &decalTextureAssetId,
         &layerMaskTextureAssetId,
-        &albedoTexturePath,
-        &normalTexturePath,
-        &metallicRoughnessTexturePath,
-        &occlusionTexturePath,
-        &emissiveTexturePath,
         &clearcoatTexturePath,
         &clearcoatRoughnessTexturePath,
         &sheenColorTexturePath,
@@ -563,16 +589,47 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 51>& PropertyWriters
 } // namespace
 
 bool RenderMaterialAssetWriter::Save(const std::filesystem::path& path, const RenderMaterialAssetData& asset) {
-    std::ofstream output{ path, std::ios::trunc };
-    if (!output) {
-        return false;
+    std::error_code error;
+    const std::filesystem::path parent = path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, error);
+        if (error) {
+            return false;
+        }
     }
-    Write(output, asset);
-    return static_cast<bool>(output);
+
+    // Atomic save: write to a temp file, flush, then rename.
+    const std::filesystem::path tmpPath = path.string() + ".tmp";
+    {
+        std::ofstream output{ tmpPath, std::ios::trunc | std::ios::binary };
+        if (!output) {
+            return false;
+        }
+        Write(output, asset);
+        output.flush();
+        if (!output) {
+            return false;
+        }
+    }
+
+    std::filesystem::rename(tmpPath, path, error);
+    if (error) {
+        // Fallback: copy then remove tmp on Windows rename-across-volumes issues
+        error.clear();
+        std::filesystem::copy_file(tmpPath, path, std::filesystem::copy_options::overwrite_existing, error);
+        if (error) {
+            return false;
+        }
+        std::filesystem::remove(tmpPath, error);
+    }
+    return !error;
 }
 
 void RenderMaterialAssetWriter::Write(std::ostream& output, const RenderMaterialAssetData& asset) {
-    output << "# KB material\n";
+    output << "# KB material instance\n";
+    output << "version " << (asset.documentVersion == 0U ? kRenderMaterialAssetDocumentVersion : asset.documentVersion) << '\n';
+    output << "materialType " << (asset.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : asset.materialType) << '\n';
+    output << "materialTypeVersion " << (asset.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : asset.materialTypeVersion) << '\n';
     for (const IRenderMaterialAssetPropertyWriter* writer : PropertyWriters()) {
         writer->Write(output, asset);
     }

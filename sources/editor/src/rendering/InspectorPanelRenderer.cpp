@@ -11,6 +11,8 @@
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
+#include "inspection/EditorValueFormatter.hpp"
+#include "inspection/MaterialAssetFormatter.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -159,24 +161,11 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
 }
 
 [[nodiscard]] std::string FormatFloat(float value, int precision = 3) {
-    char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), precision == 0 ? "%.0f" : precision == 1 ? "%.1f" : precision == 2 ? "%.2f" : "%.3f", static_cast<double>(value));
-    std::string text = buffer;
-    if (text.find('.') != std::string::npos) {
-        while (!text.empty() && text.back() == '0') {
-            text.pop_back();
-        }
-        if (!text.empty() && text.back() == '.') {
-            text.pop_back();
-        }
-    }
-    return text == "-0" ? "0" : text;
+    return EditorValueFormatter::FormatFloat(value, precision);
 }
 
 [[nodiscard]] std::string FormatUInt64(std::uint64_t value) {
-    char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(value));
-    return buffer;
+    return EditorValueFormatter::FormatUInt64(value);
 }
 
 [[nodiscard]] std::string FormatVec3(const float value[3]) {
@@ -969,15 +958,7 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
 }
 
 [[nodiscard]] std::string AlphaModeName(kb::render::RenderMaterialAlphaMode mode) {
-    switch (mode) {
-    case kb::render::RenderMaterialAlphaMode::Opaque:
-        return "Opaque";
-    case kb::render::RenderMaterialAlphaMode::Mask:
-        return "Mask";
-    case kb::render::RenderMaterialAlphaMode::Blend:
-        return "Blend";
-    }
-    return "Opaque";
+    return MaterialAssetFormatter::AlphaModeName(mode);
 }
 
 [[nodiscard]] EditorMaterialPreviewTelemetry MaterialPreviewTelemetryFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {

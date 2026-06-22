@@ -605,7 +605,9 @@ void RunPluginsPanelSuite(Report& report) {
     report.Check(!context.IsProjectPluginEnabled(descriptor->id), "Plugin can be disabled before enable checks");
     report.Check(controller.HandlePointerDown(kContent, togglePoint.x, togglePoint.y), "Clicking plugin checkbox is handled");
     report.Check(context.IsProjectPluginEnabled(descriptor->id), "Clicking checkbox enables the plugin");
-    report.Check(context.ProjectPluginBinaryPath(descriptor->id) == descriptor->binaryPath, "Enabled plugin stores the catalog binary path");
+    report.Check(
+        context.ProjectPluginBinaryPath(descriptor->id) == EditorPluginCatalog::PersistentBinaryPath(descriptor->id),
+        "Enabled plugin stores a config-agnostic binary path");
     report.Check(context.Plugins().HasPendingReload(), "Enabling plugin marks pending reload");
 
     {
@@ -616,7 +618,9 @@ void RunPluginsPanelSuite(Report& report) {
         });
         report.Check(iter != reloaded.descriptor.plugins.end(), "Enabled plugin reference persisted to descriptor");
         report.Check(iter != reloaded.descriptor.plugins.end() && iter->enabled, "Persisted plugin reference is enabled");
-        report.Check(iter != reloaded.descriptor.plugins.end() && iter->binaryPath == descriptor->binaryPath, "Persisted plugin reference keeps binary path");
+        report.Check(
+            iter != reloaded.descriptor.plugins.end() && iter->binaryPath == EditorPluginCatalog::PersistentBinaryPath(descriptor->id),
+            "Persisted plugin reference keeps a config-agnostic binary path");
     }
 
     report.Check(context.ReloadSceneFromProject(), "Reload scene with enabled plugin settings");

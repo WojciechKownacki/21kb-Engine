@@ -274,6 +274,34 @@ void RunMainToolbarTransportButtonsAreVerticallyCenteredTest() {
 
 namespace kb::editor::tests {
 
+void RunDefaultWorkspaceRegistersMaterialEditorPanelTest() {
+    // KBMAT-0201: the dedicated Material Editor panel ships as part of the default workspace.
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 10U);
+    kb::editor::tests::Require(panel->kind == kb::editor::DockPanelKind::MaterialEditor, "Default workspace should register a Material Editor panel");
+    kb::editor::tests::Require(panel->title == "Material Editor", "Material Editor panel should have the expected title");
+
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* materialLeaf = FindLeafForPanel(layout, 10U);
+    kb::editor::tests::Require(materialLeaf != nullptr, "Material Editor panel should be placed in a dock leaf");
+    const kb::editor::DockLeafLayout* inspectorLeaf = FindLeafForPanel(layout, 4U);
+    kb::editor::tests::Require(materialLeaf != nullptr && inspectorLeaf != nullptr && materialLeaf->leafId == inspectorLeaf->leafId, "Material Editor panel should share the right dock leaf with the Inspector");
+}
+
+void RunMaterialEditorPanelActivationTest() {
+    // KBMAT-0202: the double-click router activates the Material Editor panel by kind.
+    // This verifies that ActivatePanel on the registered Material Editor panel brings its
+    // tab to front (the exact operation the router performs on double-click of a .kbmat).
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockPanel* panel = RequirePanel(model, 10U);
+    kb::editor::tests::Require(panel->kind == kb::editor::DockPanelKind::MaterialEditor, "Material Editor panel should be registered");
+
+    model.Commands().ActivatePanel(10U);
+    const kb::editor::DockLayout layout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* active = FindPanelLayout(layout, 10U);
+    kb::editor::tests::Require(active != nullptr && active->active, "Material Editor panel did not become active after activation");
+}
+
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunUndockAndDockSameFrameTest();
@@ -283,6 +311,8 @@ void RunEditorDockingTests() {
     RunSplitterAndFloatingResizeTest();
     RunFloatingWindowControlHitTest();
     RunMainToolbarTransportButtonsAreVerticallyCenteredTest();
+    RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
+    RunMaterialEditorPanelActivationTest();
 }
 
 } // namespace kb::editor::tests

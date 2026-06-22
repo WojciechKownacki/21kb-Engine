@@ -423,7 +423,7 @@ void RunBasicLightingPluginTogglesSceneLightingTest() {
     project.disableEnginePluginsByDefault = true;
     project.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Rendering.BasicLighting",
-        .binaryPath = pluginPath.string(),
+        .binaryPath = pluginPath.filename().string(),
         .enabled = true,
     });
 

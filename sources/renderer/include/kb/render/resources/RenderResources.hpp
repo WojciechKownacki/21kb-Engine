@@ -227,6 +227,8 @@ struct RenderMaterialDesc {
     float occlusionStrength = 1.0F;
     float emissiveStrength = 1.0F;
     float alphaCutoff = 0.5F;
+    float uvTiling[2]{ 1.0F, 1.0F };
+    float uvOffset[2]{ 0.0F, 0.0F };
     float clearcoatFactor = 0.0F;
     float clearcoatRoughnessFactor = 0.0F;
     float sheenColor[3]{ 0.0F, 0.0F, 0.0F };
@@ -281,6 +283,8 @@ struct RenderMaterialResource {
     float occlusionStrength = 1.0F;
     float emissiveStrength = 1.0F;
     float alphaCutoff = 0.5F;
+    float uvTiling[2]{ 1.0F, 1.0F };
+    float uvOffset[2]{ 0.0F, 0.0F };
     float clearcoatFactor = 0.0F;
     float clearcoatRoughnessFactor = 0.0F;
     float sheenColor[3]{ 0.0F, 0.0F, 0.0F };

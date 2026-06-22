@@ -25,6 +25,9 @@
 #include "engine/modules/EngineModuleHost.hpp"
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/script/ScriptModule.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
 #include "scene/EditorScriptAssetGateway.hpp"
 #include "scene/input/EditorInputActionAuthoring.hpp"
@@ -282,6 +285,13 @@ void AppendEntityBranchRenderDirty(
     return path;
 }
 
+void RegisterEditorRenderAssetLoaders(kb::scene::Scene& scene) {
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
+}
+
 } // namespace
 
 EditorSceneContext::EditorSceneContext()
@@ -303,6 +313,7 @@ EditorSceneContext::EditorSceneContext()
     } else {
         console_.Error("Project", AssetErrorOr(scene_->Assets().Manager(), "Project assets could not be mounted."));
     }
+    RegisterEditorRenderAssetLoaders(*scene_);
     const std::size_t discovered = scene_->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
     currentScenePath_ = ResolveDefaultScenePath();
@@ -685,6 +696,7 @@ bool EditorSceneContext::ReloadSceneFromProject() {
         console_.Error("Project", AssetErrorOr(nextScene->Assets().Manager(), "Project assets could not be mounted."));
         return false;
     }
+    RegisterEditorRenderAssetLoaders(*nextScene);
     const std::size_t discovered = nextScene->Assets().Discover();
     console_.Info("Assets", "Asset discovery completed. Found " + std::to_string(discovered) + " asset(s).");
 
@@ -1840,7 +1852,7 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
     if (iter == project_.plugins.end()) {
         project_.plugins.push_back(kb::project::ProjectPluginReference{
             .name = std::string{ descriptor->id },
-            .binaryPath = std::string{ descriptor->binaryPath },
+            .binaryPath = EditorPluginCatalog::PersistentBinaryPath(descriptor->id),
             .enabled = true,
         });
         console_.Info("Plugins", std::string{ descriptor->displayName } + " enabled. Reopen the scene or enter play mode after reload to apply.");
@@ -1853,7 +1865,7 @@ bool EditorSceneContext::ToggleProjectPlugin(std::size_t catalogIndex) {
 
     iter->enabled = !iter->enabled;
     if (iter->binaryPath.empty()) {
-        iter->binaryPath = std::string{ descriptor->binaryPath };
+        iter->binaryPath = EditorPluginCatalog::PersistentBinaryPath(descriptor->id);
     }
     console_.Info("Plugins", std::string{ descriptor->displayName } + (iter->enabled ? " enabled." : " disabled.") + " Project plugin changes apply when the scene/module host is rebuilt.");
     const bool saved = SaveProjectDescriptor();

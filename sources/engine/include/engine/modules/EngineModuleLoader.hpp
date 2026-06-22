@@ -68,6 +68,7 @@ public:
 
 private:
     [[nodiscard]] static std::string NormalizeKey(std::string key, const std::filesystem::path& modulePath);
+    [[nodiscard]] static std::filesystem::path ResolveModulePath(const std::filesystem::path& modulePath);
     [[nodiscard]] std::filesystem::path ResolveShadowCopyPath(
         std::string_view key,
         const std::filesystem::path& modulePath,

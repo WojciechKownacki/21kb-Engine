@@ -64,6 +64,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) 
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->host == host) {
             surface->presentedInCurrentPaint = false;
+            surface->layoutActiveInCurrentPaint = false;
         }
     }
 }
@@ -72,7 +73,7 @@ bool EditorSceneBgfxViewport::HostSurfaceStore::HasVisibleUnpresentedForHost(HWN
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr &&
             surface->host == host &&
-            !surface->presentedInCurrentPaint &&
+            !surface->layoutActiveInCurrentPaint &&
             surface->window != nullptr &&
             IsWindow(surface->window) != 0 &&
             IsWindowVisible(surface->window) != 0) {
@@ -80,6 +81,10 @@ bool EditorSceneBgfxViewport::HostSurfaceStore::HasVisibleUnpresentedForHost(HWN
         }
     }
     return false;
+}
+
+void EditorSceneBgfxViewport::HostSurfaceStore::MarkLayoutActive(HostSurface& surface) noexcept {
+    surface.layoutActiveInCurrentPaint = true;
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexcept {
@@ -94,13 +99,14 @@ void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexc
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }
     surface.presentedInCurrentPaint = false;
+    surface.layoutActiveInCurrentPaint = false;
     surface.layoutBounds = {};
     surface.hasLayoutBounds = false;
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::HideUnpresentedForHost(HWND host) noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->host == host && !surface->presentedInCurrentPaint) {
+        if (surface != nullptr && surface->host == host && !surface->layoutActiveInCurrentPaint) {
             Hide(*surface);
         }
     }
@@ -115,6 +121,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexc
     surface->window = nullptr;
     surface->rect = {};
     surface->presentedInCurrentPaint = false;
+    surface->layoutActiveInCurrentPaint = false;
     surface->layoutBounds = {};
     surface->hasLayoutBounds = false;
 }
@@ -141,6 +148,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
         }
         surface->rect = {};
         surface->presentedInCurrentPaint = false;
+        surface->layoutActiveInCurrentPaint = false;
         surface->layoutBounds = {};
         surface->hasLayoutBounds = false;
     }

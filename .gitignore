@@ -52,6 +52,7 @@ CMakeUserPresets.json
 # =========================
 /Project/
 /temp/
+/others/
 *.d
 *.gcno
 *.gcda

@@ -20,6 +20,20 @@ namespace {
     return texture == nullptr || !bgfx::isValid(texture->texture) ? fallback : texture->texture;
 }
 
+[[nodiscard]] bool HasResolvedMaterialTexture(
+    RenderTextureHandle directTexture,
+    std::uint64_t textureAssetId,
+    const RenderResourceRegistry& resources,
+    const SceneRenderResourceMap& resourceMap) noexcept {
+    RenderTextureHandle textureHandle = directTexture;
+    if (!textureHandle.IsValid() && textureAssetId != 0U) {
+        textureHandle = resourceMap.ResolveTexture(textureAssetId);
+    }
+
+    const RenderTextureResource* texture = resources.FindTexture(textureHandle);
+    return texture != nullptr && bgfx::isValid(texture->texture);
+}
+
 [[nodiscard]] bgfx::TextureHandle ResolveAlbedoTexture(
     const RenderMaterialResource* material,
     const RenderResourceRegistry& resources,
@@ -70,14 +84,14 @@ namespace {
         : ResolveMaterialTexture(material->occlusionTexture, material->occlusionTextureAssetId, resources, resourceMap, fallback);
 }
 
-[[nodiscard]] std::array<float, 4> MaterialParams(const RenderMaterialResource* material) noexcept {
+[[nodiscard]] std::array<float, 4> MaterialParams(const RenderMaterialResource* material, bool normalTextureResolved) noexcept {
     if (material == nullptr) {
-        return { 0.0F, 1.0F, 1.0F, 0.5F };
+        return { 0.0F, 1.0F, 0.0F, 0.5F };
     }
     return {
         std::clamp(material->metallicFactor, 0.0F, 1.0F),
         std::clamp(material->roughnessFactor, 0.04F, 1.0F),
-        material->normalScale,
+        normalTextureResolved ? material->normalScale : 0.0F,
         material->alphaCutoff,
     };
 }
@@ -122,13 +136,14 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
     SceneMeshMaterialBindingFallbacks fallbacks) noexcept {
+    const bool normalTextureResolved = material != nullptr && HasResolvedMaterialTexture(material->normalTexture, material->normalTextureAssetId, resources, resourceMap);
     return SceneMeshMaterialBinding{
         .albedoTexture = ResolveAlbedoTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .normalTexture = ResolveNormalTexture(material, resources, resourceMap, fallbacks.normalTexture),
         .metallicRoughnessTexture = ResolveMetallicRoughnessTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .occlusionTexture = ResolveOcclusionTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .emissiveTexture = ResolveEmissiveTexture(material, resources, resourceMap, fallbacks.blackTexture),
-        .params = MaterialParams(material),
+        .params = MaterialParams(material, normalTextureResolved),
         .emissive = MaterialEmissive(material),
         .flags = MaterialFlags(material),
     };
@@ -141,7 +156,7 @@ SceneMeshShadowMaterialBinding SceneMeshMaterialBindingResolver::ResolveShadow(
     SceneMeshMaterialBindingFallbacks fallbacks) noexcept {
     return SceneMeshShadowMaterialBinding{
         .albedoTexture = ResolveAlbedoTexture(material, resources, resourceMap, fallbacks.whiteTexture),
-        .params = MaterialParams(material),
+        .params = MaterialParams(material, false),
         .flags = MaterialFlags(material),
     };
 }

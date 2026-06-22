@@ -1,7 +1,10 @@
 #include "engine/modules/EngineModuleLoader.hpp"
 
+#include <algorithm>
+#include <ranges>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -10,6 +13,7 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#include <unistd.h>
 #endif
 
 namespace kb::modules {
@@ -43,6 +47,32 @@ void CloseNativeLibrary(void* library) noexcept {
 #else
     dlclose(library);
 #endif
+}
+
+[[nodiscard]] std::filesystem::path ExecutablePath() {
+#if defined(_WIN32)
+    wchar_t path[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    return length == 0U ? std::filesystem::path{} : std::filesystem::path{ std::wstring(path, length) };
+#else
+    std::vector<char> buffer(1024, '\0');
+    const ssize_t length = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1U);
+    return length <= 0 ? std::filesystem::path{} : std::filesystem::path{ std::string(buffer.data(), static_cast<std::size_t>(length)) };
+#endif
+}
+
+[[nodiscard]] bool IsRegularFile(const std::filesystem::path& path) {
+    std::error_code error;
+    return !path.empty() && std::filesystem::is_regular_file(path, error) && !error;
+}
+
+void AppendCandidate(std::vector<std::filesystem::path>& candidates, const std::filesystem::path& candidate) {
+    if (candidate.empty()) {
+        return;
+    }
+    if (std::ranges::find(candidates, candidate) == candidates.end()) {
+        candidates.push_back(candidate);
+    }
 }
 
 } // namespace
@@ -114,9 +144,9 @@ EngineModuleLoadResult EngineModuleLoader::Load(EngineModuleLoadDesc desc) {
         return result;
     }
 
-    const std::filesystem::path sourcePath = std::filesystem::absolute(desc.modulePath);
-    if (!std::filesystem::is_regular_file(sourcePath)) {
-        result.errors.push_back(desc.diagnosticLabel + " file is missing: " + sourcePath.string());
+    const std::filesystem::path sourcePath = ResolveModulePath(desc.modulePath);
+    if (!IsRegularFile(sourcePath)) {
+        result.errors.push_back(desc.diagnosticLabel + " file is missing: " + desc.modulePath.string());
         return result;
     }
 
@@ -147,6 +177,50 @@ std::string EngineModuleLoader::NormalizeKey(std::string key, const std::filesys
         return key;
     }
     return std::filesystem::absolute(modulePath).string();
+}
+
+std::filesystem::path EngineModuleLoader::ResolveModulePath(const std::filesystem::path& modulePath) {
+    if (modulePath.empty()) {
+        return {};
+    }
+
+    std::vector<std::filesystem::path> candidates;
+    if (modulePath.is_absolute()) {
+        AppendCandidate(candidates, modulePath);
+    } else {
+        std::error_code error;
+        AppendCandidate(candidates, std::filesystem::absolute(modulePath, error));
+
+        const std::filesystem::path exePath = ExecutablePath();
+        const std::filesystem::path exeDir = exePath.parent_path();
+        AppendCandidate(candidates, exeDir / modulePath);
+        AppendCandidate(candidates, exeDir.parent_path() / modulePath);
+        AppendCandidate(candidates, exeDir.parent_path().parent_path() / modulePath);
+
+        if (modulePath.filename() == modulePath) {
+            const std::filesystem::path buildRoot = exeDir.parent_path().parent_path();
+            const std::filesystem::path configDir = exeDir.filename();
+            if (!buildRoot.empty() && !configDir.empty()) {
+                std::error_code iterError;
+                for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(buildRoot, iterError)) {
+                    if (iterError || !entry.is_directory()) {
+                        continue;
+                    }
+                    AppendCandidate(candidates, entry.path() / configDir / modulePath.filename());
+                }
+            }
+        }
+    }
+
+    for (const std::filesystem::path& candidate : candidates) {
+        if (IsRegularFile(candidate)) {
+            std::error_code error;
+            const std::filesystem::path absolute = std::filesystem::absolute(candidate, error);
+            return error ? candidate : absolute;
+        }
+    }
+
+    return modulePath.is_absolute() ? modulePath : std::filesystem::absolute(modulePath);
 }
 
 std::filesystem::path EngineModuleLoader::ResolveShadowCopyPath(
