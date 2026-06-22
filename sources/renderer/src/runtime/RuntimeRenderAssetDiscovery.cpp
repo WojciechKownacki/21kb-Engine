@@ -10,13 +10,23 @@
 #include <memory>
 
 namespace kb::render {
+namespace {
+
+template <typename Loader>
+void RegisterLoaderIfMissing(kb::assets::AssetManager& manager, std::string_view type) {
+    if (!manager.HasLoaderForType(type)) {
+        static_cast<void>(manager.RegisterLoader(std::make_unique<Loader>()));
+    }
+}
+
+} // namespace
 
 void RuntimeRenderAssetDiscovery::Ensure(kb::scene::Scene& scene, std::uint64_t currentFrame) {
     if (registeredScenes_.insert(scene.Id()).second) {
         kb::assets::AssetManager& manager = scene.Assets().Manager();
-        static_cast<void>(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()));
-        static_cast<void>(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()));
-        static_cast<void>(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()));
+        RegisterLoaderIfMissing<RenderMeshAssetLoader>(manager, "RenderMesh");
+        RegisterLoaderIfMissing<RenderMaterialAssetLoader>(manager, "RenderMaterial");
+        RegisterLoaderIfMissing<RenderTextureAssetLoader>(manager, "RenderTexture");
     }
 
     Refresh(scene, currentFrame);

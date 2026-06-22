@@ -10,7 +10,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItem
     if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
-            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Materials", .separatorAfter = true });
+            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });
         }
     }
     return items;

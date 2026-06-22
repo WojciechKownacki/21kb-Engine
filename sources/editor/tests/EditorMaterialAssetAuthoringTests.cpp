@@ -167,6 +167,12 @@ void RunCreateMaterialAssetThroughEditorAuthoringTest() {
 
     const std::optional<kb::render::RenderMaterialAssetData> loaded = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
     kb::editor::tests::Require(loaded.has_value(), "Editor material authoring wrote a material file that could not be loaded");
+    kb::editor::tests::Require(loaded->documentVersion == kb::render::kRenderMaterialAssetDocumentVersion, "Editor material authoring did not write the current material document version");
+    kb::editor::tests::Require(loaded->hasExplicitDocumentVersion, "Editor material authoring did not write explicit material document version metadata");
+    kb::editor::tests::Require(loaded->materialType == kb::render::kRenderMaterialAssetBuiltInPbrType, "Editor material authoring did not write the built-in PBR material type");
+    kb::editor::tests::Require(loaded->materialTypeVersion == kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion, "Editor material authoring did not write the built-in PBR material type version");
+    kb::editor::tests::Require(loaded->hasExplicitMaterialType, "Editor material authoring did not write explicit material type metadata");
+    kb::editor::tests::Require(loaded->hasExplicitMaterialTypeVersion, "Editor material authoring did not write explicit material type version metadata");
     const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> runtimeLoaded = scene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(metadata->id);
     kb::editor::tests::Require(runtimeLoaded.IsLoaded(), "Editor material authoring did not make the created material loadable through AssetManager");
     kb::editor::tests::Require(loaded->desc.baseColor[0] == 1.0F && loaded->desc.baseColor[1] == 1.0F && loaded->desc.baseColor[2] == 1.0F && loaded->desc.baseColor[3] == 1.0F, "Editor material authoring did not preserve default white base color");

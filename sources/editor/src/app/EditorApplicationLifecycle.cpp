@@ -5,6 +5,9 @@
 #include "platform/win32/EditorMainWindow.hpp"
 #include "platform/win32/EditorWindowClassRegistry.hpp"
 
+#include <string>
+#include <string_view>
+
 namespace kb::editor {
 namespace {
 
@@ -30,6 +33,12 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     EditorMainWindow::EnableDarkMode(state.window);
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
     state.materialPreviewViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
+    state.sceneViewport.SetErrorReporter([&state](std::string_view message) {
+        state.sceneContext.Console().Error("Renderer", std::string{ message });
+    });
+    state.materialPreviewViewport.SetErrorReporter([&state](std::string_view message) {
+        state.sceneContext.Console().Error("Renderer", std::string{ message });
+    });
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 

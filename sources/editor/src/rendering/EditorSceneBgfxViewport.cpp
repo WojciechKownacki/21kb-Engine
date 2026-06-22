@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -53,6 +54,53 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
     return clipped;
 }
 
+[[nodiscard]] const char* DiagnosticKindLabel(render::SceneRenderDiagnosticKind kind) noexcept {
+    switch (kind) {
+    case render::SceneRenderDiagnosticKind::MissingMeshBinding:
+        return "missing mesh binding";
+    case render::SceneRenderDiagnosticKind::MissingMeshResource:
+        return "missing mesh resource";
+    case render::SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat:
+        return "unsupported mesh vertex format";
+    case render::SceneRenderDiagnosticKind::MissingMaterialBinding:
+        return "missing material binding";
+    case render::SceneRenderDiagnosticKind::MissingMaterialResource:
+        return "missing material resource";
+    case render::SceneRenderDiagnosticKind::MissingTextureBinding:
+        return "missing texture binding";
+    case render::SceneRenderDiagnosticKind::MissingTextureResource:
+        return "missing texture resource";
+    case render::SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath:
+        return "unresolved material texture path";
+    case render::SceneRenderDiagnosticKind::DroppedInstances:
+        return "dropped instances";
+    }
+    return "unknown render diagnostic";
+}
+
+[[nodiscard]] std::string RendererFailureDetail(const render::Renderer& renderer) {
+    const render::SceneRenderDiagnostics& diagnostics = renderer.LastSceneDiagnostics();
+    if (diagnostics.events.empty()) {
+        return "Renderer submission failed without scene diagnostics.";
+    }
+
+    const render::SceneRenderDiagnosticEvent& event = diagnostics.events.front();
+    std::string detail = std::string{"Renderer diagnostic: "} + DiagnosticKindLabel(event.kind);
+    if (event.entityId != 0U) {
+        detail += " entity=" + std::to_string(event.entityId);
+    }
+    if (event.meshAssetId != 0U) {
+        detail += " meshAsset=" + std::to_string(event.meshAssetId);
+    }
+    if (event.materialAssetId != 0U) {
+        detail += " materialAsset=" + std::to_string(event.materialAssetId);
+    }
+    if (event.instanceCount != 0U) {
+        detail += " instances=" + std::to_string(event.instanceCount);
+    }
+    return detail;
+}
+
 } // namespace
 
 EditorSceneBgfxViewport::Win32Surface::Win32Surface(HWND window) noexcept
@@ -90,6 +138,10 @@ void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent, EditorR
     instance_ = instance;
     defaultParent_ = parent;
     backendSettings_ = backendSettings;
+}
+
+void EditorSceneBgfxViewport::SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept {
+    errorReporter_ = std::move(reporter);
 }
 
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
@@ -141,7 +193,7 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         if (surface->window != nullptr && IsWindow(surface->window) != 0 && IsWindowVisible(surface->window) == 0) {
             RequestPresent();
         }
-        surface->presentedInCurrentPaint = true;
+        hostSurfaceStore_.MarkLayoutActive(*surface);
     }
 
     if (hostSurfaceStore_.HasVisibleUnpresentedForHost(parent)) {
@@ -169,6 +221,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     presentRequested_ = true;
     renderFailed_ = false;
     renderFailureReported_ = false;
+    failureDetail_.clear();
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -179,6 +232,7 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
+    failureDetail_.clear();
     sessionStore_.MarkHostNotPresented(parent);
     hostSurfaceStore_.MarkHostNotPresented(parent);
 }
@@ -393,6 +447,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     config.preferredBgfxRendererType = preferredBackend == bgfx::RendererType::Count ? -1 : static_cast<std::int32_t>(preferredBackend);
 
     if (!renderer_.Initialize(surface, &config)) {
+        SetFailureDetail("Renderer initialization failed for this viewport. Material preview and scene view cannot use separate bgfx renderer instances in the same process.");
         return false;
     }
 
@@ -403,16 +458,21 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
 
 bool EditorSceneBgfxViewport::EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height) {
     if (surface.window == nullptr || !renderer_.IsInitialized()) {
+        SetFailureDetail("Present target creation was requested before the viewport renderer or native child surface was ready.");
         return false;
     }
-    return surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
+    if (!surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
         .nativeWindow = surface.window,
         .width = width,
         .height = height,
         .colorFormat = bgfx::TextureFormat::BGRA8,
         .depthFormat = bgfx::TextureFormat::Count,
         .flushBeforeRecreate = true,
-    });
+    })) {
+        SetFailureDetail("Native window framebuffer creation failed for the viewport present surface.");
+        return false;
+    }
+    return true;
 }
 
 void EditorSceneBgfxViewport::HideHostSurface(HostSurface& surface) noexcept {
@@ -479,7 +539,21 @@ void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
     }
 
     renderFailureReported_ = true;
-    MessageBoxA(nullptr, reason == nullptr ? "Scene render failed. The editor will stay open, but the scene viewport was disabled." : reason, "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
+    std::string message = reason == nullptr ? "Scene render failed. The editor will stay open, but the scene viewport was disabled." : reason;
+    if (!failureDetail_.empty()) {
+        message += "\n\nDetails: ";
+        message += failureDetail_;
+    }
+    if (errorReporter_) {
+        errorReporter_(message);
+    }
+    MessageBoxA(nullptr, message.c_str(), "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
+}
+
+void EditorSceneBgfxViewport::SetFailureDetail(std::string detail) {
+    if (!detail.empty()) {
+        failureDetail_ = std::move(detail);
+    }
 }
 
 bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {

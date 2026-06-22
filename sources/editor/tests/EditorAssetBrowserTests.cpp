@@ -393,14 +393,14 @@ void RunMaterialContextMenuCommandTest() {
     const bool backgroundHasMaterial = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
-    kb::editor::tests::Require(backgroundHasMaterial, "Asset browser background context menu should expose New Material");
+    kb::editor::tests::Require(backgroundHasMaterial, "Asset browser background context menu should expose New Material Instance");
 
     kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/Game/Environment", manager), "Asset browser should open a folder context menu for registered virtual folders");
     const std::vector<kb::editor::EditorAssetContextMenuItem> folderItems = state.ContextMenuItems(manager);
     const bool folderHasMaterial = std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
-    kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material");
+    kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material Instance");
 
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
     kb::editor::tests::Require(mesh != nullptr, "Asset browser material command test did not register mesh asset");

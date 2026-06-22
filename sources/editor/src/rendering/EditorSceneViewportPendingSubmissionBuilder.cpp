@@ -100,6 +100,7 @@ render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder:
             .clearTarget = clearTarget,
         },
         .cameraOverride = present.settings.cameraOverride,
+        .lightingConfig = present.settings.lightingConfig,
         .meshPassMode = present.settings.meshPassMode,
         .selectedEntityIds = SelectedEntitySpan(session),
         .dirtySceneEntityIds = dirtySceneEntityIds,

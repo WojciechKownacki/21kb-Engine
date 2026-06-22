@@ -362,7 +362,9 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorComponentLabelFormatter.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
+    src/private/inspection/EditorValueFormatter.hpp
     src/private/inspection/InspectorMaterialTextureSlotFormatter.hpp
+    src/private/inspection/MaterialAssetFormatter.hpp
     src/private/inspection/InspectorMeshRendererTextBuilder.hpp
     src/private/inspection/InspectorMultiSelectionTextBuilder.hpp
     src/private/inspection/InspectorPanelTextBuilder.hpp
@@ -439,6 +441,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
+    src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
@@ -620,6 +623,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/MaterialEditorPanelRenderer.cpp
     src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
@@ -675,6 +679,8 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
     src/inspection/InspectorMaterialTextureSlotFormatter.cpp
+    src/inspection/EditorValueFormatter.cpp
+    src/inspection/MaterialAssetFormatter.cpp
     src/inspection/InspectorMeshRendererTextBuilder.cpp
     src/inspection/InspectorMultiSelectionTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
@@ -934,6 +940,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorHierarchySelectionNormalizer.cpp
         src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
         src/scene/EditorSceneMaterialAssetActions.cpp
@@ -962,6 +969,8 @@ if(BUILD_TESTING)
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
+    src/inspection/EditorValueFormatter.cpp
+    src/inspection/MaterialAssetFormatter.cpp
         src/inspection/InspectorPanelState.cpp
     )
 
