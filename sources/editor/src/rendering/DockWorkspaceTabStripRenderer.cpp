@@ -89,6 +89,9 @@ void DrawTabChrome(HDC dc, const RECT& tab, bool active, const EditorTheme& them
     case DockPanelKind::Plugins:
         icon = HeroIconKind::AdjustmentsHorizontal;
         return true;
+    case DockPanelKind::MaterialEditor:
+        icon = HeroIconKind::RectangleGroup;
+        return true;
     default:
         return false;
     }

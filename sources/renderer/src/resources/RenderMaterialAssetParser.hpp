@@ -9,6 +9,7 @@ public:
     [[nodiscard]] static std::optional<RenderMaterialAssetData> Load(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderMaterialAssetData> Parse(std::istream& input);
     [[nodiscard]] static RenderMaterialAssetParseResult LoadWithDiagnostics(const std::filesystem::path& path);
+    [[nodiscard]] static RenderMaterialAssetParseResult LoadWithDiagnostics(const std::filesystem::path& path, kb::assets::AssetId assetId);
     [[nodiscard]] static RenderMaterialAssetParseResult ParseWithDiagnostics(std::istream& input);
 };
 

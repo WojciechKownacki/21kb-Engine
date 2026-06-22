@@ -43,6 +43,17 @@ namespace {
         ParseFloat(a, desc.baseColor[3]);
 }
 
+[[nodiscard]] bool ParseVec2(std::string_view rest, float (&output)[2]) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string x;
+    std::string y;
+    if (!(stream >> x >> y)) {
+        return false;
+    }
+    return ParseFloat(x, output[0]) &&
+        ParseFloat(y, output[1]);
+}
+
 [[nodiscard]] bool ParseVec3(std::string_view rest, float (&output)[3]) {
     std::istringstream stream{ std::string{ rest } };
     std::string x;
@@ -158,6 +169,8 @@ bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept 
         keyword == "occlusionStrength" ||
         keyword == "emissiveStrength" ||
         keyword == "alphaCutoff" ||
+        keyword == "tiling" ||
+        keyword == "offset" ||
         keyword == "clearcoatFactor" ||
         keyword == "clearcoatRoughnessFactor" ||
         keyword == "sheenColor" ||
@@ -206,6 +219,12 @@ bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string
     }
     if (keyword == "alphaCutoff") {
         return ParseFloat(rest, asset.desc.alphaCutoff);
+    }
+    if (keyword == "tiling") {
+        return ParseVec2(rest, asset.desc.uvTiling);
+    }
+    if (keyword == "offset") {
+        return ParseVec2(rest, asset.desc.uvOffset);
     }
     if (keyword == "clearcoatFactor") {
         return ParseFloat(rest, asset.desc.clearcoatFactor);

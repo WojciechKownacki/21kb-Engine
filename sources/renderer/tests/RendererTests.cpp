@@ -5,6 +5,7 @@ void RunFinalCompositePassTests();
 void RunPostProcessChainTests();
 void RunRenderFramePipelineTests();
 void RunRenderResourceRegistryTests();
+void RunRenderMaterialTypeSchemaTests();
 void RunRendererRuntimeSubmitTests();
 void RunRendererCapabilityReportTests();
 void RunMeshPipelineTests();
@@ -22,6 +23,7 @@ int main() {
     kb::render::tests::RunPostProcessChainTests();
     kb::render::tests::RunRenderFramePipelineTests();
     kb::render::tests::RunRenderResourceRegistryTests();
+    kb::render::tests::RunRenderMaterialTypeSchemaTests();
     kb::render::tests::RunRendererCapabilityReportTests();
     kb::render::tests::RunRendererRuntimeSubmitTests();
     kb::render::tests::RunMeshPipelineTests();

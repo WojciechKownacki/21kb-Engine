@@ -2,6 +2,7 @@
 
 #include "engine/project/ProjectManager.hpp"
 #include "project/EditorProjectPaths.hpp"
+#include "scene/EditorPluginCatalog.hpp"
 
 #include <system_error>
 
@@ -43,20 +44,28 @@ namespace {
     descriptor.targetPlatforms = { "Windows" };
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Physics.Jolt",
-        .binaryPath = KB_PHYSICS_JOLT_PLUGIN_PATH,
+        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Physics.Jolt"),
         .enabled = true,
     });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Audio.Miniaudio",
-        .binaryPath = KB_AUDIO_MINIAUDIO_PLUGIN_PATH,
+        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Audio.Miniaudio"),
         .enabled = true,
     });
     descriptor.plugins.push_back(kb::project::ProjectPluginReference{
         .name = "Rendering.BasicLighting",
-        .binaryPath = KB_BASIC_LIGHTING_PLUGIN_PATH,
+        .binaryPath = EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"),
         .enabled = true,
     });
     return descriptor;
+}
+
+[[nodiscard]] bool NormalizeBuiltInPluginPaths(kb::project::ProjectDescriptor& descriptor) {
+    bool changed = false;
+    for (kb::project::ProjectPluginReference& plugin : descriptor.plugins) {
+        changed = EditorPluginCatalog::NormalizeProjectPluginReference(plugin) || changed;
+    }
+    return changed;
 }
 
 [[nodiscard]] bool EnsureProjectDirectories() {
@@ -90,6 +99,12 @@ EditorProjectBootstrapResult EditorProjectBootstrap::BootstrapDefaultProject() {
     std::error_code error;
     if (std::filesystem::exists(projectFile, error) && !error) {
         kb::project::ProjectDescriptorReadResult loaded = kb::project::ProjectManager::LoadProject(projectFile);
+        if (loaded.succeeded && NormalizeBuiltInPluginPaths(loaded.descriptor)) {
+            if (!kb::project::ProjectManager::SaveProject(projectFile, loaded.descriptor)) {
+                loaded.succeeded = false;
+                loaded.error = "Project descriptor plugin paths could not be normalized.";
+            }
+        }
         return EditorProjectBootstrapResult{
             .succeeded = loaded.succeeded,
             .descriptor = loaded.descriptor,

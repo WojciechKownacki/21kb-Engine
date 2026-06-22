@@ -43,6 +43,14 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
             }
         }
     }
+    if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
+        for (const DockPanel& panel : dockModel_.Queries().Panels()) {
+            if (panel.kind == DockPanelKind::MaterialEditor) {
+                dockModel_.Commands().ActivatePanel(panel.id);
+                break;
+            }
+        }
+    }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;
 }

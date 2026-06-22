@@ -55,8 +55,8 @@ void FinalizeMesh(kb::render::RenderMeshAssetData& mesh, float radius) {
 } // namespace
 
 kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildSphere() {
-    constexpr std::uint32_t kSegments = 32U;
-    constexpr std::uint32_t kRings = 16U;
+    constexpr std::uint32_t kSegments = 48U;
+    constexpr std::uint32_t kRings = 24U;
 
     kb::render::RenderMeshAssetData mesh;
     mesh.vertices.reserve(static_cast<std::size_t>((kRings + 1U) * (kSegments + 1U)));
@@ -85,13 +85,13 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildSphere() 
             const std::uint32_t d = a + 1U;
             if (ring != 0U) {
                 mesh.indices32.push_back(a);
-                mesh.indices32.push_back(b);
                 mesh.indices32.push_back(d);
+                mesh.indices32.push_back(b);
             }
             if (ring + 1U != kRings) {
                 mesh.indices32.push_back(d);
-                mesh.indices32.push_back(b);
                 mesh.indices32.push_back(c);
+                mesh.indices32.push_back(b);
             }
         }
     }

@@ -1,6 +1,7 @@
 #include "scene/EditorPluginCatalog.hpp"
 
 #include <array>
+#include <filesystem>
 
 namespace kb::editor {
 namespace {
@@ -64,6 +65,38 @@ std::size_t EditorPluginCatalog::Count() noexcept {
 
 const EditorPluginDescriptor* EditorPluginCatalog::At(std::size_t index) noexcept {
     return index < kPlugins.size() ? &kPlugins[index] : nullptr;
+}
+
+const EditorPluginDescriptor* EditorPluginCatalog::FindById(std::string_view id) noexcept {
+    for (const EditorPluginDescriptor& descriptor : kPlugins) {
+        if (descriptor.id == id) {
+            return &descriptor;
+        }
+    }
+    return nullptr;
+}
+
+std::string EditorPluginCatalog::PersistentBinaryPath(std::string_view pluginId) {
+    const EditorPluginDescriptor* descriptor = FindById(pluginId);
+    if (descriptor == nullptr || descriptor->binaryPath.empty()) {
+        return {};
+    }
+    return std::filesystem::path{ descriptor->binaryPath }.filename().string();
+}
+
+bool EditorPluginCatalog::NormalizeProjectPluginReference(kb::project::ProjectPluginReference& plugin) {
+    const EditorPluginDescriptor* descriptor = FindById(plugin.name);
+    if (descriptor == nullptr) {
+        return false;
+    }
+
+    const std::string normalized = PersistentBinaryPath(plugin.name);
+    if (normalized.empty() || plugin.binaryPath == normalized) {
+        return false;
+    }
+
+    plugin.binaryPath = normalized;
+    return true;
 }
 
 } // namespace kb::editor
