@@ -50,6 +50,7 @@
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/EditorMaterialAssetEditCommand.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
+#include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
@@ -1702,6 +1703,17 @@ bool EditorSceneContext::SetMaterialTextureAsset(kb::assets::AssetId id, EditorM
         const kb::assets::AssetMetadata* texture = scene_->Assets().Manager().Registry().Find(textureId);
         if (texture == nullptr || !IsTextureAsset(*texture)) {
             console_.Error("Materials", "Material texture slot rejected a non-texture asset.");
+            return false;
+        }
+        const EditorMaterialTextureSlotValidationResult validation = EditorMaterialTextureSlotValidation::Validate(*texture, slot);
+        if (!validation.accepted) {
+            console_.Error(
+                "Materials",
+                "Texture '" + (texture->name.empty() ? texture->virtualPath.filename().string() : texture->name)
+                    + "' looks like " + std::string{ EditorMaterialTextureSlotValidation::SemanticName(validation.inferredSemantic) }
+                    + "/" + std::string{ EditorMaterialTextureSlotValidation::ColorSpaceName(validation.inferredColorSpace) }
+                    + ", but the " + std::string{ EditorMaterialTextureSlotValidation::SemanticName(validation.expectedSemantic) }
+                    + " slot expects " + std::string{ EditorMaterialTextureSlotValidation::ColorSpaceName(validation.expectedColorSpace) } + ".");
             return false;
         }
     }
