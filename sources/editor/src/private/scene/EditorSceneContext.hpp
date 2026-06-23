@@ -224,6 +224,7 @@ public:
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
     [[nodiscard]] bool HasDirtyMaterialAssetEdit() const noexcept;
     [[nodiscard]] bool PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset);
+    [[nodiscard]] bool PrepareMaterialEditorClose(std::string_view reason);
     [[nodiscard]] std::optional<kb::input::InputActionAsset> ReadInputActionAsset(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetInputActionName(kb::assets::AssetId id, std::string name);
     [[nodiscard]] bool CycleInputActionValueType(kb::assets::AssetId id);
