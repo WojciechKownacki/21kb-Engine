@@ -26,6 +26,7 @@ constexpr int kPadding = MaterialEditorPanelMetrics::Padding;
 constexpr int kRowHeight = MaterialEditorPanelMetrics::RowHeight;
 constexpr int kSectionHeight = MaterialEditorPanelMetrics::SectionHeight;
 constexpr int kLabelWidth = 132;
+constexpr int kCompactLabelWidth = 96;
 constexpr int kTitleHeight = MaterialEditorPanelMetrics::TitleHeight;
 constexpr int kPreviewGap = MaterialEditorPanelMetrics::PreviewGap;
 
@@ -58,6 +59,30 @@ void DrawField(HDC dc, const RECT& content, int& y, const std::string& label, co
     const RECT row{ content.left + kPadding, y, content.right - kPadding, y + kRowHeight };
     DrawText(dc, RECT{ row.left, row.top, row.left + kLabelWidth, row.bottom }, label.c_str(), RGB(122, 130, 144), 12);
     DrawText(dc, RECT{ row.left + kLabelWidth, row.top, row.right, row.bottom }, value.c_str(), valueColor, 12);
+    y += kRowHeight;
+}
+
+void DrawCompactField(HDC dc, const RECT& rect, const std::string& label, const std::string& value) {
+    DrawText(dc, RECT{ rect.left, rect.top, rect.left + kCompactLabelWidth, rect.bottom }, label.c_str(), RGB(122, 130, 144), 11);
+    DrawText(dc, RECT{ rect.left + kCompactLabelWidth, rect.top, rect.right, rect.bottom }, value.c_str(), RGB(196, 205, 214), 11);
+}
+
+void DrawParameterPair(
+    HDC dc,
+    const RECT& content,
+    int& y,
+    const std::string& leftLabel,
+    const std::string& leftValue,
+    const std::string& rightLabel,
+    const std::string& rightValue) {
+    const int gap = 12;
+    const int innerLeft = content.left + kPadding;
+    const int innerRight = content.right - kPadding;
+    const int columnWidth = (innerRight - innerLeft - gap) / 2;
+    const RECT left{ innerLeft, y, innerLeft + columnWidth, y + kRowHeight };
+    const RECT right{ left.right + gap, y, innerRight, y + kRowHeight };
+    DrawCompactField(dc, left, leftLabel, leftValue);
+    DrawCompactField(dc, right, rightLabel, rightValue);
     y += kRowHeight;
 }
 
@@ -97,18 +122,31 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 
     DrawSectionHeader(dc, content, y, "Parameters");
     const auto& desc = material.desc;
-    DrawField(dc, content, y, "Base Color", EditorValueFormatter::FormatFloat(desc.baseColor[0]) + ", " + EditorValueFormatter::FormatFloat(desc.baseColor[1]) + ", " + EditorValueFormatter::FormatFloat(desc.baseColor[2]) + ", " + EditorValueFormatter::FormatFloat(desc.baseColor[3]));
-    DrawField(dc, content, y, "Metallic", EditorValueFormatter::FormatFloat(desc.metallicFactor));
-    DrawField(dc, content, y, "Roughness", EditorValueFormatter::FormatFloat(desc.roughnessFactor));
-    DrawField(dc, content, y, "Normal Scale", EditorValueFormatter::FormatFloat(desc.normalScale));
-    DrawField(dc, content, y, "Occlusion", EditorValueFormatter::FormatFloat(desc.occlusionStrength));
-    DrawField(dc, content, y, "Emissive Color", EditorValueFormatter::FormatFloat(desc.emissiveColor[0]) + ", " + EditorValueFormatter::FormatFloat(desc.emissiveColor[1]) + ", " + EditorValueFormatter::FormatFloat(desc.emissiveColor[2]));
-    DrawField(dc, content, y, "Emissive Strength", EditorValueFormatter::FormatFloat(desc.emissiveStrength));
-    DrawField(dc, content, y, "Alpha Mode", MaterialAssetFormatter::AlphaModeName(desc.alphaMode));
-    DrawField(dc, content, y, "Alpha Cutoff", EditorValueFormatter::FormatFloat(desc.alphaCutoff));
-    DrawField(dc, content, y, "Double Sided", desc.doubleSided ? "true" : "false");
-    DrawField(dc, content, y, "Tiling", EditorValueFormatter::FormatFloat(desc.uvTiling[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvTiling[1]));
-    DrawField(dc, content, y, "Offset", EditorValueFormatter::FormatFloat(desc.uvOffset[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvOffset[1]));
+    const std::string baseColor = EditorValueFormatter::FormatFloat(desc.baseColor[0]) + ", "
+        + EditorValueFormatter::FormatFloat(desc.baseColor[1]) + ", "
+        + EditorValueFormatter::FormatFloat(desc.baseColor[2]) + ", "
+        + EditorValueFormatter::FormatFloat(desc.baseColor[3]);
+    const std::string emissiveColor = EditorValueFormatter::FormatFloat(desc.emissiveColor[0]) + ", "
+        + EditorValueFormatter::FormatFloat(desc.emissiveColor[1]) + ", "
+        + EditorValueFormatter::FormatFloat(desc.emissiveColor[2]);
+    const std::string tiling = EditorValueFormatter::FormatFloat(desc.uvTiling[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvTiling[1]);
+    const std::string offset = EditorValueFormatter::FormatFloat(desc.uvOffset[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvOffset[1]);
+
+    DrawParameterPair(dc, content, y, "Base Color", baseColor, "Metallic", EditorValueFormatter::FormatFloat(desc.metallicFactor));
+    DrawParameterPair(dc, content, y, "Roughness", EditorValueFormatter::FormatFloat(desc.roughnessFactor), "Normal Scale", EditorValueFormatter::FormatFloat(desc.normalScale));
+    DrawParameterPair(dc, content, y, "Occlusion", EditorValueFormatter::FormatFloat(desc.occlusionStrength), "Emissive", emissiveColor);
+    DrawParameterPair(dc, content, y, "Emissive Str.", EditorValueFormatter::FormatFloat(desc.emissiveStrength), "Alpha Mode", MaterialAssetFormatter::AlphaModeName(desc.alphaMode));
+    DrawParameterPair(dc, content, y, "Alpha Cutoff", EditorValueFormatter::FormatFloat(desc.alphaCutoff), "Double Sided", desc.doubleSided ? "true" : "false");
+    DrawParameterPair(dc, content, y, "Tiling", tiling, "Offset", offset);
+    y += 6;
+
+    DrawSectionHeader(dc, content, y, "Texture Slots");
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    DrawTextureField(dc, content, y, "Base Color", manager, desc.albedoTextureAssetId);
+    DrawTextureField(dc, content, y, "Normal", manager, desc.normalTextureAssetId);
+    DrawTextureField(dc, content, y, "Metallic-Roughness", manager, desc.metallicRoughnessTextureAssetId);
+    DrawTextureField(dc, content, y, "Emissive", manager, desc.emissiveTextureAssetId);
+    DrawTextureField(dc, content, y, "Occlusion", manager, desc.occlusionTextureAssetId);
     y += 6;
 
     DrawSectionHeader(dc, content, y, "Preview Status");
@@ -123,15 +161,6 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     DrawField(dc, content, y, "Material Type", material.materialType + MarkExplicit(material.hasExplicitMaterialType));
     DrawField(dc, content, y, "Type Version", EditorValueFormatter::FormatUInt64(material.materialTypeVersion) + MarkExplicit(material.hasExplicitMaterialTypeVersion));
     DrawField(dc, content, y, "Document Version", EditorValueFormatter::FormatUInt64(material.documentVersion) + MarkExplicit(material.hasExplicitDocumentVersion));
-    y += 6;
-
-    DrawSectionHeader(dc, content, y, "Texture Slots");
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    DrawTextureField(dc, content, y, "Albedo", manager, desc.albedoTextureAssetId);
-    DrawTextureField(dc, content, y, "Normal", manager, desc.normalTextureAssetId);
-    DrawTextureField(dc, content, y, "Metallic-Roughness", manager, desc.metallicRoughnessTextureAssetId);
-    DrawTextureField(dc, content, y, "Occlusion", manager, desc.occlusionTextureAssetId);
-    DrawTextureField(dc, content, y, "Emissive", manager, desc.emissiveTextureAssetId);
 }
 
 } // namespace
