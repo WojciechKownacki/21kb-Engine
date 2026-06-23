@@ -1731,6 +1731,78 @@ bool EditorSceneContext::CycleMaterialTextureAsset(kb::assets::AssetId id, Edito
     return SetMaterialTextureAsset(id, slot, NextTextureAssetId(textures, MaterialTextureSlotValue(*material, slot)));
 }
 
+bool EditorSceneContext::SaveMaterialEditorAsset(kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        console_.Error("Materials", "No material asset is selected for Save.");
+        return false;
+    }
+    if (HasActiveMaterialAssetEdit()) {
+        if (activeMaterialEditAsset_ != id) {
+            console_.Error("Materials", "Cannot save material while another material edit is active.");
+            return false;
+        }
+        return CommitActiveMaterialAssetEdit();
+    }
+    return ValidateMaterialEditorAsset(id);
+}
+
+bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        console_.Error("Materials", "No material asset is selected for Revert.");
+        return false;
+    }
+    if (!HasActiveMaterialAssetEdit()) {
+        console_.Info("Materials", "Material has no pending edit to revert.");
+        return true;
+    }
+    if (activeMaterialEditAsset_ != id) {
+        console_.Error("Materials", "Cannot revert material while another material edit is active.");
+        return false;
+    }
+    CancelActiveMaterialAssetEdit();
+    console_.Info("Materials", "Material edit reverted.");
+    return true;
+}
+
+bool EditorSceneContext::ValidateMaterialEditorAsset(kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        console_.Error("Materials", "No material asset is selected for Validate.");
+        return false;
+    }
+
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        console_.Error("Materials", "Selected asset is not a Material Instance.");
+        return false;
+    }
+
+    const std::filesystem::path path = metadata->physicalPath.empty()
+        ? manager.Mounts().Resolve(metadata->virtualPath).value_or(std::filesystem::path{})
+        : metadata->physicalPath;
+    if (path.empty()) {
+        console_.Error("Materials", "Material asset path could not be resolved: " + metadata->virtualPath.generic_string());
+        return false;
+    }
+
+    const kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, id);
+    for (const kb::render::RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        std::string message = std::string{ kb::render::RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) } + ": " + diagnostic.message;
+        if (!diagnostic.field.empty()) {
+            message += " [" + diagnostic.field + "]";
+        }
+        if (diagnostic.severity == kb::render::RenderMaterialAssetParseDiagnosticSeverity::Warning) {
+            console_.Warning("Materials", message);
+        } else {
+            console_.Error("Materials", message);
+        }
+    }
+    if (result.Succeeded()) {
+        console_.Info("Materials", "Material validated: " + metadata->virtualPath.generic_string());
+    }
+    return result.Succeeded();
+}
+
 bool EditorSceneContext::BeginMaterialAssetFloatEdit(kb::assets::AssetId id, InspectorPropertyId property) {
     if (HasActiveMaterialAssetEdit() || !IsMaterialFloatProperty(property)) {
         return false;
