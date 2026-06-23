@@ -62,6 +62,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -222,6 +224,22 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
     default:
         return {};
     }
+}
+
+[[nodiscard]] std::optional<float> ParsePlainFloat(std::string_view text) {
+    std::string copy{ text };
+    char* end = nullptr;
+    const float value = std::strtof(copy.c_str(), &end);
+    if (end == copy.c_str()) {
+        return std::nullopt;
+    }
+    while (end != nullptr && *end != '\0') {
+        if (!std::isspace(static_cast<unsigned char>(*end))) {
+            return std::nullopt;
+        }
+        ++end;
+    }
+    return value;
 }
 
 [[nodiscard]] bool HasSelectedAncestor(const kb::scene::Scene& scene, kb::scene::SceneEntity entity, std::span<const kb::scene::SceneEntity> selected) noexcept {
@@ -1587,6 +1605,9 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
+    if (HasActiveMaterialAssetEdit()) {
+        return true;
+    }
     if (!inspector_.IsTextEditDirty() || !IsMaterialFloatProperty(inspector_.EditedProperty())) {
         return false;
     }
@@ -1746,6 +1767,19 @@ bool EditorSceneContext::SaveMaterialEditorAsset(kb::assets::AssetId id) {
         console_.Error("Materials", "No material asset is selected for Save.");
         return false;
     }
+    if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
+        const std::optional<float> value = ParsePlainFloat(inspector_.EditBuffer());
+        if (!value.has_value()) {
+            console_.Error("Materials", "Material value edit could not be saved because the value is not a valid number.");
+            return false;
+        }
+        std::unique_ptr<IEditorMaterialAssetPropertyEdit> edit = MaterialFloatEditForProperty(inspector_.EditedProperty(), *value);
+        if (edit == nullptr || !ExecuteMaterialAssetEdit(id, std::move(edit))) {
+            return false;
+        }
+        inspector_.EndTextEdit();
+        return true;
+    }
     if (HasActiveMaterialAssetEdit()) {
         if (activeMaterialEditAsset_ != id) {
             console_.Error("Materials", "Cannot save material while another material edit is active.");
@@ -1760,6 +1794,11 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     if (!id.IsValid()) {
         console_.Error("Materials", "No material asset is selected for Revert.");
         return false;
+    }
+    if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
+        inspector_.EndTextEdit();
+        console_.Info("Materials", "Material value edit reverted.");
+        return true;
     }
     if (!HasActiveMaterialAssetEdit()) {
         console_.Info("Materials", "Material has no pending edit to revert.");
