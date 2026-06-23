@@ -15,8 +15,18 @@
 
 namespace kb::editor {
 
+enum class MaterialEditorPanelCommand {
+    None,
+    Save,
+    Revert,
+    Validate,
+};
+
 struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
+    RECT saveButton{};
+    RECT revertButton{};
+    RECT validateButton{};
     RECT previewFrame{};
     int parameterSectionTop = 0;
     int mvpParameterBottom = 0;
@@ -58,6 +68,7 @@ public:
     /// std::nullopt when no Material Instance is selected. Consumed by the editor frame
     /// loop to present the bgfx preview into this panel (mirrors the Inspector preview path).
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static MaterialEditorPanelCommand CommandAt(const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static std::optional<EditorMaterialTextureSlot> TextureSlotAt(const RECT& content, int x, int y) noexcept;
 #endif
 };
@@ -69,6 +80,13 @@ inline bool MaterialEditorPanelPointInRect(const RECT& rect, int x, int y) noexc
 
 inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT& content) noexcept {
     MaterialEditorPanelLayout layout{};
+    const int buttonTop = content.top + 8;
+    const int buttonBottom = buttonTop + 26;
+    const int buttonGap = 6;
+    layout.validateButton = RECT{ content.right - MaterialEditorPanelMetrics::Padding - 72, buttonTop, content.right - MaterialEditorPanelMetrics::Padding, buttonBottom };
+    layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
+    layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
+
     const int previewY = content.top + MaterialEditorPanelMetrics::HeaderHeight + MaterialEditorPanelMetrics::Padding;
     layout.previewFrame = RECT{
         content.left + MaterialEditorPanelMetrics::PreviewPadding,
@@ -89,6 +107,20 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     y += MaterialEditorPanelMetrics::SectionHeight + 4;
     layout.textureSlotBottom = y + (MaterialEditorPanelMetrics::TextureSlotRowCount * MaterialEditorPanelMetrics::RowHeight);
     return layout;
+}
+
+inline MaterialEditorPanelCommand MaterialEditorPanelRenderer::CommandAt(const RECT& content, int x, int y) noexcept {
+    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    if (MaterialEditorPanelPointInRect(layout.saveButton, x, y)) {
+        return MaterialEditorPanelCommand::Save;
+    }
+    if (MaterialEditorPanelPointInRect(layout.revertButton, x, y)) {
+        return MaterialEditorPanelCommand::Revert;
+    }
+    if (MaterialEditorPanelPointInRect(layout.validateButton, x, y)) {
+        return MaterialEditorPanelCommand::Validate;
+    }
+    return MaterialEditorPanelCommand::None;
 }
 
 inline std::optional<EditorMaterialTextureSlot> MaterialEditorPanelRenderer::TextureSlotAt(const RECT& content, int x, int y) noexcept {
