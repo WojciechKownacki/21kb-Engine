@@ -4,6 +4,7 @@
 #include "assets/EditorAssetBrowserHitTester.hpp"
 #include "assets/EditorAssetBrowserLayout.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
+#include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "engine/assets/AssetManager.hpp"
 
 #include <algorithm>
@@ -408,6 +409,21 @@ void RunMaterialContextMenuCommandTest() {
     const std::vector<kb::editor::EditorAssetContextMenuItem> meshItems = state.ContextMenuItems(manager);
     kb::editor::tests::Require(!meshItems.empty() && meshItems.front().command == kb::editor::EditorAssetContextCommand::ExtractMaterials, "Mesh asset context menu should expose Extract Materials first");
 }
+
+void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("PreviewMaterial", "RenderMaterial", "/Game/Materials/PreviewMaterial.kbmat")));
+
+    kb::editor::EditorAssetBrowserState state;
+    kb::editor::tests::Require(state.SelectFolder("/Game/Materials", manager), "Material double-click test should open the material folder");
+
+    const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Materials/PreviewMaterial.kbmat");
+    kb::editor::tests::Require(material != nullptr, "Material double-click test did not register material metadata");
+    const kb::editor::EditorAssetBrowserDoubleClickResult result =
+        kb::editor::EditorAssetBrowserDoubleClickHandler::HandleMaterialAssetDoubleClick(*material, state, manager);
+    kb::editor::tests::Require(result == kb::editor::EditorAssetBrowserDoubleClickResult::MaterialEditorOpened, "Double-clicking a material asset should request Material Editor activation");
+    kb::editor::tests::Require(state.InspectorAsset() == material->id, "Double-clicking a material asset should select it for the Material Editor");
+}
 #endif
 
 } // namespace
@@ -431,6 +447,7 @@ void RunEditorAssetBrowserTests() {
     RunContextMenuHitTestTest();
     RunImportCommandHitTestTest();
     RunMaterialContextMenuCommandTest();
+    RunMaterialAssetDoubleClickOpensMaterialEditorTest();
 #endif
 }
 
