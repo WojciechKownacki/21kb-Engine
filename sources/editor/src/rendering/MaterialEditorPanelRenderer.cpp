@@ -21,15 +21,13 @@
 namespace kb::editor {
 namespace {
 
-constexpr int kHeaderHeight = 42;
-constexpr int kPadding = 14;
-constexpr int kRowHeight = 22;
-constexpr int kSectionHeight = 26;
+constexpr int kHeaderHeight = MaterialEditorPanelMetrics::HeaderHeight;
+constexpr int kPadding = MaterialEditorPanelMetrics::Padding;
+constexpr int kRowHeight = MaterialEditorPanelMetrics::RowHeight;
+constexpr int kSectionHeight = MaterialEditorPanelMetrics::SectionHeight;
 constexpr int kLabelWidth = 132;
-constexpr int kTitleHeight = 30;
-constexpr int kPreviewHeight = 160;
-constexpr int kPreviewPadding = 12;
-constexpr int kPreviewGap = 8;
+constexpr int kTitleHeight = MaterialEditorPanelMetrics::TitleHeight;
+constexpr int kPreviewGap = MaterialEditorPanelMetrics::PreviewGap;
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
@@ -74,8 +72,7 @@ void DrawTextureField(HDC dc, const RECT& content, int& y, const char* label, co
 }
 
 [[nodiscard]] RECT PreviewFrameRect(const RECT& content) noexcept {
-    const int y = content.top + kHeaderHeight + kPadding;
-    return RECT{ content.left + kPreviewPadding, y, content.right - kPreviewPadding, y + kPreviewHeight };
+    return MaterialEditorPanelRenderer::ResolveLayout(content).previewFrame;
 }
 
 void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -92,24 +89,11 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     DrawText(dc, frame, telemetry.materialLoaded ? "Material preview" : "Material fallback preview", RGB(86, 92, 100), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     y = frame.bottom + kPreviewGap;
 
-    DrawField(dc, content, y, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
-    DrawField(dc, content, y, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
-    DrawField(dc, content, y, "Missing Textures", EditorValueFormatter::FormatUInt64(telemetry.missingTextureCount));
-    y += 6;
-
     const std::string assetName = metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name;
     DrawText(dc, RECT{ content.left + kPadding, y, content.right - kPadding, y + kTitleHeight }, assetName.c_str(), RGB(232, 236, 240), 15, FW_SEMIBOLD);
     y += kTitleHeight;
     DrawText(dc, RECT{ content.left + kPadding, y, content.right - kPadding, y + kRowHeight }, "Material Instance", RGB(126, 201, 143), 11);
     y += kRowHeight + 6;
-
-    DrawSectionHeader(dc, content, y, "Identity");
-    DrawField(dc, content, y, "Asset Id", EditorValueFormatter::FormatUInt64(metadata.id.value));
-    DrawField(dc, content, y, "Virtual Path", metadata.virtualPath.generic_string());
-    DrawField(dc, content, y, "Material Type", material.materialType + MarkExplicit(material.hasExplicitMaterialType));
-    DrawField(dc, content, y, "Type Version", EditorValueFormatter::FormatUInt64(material.materialTypeVersion) + MarkExplicit(material.hasExplicitMaterialTypeVersion));
-    DrawField(dc, content, y, "Document Version", EditorValueFormatter::FormatUInt64(material.documentVersion) + MarkExplicit(material.hasExplicitDocumentVersion));
-    y += 6;
 
     DrawSectionHeader(dc, content, y, "Parameters");
     const auto& desc = material.desc;
@@ -125,6 +109,20 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     DrawField(dc, content, y, "Double Sided", desc.doubleSided ? "true" : "false");
     DrawField(dc, content, y, "Tiling", EditorValueFormatter::FormatFloat(desc.uvTiling[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvTiling[1]));
     DrawField(dc, content, y, "Offset", EditorValueFormatter::FormatFloat(desc.uvOffset[0]) + ", " + EditorValueFormatter::FormatFloat(desc.uvOffset[1]));
+    y += 6;
+
+    DrawSectionHeader(dc, content, y, "Preview Status");
+    DrawField(dc, content, y, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
+    DrawField(dc, content, y, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
+    DrawField(dc, content, y, "Missing Textures", EditorValueFormatter::FormatUInt64(telemetry.missingTextureCount));
+    y += 6;
+
+    DrawSectionHeader(dc, content, y, "Identity");
+    DrawField(dc, content, y, "Asset Id", EditorValueFormatter::FormatUInt64(metadata.id.value));
+    DrawField(dc, content, y, "Virtual Path", metadata.virtualPath.generic_string());
+    DrawField(dc, content, y, "Material Type", material.materialType + MarkExplicit(material.hasExplicitMaterialType));
+    DrawField(dc, content, y, "Type Version", EditorValueFormatter::FormatUInt64(material.materialTypeVersion) + MarkExplicit(material.hasExplicitMaterialTypeVersion));
+    DrawField(dc, content, y, "Document Version", EditorValueFormatter::FormatUInt64(material.documentVersion) + MarkExplicit(material.hasExplicitDocumentVersion));
     y += 6;
 
     DrawSectionHeader(dc, content, y, "Texture Slots");
