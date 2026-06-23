@@ -38,6 +38,10 @@ namespace {
     return metadata.type == "RenderMaterial";
 }
 
+[[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
+}
+
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetMetadata& metadata, const kb::assets::AssetManager& manager) {
     if (const std::optional<std::filesystem::path> mounted = manager.Mounts().Resolve(metadata.virtualPath)) {
         return *mounted;
@@ -101,6 +105,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             drag.assetAssignsAudioClip = IsAudioAsset(*metadata);
             drag.assetAssignsMaterial = IsMaterialAsset(*metadata);
+            drag.assetAssignsTexture = IsTextureAsset(*metadata);
             return;
         }
 

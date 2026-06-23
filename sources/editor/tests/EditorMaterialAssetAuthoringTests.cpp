@@ -16,6 +16,7 @@
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/EditorMaterialAssetEditCommand.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
+#include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 
 #include <array>
 #include <cstdint>
@@ -304,6 +305,31 @@ void RunMaterialTextureSlotAuthoringTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialTextureSlotValidationTest() {
+    const kb::assets::AssetMetadata normal = Metadata("Stone_Normal", "RenderTexture", "/Game/Textures/Stone_Normal.png");
+    const kb::assets::AssetMetadata baseColor = Metadata("Stone_BaseColor", "RenderTexture", "/Game/Textures/Stone_BaseColor.png");
+    const kb::assets::AssetMetadata custom = Metadata("StoneLayerA", "RenderTexture", "/Game/Textures/StoneLayerA.png");
+
+    const kb::editor::EditorMaterialTextureSlotValidationResult acceptedNormal =
+        kb::editor::EditorMaterialTextureSlotValidation::Validate(normal, kb::editor::EditorMaterialTextureSlot::Normal);
+    kb::editor::tests::Require(acceptedNormal.accepted, "Material texture validation should accept a normal map in the Normal slot");
+    kb::editor::tests::Require(acceptedNormal.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Linear, "Normal texture slot should expect linear data");
+
+    const kb::editor::EditorMaterialTextureSlotValidationResult rejectedNormalAsBaseColor =
+        kb::editor::EditorMaterialTextureSlotValidation::Validate(normal, kb::editor::EditorMaterialTextureSlot::Albedo);
+    kb::editor::tests::Require(!rejectedNormalAsBaseColor.accepted, "Material texture validation should reject a normal map in the Base Color slot");
+    kb::editor::tests::Require(rejectedNormalAsBaseColor.expectedColorSpace == kb::editor::EditorMaterialTextureColorSpace::Srgb, "Base Color texture slot should expect sRGB data");
+
+    const kb::editor::EditorMaterialTextureSlotValidationResult acceptedBaseColor =
+        kb::editor::EditorMaterialTextureSlotValidation::Validate(baseColor, kb::editor::EditorMaterialTextureSlot::Albedo);
+    kb::editor::tests::Require(acceptedBaseColor.accepted, "Material texture validation should accept base color textures in the Base Color slot");
+
+    const kb::editor::EditorMaterialTextureSlotValidationResult acceptedUnknown =
+        kb::editor::EditorMaterialTextureSlotValidation::Validate(custom, kb::editor::EditorMaterialTextureSlot::Occlusion);
+    kb::editor::tests::Require(acceptedUnknown.accepted, "Material texture validation should allow ambiguous texture names");
+    kb::editor::tests::Require(acceptedUnknown.inferredSemantic == kb::editor::EditorMaterialTextureSemantic::Unknown, "Ambiguous texture names should remain unclassified");
+}
+
 void RunMaterialAssetEditCommandUndoRedoTest() {
     CleanTempRoot();
 
@@ -426,6 +452,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
     RunMaterialTextureSlotAuthoringTest();
+    RunMaterialTextureSlotValidationTest();
     RunMaterialAssetEditCommandUndoRedoTest();
     RunExtractEmbeddedMaterialToMaterialAssetTest();
 }

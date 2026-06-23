@@ -394,6 +394,14 @@ void RunMaterialEditorMvpLayoutKeepsParametersVisibleTest() {
     kb::editor::tests::Require(layout.mvpParameterBottom <= content.bottom - 12, "Material Editor MVP parameter rows should fit in the default panel height");
     kb::editor::tests::Require(layout.mvpParameterBottom < layout.textureSectionTop, "Material Editor texture slots should follow the MVP parameters");
     kb::editor::tests::Require(layout.textureSlotBottom <= content.bottom - 12, "Material Editor texture slot rows should fit in the default panel height");
+
+    const int slotX = content.left + 24;
+    const int firstSlotY = layout.textureSectionTop + kb::editor::MaterialEditorPanelMetrics::SectionHeight + 8;
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY) == kb::editor::EditorMaterialTextureSlot::Albedo, "Material Editor should hit-test the Base Color texture slot");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + kb::editor::MaterialEditorPanelMetrics::RowHeight) == kb::editor::EditorMaterialTextureSlot::Normal, "Material Editor should hit-test the Normal texture slot");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (2 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::MetallicRoughness, "Material Editor should hit-test the Metallic-Roughness texture slot");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (3 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::Emissive, "Material Editor should hit-test the Emissive texture slot");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (4 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::Occlusion, "Material Editor should hit-test the Occlusion texture slot");
 }
 #endif
 
