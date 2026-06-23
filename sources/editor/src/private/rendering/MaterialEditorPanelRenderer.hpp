@@ -9,6 +9,8 @@
 #include <Windows.h>
 #endif
 
+#include <array>
+#include <cstddef>
 #include <optional>
 
 namespace kb::editor {
@@ -56,10 +58,15 @@ public:
     /// std::nullopt when no Material Instance is selected. Consumed by the editor frame
     /// loop to present the bgfx preview into this panel (mirrors the Inspector preview path).
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static std::optional<EditorMaterialTextureSlot> TextureSlotAt(const RECT& content, int x, int y) noexcept;
 #endif
 };
 
 #if defined(_WIN32)
+inline bool MaterialEditorPanelPointInRect(const RECT& rect, int x, int y) noexcept {
+    return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
 inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT& content) noexcept {
     MaterialEditorPanelLayout layout{};
     const int previewY = content.top + MaterialEditorPanelMetrics::HeaderHeight + MaterialEditorPanelMetrics::Padding;
@@ -82,6 +89,31 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     y += MaterialEditorPanelMetrics::SectionHeight + 4;
     layout.textureSlotBottom = y + (MaterialEditorPanelMetrics::TextureSlotRowCount * MaterialEditorPanelMetrics::RowHeight);
     return layout;
+}
+
+inline std::optional<EditorMaterialTextureSlot> MaterialEditorPanelRenderer::TextureSlotAt(const RECT& content, int x, int y) noexcept {
+    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    const int firstRowTop = layout.textureSectionTop + MaterialEditorPanelMetrics::SectionHeight + 4;
+    const std::array<EditorMaterialTextureSlot, MaterialEditorPanelMetrics::TextureSlotRowCount> slots{
+        EditorMaterialTextureSlot::Albedo,
+        EditorMaterialTextureSlot::Normal,
+        EditorMaterialTextureSlot::MetallicRoughness,
+        EditorMaterialTextureSlot::Emissive,
+        EditorMaterialTextureSlot::Occlusion,
+    };
+    for (std::size_t index = 0; index < slots.size(); ++index) {
+        const int rowTop = firstRowTop + (static_cast<int>(index) * MaterialEditorPanelMetrics::RowHeight);
+        const RECT row{
+            content.left + MaterialEditorPanelMetrics::Padding,
+            rowTop,
+            content.right - MaterialEditorPanelMetrics::Padding,
+            rowTop + MaterialEditorPanelMetrics::RowHeight,
+        };
+        if (MaterialEditorPanelPointInRect(row, x, y)) {
+            return slots[index];
+        }
+    }
+    return std::nullopt;
 }
 #endif
 
