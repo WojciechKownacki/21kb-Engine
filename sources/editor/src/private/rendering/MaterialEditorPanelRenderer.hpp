@@ -18,6 +18,8 @@ struct MaterialEditorPanelLayout {
     RECT previewFrame{};
     int parameterSectionTop = 0;
     int mvpParameterBottom = 0;
+    int textureSectionTop = 0;
+    int textureSlotBottom = 0;
 #endif
 };
 
@@ -31,7 +33,8 @@ inline constexpr int TitleHeight = 24;
 inline constexpr int PreviewHeight = 112;
 inline constexpr int PreviewPadding = 10;
 inline constexpr int PreviewGap = 6;
-inline constexpr int MvpParameterRowCount = 10;
+inline constexpr int MvpParameterRowCount = 6;
+inline constexpr int TextureSlotRowCount = 5;
 } // namespace MaterialEditorPanelMetrics
 #endif
 
@@ -74,6 +77,10 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     layout.parameterSectionTop = y;
     y += MaterialEditorPanelMetrics::SectionHeight + 4;
     layout.mvpParameterBottom = y + (MaterialEditorPanelMetrics::MvpParameterRowCount * MaterialEditorPanelMetrics::RowHeight);
+    y = layout.mvpParameterBottom + 6;
+    layout.textureSectionTop = y;
+    y += MaterialEditorPanelMetrics::SectionHeight + 4;
+    layout.textureSlotBottom = y + (MaterialEditorPanelMetrics::TextureSlotRowCount * MaterialEditorPanelMetrics::RowHeight);
     return layout;
 }
 #endif

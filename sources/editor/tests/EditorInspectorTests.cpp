@@ -392,6 +392,8 @@ void RunMaterialEditorMvpLayoutKeepsParametersVisibleTest() {
     kb::editor::tests::Require(layout.previewFrame.top > content.top, "Material Editor preview should be the first body element");
     kb::editor::tests::Require(layout.previewFrame.bottom < layout.parameterSectionTop, "Material Editor parameters should follow the preview");
     kb::editor::tests::Require(layout.mvpParameterBottom <= content.bottom - 12, "Material Editor MVP parameter rows should fit in the default panel height");
+    kb::editor::tests::Require(layout.mvpParameterBottom < layout.textureSectionTop, "Material Editor texture slots should follow the MVP parameters");
+    kb::editor::tests::Require(layout.textureSlotBottom <= content.bottom - 12, "Material Editor texture slot rows should fit in the default panel height");
 }
 #endif
 
