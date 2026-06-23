@@ -18,6 +18,10 @@ EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, boo
 
 LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (const std::uint32_t panelId = floatingWindows_.Queries().PanelId(messageWindow); panelId != 0) {
+        const DockPanel* panel = dockModel_.Queries().FindPanel(panelId);
+        if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !sceneContext_.PrepareMaterialEditorClose("closing the Material Editor")) {
+            return 0;
+        }
         floatingWindows_.Commands().Destroy(panelId);
         dockModel_.Commands().DockPanelTo(panelId, DockDropPreview{ .zone = DockDropZone::Bottom });
         InvalidateRect(mainWindow_, nullptr, FALSE);
@@ -25,6 +29,9 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     }
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
+    if (!sceneContext_.PrepareMaterialEditorClose("closing the editor")) {
+        return 0;
+    }
     const std::optional<EditorDirtySceneResolution> resolution =
         EditorSceneLifecycleGuard::ConfirmDirtySceneTransition(mainWindow_, sceneContext_, L"closing the editor");
     if (!resolution.has_value()) {

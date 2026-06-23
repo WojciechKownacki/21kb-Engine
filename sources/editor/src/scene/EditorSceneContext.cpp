@@ -1602,6 +1602,16 @@ bool EditorSceneContext::PrepareMaterialAssetSelectionChange(kb::assets::AssetId
     return false;
 }
 
+bool EditorSceneContext::PrepareMaterialEditorClose(std::string_view reason) {
+    if (!HasDirtyMaterialAssetEdit()) {
+        return true;
+    }
+    console_.Warning(
+        "Materials",
+        "Unsaved material value edit before " + std::string{ reason } + ". Press Save to commit it or Revert to discard it.");
+    return false;
+}
+
 std::optional<kb::input::InputActionAsset> EditorSceneContext::ReadInputActionAsset(kb::assets::AssetId id) const {
     return EditorInputAssetGateway::ReadAction(*scene_, id);
 }
