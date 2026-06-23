@@ -37,7 +37,6 @@ struct EditorApplicationState {
     EditorGdiRenderer renderer;
     EditorRenderBackendSettings renderBackendSettings;
     EditorSceneBgfxViewport sceneViewport;
-    EditorSceneBgfxViewport materialPreviewViewport;
     EditorFloatingWindowManager floatingWindows;
     EditorDockController dockController;
     EditorHierarchySelectionController hierarchySelection;

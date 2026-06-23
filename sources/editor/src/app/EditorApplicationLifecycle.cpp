@@ -32,11 +32,7 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 
     EditorMainWindow::EnableDarkMode(state.window);
     state.sceneViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
-    state.materialPreviewViewport.Configure(state.instance, state.window, &state.renderBackendSettings);
     state.sceneViewport.SetErrorReporter([&state](std::string_view message) {
-        state.sceneContext.Console().Error("Renderer", std::string{ message });
-    });
-    state.materialPreviewViewport.SetErrorReporter([&state](std::string_view message) {
         state.sceneContext.Console().Error("Renderer", std::string{ message });
     });
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
@@ -52,7 +48,6 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
 void EditorApplicationLifecycle::Shutdown(EditorApplicationState& state) {
     static_cast<void>(state.sceneContext.RestorePlayModeSceneSession());
     static_cast<void>(state.sceneContext.SaveDirtySceneDocument("application shutdown"));
-    state.materialPreviewViewport.Shutdown();
     state.sceneViewport.Shutdown();
     state.floatingWindows.Lifecycle().Shutdown();
 
