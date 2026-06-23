@@ -394,6 +394,9 @@ void RunMaterialEditorMvpLayoutKeepsParametersVisibleTest() {
     kb::editor::tests::Require(layout.mvpParameterBottom <= content.bottom - 12, "Material Editor MVP parameter rows should fit in the default panel height");
     kb::editor::tests::Require(layout.mvpParameterBottom < layout.textureSectionTop, "Material Editor texture slots should follow the MVP parameters");
     kb::editor::tests::Require(layout.textureSlotBottom <= content.bottom - 12, "Material Editor texture slot rows should fit in the default panel height");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.revertButton.left + 2, layout.revertButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Revert, "Material Editor should hit-test the Revert command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
 
     const int slotX = content.left + 24;
     const int firstSlotY = layout.textureSectionTop + kb::editor::MaterialEditorPanelMetrics::SectionHeight + 8;

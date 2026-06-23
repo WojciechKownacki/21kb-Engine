@@ -19,6 +19,7 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
 #include <algorithm>
@@ -118,6 +119,29 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
+
+    if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
+        const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
+        if (command != MaterialEditorPanelCommand::None) {
+            const kb::assets::AssetId materialId = sceneContext_.AssetBrowser().InspectorAsset();
+            switch (command) {
+            case MaterialEditorPanelCommand::Save:
+                static_cast<void>(sceneContext_.SaveMaterialEditorAsset(materialId));
+                break;
+            case MaterialEditorPanelCommand::Revert:
+                static_cast<void>(sceneContext_.RevertMaterialEditorAsset(materialId));
+                break;
+            case MaterialEditorPanelCommand::Validate:
+                static_cast<void>(sceneContext_.ValidateMaterialEditorAsset(materialId));
+                break;
+            case MaterialEditorPanelCommand::None:
+                break;
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+    }
 
     // A click outside the Project Settings panel dismisses its open dropdown,
     // then proceeds with normal handling of wherever the click landed.

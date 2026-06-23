@@ -246,6 +246,9 @@ public:
     [[nodiscard]] bool ToggleMaterialDoubleSided(kb::assets::AssetId id);
     [[nodiscard]] bool SetMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot, kb::assets::AssetId textureId);
     [[nodiscard]] bool CycleMaterialTextureAsset(kb::assets::AssetId id, EditorMaterialTextureSlot slot);
+    [[nodiscard]] bool SaveMaterialEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool RevertMaterialEditorAsset(kb::assets::AssetId id);
+    [[nodiscard]] bool ValidateMaterialEditorAsset(kb::assets::AssetId id);
     [[nodiscard]] bool BeginMaterialAssetFloatEdit(kb::assets::AssetId id, InspectorPropertyId property);
     [[nodiscard]] bool ApplyActiveMaterialAssetFloatEdit(float value);
     [[nodiscard]] bool CommitActiveMaterialAssetEdit();

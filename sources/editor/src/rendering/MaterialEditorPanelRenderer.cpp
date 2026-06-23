@@ -38,13 +38,24 @@ void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize
     DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
 }
 
+void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasized) {
+    const COLORREF fill = emphasized ? RGB(42, 58, 47) : RGB(38, 41, 46);
+    const COLORREF border = emphasized ? RGB(83, 122, 91) : RGB(58, 63, 70);
+    GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
+    DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, RGB(221, 226, 232), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 void DrawHeader(HDC dc, const RECT& content, bool dirty) {
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, header, RGB(32, 35, 39));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
-    DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPadding, header.top, layout.saveButton.left - 10, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
+    DrawCommandButton(dc, layout.saveButton, "Save", dirty);
+    DrawCommandButton(dc, layout.revertButton, "Revert", false);
+    DrawCommandButton(dc, layout.validateButton, "Validate", false);
     if (dirty) {
-        DrawText(dc, RECT{ header.left + kPadding, header.top, header.right - kPadding, header.bottom }, "Unsaved changes", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, RECT{ header.left + kPadding, header.top, layout.saveButton.left - 10, header.bottom }, "Unsaved changes", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
