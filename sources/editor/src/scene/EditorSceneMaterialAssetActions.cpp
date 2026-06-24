@@ -22,7 +22,7 @@ void TrimMaterialSlotOverrides(kb::scene::MeshRendererComponent& renderer) noexc
 } // namespace
 
 bool EditorSceneMaterialAssetActions::IsMaterialAsset(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == "RenderMaterial";
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
 bool EditorSceneMaterialAssetActions::AssignMaterial(

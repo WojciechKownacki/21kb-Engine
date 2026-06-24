@@ -45,6 +45,7 @@ enum class EditorAssetContextCommand {
     NewFolder,
     NewLuaScript,
     NewMaterial,
+    CreateMaterialInstance,
     NewInputAction,
     NewInputAxis,
     NewInputMappingContext,

@@ -30,7 +30,7 @@ public:
         EditorPointerDragState& pointerDrag,
         const EditorMetrics& metrics) noexcept;
 
-    void Handle(HWND messageWindow, int x, int y, bool leftButtonDown);
+    void Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown);
 
 private:
     HWND mainWindow_ = nullptr;

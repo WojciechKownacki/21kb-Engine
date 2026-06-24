@@ -13,6 +13,8 @@
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
@@ -197,6 +199,12 @@ void WriteMaterial(
         << "metallicRoughnessTextureAssetId " << metallicRoughnessTextureId << "\n"
         << "occlusionTextureAssetId " << occlusionTextureId << "\n"
         << "emissiveTextureAssetId " << emissiveTextureId << "\n";
+}
+
+void WriteMaterialInstance(const std::filesystem::path& path, kb::assets::AssetId parentMaterialAssetId) {
+    RenderMaterialInstanceAssetData instance{};
+    instance.parentMaterialAssetId = parentMaterialAssetId;
+    Require(RenderMaterialInstanceAssetWriter::Save(path, instance), "Material instance fixture could not be written");
 }
 
 void WriteMaterialWithTexturePaths(
@@ -558,6 +566,116 @@ void RunRendererReloadsChangedRuntimeMaterialAssetTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererSubmitsMaterialInstanceAssetInHeadlessNoopTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_material_instance";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Runtime material instance test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path materialPath = root / "parent.kbmat";
+    const std::filesystem::path instancePath = root / "parent_instance.kbmatinst";
+    WriteTriangleObj(meshPath);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Runtime material instance test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Runtime material instance test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "Runtime material instance test could not register material instance loader");
+    Require(manager.Mounts().Mount("Game", root), "Runtime material instance test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 1U, "Runtime material instance test did not discover mesh asset");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Runtime material instance test discovered wrong mesh metadata");
+    WriteMaterial(materialPath, 0U, 0U, 0U, 0U, 0U);
+    Require(manager.DiscoverMountedAssets() >= 2U, "Runtime material instance test did not discover parent material");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/parent.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Runtime material instance test discovered wrong parent material metadata");
+    const kb::assets::AssetId parentMaterialId = materialMetadata->id;
+    WriteMaterialInstance(instancePath, parentMaterialId);
+    Require(manager.DiscoverMountedAssets() >= 3U, "Runtime material instance test did not discover material instance");
+    meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* instanceMetadata = manager.Registry().FindByPath("/Game/parent_instance.kbmatinst");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Runtime material instance test lost mesh metadata");
+    Require(instanceMetadata != nullptr && instanceMetadata->type == "RenderMaterialInstance", "Runtime material instance test discovered wrong material instance metadata");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Runtime Material Instance Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = instanceMetadata->id.value,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .scenePassSubmitStats = 1U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 1U,
+        .syncTransformResolvingEntries = 1U,
+    });
+    Require(renderer.Initialize(surface, &config), "Renderer did not initialize in runtime material instance test");
+    Require(renderer.BeginFrame(), "Renderer did not begin runtime material instance frame");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 4U,
+            .maxVisibleInstances = 8U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+    Require(renderer.SubmitScene(scene, desc), "Renderer did not submit runtime material instance scene");
+    const SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
+    Require(!submitStats.HasMissingResources(), "Runtime material instance submit reported missing resources");
+    Require(submitStats.submittedMeshCount == 1U, "Runtime material instance submit did not submit one mesh");
+
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Runtime material instance test could not access scene resources");
+    const RenderMaterialHandle instanceHandle = resourceMap->ResolveMaterial(instanceMetadata->id.value);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(instanceHandle);
+    Require(instanceHandle.IsValid() && materialResource != nullptr, "Runtime material instance did not bind a material resource under the instance asset id");
+    Require(NearlyEqual(materialResource->baseColor[0], 0.8F), "Runtime material instance did not inherit parent base color");
+    Require(NearlyEqual(materialResource->roughnessFactor, 0.55F), "Runtime material instance did not inherit parent roughness");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.cachedMaterialCount == 1U, "Runtime material instance test should cache one resolved material resource");
+    Require(runtimeStats.referencedMaterialAssetCount == 1U, "Runtime material instance test should reference the assigned instance material asset");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_embedded_material";
     std::error_code error;
@@ -722,6 +840,7 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
+    RunRendererSubmitsMaterialInstanceAssetInHeadlessNoopTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }

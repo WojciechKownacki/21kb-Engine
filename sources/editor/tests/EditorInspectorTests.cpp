@@ -188,6 +188,8 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
     const kb::scene::SceneEntity entity = source.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
     source.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 77U });
 
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(kb::assets::AssetMetadata{ .type = "RenderMaterial" }), "RenderMaterial should be accepted as a material asset");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(kb::assets::AssetMetadata{ .type = "RenderMaterialInstance" }), "RenderMaterialInstance should be accepted as a material asset");
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(source, entity, kb::assets::AssetId{ 101U }), "Material asset action did not assign a Mesh Renderer material");
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(source, entity, 1U, kb::assets::AssetId{ 202U }), "Material asset action did not assign a slot override");
     kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "MaterialAssignment"), "Material assignment scene could not be saved");
@@ -386,25 +388,32 @@ void RunMaterialValueFormatterTest() {
 }
 
 #if defined(_WIN32)
-void RunMaterialEditorMvpLayoutKeepsParametersVisibleTest() {
+void RunMaterialEditorGraphLayoutAndHitTestTest() {
     const RECT content{0, 0, 440, 540};
     const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    kb::editor::tests::Require(layout.previewFrame.top > content.top, "Material Editor preview should be the first body element");
-    kb::editor::tests::Require(layout.previewFrame.bottom < layout.parameterSectionTop, "Material Editor parameters should follow the preview");
-    kb::editor::tests::Require(layout.mvpParameterBottom <= content.bottom - 12, "Material Editor MVP parameter rows should fit in the default panel height");
-    kb::editor::tests::Require(layout.mvpParameterBottom < layout.textureSectionTop, "Material Editor texture slots should follow the MVP parameters");
-    kb::editor::tests::Require(layout.textureSlotBottom <= content.bottom - 12, "Material Editor texture slot rows should fit in the default panel height");
+    kb::editor::tests::Require(layout.graphCanvas.left == content.left, "Material Editor graph should own the full tab width");
+    kb::editor::tests::Require(layout.graphCanvas.right == content.right, "Material Editor graph should own the full tab width");
+    kb::editor::tests::Require(layout.graphCanvas.top == content.top + kb::editor::MaterialEditorPanelMetrics::HeaderHeight, "Material Editor graph should start directly below the toolbar");
+    kb::editor::tests::Require(layout.graphCanvas.bottom == content.bottom, "Material Editor graph should fill the tab height");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.previewFrame.left + 2, layout.previewFrame.top + 2), "Material preview should be an overlay inside the graph workspace");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.assetBadge.left + 2, layout.assetBadge.top + 2), "Material identity should be an overlay inside the graph workspace");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.revertButton.left + 2, layout.revertButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Revert, "Material Editor should hit-test the Revert command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
 
-    const int slotX = content.left + 24;
-    const int firstSlotY = layout.textureSectionTop + kb::editor::MaterialEditorPanelMetrics::SectionHeight + 8;
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY) == kb::editor::EditorMaterialTextureSlot::Albedo, "Material Editor should hit-test the Base Color texture slot");
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + kb::editor::MaterialEditorPanelMetrics::RowHeight) == kb::editor::EditorMaterialTextureSlot::Normal, "Material Editor should hit-test the Normal texture slot");
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (2 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::MetallicRoughness, "Material Editor should hit-test the Metallic-Roughness texture slot");
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (3 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::Emissive, "Material Editor should hit-test the Emissive texture slot");
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, slotX, firstSlotY + (4 * kb::editor::MaterialEditorPanelMetrics::RowHeight)) == kb::editor::EditorMaterialTextureSlot::Occlusion, "Material Editor should hit-test the Occlusion texture slot");
+    kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 240,
+        .positionY = 180,
+    });
+    const std::optional<RECT> outputNode = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graph, 1U);
+    kb::editor::tests::Require(outputNode.has_value(), "Material Editor should resolve a graph node rect");
+    kb::editor::tests::Require(outputNode->right > layout.graphCanvas.left + ((layout.graphCanvas.right - layout.graphCanvas.left) / 2), "Material Output should default to the right side of the graph workspace");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::GraphNodeAt(content, graph, outputNode->left + 8, outputNode->top + 8) == 1U, "Material Editor should hit-test the material output node");
+    kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::GraphNodeAt(content, graph, layout.graphCanvas.left + 2, layout.graphCanvas.top + 2).has_value(), "Material Editor graph hit-test should ignore empty canvas space");
+    kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, layout.graphCanvas.left + 24, layout.graphCanvas.top + 80).has_value(), "Material Editor graph workspace should not expose inspector-style texture slot rows");
 }
 #endif
 
@@ -424,7 +433,7 @@ void RunEditorInspectorTests() {
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
     RunMaterialValueFormatterTest();
 #if defined(_WIN32)
-    RunMaterialEditorMvpLayoutKeepsParametersVisibleTest();
+    RunMaterialEditorGraphLayoutAndHitTestTest();
 #endif
 }
 

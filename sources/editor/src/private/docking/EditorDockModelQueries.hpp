@@ -12,7 +12,7 @@ namespace kb::editor {
 
 class EditorDockModelQueries {
 public:
-    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root) noexcept;
+    EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId) noexcept;
 
     [[nodiscard]] const std::vector<DockPanel>& Panels() const noexcept;
     [[nodiscard]] std::vector<DockPanel> PanelsInArea(DockArea area) const;
@@ -25,6 +25,7 @@ public:
 private:
     const DockPanelCollection& panels_;
     const DockNode* root_ = nullptr;
+    std::uint32_t maximizedLeafId_ = 0;
 };
 
 } // namespace kb::editor

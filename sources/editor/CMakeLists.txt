@@ -87,6 +87,7 @@ add_executable(kb_editor WIN32
     src/app/EditorWindowPointerHandler.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
+    src/app/EditorWindowResizeInteraction.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
     src/app/main.cpp
@@ -353,6 +354,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowPointerHandler.hpp
     src/private/app/EditorWindowToolbarPointerHandler.hpp
     src/private/app/EditorWindowInvalidator.hpp
+    src/private/app/EditorWindowResizeInteraction.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
@@ -394,6 +396,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/EditorBgfxBackendSelector.hpp
     src/private/rendering/ConsoleDetailTextOverlay.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
+    src/private/rendering/EditorHostSurfaceLayoutResolver.hpp
     src/private/rendering/EditorPanelContentResolver.hpp
     src/private/rendering/EditorRenderBackendSettings.hpp
     src/private/rendering/EditorSurfaceKind.hpp
@@ -579,6 +582,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorDragOverlayRenderer.cpp
     src/rendering/EditorBgfxBackendSelector.cpp
     src/rendering/EditorGdiRenderer.cpp
+    src/rendering/EditorHostSurfaceLayoutResolver.cpp
     src/rendering/EditorPanelContentResolver.cpp
     src/rendering/EditorRenderBackendSettings.cpp
     src/rendering/EditorSceneBgfxViewport.cpp
