@@ -9,6 +9,7 @@
 #include "assets/EditorAssetBrowserGeometry.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 #include "scene/EditorSceneContext.hpp"
 
@@ -77,6 +78,14 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
         return sceneContext_.SetHierarchyScrollOffset(
             sceneContext_.HierarchyScrollOffset() - direction * kHierarchyRowHeight * 3,
             maxOffset);
+    }
+
+    const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow_, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (materialEditorContent.has_value() && Contains(*materialEditorContent, x, y)) {
+        const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (Contains(layout.graphCanvas, x, y)) {
+            return sceneContext_.ZoomMaterialGraph(wheelDelta, x - layout.graphCanvas.left, y - layout.graphCanvas.top);
+        }
     }
 
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);

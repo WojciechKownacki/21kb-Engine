@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 
 #include <cstdint>
@@ -25,6 +26,7 @@ public:
     EditorMaterialAssetAuthoring(kb::scene::Scene& scene, EditorAssetBrowserState& browser, EditorConsoleState& console) noexcept;
 
     [[nodiscard]] bool Create(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateInstance(kb::assets::AssetId parentMaterial);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> Read(kb::assets::AssetId id) const;
     [[nodiscard]] bool SetBaseColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetEmissiveColor(kb::assets::AssetId id, int channel, float value);
