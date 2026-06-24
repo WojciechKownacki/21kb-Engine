@@ -2,6 +2,7 @@
 #include "EditorTestSuites.hpp"
 
 #include "docking/EditorDockModel.hpp"
+#include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/EditorToolbarLayout.hpp"
 #include "windowing/FloatingWindowControlHitTester.hpp"
 #include "windowing/FloatingWindowControlLayout.hpp"
@@ -93,6 +94,51 @@ void RunTabActivationPreservesOrderTest() {
     kb::editor::tests::Require(PanelOrderInLeaf(sceneActiveLayout, sceneLayout->leafId) == initialOrder, "Activating Scene View reordered tabs");
     const kb::editor::DockPanelLayout* activeScene = FindPanelLayout(sceneActiveLayout, 2U);
     kb::editor::tests::Require(activeScene != nullptr && activeScene->active, "Scene View did not become active");
+}
+
+void RunClosePanelRemovesTabFromLayoutTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
+    const kb::editor::DockPanelLayout* scriptLayout = FindPanelLayout(initialLayout, 8U);
+    kb::editor::tests::Require(sceneLayout != nullptr && scriptLayout != nullptr, "Scene and Script Editor should start in the center leaf");
+    kb::editor::tests::Require(sceneLayout->leafId == scriptLayout->leafId, "Scene and Script Editor should share a tab group");
+
+    kb::editor::tests::Require(model.Commands().ClosePanel(8U), "Closing Script Editor tab should succeed");
+    const kb::editor::DockLayout closedLayout = BuildDefaultLayout(model);
+    kb::editor::tests::Require(FindPanelLayout(closedLayout, 8U) == nullptr, "Closed Script Editor tab should not remain in layout");
+    const kb::editor::DockPanelLayout* remainingScene = FindPanelLayout(closedLayout, 2U);
+    kb::editor::tests::Require(remainingScene != nullptr && remainingScene->active, "Closing sibling tab should leave Scene active in the group");
+}
+
+void RunMaximizedLeafBuildsSingleGroupLayoutTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* sceneLayout = FindPanelLayout(initialLayout, 2U);
+    kb::editor::tests::Require(sceneLayout != nullptr, "Scene panel should exist before maximizing");
+
+    kb::editor::tests::Require(model.Commands().ToggleMaximizedLeaf(sceneLayout->leafId), "Maximizing Scene leaf should succeed");
+    const kb::editor::DockLayout maximized = BuildDefaultLayout(model);
+    kb::editor::tests::Require(maximized.leaves.size() == 1U, "Maximized layout should expose a single dock leaf");
+    kb::editor::tests::Require(maximized.splitters.empty(), "Maximized layout should hide splitters");
+    kb::editor::tests::Require(FindPanelLayout(maximized, 1U) == nullptr, "Hierarchy should not appear while center leaf is maximized");
+    kb::editor::tests::Require(FindPanelLayout(maximized, 5U) == nullptr, "Project Files should not appear while center leaf is maximized");
+    kb::editor::tests::Require(FindPanelLayout(maximized, 2U) != nullptr, "Scene should remain visible in its maximized leaf");
+
+    kb::editor::tests::Require(model.Commands().ToggleMaximizedLeaf(sceneLayout->leafId), "Second maximize toggle should restore layout");
+    const kb::editor::DockLayout restored = BuildDefaultLayout(model);
+    kb::editor::tests::Require(restored.leaves.size() > 1U, "Restored layout should expose the original dock groups");
+    kb::editor::tests::Require(FindPanelLayout(restored, 1U) != nullptr, "Hierarchy should return after restoring maximized leaf");
+    kb::editor::tests::Require(FindPanelLayout(restored, 5U) != nullptr, "Project Files should return after restoring maximized leaf");
+}
+
+void RunTabCloseControlGeometryTest() {
+    const kb::editor::DockRect tab{ 10, 20, 156, 28 };
+    const kb::editor::DockRect close = kb::editor::DockTabControlGeometry::CloseRect(tab);
+    kb::editor::tests::Require(!close.Empty(), "Tab close control should resolve for a normal tab");
+    kb::editor::tests::Require(close.x + close.width <= tab.x + tab.width, "Tab close control should stay inside tab bounds");
+    kb::editor::tests::Require(kb::editor::DockTabControlGeometry::ContainsClose(tab, close.x + 1, close.y + 1), "Tab close hit test should accept an interior point");
+    kb::editor::tests::Require(!kb::editor::DockTabControlGeometry::ContainsClose(tab, tab.x + 4, tab.y + 4), "Tab close hit test should reject the tab title area");
 }
 
 void RunUndockAndDockSameFrameTest() {
@@ -304,6 +350,9 @@ void RunMaterialEditorPanelActivationTest() {
 
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
+    RunClosePanelRemovesTabFromLayoutTest();
+    RunMaximizedLeafBuildsSingleGroupLayoutTest();
+    RunTabCloseControlGeometryTest();
     RunUndockAndDockSameFrameTest();
     RunTopChromeDropPreviewTest();
     RunDockedPanelsShareEdgesWithoutVisibleGapsTest();

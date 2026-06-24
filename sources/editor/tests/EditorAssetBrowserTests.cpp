@@ -394,14 +394,21 @@ void RunMaterialContextMenuCommandTest() {
     const bool backgroundHasMaterial = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
-    kb::editor::tests::Require(backgroundHasMaterial, "Asset browser background context menu should expose New Material Instance");
+    kb::editor::tests::Require(backgroundHasMaterial, "Asset browser background context menu should expose New Material");
 
     kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/Game/Environment", manager), "Asset browser should open a folder context menu for registered virtual folders");
     const std::vector<kb::editor::EditorAssetContextMenuItem> folderItems = state.ContextMenuItems(manager);
     const bool folderHasMaterial = std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
-    kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material Instance");
+    kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material");
+
+    static_cast<void>(manager.RegisterAsset(Metadata("Paint", "RenderMaterial", "/Game/Environment/Paint.kbmat")));
+    const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Environment/Paint.kbmat");
+    kb::editor::tests::Require(material != nullptr, "Asset browser material command test did not register material asset");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, material->id, manager), "Asset browser should open a material asset context menu");
+    const std::vector<kb::editor::EditorAssetContextMenuItem> materialItems = state.ContextMenuItems(manager);
+    kb::editor::tests::Require(!materialItems.empty() && materialItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialInstance, "Material asset context menu should expose Create Material Instance first");
 
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
     kb::editor::tests::Require(mesh != nullptr, "Asset browser material command test did not register mesh asset");
@@ -413,6 +420,7 @@ void RunMaterialContextMenuCommandTest() {
 void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("PreviewMaterial", "RenderMaterial", "/Game/Materials/PreviewMaterial.kbmat")));
+    static_cast<void>(manager.RegisterAsset(Metadata("PreviewMaterialInstance", "RenderMaterialInstance", "/Game/Materials/PreviewMaterialInstance.kbmatinst")));
 
     kb::editor::EditorAssetBrowserState state;
     kb::editor::tests::Require(state.SelectFolder("/Game/Materials", manager), "Material double-click test should open the material folder");
@@ -423,6 +431,13 @@ void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
         kb::editor::EditorAssetBrowserDoubleClickHandler::HandleMaterialAssetDoubleClick(*material, state, manager);
     kb::editor::tests::Require(result == kb::editor::EditorAssetBrowserDoubleClickResult::MaterialEditorOpened, "Double-clicking a material asset should request Material Editor activation");
     kb::editor::tests::Require(state.InspectorAsset() == material->id, "Double-clicking a material asset should select it for the Material Editor");
+
+    const kb::assets::AssetMetadata* instance = manager.Registry().FindByPath("/Game/Materials/PreviewMaterialInstance.kbmatinst");
+    kb::editor::tests::Require(instance != nullptr, "Material double-click test did not register material instance metadata");
+    const kb::editor::EditorAssetBrowserDoubleClickResult instanceResult =
+        kb::editor::EditorAssetBrowserDoubleClickHandler::HandleMaterialAssetDoubleClick(*instance, state, manager);
+    kb::editor::tests::Require(instanceResult == kb::editor::EditorAssetBrowserDoubleClickResult::MaterialEditorOpened, "Double-clicking a material instance asset should request Material Editor activation");
+    kb::editor::tests::Require(state.InspectorAsset() == instance->id, "Double-clicking a material instance asset should select it for the Material Editor");
 }
 #endif
 

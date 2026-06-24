@@ -1,9 +1,11 @@
 #include "rendering/MainWindowBackBufferPainter.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorWindowResizeInteraction.hpp"
 #include "rendering/DockDropPreviewOverlayWindow.hpp"
 #include "rendering/DockWorkspaceRenderer.hpp"
 #include "rendering/EditorDragOverlayRenderer.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/EditorScriptEditorOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
@@ -42,28 +44,6 @@ struct MainWindowPaintContext {
         .right = rect.x + rect.width,
         .bottom = rect.y + rect.height,
     };
-}
-
-[[nodiscard]] std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> ResolveViewportLayouts(
-    const DockLayout& layout,
-    const EditorDockModel& dockModel,
-    const EditorSceneContext& sceneContext) {
-    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
-    for (const DockPanelLayout& panelLayout : layout.panels) {
-        if (!panelLayout.active) {
-            continue;
-        }
-        const DockPanel* panel = dockModel.Queries().FindPanel(panelLayout.panelId);
-        if (panel == nullptr || panel->kind != DockPanelKind::Scene) {
-            continue;
-        }
-        const RECT content = ToRect(panelLayout.content);
-        layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
-            .viewportKey = panelLayout.panelId,
-            .bounds = SceneViewportToolbarRenderer::Resolve(content, sceneContext.ViewportPreview(panelLayout.panelId)).renderArea,
-        });
-    }
-    return layouts;
 }
 
 [[nodiscard]] std::optional<RECT> ResolveAssetContent(const DockLayout& layout, const EditorDockModel& dockModel) {
@@ -121,10 +101,17 @@ void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
         paintContext->metrics->splitterSize,
         paintContext->metrics->panelPadding);
     const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> viewportLayouts =
-        ResolveViewportLayouts(layout, *paintContext->dockModel, *paintContext->sceneContext);
-    paintContext->sceneViewport->SyncHostSurfaceLayouts(
-        paintContext->window,
-        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{viewportLayouts.data(), viewportLayouts.size()});
+        EditorHostSurfaceLayoutResolver::ResolveMainWindow(
+            paintContext->window,
+            *paintContext->dockModel,
+            *paintContext->metrics,
+            *paintContext->sceneContext);
+    const std::span<const EditorSceneBgfxViewport::HostSurfaceLayout> viewportLayoutSpan{viewportLayouts.data(), viewportLayouts.size()};
+    if (EditorWindowResizeInteraction::IsWindowResizing(paintContext->window) || (paintContext->dockDrag != nullptr && paintContext->dockDrag->kind == DockHitKind::Splitter)) {
+        paintContext->sceneViewport->SyncHostSurfaceLayoutsForResize(paintContext->window, viewportLayoutSpan);
+    } else {
+        paintContext->sceneViewport->SyncHostSurfaceLayouts(paintContext->window, viewportLayoutSpan);
+    }
 
     // Hide the script editor's child text control unless its panel is the active
     // tab, so it does not linger over whatever shares its dock leaf.

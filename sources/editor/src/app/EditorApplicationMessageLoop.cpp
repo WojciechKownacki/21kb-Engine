@@ -9,7 +9,9 @@
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
@@ -19,6 +21,8 @@
 #include <algorithm>
 #include <chrono>
 #include <optional>
+#include <span>
+#include <vector>
 
 #include <bx/math.h>
 
@@ -30,8 +34,6 @@ constexpr DWORD kPausedToolbarAnimationIntervalMs = 33;
 constexpr double kEditorTargetFrameRate = 180.0;
 constexpr DWORD kSceneToolbarRefreshIntervalMs = 250;
 constexpr int kMaxMessagesPerPump = 128;
-constexpr std::uint64_t kMaterialPreviewViewportKey = 0x4D41545052455630ULL;
-constexpr std::uint64_t kMaterialEditorPreviewViewportKey = 0x4D41545052455631ULL;
 
 [[nodiscard]] float RuntimeDeltaSeconds(std::chrono::steady_clock::time_point previous, std::chrono::steady_clock::time_point current) noexcept {
     const std::chrono::duration<float> delta = current - previous;
@@ -103,7 +105,7 @@ constexpr std::uint64_t kMaterialEditorPreviewViewportKey = 0x4D41545052455631UL
         return nullptr;
     }
     const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(assetId);
-    return metadata != nullptr && metadata->type == "RenderMaterial" ? metadata : nullptr;
+    return metadata != nullptr && (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance") ? metadata : nullptr;
 }
 
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
@@ -235,7 +237,7 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
             metadata != nullptr && inspectorContent.has_value()
                 ? InspectorPanelRenderer::MaterialPreviewRect(*inspectorContent, state.sceneContext)
                 : std::nullopt,
-            kMaterialPreviewViewportKey},
+            kInspectorMaterialPreviewViewportKey},
         PreviewTarget{
             metadata != nullptr && materialEditorContent.has_value()
                 ? MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditorContent, state.sceneContext)
@@ -264,7 +266,16 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
 
     bool scenePresented = false;
     const DockLayout layout = BuildMainLayout(state);
+    const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> hostLayouts =
+        EditorHostSurfaceLayoutResolver::ResolveMainWindow(
+            state.window,
+            state.dockModel,
+            state.metrics,
+            state.sceneContext);
     state.sceneViewport.BeginPaintLayout(state.window);
+    state.sceneViewport.SyncHostSurfaceLayouts(
+        state.window,
+        std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{hostLayouts.data(), hostLayouts.size()});
     for (const DockPanelLayout& panelLayout : layout.panels) {
         if (!panelLayout.active) {
             continue;

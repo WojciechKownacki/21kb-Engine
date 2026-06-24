@@ -4,6 +4,7 @@
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/EditorSceneViewportRegionBuilder.hpp"
 
@@ -52,6 +53,49 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
         return {};
     }
     return clipped;
+}
+
+[[nodiscard]] RECT WindowRectInHostClient(HWND window, HWND host) noexcept {
+    if (window == nullptr || host == nullptr || IsWindow(window) == 0 || IsWindow(host) == 0) {
+        return {};
+    }
+
+    RECT rect{};
+    if (GetWindowRect(window, &rect) == 0) {
+        return {};
+    }
+
+    POINT points[2]{
+        POINT{rect.left, rect.top},
+        POINT{rect.right, rect.bottom},
+    };
+    static_cast<void>(MapWindowPoints(nullptr, host, points, 2U));
+
+    return RECT{
+        .left = points[0].x,
+        .top = points[0].y,
+        .right = points[1].x,
+        .bottom = points[1].y,
+    };
+}
+
+void EnsureParentChildClipping(HWND parent) noexcept {
+    if (parent == nullptr || IsWindow(parent) == 0) {
+        return;
+    }
+
+    const LONG_PTR style = GetWindowLongPtrW(parent, GWL_STYLE);
+    if (style == 0) {
+        return;
+    }
+
+    constexpr LONG_PTR requiredStyle = WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    if ((style & requiredStyle) == requiredStyle) {
+        return;
+    }
+
+    SetWindowLongPtrW(parent, GWL_STYLE, style | requiredStyle);
+    SetWindowPos(parent, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
 }
 
 [[nodiscard]] const char* DiagnosticKindLabel(render::SceneRenderDiagnosticKind kind) noexcept {
@@ -138,6 +182,7 @@ void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent, EditorR
     instance_ = instance;
     defaultParent_ = parent;
     backendSettings_ = backendSettings;
+    EnsureParentChildClipping(parent);
 }
 
 void EditorSceneBgfxViewport::SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept {
@@ -184,13 +229,14 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         if (layoutChanged) {
             surface->layoutBounds = layoutBounds;
             surface->hasLayoutBounds = true;
-            if (surface->window != nullptr && IsWindow(surface->window) != 0) {
-                static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
-            }
             RequestPresent();
         }
 
-        if (surface->window != nullptr && IsWindow(surface->window) != 0 && IsWindowVisible(surface->window) == 0) {
+        if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+            static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
+        }
+
+        if (surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) == 0) {
             RequestPresent();
         }
         hostSurfaceStore_.MarkLayoutActive(*surface);
@@ -199,6 +245,34 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
     if (hostSurfaceStore_.HasVisibleUnpresentedForHost(parent)) {
         RequestPresent();
     }
+}
+
+void EditorSceneBgfxViewport::SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept {
+    if (parent == nullptr) {
+        return;
+    }
+
+    hostSurfaceStore_.MarkHostNotPresented(parent);
+    for (const HostSurfaceLayout& layout : layouts) {
+        const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
+        if (RectWidth(layoutBounds) == 0U || RectHeight(layoutBounds) == 0U) {
+            continue;
+        }
+
+        HostSurface* surface = hostSurfaceStore_.Ensure(parent, layout.viewportKey);
+        if (surface == nullptr) {
+            continue;
+        }
+
+        surface->layoutBounds = layoutBounds;
+        surface->hasLayoutBounds = true;
+        if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+            static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
+        }
+        hostSurfaceStore_.MarkLayoutActive(*surface);
+    }
+
+    hostSurfaceStore_.HideUnpresentedForHost(parent);
 }
 
 void EditorSceneBgfxViewport::Shutdown() {
@@ -287,6 +361,11 @@ void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect, const kb::s
     Present(nullptr, parent, rect, scene, EditorTheme{}, settings);
 }
 
+bool EditorSceneBgfxViewport::IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept {
+    const HostSurface* surface = FindHostSurface(host, key);
+    return surface != nullptr && surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) != 0;
+}
+
 void EditorSceneBgfxViewport::Hide() noexcept {
     sessionStore_.MarkAllNotPresented();
 }
@@ -363,15 +442,19 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits) {
     if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
         return false;
     }
 
-    bool needsPositionUpdate = !RectEquals(surface.rect, rect);
+    EnsureParentChildClipping(surface.host);
+    preserveBits = preserveBits || ShouldPreserveHostSurfaceBits(surface.key);
+    const RECT actualRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+    bool needsPositionUpdate = !RectEquals(surface.rect, rect) || !RectEquals(actualRect, rect);
     bool needsRegionUpdate = needsPositionUpdate;
-    if (surface.window == nullptr || IsWindow(surface.window) == 0) {
-        surface.window = CreateWindowExW(
+
+    if (surface.clipWindow == nullptr || IsWindow(surface.clipWindow) == 0) {
+        surface.clipWindow = CreateWindowExW(
             0,
             kSceneViewportClassName,
             L"",
@@ -384,36 +467,108 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             nullptr,
             instance_,
             this);
-        if (surface.window == nullptr) {
+        if (surface.clipWindow == nullptr) {
             return false;
         }
         needsPositionUpdate = false;
         needsRegionUpdate = true;
-    } else if (GetParent(surface.window) != surface.host) {
+    } else if (GetParent(surface.clipWindow) != surface.host) {
+        ShowWindow(surface.clipWindow, SW_HIDE);
+        SetParent(surface.clipWindow, surface.host);
+        needsPositionUpdate = true;
+        needsRegionUpdate = true;
+    }
+
+    if (surface.window == nullptr || IsWindow(surface.window) == 0) {
+        surface.window = CreateWindowExW(
+            0,
+            kSceneViewportClassName,
+            L"",
+            WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            0,
+            0,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            surface.clipWindow,
+            nullptr,
+            instance_,
+            this);
+        if (surface.window == nullptr) {
+            return false;
+        }
+        needsRegionUpdate = true;
+    } else if (GetParent(surface.window) != surface.clipWindow) {
         ShowWindow(surface.window, SW_HIDE);
-        SetParent(surface.window, surface.host);
+        SetParent(surface.window, surface.clipWindow);
         needsPositionUpdate = true;
         needsRegionUpdate = true;
     }
 
     if (needsPositionUpdate) {
-        SetWindowPos(
-            surface.window,
+        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+        if (!preserveBits) {
+            flags |= SWP_NOCOPYBITS;
+        }
+        if (SetWindowPos(
+            surface.clipWindow,
             HWND_BOTTOM,
             rect.left,
             rect.top,
             static_cast<int>(RectWidth(rect)),
             static_cast<int>(RectHeight(rect)),
-            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS);
+            flags) == 0) {
+            return false;
+        }
+
+        const RECT movedRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+        if (!RectEquals(movedRect, rect)) {
+            if (SetWindowPos(
+                surface.clipWindow,
+                HWND_BOTTOM,
+                rect.left,
+                rect.top,
+                static_cast<int>(RectWidth(rect)),
+                static_cast<int>(RectHeight(rect)),
+                flags) == 0) {
+                return false;
+            }
+            const RECT retryRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+            if (!RectEquals(retryRect, rect)) {
+                return false;
+            }
+        }
+
+        if (SetWindowPos(
+            surface.window,
+            HWND_TOP,
+            0,
+            0,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            flags) == 0) {
+            return false;
+        }
     }
 
     if (needsRegionUpdate) {
-        HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, std::span<const RECT>{&rect, 1U});
-        if (combinedRegion == nullptr) {
+        const RECT windowRegionRect{0, 0, static_cast<LONG>(RectWidth(rect)), static_cast<LONG>(RectHeight(rect))};
+        HRGN clipRegion = CreateRectRgn(windowRegionRect.left, windowRegionRect.top, windowRegionRect.right, windowRegionRect.bottom);
+        if (clipRegion == nullptr) {
             return false;
         }
-        if (SetWindowRgn(surface.window, combinedRegion, FALSE) == 0) {
-            DeleteObject(combinedRegion);
+        if (SetWindowRgn(surface.clipWindow, clipRegion, FALSE) == 0) {
+            DeleteObject(clipRegion);
+            return false;
+        }
+
+        HRGN renderRegion = preserveBits
+            ? CreateRectRgn(windowRegionRect.left, windowRegionRect.top, windowRegionRect.right, windowRegionRect.bottom)
+            : EditorSceneViewportRegionBuilder::BuildCombinedRegion(windowRegionRect, std::span<const RECT>{&windowRegionRect, 1U});
+        if (renderRegion == nullptr) {
+            return false;
+        }
+        if (SetWindowRgn(surface.window, renderRegion, FALSE) == 0) {
+            DeleteObject(renderRegion);
             return false;
         }
     }
@@ -601,6 +756,10 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     return true;
 }
 
+bool EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept {
+    return viewportKey == kInspectorMaterialPreviewViewportKey || viewportKey == kMaterialEditorPreviewViewportKey;
+}
+
 LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     auto* viewport = reinterpret_cast<EditorSceneBgfxViewport*>(GetWindowLongPtrW(window, GWLP_USERDATA));
 
@@ -611,9 +770,12 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         return TRUE;
     }
     case WM_ERASEBKGND: {
-        RECT client{};
-        if (GetClientRect(window, &client) != 0) {
-            FillRect(reinterpret_cast<HDC>(wparam), &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface == nullptr || !ShouldPreserveHostSurfaceBits(surface->key)) {
+            RECT client{};
+            if (GetClientRect(window, &client) != 0) {
+                FillRect(reinterpret_cast<HDC>(wparam), &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+            }
         }
         return TRUE;
     }

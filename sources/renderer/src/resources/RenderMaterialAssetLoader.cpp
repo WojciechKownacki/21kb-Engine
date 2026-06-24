@@ -42,6 +42,16 @@ std::string_view RenderMaterialAssetParseDiagnosticCodeName(RenderMaterialAssetP
         return "unsupported_material_type_version";
     case RenderMaterialAssetParseDiagnosticCode::TextureColorSpaceExpectation:
         return "texture_color_space_expectation";
+    case RenderMaterialAssetParseDiagnosticCode::InvalidGraphField:
+        return "invalid_graph_field";
+    case RenderMaterialAssetParseDiagnosticCode::UnsupportedGraphVersion:
+        return "unsupported_graph_version";
+    case RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode:
+        return "invalid_graph_node";
+    case RenderMaterialAssetParseDiagnosticCode::DuplicateGraphNode:
+        return "duplicate_graph_node";
+    case RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink:
+        return "invalid_graph_link";
     }
     return "unknown_diagnostic";
 }
@@ -78,8 +88,6 @@ std::string RenderMaterialAssetParseResult::ErrorMessage() const {
 }
 
 std::string_view RenderMaterialAssetLoader::Type() const noexcept {
-    // Asset type identifier used by the AssetManager. This is a Material Instance
-    // asset type, even though the display name remains "Material" for UI brevity.
     return "RenderMaterial";
 }
 

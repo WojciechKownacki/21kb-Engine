@@ -773,7 +773,7 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     {
         std::ofstream output{ materialPath, std::ios::trunc };
         output
-            << "# KB material instance\n"
+            << "# KB material\n"
             << "version 1\n"
             << "materialType builtin.pbr\n"
             << "materialTypeVersion 1\n"
@@ -950,7 +950,7 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
 
     std::ostringstream output;
     RenderMaterialAssetWriter::Write(output, source);
-    Require(output.str().find("# KB material instance\nversion 1\nmaterialType builtin.pbr\nmaterialTypeVersion 1\nbaseColor") == 0U, "Material writer did not emit canonical material instance header");
+    Require(output.str().find("# KB material\nversion 1\nmaterialType builtin.pbr\nmaterialTypeVersion 1\nbaseColor") == 0U, "Material writer did not emit canonical material header");
     std::istringstream input{ output.str() };
     const std::optional<RenderMaterialAssetData> loaded = RenderMaterialAssetLoader::LoadMaterial(input);
     Require(loaded.has_value(), "RenderMaterialAssetWriter produced material text the parser rejected");
@@ -1006,7 +1006,7 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
     std::ostringstream canonicalOutput;
     RenderMaterialAssetWriter::Write(canonicalOutput, *shuffled);
     const std::string expectedCanonical =
-        "# KB material instance\n"
+        "# KB material\n"
         "version 1\n"
         "materialType builtin.pbr\n"
         "materialTypeVersion 1\n"
@@ -1041,7 +1041,9 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "anisotropyRotation 0\n"
         "layerWeight 1\n"
         "decalBlendMode DISABLED\n"
-        "layerBlendMode REPLACE\n";
+        "layerBlendMode REPLACE\n"
+        "graphVersion 1\n"
+        "graphNode 1 MaterialOutput 640 240\n";
     Require(canonicalOutput.str() == expectedCanonical, "Material writer did not emit deterministic canonical field ordering");
 
     std::ostringstream canonicalOutputAgain;

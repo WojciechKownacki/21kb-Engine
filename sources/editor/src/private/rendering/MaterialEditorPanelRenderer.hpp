@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/editor/theme/EditorTheme.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -9,8 +10,11 @@
 #include <Windows.h>
 #endif
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 
 namespace kb::editor {
@@ -28,10 +32,8 @@ struct MaterialEditorPanelLayout {
     RECT revertButton{};
     RECT validateButton{};
     RECT previewFrame{};
-    int parameterSectionTop = 0;
-    int mvpParameterBottom = 0;
-    int textureSectionTop = 0;
-    int textureSlotBottom = 0;
+    RECT assetBadge{};
+    RECT graphCanvas{};
 #endif
 };
 
@@ -40,23 +42,17 @@ namespace MaterialEditorPanelMetrics {
 inline constexpr int HeaderHeight = 42;
 inline constexpr int Padding = 10;
 inline constexpr int RowHeight = 18;
-inline constexpr int SectionHeight = 26;
-inline constexpr int TitleHeight = 24;
-inline constexpr int PreviewHeight = 112;
-inline constexpr int PreviewPadding = 10;
-inline constexpr int PreviewGap = 6;
-inline constexpr int MvpParameterRowCount = 6;
+inline constexpr int PreviewWidth = 154;
+inline constexpr int PreviewHeight = 104;
+inline constexpr int GraphNodeWidth = 324;
+inline constexpr int GraphNodeHeight = 348;
 inline constexpr int TextureSlotRowCount = 5;
 } // namespace MaterialEditorPanelMetrics
 #endif
 
-/// Dedicated Material Editor panel. Renders the live state of the Material Instance
-/// asset currently selected for inspection (`EditorSceneContext::AssetBrowser().InspectorAsset()`).
-///
-/// This is a presentational (read-only) surface through KBMAT-0203. The top frame
-/// is a live bgfx material sphere preview; interactive editing, drag/drop and undo arrive later. It is intentionally a
-/// standalone component (not an extraction of the Inspector's material section, which is
-/// coupled to Inspector-only interaction types).
+/// Dedicated Material Editor panel. The selected material document is presented as
+/// a full-tab graph workspace; compact overlays provide preview and identity context
+/// without turning the tab back into an inspector-style property form.
 class MaterialEditorPanelRenderer {
 public:
 #if defined(_WIN32)
@@ -65,17 +61,33 @@ public:
     [[nodiscard]] static MaterialEditorPanelLayout ResolveLayout(const RECT& content) noexcept;
 
     /// Live material preview target rect (sphere) inside this panel's content area, or
-    /// std::nullopt when no Material Instance is selected. Consumed by the editor frame
+    /// std::nullopt when no material document is selected. Consumed by the editor frame
     /// loop to present the bgfx preview into this panel (mirrors the Inspector preview path).
     [[nodiscard]] static std::optional<RECT> MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept;
     [[nodiscard]] static MaterialEditorPanelCommand CommandAt(const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static std::optional<EditorMaterialTextureSlot> TextureSlotAt(const RECT& content, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<std::uint32_t> GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<std::uint32_t> GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept;
+    [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept;
 #endif
 };
 
 #if defined(_WIN32)
 inline bool MaterialEditorPanelPointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+inline int MaterialEditorPanelRectWidth(const RECT& rect) noexcept {
+    return std::max(0, static_cast<int>(rect.right - rect.left));
+}
+
+inline int MaterialEditorPanelRectHeight(const RECT& rect) noexcept {
+    return std::max(0, static_cast<int>(rect.bottom - rect.top));
+}
+
+inline int MaterialEditorPanelScaled(int value, float zoom) noexcept {
+    return std::max(1, static_cast<int>(std::lround(static_cast<float>(value) * zoom)));
 }
 
 inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(const RECT& content) noexcept {
@@ -87,30 +99,31 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
     layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
 
-    const int previewY = content.top + MaterialEditorPanelMetrics::HeaderHeight + MaterialEditorPanelMetrics::Padding;
-    layout.previewFrame = RECT{
-        content.left + MaterialEditorPanelMetrics::PreviewPadding,
-        previewY,
-        content.right - MaterialEditorPanelMetrics::PreviewPadding,
-        previewY + MaterialEditorPanelMetrics::PreviewHeight,
+    layout.graphCanvas = RECT{
+        content.left,
+        content.top + MaterialEditorPanelMetrics::HeaderHeight,
+        content.right,
+        content.bottom,
     };
-    int y = layout.previewFrame.bottom
-        + MaterialEditorPanelMetrics::PreviewGap
-        + MaterialEditorPanelMetrics::TitleHeight
-        + MaterialEditorPanelMetrics::RowHeight
-        + 6;
-    layout.parameterSectionTop = y;
-    y += MaterialEditorPanelMetrics::SectionHeight + 4;
-    layout.mvpParameterBottom = y + (MaterialEditorPanelMetrics::MvpParameterRowCount * MaterialEditorPanelMetrics::RowHeight);
-    y = layout.mvpParameterBottom + 6;
-    layout.textureSectionTop = y;
-    y += MaterialEditorPanelMetrics::SectionHeight + 4;
-    layout.textureSlotBottom = y + (MaterialEditorPanelMetrics::TextureSlotRowCount * MaterialEditorPanelMetrics::RowHeight);
+    const int overlayLeft = layout.graphCanvas.left + MaterialEditorPanelMetrics::Padding;
+    const int overlayTop = layout.graphCanvas.top + MaterialEditorPanelMetrics::Padding;
+    layout.previewFrame = RECT{
+        overlayLeft,
+        overlayTop,
+        overlayLeft + MaterialEditorPanelMetrics::PreviewWidth,
+        overlayTop + MaterialEditorPanelMetrics::PreviewHeight,
+    };
+    layout.assetBadge = RECT{
+        overlayLeft,
+        layout.previewFrame.bottom + 8,
+        std::min(static_cast<int>(layout.graphCanvas.right - MaterialEditorPanelMetrics::Padding), overlayLeft + 280),
+        layout.previewFrame.bottom + 58,
+    };
     return layout;
 }
 
 inline MaterialEditorPanelCommand MaterialEditorPanelRenderer::CommandAt(const RECT& content, int x, int y) noexcept {
-    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     if (MaterialEditorPanelPointInRect(layout.saveButton, x, y)) {
         return MaterialEditorPanelCommand::Save;
     }
@@ -124,25 +137,80 @@ inline MaterialEditorPanelCommand MaterialEditorPanelRenderer::CommandAt(const R
 }
 
 inline std::optional<EditorMaterialTextureSlot> MaterialEditorPanelRenderer::TextureSlotAt(const RECT& content, int x, int y) noexcept {
-    const MaterialEditorPanelLayout layout = ResolveLayout(content);
-    const int firstRowTop = layout.textureSectionTop + MaterialEditorPanelMetrics::SectionHeight + 4;
-    const std::array<EditorMaterialTextureSlot, MaterialEditorPanelMetrics::TextureSlotRowCount> slots{
-        EditorMaterialTextureSlot::Albedo,
-        EditorMaterialTextureSlot::Normal,
-        EditorMaterialTextureSlot::MetallicRoughness,
-        EditorMaterialTextureSlot::Emissive,
-        EditorMaterialTextureSlot::Occlusion,
-    };
-    for (std::size_t index = 0; index < slots.size(); ++index) {
-        const int rowTop = firstRowTop + (static_cast<int>(index) * MaterialEditorPanelMetrics::RowHeight);
-        const RECT row{
-            content.left + MaterialEditorPanelMetrics::Padding,
-            rowTop,
-            content.right - MaterialEditorPanelMetrics::Padding,
-            rowTop + MaterialEditorPanelMetrics::RowHeight,
-        };
-        if (MaterialEditorPanelPointInRect(row, x, y)) {
-            return slots[index];
+    static_cast<void>(content);
+    static_cast<void>(x);
+    static_cast<void>(y);
+    return std::nullopt;
+}
+
+inline std::optional<RECT> MaterialEditorPanelGraphNodeRectWithView(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId,
+    float zoom,
+    int panX,
+    int panY,
+    int nodeOffsetX,
+    int nodeOffsetY) noexcept {
+    const kb::render::RenderMaterialGraphNode* target = kb::render::FindRenderMaterialGraphNode(graph, nodeId);
+    if (target == nullptr) {
+        return std::nullopt;
+    }
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    const RECT canvas = layout.graphCanvas;
+    const float clampedZoom = std::clamp(zoom, 0.25F, 2.0F);
+    const int nodeWidth = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeWidth, clampedZoom);
+    const int nodeHeight = MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeight, clampedZoom);
+
+    const int x = canvas.left + panX + MaterialEditorPanelScaled(target->positionX + nodeOffsetX, clampedZoom);
+    const int y = canvas.top + panY + MaterialEditorPanelScaled(target->positionY + nodeOffsetY, clampedZoom);
+    return RECT{ x, y, x + nodeWidth, y + nodeHeight };
+}
+
+inline std::optional<RECT> MaterialEditorPanelRenderer::GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept {
+    return MaterialEditorPanelGraphNodeRectWithView(content, graph, nodeId, 1.0F, 0, 0, 0, 0);
+}
+
+inline std::optional<RECT> MaterialEditorPanelRenderer::GraphNodeRect(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId) noexcept {
+    return MaterialEditorPanelGraphNodeRectWithView(
+        content,
+        graph,
+        nodeId,
+        sceneContext.MaterialGraphZoom(),
+        sceneContext.MaterialGraphPanX(),
+        sceneContext.MaterialGraphPanY(),
+        sceneContext.MaterialGraphNodeOffsetX(assetId, nodeId),
+        sceneContext.MaterialGraphNodeOffsetY(assetId, nodeId));
+}
+
+inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept {
+    for (std::size_t index = graph.nodes.size(); index-- > 0U;) {
+        const kb::render::RenderMaterialGraphNode& node = graph.nodes[index];
+        const std::optional<RECT> rect = GraphNodeRect(content, graph, node.id);
+        if (rect.has_value() && MaterialEditorPanelPointInRect(*rect, x, y)) {
+            return node.id;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    int x,
+    int y) noexcept {
+    for (std::size_t index = graph.nodes.size(); index-- > 0U;) {
+        const kb::render::RenderMaterialGraphNode& node = graph.nodes[index];
+        const std::optional<RECT> rect = GraphNodeRect(content, graph, node.id, sceneContext, assetId);
+        if (rect.has_value() && MaterialEditorPanelPointInRect(*rect, x, y)) {
+            return node.id;
         }
     }
     return std::nullopt;

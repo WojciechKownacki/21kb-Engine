@@ -53,9 +53,13 @@ std::optional<EditorResolvedPanelContent> EditorPanelContentResolver::ResolvePan
         }
         RECT client{};
         GetClientRect(sourceWindow, &client);
-        client.top += metrics.floatingChromeHeight;
+        RECT panelRect = GdiDrawing::Inset(client, 1);
+        RECT content = panel->kind == DockPanelKind::Scene
+            ? panelRect
+            : GdiDrawing::Inset(panelRect, metrics.panelPadding);
+        content.top += metrics.tabStripHeight;
         return EditorResolvedPanelContent{
-            .content = client,
+            .content = content,
             .panelId = panelId,
         };
     }

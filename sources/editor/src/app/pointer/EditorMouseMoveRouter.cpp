@@ -13,6 +13,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
@@ -25,6 +26,12 @@ namespace {
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
     return std::max(0L, rect.bottom - rect.top);
+}
+
+void RepaintNow(HWND window) noexcept {
+    if (window != nullptr) {
+        RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+    }
 }
 
 [[nodiscard]] int HierarchyMaxScroll(const RECT& hierarchyContent, const EditorSceneContext& sceneContext) {
@@ -56,7 +63,7 @@ EditorMouseMoveRouter::EditorMouseMoveRouter(
     , pointerDrag_(pointerDrag)
     , metrics_(metrics) {}
 
-void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown) {
+void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftButtonDown, bool rightButtonDown) {
     const std::optional<RECT> sceneContent = EditorPanelContentResolver::Resolve(DockPanelKind::Scene, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
     if (SceneViewportToolbarRenderer::UpdateInfoHover(sceneContent.value_or(RECT{}), x, y)) {
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
@@ -99,6 +106,28 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (sceneContext_.IsMaterialGraphNodeDragging()) {
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragMaterialGraphNode(x, y));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsMaterialGraphPanning()) {
+        if (!rightButtonDown) {
+            static_cast<void>(sceneContext_.EndMaterialGraphPan());
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragMaterialGraphPan(x, y));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     const bool draggingMeshPreview = sceneContext_.Inspector().IsDraggingMeshPreview();
     if (leftButtonDown && inspectorPointer.HandlePointerDrag(inspectorContent, x, y)) {
         if (!draggingMeshPreview) {
@@ -114,7 +143,12 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
     }
 
     if (leftButtonDown && dockController_.HandlePointerMove(messageWindow, x, y, true)) {
+        if (messageWindow == mainWindow_) {
+            EditorHostSurfaceLayoutResolver::SyncMainWindow(mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         sceneViewport_.RequestPresent();
+        RepaintNow(mainWindow_);
         return;
     }
 
@@ -160,7 +194,12 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
     if (dockController_.HandlePointerMove(messageWindow, x, y, leftButtonDown)) {
+        if (messageWindow == mainWindow_) {
+            EditorHostSurfaceLayoutResolver::SyncMainWindow(mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         sceneViewport_.RequestPresent();
+        RepaintNow(mainWindow_);
     }
     splitterCursor.UpdateCursor(x, y);
 }

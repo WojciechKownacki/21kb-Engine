@@ -1,13 +1,19 @@
 #include "rendering/FloatingWindowBackBufferPainter.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorWindowResizeInteraction.hpp"
 #include "rendering/ConsoleDetailTextOverlay.hpp"
 #include "rendering/EditorSurfacePainter.hpp"
 #include "rendering/FloatingEditorWindowRenderer.hpp"
 #include "rendering/GdiBackBufferRenderer.hpp"
 #include "rendering/GdiDrawing.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/SceneViewportToolbarDropdownOverlayWindow.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
+
+#include <vector>
 
 namespace kb::editor {
 namespace {
@@ -22,19 +28,45 @@ struct FloatingWindowPaintContext {
     EditorSceneBgfxViewport* sceneViewport = nullptr;
 };
 
+[[nodiscard]] RECT FloatingPanelContentRect(const RECT& client, const DockPanel& panel, const EditorMetrics& metrics) noexcept {
+    RECT panelRect = GdiDrawing::Inset(client, 1);
+    RECT content = panel.kind == DockPanelKind::Scene
+        ? panelRect
+        : GdiDrawing::Inset(panelRect, metrics.panelPadding);
+    content.top += metrics.tabStripHeight;
+    return content;
+}
+
 void PaintBackBuffer(const GdiBackBufferPaintContext& paint, void* context) {
     auto* paintContext = static_cast<FloatingWindowPaintContext*>(context);
-    const bool viewportPanel = paintContext->panel->kind == DockPanelKind::Scene;
-    if (viewportPanel) {
-        RECT content = paint.client;
-        content.top += paintContext->metrics->floatingChromeHeight;
-        const EditorSceneBgfxViewport::HostSurfaceLayout layout{
+    const RECT content = FloatingPanelContentRect(paint.client, *paintContext->panel, *paintContext->metrics);
+
+    std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> layouts;
+    if (paintContext->panel->kind == DockPanelKind::Scene) {
+        layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
             .viewportKey = paintContext->panel->id,
             .bounds = SceneViewportToolbarRenderer::Resolve(content, paintContext->sceneContext->ViewportPreview(paintContext->panel->id)).renderArea,
-        };
-        paintContext->sceneViewport->SyncHostSurfaceLayouts(
-            paintContext->window,
-            std::span<const EditorSceneBgfxViewport::HostSurfaceLayout>{&layout, 1U});
+        });
+    } else if (paintContext->panel->kind == DockPanelKind::Inspector) {
+        if (const std::optional<RECT> preview = InspectorPanelRenderer::MaterialPreviewRect(content, *paintContext->sceneContext)) {
+            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                .viewportKey = kInspectorMaterialPreviewViewportKey,
+                .bounds = *preview,
+            });
+        }
+    } else if (paintContext->panel->kind == DockPanelKind::MaterialEditor) {
+        if (const std::optional<RECT> preview = MaterialEditorPanelRenderer::MaterialPreviewRect(content, *paintContext->sceneContext)) {
+            layouts.push_back(EditorSceneBgfxViewport::HostSurfaceLayout{
+                .viewportKey = kMaterialEditorPreviewViewportKey,
+                .bounds = *preview,
+            });
+        }
+    }
+    const std::span<const EditorSceneBgfxViewport::HostSurfaceLayout> layoutSpan{layouts.data(), layouts.size()};
+    if (EditorWindowResizeInteraction::IsWindowResizing(paintContext->window)) {
+        paintContext->sceneViewport->SyncHostSurfaceLayoutsForResize(paintContext->window, layoutSpan);
+    } else {
+        paintContext->sceneViewport->SyncHostSurfaceLayouts(paintContext->window, layoutSpan);
     }
 
     EditorSurfacePainter::Fill(paint.dc, paint.client, *paintContext->theme, EditorSurfaceKind::AppBackground);
@@ -63,7 +95,7 @@ void FloatingWindowBackBufferPainter::Paint(HWND window, const DockPanel& panel,
     if (panel.kind == DockPanelKind::Scene && sceneContext.ViewportPreview(panel.id).ToolbarDropdown() != EditorViewportToolbarDropdown::None) {
         RECT content{};
         GetClientRect(window, &content);
-        content.top += metrics.floatingChromeHeight;
+        content = FloatingPanelContentRect(content, panel, metrics);
         FloatingSceneToolbarDropdownOverlay().Show(window, content, panel.id, theme, sceneContext);
     } else {
         FloatingSceneToolbarDropdownOverlay().Hide();

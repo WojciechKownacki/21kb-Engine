@@ -6,6 +6,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
@@ -65,7 +66,7 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         const kb::assets::AssetId assetId{ materialAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
         auto cacheIt = materials.find(runtimeKey);
-        if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
             if (cacheIt != materials.end()) {
                 context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
                 context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
@@ -77,7 +78,19 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             return;
         }
 
-        if (cacheIt != materials.end() && cacheIt->second.contentHash == metadata->contentHash && context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {
+        const ResolvedRuntimeMaterialAsset resolvedAsset = context.materialResolver.ResolveAsset(manager, *metadata);
+        if (!resolvedAsset.resolved) {
+            if (cacheIt != materials.end()) {
+                context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
+                context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
+                static_cast<void>(manager.Unload(assetId));
+                materials.erase(cacheIt);
+            }
+            context.sceneRenderer.ResourceMap().UnbindMaterial(materialAssetId);
+            return;
+        }
+
+        if (cacheIt != materials.end() && cacheIt->second.contentHash == resolvedAsset.contentHash && context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {
             RuntimeMaterialResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
             context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, cached.handle);
@@ -91,13 +104,7 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             materials.erase(cacheIt);
         }
 
-        const kb::assets::AssetHandle<RenderMaterialAssetData> asset = manager.Load<RenderMaterialAssetData>(assetId);
-        if (!asset.IsLoaded()) {
-            context.sceneRenderer.ResourceMap().UnbindMaterial(materialAssetId);
-            return;
-        }
-
-        const ResolvedRuntimeMaterialDesc materialDesc = context.materialResolver.ResolveLoadedMaterial(manager, *metadata, *asset);
+        const ResolvedRuntimeMaterialDesc materialDesc = resolvedAsset.material;
         context.unresolvedMaterialTexturePathCount += materialDesc.unresolvedTexturePathCount;
         EmitUnresolvedMaterialTexturePathDiagnostic(context.diagnostics, materialAssetId, materialDesc.unresolvedTexturePathCount);
         const RenderMaterialHandle handle = context.sceneRenderer.Resources().RegisterMaterial(materialDesc.desc);
@@ -109,7 +116,7 @@ void RuntimeMaterialResourceEnsurer::Ensure(
 
         materials[runtimeKey] = RuntimeMaterialResource{
             .handle = handle,
-            .contentHash = metadata->contentHash,
+            .contentHash = resolvedAsset.contentHash,
             .lastReferencedFrame = context.currentFrame,
         };
         context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, handle);

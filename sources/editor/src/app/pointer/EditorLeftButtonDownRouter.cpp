@@ -18,8 +18,10 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
+#include "docking/DockMainLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/DockTabControlGeometry.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
 #include <algorithm>
@@ -33,6 +35,15 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
 
 [[nodiscard]] bool PointInRect(const RECT& rect, int x, int y) noexcept {
     return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+[[nodiscard]] const DockPanelLayout* TabCloseHit(const DockLayout& layout, int x, int y) noexcept {
+    for (const DockPanelLayout& panel : layout.panels) {
+        if (DockTabControlGeometry::ContainsClose(panel.tab, x, y)) {
+            return &panel;
+        }
+    }
+    return nullptr;
 }
 
 [[nodiscard]] int RectHeight(const RECT& rect) noexcept {
@@ -117,14 +128,34 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (EditorWindowToolbarPointerHandler::HandleLeftButtonDown(mainWindow_, messageWindow, x, y, dockModel_, sceneContext_, sceneViewport_, playMode_, shellInteraction_, metrics_)) {
         return;
     }
+    if (messageWindow == mainWindow_) {
+        const DockLayout layout = DockMainLayoutResolver::Resolve(mainWindow_, dockModel_, metrics_);
+        if (const DockPanelLayout* closeTab = TabCloseHit(layout, x, y); closeTab != nullptr) {
+            const DockPanel* panel = dockModel_.Queries().FindPanel(closeTab->panelId);
+            if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !sceneContext_.PrepareMaterialEditorClose("closing the Material Editor tab")) {
+                return;
+            }
+            if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
+                sceneViewport_.RequestPresent();
+                EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            }
+            return;
+        }
+    }
+
+    EditorMainDockSplitterPointerController mainSplitter(mainWindow_, dockModel_, dockController_, sceneContext_, sceneViewport_, metrics_);
+    if (mainSplitter.HandlePointerDown(messageWindow, x, y)) {
+        return;
+    }
+
     const EditorPanelPointerHitContext panelHit =
         EditorPanelPointerHitContextResolver::Resolve(messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_, x, y);
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
+        const kb::assets::AssetId materialId = sceneContext_.AssetBrowser().InspectorAsset();
         const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
         if (command != MaterialEditorPanelCommand::None) {
-            const kb::assets::AssetId materialId = sceneContext_.AssetBrowser().InspectorAsset();
             switch (command) {
             case MaterialEditorPanelCommand::Save:
                 static_cast<void>(sceneContext_.SaveMaterialEditorAsset(materialId));
@@ -137,6 +168,25 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 break;
             case MaterialEditorPanelCommand::None:
                 break;
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+
+        const MaterialEditorPanelLayout materialLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (MaterialEditorPanelPointInRect(materialLayout.graphCanvas, x, y)) {
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.ReadMaterialDocumentAsset(materialId);
+            if (material.has_value()) {
+                if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
+                    if (sceneContext_.BeginMaterialGraphNodeDrag(materialId, *nodeId, x, y)) {
+                        SetCapture(messageWindow);
+                    }
+                } else {
+                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                }
+            } else {
+                static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
             }
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
@@ -182,11 +232,6 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             return;
         }
-    }
-
-    EditorMainDockSplitterPointerController mainSplitter(mainWindow_, dockModel_, dockController_, sceneViewport_, metrics_);
-    if (mainSplitter.HandlePointerDown(messageWindow, x, y)) {
-        return;
     }
 
     EditorPointerDragSourceResolver::Resolve(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);

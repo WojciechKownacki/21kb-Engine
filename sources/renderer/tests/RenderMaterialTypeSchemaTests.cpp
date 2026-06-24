@@ -357,6 +357,74 @@ void RunMaterialAssetTilingOffsetRoundTripTest() {
     Require(NearlyEqual(result.asset->desc.uvOffset[1], -1.0F), "Round-trip lost uvOffset[1]");
 }
 
+void RunMaterialGraphRoundTripTest() {
+    RenderMaterialAssetData original{};
+    original.graph = MakeDefaultRenderMaterialGraphDocument();
+    original.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 240,
+        .positionY = 180,
+    });
+    original.graph.links.push_back(RenderMaterialGraphLink{
+        .fromNodeId = 2U,
+        .fromPin = "rgba",
+        .toNodeId = 1U,
+        .toPin = "baseColor",
+    });
+
+    std::ostringstream output;
+    RenderMaterialAssetWriter::Write(output, original);
+    Require(output.str().find("graphVersion 1\n") != std::string::npos, "Material writer did not emit graph version");
+    Require(output.str().find("graphNode 1 MaterialOutput 640 240\n") != std::string::npos, "Material writer did not emit material output node");
+    Require(output.str().find("graphNode 2 ConstantColor 240 180\n") != std::string::npos, "Material writer did not emit constant color node");
+    Require(output.str().find("graphLink 2 rgba 1 baseColor\n") != std::string::npos, "Material writer did not emit graph link");
+
+    std::istringstream input{ output.str() };
+    const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(result.asset.has_value(), "Material graph round-trip should parse");
+    Require(result.Succeeded(), "Material graph round-trip should have no diagnostics");
+    Require(result.asset->graph.hasExplicitDocumentVersion, "Material graph round-trip lost explicit graph version");
+    Require(result.asset->graph.nodes.size() == 2U, "Material graph round-trip lost nodes");
+    Require(result.asset->graph.links.size() == 1U, "Material graph round-trip lost links");
+    Require(result.asset->graph.nodes[0].kind == RenderMaterialGraphNodeKind::MaterialOutput, "Material graph round-trip changed output node kind");
+    Require(result.asset->graph.nodes[1].kind == RenderMaterialGraphNodeKind::ConstantColor, "Material graph round-trip changed constant node kind");
+    Require(result.asset->graph.links[0].fromNodeId == 2U && result.asset->graph.links[0].toNodeId == 1U, "Material graph round-trip changed link nodes");
+    Require(result.asset->graph.links[0].fromPin == "rgba" && result.asset->graph.links[0].toPin == "baseColor", "Material graph round-trip changed link pins");
+}
+
+void RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest() {
+    std::istringstream input{
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "materialTypeVersion 1\n"
+        "baseColor 1 1 1 1\n"
+    };
+    const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(result.asset.has_value(), "Legacy material without graph fields should still parse");
+    Require(result.Succeeded(), "Legacy material graph default should not produce diagnostics");
+    Require(result.asset->graph.nodes.size() == 1U, "Legacy material should receive a default graph node");
+    Require(result.asset->graph.nodes[0].kind == RenderMaterialGraphNodeKind::MaterialOutput, "Legacy material default graph should contain Material Output");
+}
+
+void RunMaterialGraphRejectsInvalidLinksTest() {
+    std::istringstream input{
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "materialTypeVersion 1\n"
+        "baseColor 1 1 1 1\n"
+        "graphVersion 1\n"
+        "graphNode 1 MaterialOutput 640 240\n"
+        "graphNode 2 ConstantScalar 240 180\n"
+        "graphLink 2 rgba 1 baseColor\n"
+    };
+    const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(!result.asset.has_value(), "Invalid graph link should fail parsing");
+    Require(!result.diagnostics.empty(), "Invalid graph link should produce a diagnostic");
+    Require(result.diagnostics.back().code == RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, "Invalid graph link should use typed diagnostic code");
+    Require(result.diagnostics.back().field == "graphLink", "Invalid graph link diagnostic should identify graphLink");
+}
+
 } // namespace
 
 void RunRenderMaterialTypeSchemaTests() {
@@ -374,6 +442,9 @@ void RunRenderMaterialTypeSchemaTests() {
     RunBuiltInPbrSchemaAlphaModesListedTest();
     RunBuiltInPbrSchemaUnsupportedAdvancedFeaturesListedTest();
     RunMaterialAssetTilingOffsetRoundTripTest();
+    RunMaterialGraphRoundTripTest();
+    RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest();
+    RunMaterialGraphRejectsInvalidLinksTest();
 }
 
 } // namespace kb::render::tests
