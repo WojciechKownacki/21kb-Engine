@@ -32,6 +32,15 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateLuaScriptAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewMaterial: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateMaterialAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::CreateMaterialInstance:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.CreateMaterialInstanceAsset(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::NewInputAction: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputActionAsset(destinationFolder);
@@ -44,6 +53,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputMappingContextAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::ExtractMaterials:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.ExtractEmbeddedMaterials(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::AddDirectionalLight:
         return sceneContext.CreateLightObject(kb::scene::LightKind::Directional).IsValid();
     case EditorAssetContextCommand::AddPointLight:

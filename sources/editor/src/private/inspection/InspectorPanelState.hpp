@@ -22,6 +22,8 @@ enum class InspectorSectionId : std::uint8_t {
     Folder,
     InputAction,
     InputMappings,
+    Material,
+    MaterialPreview,
     Script,
     AddComponent,
 };
@@ -67,6 +69,36 @@ enum class InspectorPropertyId : std::uint8_t {
     InputMappingTrigger,
     InputMappingRemove,
     InputMappingAdd,
+    MeshRendererMesh,
+    MeshRendererMaterial,
+    MeshRendererMaterialSlot0,
+    MeshRendererMaterialSlot1,
+    MeshRendererMaterialSlot2,
+    MeshRendererMaterialSlot3,
+    MeshRendererMaterialSlot4,
+    MeshRendererMaterialSlot5,
+    MeshRendererMaterialSlot6,
+    MeshRendererMaterialSlot7,
+    MaterialBaseColorR,
+    MaterialBaseColorG,
+    MaterialBaseColorB,
+    MaterialBaseColorA,
+    MaterialMetallicFactor,
+    MaterialRoughnessFactor,
+    MaterialNormalScale,
+    MaterialOcclusionStrength,
+    MaterialEmissiveColorR,
+    MaterialEmissiveColorG,
+    MaterialEmissiveColorB,
+    MaterialEmissiveStrength,
+    MaterialAlphaCutoff,
+    MaterialAlphaMode,
+    MaterialDoubleSided,
+    MaterialAlbedoTexture,
+    MaterialNormalTexture,
+    MaterialMetallicRoughnessTexture,
+    MaterialOcclusionTexture,
+    MaterialEmissiveTexture,
     ScriptName,
     ScriptEnabled,
     AudioSourceClip,
@@ -107,6 +139,7 @@ struct InspectorPanelState {
     void BeginKeyCapture(int mappingIndex) noexcept;
     void EndKeyCapture() noexcept;
     [[nodiscard]] bool IsTextEditing() const noexcept;
+    [[nodiscard]] bool IsTextEditDirty() const noexcept;
     [[nodiscard]] InspectorPropertyId EditedProperty() const noexcept;
     [[nodiscard]] const std::string& EditBuffer() const noexcept;
     // Row index the current text edit targets in a dynamic list (e.g. which
@@ -167,9 +200,12 @@ private:
     bool detailsCollapsed_ = false;
     bool audioSourceCollapsed_ = false;
     bool audioListenerCollapsed_ = false;
+    bool meshRendererCollapsed_ = false;
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;
+    bool materialCollapsed_ = false;
+    bool materialPreviewCollapsed_ = false;
     bool scriptCollapsed_ = false;
     bool addComponentBrowserOpen_ = false;
     bool scriptComponentMenuOpen_ = false;
@@ -177,6 +213,7 @@ private:
     InspectorSectionId hoveredSection_ = InspectorSectionId::None;
     InspectorPropertyId hoveredProperty_ = InspectorPropertyId::None;
     InspectorPropertyId editedProperty_ = InspectorPropertyId::None;
+    std::string editOriginalBuffer_;
     std::string editBuffer_;
     int editIndex_ = -1;
     bool valueTypeDropdownOpen_ = false;

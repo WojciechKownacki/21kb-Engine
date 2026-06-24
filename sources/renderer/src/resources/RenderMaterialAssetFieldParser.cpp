@@ -43,6 +43,17 @@ namespace {
         ParseFloat(a, desc.baseColor[3]);
 }
 
+[[nodiscard]] bool ParseVec2(std::string_view rest, float (&output)[2]) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string x;
+    std::string y;
+    if (!(stream >> x >> y)) {
+        return false;
+    }
+    return ParseFloat(x, output[0]) &&
+        ParseFloat(y, output[1]);
+}
+
 [[nodiscard]] bool ParseVec3(std::string_view rest, float (&output)[3]) {
     std::istringstream stream{ std::string{ rest } };
     std::string x;
@@ -146,6 +157,39 @@ namespace {
 
 } // namespace
 
+bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept {
+    return RenderMaterialTextureFieldParser::IsKnown(keyword) ||
+        keyword == "baseColor" ||
+        keyword == "baseColorFactor" ||
+        keyword == "emissiveColor" ||
+        keyword == "emissiveFactor" ||
+        keyword == "metallicFactor" ||
+        keyword == "roughnessFactor" ||
+        keyword == "normalScale" ||
+        keyword == "occlusionStrength" ||
+        keyword == "emissiveStrength" ||
+        keyword == "alphaCutoff" ||
+        keyword == "tiling" ||
+        keyword == "offset" ||
+        keyword == "clearcoatFactor" ||
+        keyword == "clearcoatRoughnessFactor" ||
+        keyword == "sheenColor" ||
+        keyword == "sheenRoughnessFactor" ||
+        keyword == "transmissionFactor" ||
+        keyword == "thicknessFactor" ||
+        keyword == "attenuationColor" ||
+        keyword == "attenuationDistance" ||
+        keyword == "subsurfaceColor" ||
+        keyword == "subsurfaceFactor" ||
+        keyword == "anisotropyStrength" ||
+        keyword == "anisotropyRotation" ||
+        keyword == "layerWeight" ||
+        keyword == "alphaMode" ||
+        keyword == "decalBlendMode" ||
+        keyword == "layerBlendMode" ||
+        keyword == "doubleSided";
+}
+
 bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset) {
     const RenderMaterialFieldParseResult textureField = RenderMaterialTextureFieldParser::Apply(keyword, rest, asset);
     if (textureField != RenderMaterialFieldParseResult::Unknown) {
@@ -175,6 +219,12 @@ bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string
     }
     if (keyword == "alphaCutoff") {
         return ParseFloat(rest, asset.desc.alphaCutoff);
+    }
+    if (keyword == "tiling") {
+        return ParseVec2(rest, asset.desc.uvTiling);
+    }
+    if (keyword == "offset") {
+        return ParseVec2(rest, asset.desc.uvOffset);
     }
     if (keyword == "clearcoatFactor") {
         return ParseFloat(rest, asset.desc.clearcoatFactor);

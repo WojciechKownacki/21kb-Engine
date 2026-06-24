@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
@@ -17,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace kb::render::tests {
@@ -772,6 +774,9 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
         std::ofstream output{ materialPath, std::ios::trunc };
         output
             << "# KB material\n"
+            << "version 1\n"
+            << "materialType builtin.pbr\n"
+            << "materialTypeVersion 1\n"
             << "baseColor 0.2 0.4 0.8 1.0\n"
             << "emissiveColor 0.1 0.2 0.3\n"
             << "metallicFactor 0.6\n"
@@ -823,10 +828,19 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     Require(metadata != nullptr && metadata->type == "RenderMaterial", "AssetManager registered the material with the wrong type");
     const kb::assets::AssetHandle<RenderMaterialAssetData> asset = manager.Load<RenderMaterialAssetData>(metadata->id);
     Require(asset.IsLoaded(), "AssetManager did not load RenderMaterialAssetData through RenderMaterialAssetLoader");
+    Require(asset->documentVersion == kRenderMaterialAssetDocumentVersion, "Loaded material did not preserve document version");
+    Require(asset->hasExplicitDocumentVersion, "Loaded material did not record explicit document version metadata");
+    Require(asset->materialType == kRenderMaterialAssetBuiltInPbrType, "Loaded material did not preserve material type");
+    Require(asset->materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion, "Loaded material did not preserve material type version");
+    Require(asset->hasExplicitMaterialType, "Loaded material did not record explicit material type metadata");
+    Require(asset->hasExplicitMaterialTypeVersion, "Loaded material did not record explicit material type version metadata");
     Require(NearlyEqual(asset->desc.baseColor[0], 0.2F), "Loaded material did not preserve baseColor red");
     Require(NearlyEqual(asset->desc.baseColor[1], 0.4F), "Loaded material did not preserve baseColor green");
     Require(NearlyEqual(asset->desc.baseColor[2], 0.8F), "Loaded material did not preserve baseColor blue");
-    Require(NearlyEqual(asset->desc.emissiveColor[2], 0.3F), "Loaded material did not preserve emissive color");
+    Require(NearlyEqual(asset->desc.baseColor[3], 1.0F), "Loaded material did not preserve baseColor alpha");
+    Require(NearlyEqual(asset->desc.emissiveColor[0], 0.1F), "Loaded material did not preserve emissive color red");
+    Require(NearlyEqual(asset->desc.emissiveColor[1], 0.2F), "Loaded material did not preserve emissive color green");
+    Require(NearlyEqual(asset->desc.emissiveColor[2], 0.3F), "Loaded material did not preserve emissive color blue");
     Require(NearlyEqual(asset->desc.metallicFactor, 0.6F), "Loaded material did not preserve metallic factor");
     Require(NearlyEqual(asset->desc.roughnessFactor, 0.35F), "Loaded material did not preserve roughness factor");
     Require(NearlyEqual(asset->desc.normalScale, 0.75F), "Loaded material did not preserve normal scale");
@@ -867,6 +881,372 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     Require(asset->layerMaskTexturePath == "Textures/layer-mask.kbtex", "Loaded material did not preserve layer mask texture path");
 
     std::filesystem::remove_all(root, error);
+}
+
+void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
+    RenderMaterialAssetData source{};
+    source.desc.baseColor[0] = 0.12F;
+    source.desc.baseColor[1] = 0.34F;
+    source.desc.baseColor[2] = 0.56F;
+    source.desc.baseColor[3] = 0.78F;
+    source.desc.emissiveColor[0] = 0.9F;
+    source.desc.emissiveColor[1] = 0.8F;
+    source.desc.emissiveColor[2] = 0.7F;
+    source.desc.metallicFactor = 0.25F;
+    source.desc.roughnessFactor = 0.65F;
+    source.desc.normalScale = 1.5F;
+    source.desc.occlusionStrength = 0.45F;
+    source.desc.emissiveStrength = 3.0F;
+    source.desc.alphaCutoff = 0.33F;
+    source.desc.clearcoatFactor = 0.22F;
+    source.desc.clearcoatRoughnessFactor = 0.44F;
+    source.desc.sheenColor[0] = 0.11F;
+    source.desc.sheenColor[1] = 0.22F;
+    source.desc.sheenColor[2] = 0.33F;
+    source.desc.sheenRoughnessFactor = 0.58F;
+    source.desc.transmissionFactor = 0.18F;
+    source.desc.thicknessFactor = 0.27F;
+    source.desc.attenuationColor[0] = 0.66F;
+    source.desc.attenuationColor[1] = 0.77F;
+    source.desc.attenuationColor[2] = 0.88F;
+    source.desc.attenuationDistance = 12.0F;
+    source.desc.subsurfaceColor[0] = 0.19F;
+    source.desc.subsurfaceColor[1] = 0.29F;
+    source.desc.subsurfaceColor[2] = 0.39F;
+    source.desc.subsurfaceFactor = 0.49F;
+    source.desc.anisotropyStrength = 0.59F;
+    source.desc.anisotropyRotation = 0.69F;
+    source.desc.layerWeight = 0.79F;
+    source.desc.alphaMode = RenderMaterialAlphaMode::Blend;
+    source.desc.decalBlendMode = RenderMaterialDecalBlendMode::Normal;
+    source.desc.layerBlendMode = RenderMaterialLayerBlendMode::Add;
+    source.desc.doubleSided = true;
+    source.desc.albedoTextureAssetId = 101U;
+    source.desc.normalTextureAssetId = 102U;
+    source.desc.metallicRoughnessTextureAssetId = 103U;
+    source.desc.occlusionTextureAssetId = 104U;
+    source.desc.emissiveTextureAssetId = 105U;
+    source.desc.clearcoatTextureAssetId = 106U;
+    source.desc.clearcoatRoughnessTextureAssetId = 107U;
+    source.desc.sheenColorTextureAssetId = 108U;
+    source.desc.transmissionTextureAssetId = 109U;
+    source.desc.thicknessTextureAssetId = 110U;
+    source.desc.anisotropyTextureAssetId = 111U;
+    source.desc.decalTextureAssetId = 112U;
+    source.desc.layerMaskTextureAssetId = 113U;
+    source.albedoTexturePath = "Textures/albedo.kbtex";
+    source.normalTexturePath = "Textures/normal.kbtex";
+    source.metallicRoughnessTexturePath = "Textures/mr.kbtex";
+    source.occlusionTexturePath = "Textures/ao.kbtex";
+    source.emissiveTexturePath = "Textures/emissive.kbtex";
+    source.clearcoatTexturePath = "Textures/clearcoat.kbtex";
+    source.clearcoatRoughnessTexturePath = "Textures/clearcoat-roughness.kbtex";
+    source.sheenColorTexturePath = "Textures/sheen.kbtex";
+    source.transmissionTexturePath = "Textures/transmission.kbtex";
+    source.thicknessTexturePath = "Textures/thickness.kbtex";
+    source.anisotropyTexturePath = "Textures/anisotropy.kbtex";
+    source.decalTexturePath = "Textures/decal.kbtex";
+    source.layerMaskTexturePath = "Textures/layer.kbtex";
+
+    std::ostringstream output;
+    RenderMaterialAssetWriter::Write(output, source);
+    Require(output.str().find("# KB material\nversion 1\nmaterialType builtin.pbr\nmaterialTypeVersion 1\nbaseColor") == 0U, "Material writer did not emit canonical material header");
+    std::istringstream input{ output.str() };
+    const std::optional<RenderMaterialAssetData> loaded = RenderMaterialAssetLoader::LoadMaterial(input);
+    Require(loaded.has_value(), "RenderMaterialAssetWriter produced material text the parser rejected");
+    Require(loaded->documentVersion == kRenderMaterialAssetDocumentVersion, "Material writer roundtrip lost document version");
+    Require(loaded->hasExplicitDocumentVersion, "Material writer roundtrip lost explicit document version metadata");
+    Require(loaded->materialType == kRenderMaterialAssetBuiltInPbrType, "Material writer roundtrip lost material type");
+    Require(loaded->materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion, "Material writer roundtrip lost material type version");
+    Require(loaded->hasExplicitMaterialType, "Material writer roundtrip lost explicit material type metadata");
+    Require(loaded->hasExplicitMaterialTypeVersion, "Material writer roundtrip lost explicit material type version metadata");
+    Require(NearlyEqual(loaded->desc.baseColor[2], source.desc.baseColor[2]), "Material writer roundtrip lost base color");
+    Require(NearlyEqual(loaded->desc.emissiveColor[0], source.desc.emissiveColor[0]), "Material writer roundtrip lost emissive color");
+    Require(NearlyEqual(loaded->desc.roughnessFactor, source.desc.roughnessFactor), "Material writer roundtrip lost roughness");
+    Require(NearlyEqual(loaded->desc.clearcoatRoughnessFactor, source.desc.clearcoatRoughnessFactor), "Material writer roundtrip lost clearcoat roughness");
+    Require(NearlyEqual(loaded->desc.attenuationColor[2], source.desc.attenuationColor[2]), "Material writer roundtrip lost attenuation color");
+    Require(NearlyEqual(loaded->desc.layerWeight, source.desc.layerWeight), "Material writer roundtrip lost layer weight");
+    Require(loaded->desc.alphaMode == RenderMaterialAlphaMode::Blend, "Material writer roundtrip lost alpha mode");
+    Require(loaded->desc.decalBlendMode == RenderMaterialDecalBlendMode::Normal, "Material writer roundtrip lost decal mode");
+    Require(loaded->desc.layerBlendMode == RenderMaterialLayerBlendMode::Add, "Material writer roundtrip lost layer mode");
+    Require(loaded->desc.doubleSided, "Material writer roundtrip lost double-sided state");
+    Require(loaded->desc.albedoTextureAssetId == source.desc.albedoTextureAssetId, "Material writer roundtrip lost albedo texture asset id");
+    Require(loaded->desc.normalTextureAssetId == source.desc.normalTextureAssetId, "Material writer roundtrip lost normal texture asset id");
+    Require(loaded->desc.metallicRoughnessTextureAssetId == source.desc.metallicRoughnessTextureAssetId, "Material writer roundtrip lost metallic-roughness texture asset id");
+    Require(loaded->desc.occlusionTextureAssetId == source.desc.occlusionTextureAssetId, "Material writer roundtrip lost occlusion texture asset id");
+    Require(loaded->desc.emissiveTextureAssetId == source.desc.emissiveTextureAssetId, "Material writer roundtrip lost emissive texture asset id");
+    Require(loaded->desc.decalTextureAssetId == source.desc.decalTextureAssetId, "Material writer roundtrip lost decal texture asset id");
+    Require(loaded->desc.layerMaskTextureAssetId == source.desc.layerMaskTextureAssetId, "Material writer roundtrip lost layer mask texture asset id");
+    Require(loaded->clearcoatRoughnessTexturePath == source.clearcoatRoughnessTexturePath, "Material writer roundtrip lost clearcoat roughness path");
+    Require(loaded->layerMaskTexturePath == source.layerMaskTexturePath, "Material writer roundtrip lost layer mask path");
+
+    std::istringstream shuffledInput{
+        "normalTexture Textures/normal.kbtex\n"
+        "doubleSided true\n"
+        "materialTypeVersion 1\n"
+        "roughnessFactor 0.25\n"
+        "version 1\n"
+        "baseColorTextureAssetId 10\n"
+        "alphaCutoff 0.25\n"
+        "emissiveStrength 4\n"
+        "materialType builtin.pbr\n"
+        "metallicFactor 0.5\n"
+        "normalTextureAssetId 20\n"
+        "baseColorFactor 0.25 0.5 0.75 1\n"
+        "emissiveColor 0 0.25 0.5\n"
+        "alphaMode MASK\n"
+        "baseColorTexture Textures/base.kbtex\n"
+        "normalScale 2\n"
+        "emissiveTextureAssetId 50\n"
+        "occlusionStrength 0.75\n"
+    };
+    const std::optional<RenderMaterialAssetData> shuffled = RenderMaterialAssetLoader::LoadMaterial(shuffledInput);
+    Require(shuffled.has_value(), "Canonical material writer fixture did not parse");
+
+    std::ostringstream canonicalOutput;
+    RenderMaterialAssetWriter::Write(canonicalOutput, *shuffled);
+    const std::string expectedCanonical =
+        "# KB material\n"
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "materialTypeVersion 1\n"
+        "baseColor 0.25 0.5 0.75 1\n"
+        "metallicFactor 0.5\n"
+        "roughnessFactor 0.25\n"
+        "normalScale 2\n"
+        "occlusionStrength 0.75\n"
+        "emissiveColor 0 0.25 0.5\n"
+        "emissiveStrength 4\n"
+        "alphaMode MASK\n"
+        "alphaCutoff 0.25\n"
+        "doubleSided true\n"
+        "tiling 1 1\n"
+        "offset 0 0\n"
+        "albedoTextureAssetId 10\n"
+        "normalTextureAssetId 20\n"
+        "emissiveTextureAssetId 50\n"
+        "albedoTexture Textures/base.kbtex\n"
+        "normalTexture Textures/normal.kbtex\n"
+        "clearcoatFactor 0\n"
+        "clearcoatRoughnessFactor 0\n"
+        "sheenColor 0 0 0\n"
+        "sheenRoughnessFactor 0\n"
+        "transmissionFactor 0\n"
+        "thicknessFactor 0\n"
+        "attenuationColor 1 1 1\n"
+        "attenuationDistance 0\n"
+        "subsurfaceColor 1 1 1\n"
+        "subsurfaceFactor 0\n"
+        "anisotropyStrength 0\n"
+        "anisotropyRotation 0\n"
+        "layerWeight 1\n"
+        "decalBlendMode DISABLED\n"
+        "layerBlendMode REPLACE\n"
+        "graphVersion 1\n"
+        "graphNode 1 MaterialOutput 640 240\n";
+    Require(canonicalOutput.str() == expectedCanonical, "Material writer did not emit deterministic canonical field ordering");
+
+    std::ostringstream canonicalOutputAgain;
+    RenderMaterialAssetWriter::Write(canonicalOutputAgain, *shuffled);
+    Require(canonicalOutputAgain.str() == canonicalOutput.str(), "Material writer emitted different output for the same material instance data");
+}
+
+void RunRenderMaterialAssetParserReportsReadableErrorsTest() {
+    {
+        std::istringstream input{
+            "metallicFactor nope\n"
+            "unknownMaterialField 1\n"
+            "alphaMode TRANSPARENT\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Invalid material parser diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 3U, "Invalid material parser diagnostics should report each invalid line");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::InvalidFloat, "Invalid material parser diagnostics lost the invalid float code");
+        Require(result.diagnostics[0].line == 1U, "Invalid material parser diagnostics lost the invalid value line number");
+        Require(!result.diagnostics[0].assetId.IsValid(), "Stream material parser diagnostics should not invent an asset id");
+        Require(result.diagnostics[0].path.empty(), "Stream material parser diagnostics should not invent a file path");
+        Require(result.diagnostics[0].field == "metallicFactor", "Invalid material parser diagnostics lost the invalid value field name");
+        Require(result.diagnostics[0].message.find("Invalid float value") != std::string::npos, "Invalid material parser diagnostics did not identify an invalid float value");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnknownField, "Invalid material parser diagnostics lost the unknown field code");
+        Require(result.diagnostics[1].line == 2U, "Invalid material parser diagnostics lost the unknown field line number");
+        Require(result.diagnostics[1].field == "unknownMaterialField", "Invalid material parser diagnostics lost the unknown field name");
+        Require(result.diagnostics[1].message.find("Unknown material field") != std::string::npos, "Invalid material parser diagnostics did not identify an unknown field");
+        Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::InvalidEnum, "Invalid material parser diagnostics lost the invalid enum code");
+        Require(result.diagnostics[2].field == "alphaMode", "Invalid material parser diagnostics lost the invalid enum field name");
+        Require(result.diagnostics[2].message.find("Invalid enum value") != std::string::npos, "Invalid material parser diagnostics did not identify an invalid enum value");
+        Require(result.ErrorMessage().find("code invalid_float") != std::string::npos, "Invalid material parser error message did not include the invalid float diagnostic code");
+        Require(result.ErrorMessage().find("code invalid_enum") != std::string::npos, "Invalid material parser error message did not include the invalid enum diagnostic code");
+        Require(result.ErrorMessage().find("line 1") != std::string::npos, "Invalid material parser error message did not include line numbers");
+        Require(result.ErrorMessage().find("metallicFactor nope") != std::string::npos, "Invalid material parser error message did not include source text");
+    }
+    {
+        std::istringstream input{
+            "baseColor 1.2 0.5 0.5 1\n"
+            "roughnessFactor -0.1\n"
+            "normalScale 9\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Out-of-range material parser diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 3U, "Out-of-range material parser diagnostics should report each invalid range");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::OutOfRange, "Out-of-range material parser diagnostics lost base color code");
+        Require(result.diagnostics[0].field == "baseColor", "Out-of-range material parser diagnostics lost base color field");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::OutOfRange, "Out-of-range material parser diagnostics lost roughness code");
+        Require(result.diagnostics[1].field == "roughnessFactor", "Out-of-range material parser diagnostics lost roughness field");
+        Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::OutOfRange, "Out-of-range material parser diagnostics lost normal scale code");
+        Require(result.ErrorMessage().find("code out_of_range") != std::string::npos, "Out-of-range material parser error message did not include the diagnostic code");
+    }
+    {
+        std::istringstream input{
+            "baseColor 0.25 0.5 0.75 1\n"
+            "clearcoatFactor 0.5\n"
+            "transmissionTexture Textures/transmission.kbtex\n"
+            "decalBlendMode PBR\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(result.asset.has_value(), "Unsupported advanced material field warnings should keep the parsed asset available");
+        Require(!result.Succeeded(), "Unsupported advanced material field warnings should keep diagnostics visible");
+        Require(result.diagnostics.size() == 3U, "Unsupported advanced material field diagnostics should report each active advanced field");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost clearcoat code");
+        Require(result.diagnostics[0].severity == RenderMaterialAssetParseDiagnosticSeverity::Warning, "Unsupported advanced material diagnostics should be warnings");
+        Require(result.diagnostics[0].field == "clearcoatFactor", "Unsupported advanced material diagnostics lost clearcoat field");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost transmission texture code");
+        Require(result.diagnostics[1].field == "transmissionTexture", "Unsupported advanced material diagnostics lost transmission texture field");
+        Require(result.diagnostics[2].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField, "Unsupported advanced material diagnostics lost decal code");
+        Require(result.diagnostics[2].field == "decalBlendMode", "Unsupported advanced material diagnostics lost decal field");
+        Require(result.ErrorMessage().find("code unsupported_advanced_field") != std::string::npos, "Unsupported advanced material diagnostics did not include the warning code");
+    }
+    {
+        std::istringstream input{
+            "version nope\n"
+            "version 999\n"
+            "baseColor 1 1 1 1\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Invalid material document version diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 2U, "Invalid material document version diagnostics should report each invalid version line");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::InvalidDocumentVersion, "Invalid material document version diagnostics lost invalid version code");
+        Require(result.diagnostics[0].line == 1U && result.diagnostics[0].field == "version", "Invalid material document version diagnostics lost line or field");
+        Require(result.diagnostics[0].message.find("Invalid value") != std::string::npos, "Invalid material document version diagnostics did not identify invalid value");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedDocumentVersion, "Invalid material document version diagnostics lost unsupported version code");
+        Require(result.diagnostics[1].message.find("Unsupported material document version") != std::string::npos, "Invalid material document version diagnostics did not identify unsupported future version");
+    }
+    {
+        std::istringstream input{
+            "materialType raw.graph\n"
+            "materialTypeVersion 2\n"
+            "baseColor 1 1 1 1\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Unsupported material type diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 2U, "Unsupported material type diagnostics should report type and version failures");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialType, "Unsupported material type diagnostics lost type code");
+        Require(result.diagnostics[0].line == 1U && result.diagnostics[0].field == "materialType", "Unsupported material type diagnostics lost line or field");
+        Require(result.diagnostics[0].message.find("Unsupported material type") != std::string::npos, "Unsupported material type diagnostics did not identify the type");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialTypeVersion, "Unsupported material type diagnostics lost version code");
+        Require(result.diagnostics[1].field == "materialTypeVersion", "Unsupported material type diagnostics lost the version field");
+        Require(result.diagnostics[1].message.find("Unsupported material type version") != std::string::npos, "Unsupported material type diagnostics did not identify the version");
+    }
+    {
+        std::istringstream input{
+            "materialTypeVersion nope\n"
+            "materialTypeVersion 999\n"
+            "baseColor 1 1 1 1\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Invalid material type version diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 2U, "Invalid material type version diagnostics should report each invalid line");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::InvalidMaterialTypeVersion, "Invalid material type version diagnostics lost invalid version code");
+        Require(result.diagnostics[0].field == "materialTypeVersion", "Invalid material type version diagnostics lost the field name");
+        Require(result.diagnostics[0].message.find("Invalid value") != std::string::npos, "Invalid material type version diagnostics did not identify invalid value");
+        Require(result.diagnostics[1].code == RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialTypeVersion, "Invalid material type version diagnostics lost unsupported version code");
+        Require(result.diagnostics[1].message.find("Unsupported material type version") != std::string::npos, "Invalid material type version diagnostics did not identify unsupported future version");
+    }
+    {
+        std::istringstream input{
+            "baseColor 0.25 0.5 0.75 1\n"
+        };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(result.asset.has_value(), "Unversioned legacy material asset should remain loadable");
+        Require(result.asset->documentVersion == kRenderMaterialAssetDocumentVersion, "Unversioned legacy material asset should use current in-memory document version");
+        Require(!result.asset->hasExplicitDocumentVersion, "Unversioned legacy material asset should record missing explicit document version metadata");
+        Require(result.asset->materialType == kRenderMaterialAssetBuiltInPbrType, "Legacy material asset should use built-in PBR material type");
+        Require(result.asset->materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion, "Legacy material asset should use current built-in PBR material type version");
+        Require(!result.asset->hasExplicitMaterialType, "Legacy material asset should record missing explicit material type metadata");
+        Require(!result.asset->hasExplicitMaterialTypeVersion, "Legacy material asset should record missing explicit material type version metadata");
+    }
+    {
+        // KBMAT-0112: a legacy unversioned .kbmat migrates to a versioned Material Instance on save.
+        std::istringstream legacyInput{
+            "baseColor 0.25 0.5 0.75 1\n"
+            "metallicFactor 0.3\n"
+            "roughnessFactor 0.7\n"
+        };
+        const RenderMaterialAssetParseResult legacy = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(legacyInput);
+        Require(legacy.asset.has_value(), "Legacy material asset should load for migration");
+        Require(!legacy.asset->hasExplicitDocumentVersion, "Legacy material asset should lack explicit document version before migration");
+        Require(!legacy.asset->hasExplicitMaterialType, "Legacy material asset should lack explicit material type before migration");
+        Require(!legacy.asset->hasExplicitMaterialTypeVersion, "Legacy material asset should lack explicit material type version before migration");
+
+        const std::filesystem::path tmpFile = std::filesystem::temp_directory_path() / "kbmat_legacy_migration.kbmat";
+        Require(RenderMaterialAssetWriter::Save(tmpFile, *legacy.asset), "Migrated material save should succeed");
+
+        const RenderMaterialAssetParseResult migrated = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(tmpFile);
+        Require(migrated.asset.has_value(), "Migrated material asset should load after save");
+        Require(migrated.Succeeded(), "Migrated material asset should have no diagnostics after explicit version and type are written");
+        Require(migrated.asset->hasExplicitDocumentVersion, "Migrated material asset should record explicit document version");
+        Require(migrated.asset->documentVersion == kRenderMaterialAssetDocumentVersion, "Migrated material asset should use the current document version");
+        Require(migrated.asset->hasExplicitMaterialType, "Migrated material asset should record explicit material type");
+        Require(migrated.asset->materialType == kRenderMaterialAssetBuiltInPbrType, "Migrated material asset should use the built-in PBR material type");
+        Require(migrated.asset->hasExplicitMaterialTypeVersion, "Migrated material asset should record explicit material type version");
+        Require(migrated.asset->materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion, "Migrated material asset should use the current built-in PBR material type version");
+        Require(NearlyEqual(migrated.asset->desc.baseColor[2], 0.75F), "Migrated material asset should preserve base color");
+        Require(NearlyEqual(migrated.asset->desc.metallicFactor, 0.3F), "Migrated material asset should preserve metallic factor");
+        Require(NearlyEqual(migrated.asset->desc.roughnessFactor, 0.7F), "Migrated material asset should preserve roughness factor");
+
+        std::error_code removeError;
+        std::filesystem::remove(tmpFile, removeError);
+    }
+    {
+        std::istringstream input{ "# comment only\n\n" };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+        Require(!result.asset.has_value(), "Empty material parser diagnostics should not return an asset");
+        Require(result.diagnostics.size() == 1U, "Empty material parser diagnostics should report one error");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::EmptyDocument, "Empty material parser diagnostics lost empty document code");
+        Require(result.diagnostics[0].message.find("does not contain any material properties") != std::string::npos, "Empty material parser diagnostics should explain the missing material properties");
+    }
+    {
+        const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_diagnostics";
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+        std::filesystem::create_directories(root, error);
+        Require(!error, "Material diagnostics test could not create temp root");
+
+        const std::filesystem::path materialPath = root / "broken.kbmat";
+        {
+            std::ofstream output{ materialPath, std::ios::trunc };
+            output << "roughnessFactor broken\n";
+        }
+
+        const kb::assets::AssetId materialAssetId{ 77U };
+        const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(materialPath, materialAssetId);
+        Require(!result.asset.has_value(), "Path material parser diagnostics should not return an asset for invalid data");
+        Require(result.diagnostics.size() == 1U, "Path material parser diagnostics should report the invalid field");
+        Require(result.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::InvalidFloat, "Path material parser diagnostics lost invalid float code");
+        Require(result.diagnostics[0].assetId == materialAssetId, "Path material parser diagnostics lost asset id context");
+        Require(result.diagnostics[0].path == materialPath, "Path material parser diagnostics lost file path context");
+        Require(result.ErrorMessage().find("asset 77") != std::string::npos, "Path material parser error message did not include asset id context");
+        Require(result.ErrorMessage().find(materialPath.generic_string()) != std::string::npos, "Path material parser error message did not include file path context");
+
+        const std::filesystem::path missingPath = root / "missing.kbmat";
+        const RenderMaterialAssetParseResult missing = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(missingPath, materialAssetId);
+        Require(!missing.asset.has_value(), "Missing material file diagnostics should not return an asset");
+        Require(missing.diagnostics.size() == 1U, "Missing material file diagnostics should report one error");
+        Require(missing.diagnostics[0].code == RenderMaterialAssetParseDiagnosticCode::FileOpenFailed, "Missing material file diagnostics lost file open failure code");
+        Require(missing.diagnostics[0].assetId == materialAssetId, "Missing material file diagnostics lost asset id context");
+        Require(missing.diagnostics[0].path == missingPath, "Missing material file diagnostics lost file path context");
+
+        std::filesystem::remove_all(root, error);
+    }
 }
 
 void RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest() {
@@ -1006,6 +1386,8 @@ void RunRenderResourceRegistryTests() {
     RunGltfImporterRejectsOutOfRangeIndicesTest();
     RunGltfImporterKeepsUint32IndicesForLargeTangentMeshesTest();
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
+    RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
+    RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();

@@ -16,12 +16,15 @@ constexpr UINT_PTR kAssetMenuNewLuaScript = 2003;
 constexpr UINT_PTR kAssetMenuNewInputAction = 2004;
 constexpr UINT_PTR kAssetMenuNewInputAxis = 2006;
 constexpr UINT_PTR kAssetMenuNewInputMappingContext = 2005;
+constexpr UINT_PTR kAssetMenuNewMaterial = 2007;
+constexpr UINT_PTR kAssetMenuCreateMaterialInstance = 2008;
 constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
 constexpr UINT_PTR kAssetMenuPointLight = 2102;
 constexpr UINT_PTR kAssetMenuSpotLight = 2103;
 constexpr UINT_PTR kAssetMenuRename = 2201;
 constexpr UINT_PTR kAssetMenuDelete = 2202;
 constexpr UINT_PTR kAssetMenuRefresh = 2203;
+constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
 
 [[nodiscard]] UINT_PTR CommandId(EditorAssetContextCommand command) noexcept {
     switch (command) {
@@ -31,12 +34,18 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return kAssetMenuNewFolder;
     case EditorAssetContextCommand::NewLuaScript:
         return kAssetMenuNewLuaScript;
+    case EditorAssetContextCommand::NewMaterial:
+        return kAssetMenuNewMaterial;
+    case EditorAssetContextCommand::CreateMaterialInstance:
+        return kAssetMenuCreateMaterialInstance;
     case EditorAssetContextCommand::NewInputAction:
         return kAssetMenuNewInputAction;
     case EditorAssetContextCommand::NewInputAxis:
         return kAssetMenuNewInputAxis;
     case EditorAssetContextCommand::NewInputMappingContext:
         return kAssetMenuNewInputMappingContext;
+    case EditorAssetContextCommand::ExtractMaterials:
+        return kAssetMenuExtractMaterials;
     case EditorAssetContextCommand::AddDirectionalLight:
         return kAssetMenuDirectionalLight;
     case EditorAssetContextCommand::AddPointLight:
@@ -64,12 +73,18 @@ constexpr UINT_PTR kAssetMenuRefresh = 2203;
         return EditorAssetContextCommand::NewFolder;
     case kAssetMenuNewLuaScript:
         return EditorAssetContextCommand::NewLuaScript;
+    case kAssetMenuNewMaterial:
+        return EditorAssetContextCommand::NewMaterial;
+    case kAssetMenuCreateMaterialInstance:
+        return EditorAssetContextCommand::CreateMaterialInstance;
     case kAssetMenuNewInputAction:
         return EditorAssetContextCommand::NewInputAction;
     case kAssetMenuNewInputAxis:
         return EditorAssetContextCommand::NewInputAxis;
     case kAssetMenuNewInputMappingContext:
         return EditorAssetContextCommand::NewInputMappingContext;
+    case kAssetMenuExtractMaterials:
+        return EditorAssetContextCommand::ExtractMaterials;
     case kAssetMenuDirectionalLight:
         return EditorAssetContextCommand::AddDirectionalLight;
     case kAssetMenuPointLight:

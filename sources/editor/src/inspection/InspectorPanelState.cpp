@@ -25,12 +25,18 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return audioSourceCollapsed_;
     case InspectorSectionId::AudioListener:
         return audioListenerCollapsed_;
+    case InspectorSectionId::MeshRenderer:
+        return meshRendererCollapsed_;
     case InspectorSectionId::Folder:
         return folderCollapsed_;
     case InspectorSectionId::InputAction:
         return inputActionCollapsed_;
     case InspectorSectionId::InputMappings:
         return inputMappingsCollapsed_;
+    case InspectorSectionId::Material:
+        return materialCollapsed_;
+    case InspectorSectionId::MaterialPreview:
+        return materialPreviewCollapsed_;
     case InspectorSectionId::Script:
         return scriptCollapsed_;
     default:
@@ -59,6 +65,9 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
     case InspectorSectionId::AudioListener:
         target = &audioListenerCollapsed_;
         break;
+    case InspectorSectionId::MeshRenderer:
+        target = &meshRendererCollapsed_;
+        break;
     case InspectorSectionId::Folder:
         target = &folderCollapsed_;
         break;
@@ -67,6 +76,12 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::InputMappings:
         target = &inputMappingsCollapsed_;
+        break;
+    case InspectorSectionId::Material:
+        target = &materialCollapsed_;
+        break;
+    case InspectorSectionId::MaterialPreview:
+        target = &materialPreviewCollapsed_;
         break;
     case InspectorSectionId::Script:
         target = &scriptCollapsed_;
@@ -182,6 +197,10 @@ bool InspectorPanelState::IsTextEditing() const noexcept {
     return editedProperty_ != InspectorPropertyId::None;
 }
 
+bool InspectorPanelState::IsTextEditDirty() const noexcept {
+    return IsTextEditing() && editBuffer_ != editOriginalBuffer_;
+}
+
 InspectorPropertyId InspectorPanelState::EditedProperty() const noexcept {
     return editedProperty_;
 }
@@ -200,6 +219,7 @@ void InspectorPanelState::SetEditIndex(int index) noexcept {
 
 void InspectorPanelState::BeginTextEdit(InspectorPropertyId property, std::string value) {
     editedProperty_ = property;
+    editOriginalBuffer_ = value;
     editBuffer_ = std::move(value);
     editIndex_ = -1;
     editSelectingAll_ = false;
@@ -251,6 +271,7 @@ void InspectorPanelState::SelectAllText() noexcept {
 
 void InspectorPanelState::EndTextEdit() noexcept {
     editedProperty_ = InspectorPropertyId::None;
+    editOriginalBuffer_.clear();
     editBuffer_.clear();
     editIndex_ = -1;
     editSelectingAll_ = false;

@@ -3,6 +3,7 @@
 #if defined(_WIN32)
 #include "rendering/gdi/ScopedPaint.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -26,7 +27,7 @@ public:
     }
 
     [[nodiscard]] HDC Ensure(HDC target, int width, int height) {
-        if (dc_ != nullptr && bitmap_ != nullptr && width_ == width && height_ == height) {
+        if (dc_ != nullptr && bitmap_ != nullptr && width <= width_ && height <= height_) {
             return dc_;
         }
 
@@ -35,24 +36,32 @@ public:
             return nullptr;
         }
 
+        const int bufferWidth = GrowDimension(width);
+        const int bufferHeight = GrowDimension(height);
+
         dc_ = CreateCompatibleDC(target);
         if (dc_ == nullptr) {
             return nullptr;
         }
 
-        bitmap_ = CreateCompatibleBitmap(target, width, height);
+        bitmap_ = CreateCompatibleBitmap(target, bufferWidth, bufferHeight);
         if (bitmap_ == nullptr) {
             Reset();
             return nullptr;
         }
 
         oldBitmap_ = static_cast<HBITMAP>(SelectObject(dc_, bitmap_));
-        width_ = width;
-        height_ = height;
+        width_ = bufferWidth;
+        height_ = bufferHeight;
         return dc_;
     }
 
 private:
+    [[nodiscard]] static int GrowDimension(int value) noexcept {
+        constexpr int kGranularity = 256;
+        return std::max(kGranularity, ((value + kGranularity - 1) / kGranularity) * kGranularity);
+    }
+
     void Reset() noexcept {
         if (dc_ != nullptr) {
             if (oldBitmap_ != nullptr) {

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "engine/assets/AssetManager.hpp"
+#include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
@@ -9,6 +10,11 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
+#include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
+#include "inspection/EditorValueFormatter.hpp"
+#include "inspection/MaterialAssetFormatter.hpp"
+#include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
 #include "rendering/EditorTexturePreviewService.hpp"
 #include "rendering/GdiDrawing.hpp"
@@ -20,11 +26,13 @@
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
+#include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -53,6 +61,10 @@ constexpr int kCheckboxSize = 16;
 constexpr int kTextBaselineOffsetY = 1;
 constexpr int kAssetPreviewMaxHeight = 214;
 constexpr int kAssetPreviewMinHeight = 142;
+constexpr int kMaterialPreviewHeight = 160;
+constexpr int kMaterialPreviewPadding = 12;
+constexpr int kMaterialPreviewGap = 8;
+constexpr std::size_t kMaterialPreviewMaxMissingRows = 2U;
 constexpr int kMeshPreviewToolbarHeight = 30;
 constexpr int kMeshPreviewToolbarButtonSize = 22;
 constexpr int kMeshPreviewToolbarButtonGap = 4;
@@ -149,24 +161,11 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
 }
 
 [[nodiscard]] std::string FormatFloat(float value, int precision = 3) {
-    char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), precision == 0 ? "%.0f" : precision == 1 ? "%.1f" : precision == 2 ? "%.2f" : "%.3f", static_cast<double>(value));
-    std::string text = buffer;
-    if (text.find('.') != std::string::npos) {
-        while (!text.empty() && text.back() == '0') {
-            text.pop_back();
-        }
-        if (!text.empty() && text.back() == '.') {
-            text.pop_back();
-        }
-    }
-    return text == "-0" ? "0" : text;
+    return EditorValueFormatter::FormatFloat(value, precision);
 }
 
 [[nodiscard]] std::string FormatUInt64(std::uint64_t value) {
-    char buffer[32]{};
-    std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(value));
-    return buffer;
+    return EditorValueFormatter::FormatUInt64(value);
 }
 
 [[nodiscard]] std::string FormatVec3(const float value[3]) {
@@ -433,6 +432,10 @@ public:
         }
         DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value);
         Advance();
+    }
+
+    void Float(std::string_view label, std::string_view value, InspectorPropertyId property) {
+        Field(label, value, property);
     }
 
     void Bool(std::string_view label, bool value, InspectorPropertyId property = InspectorPropertyId::None) {
@@ -878,6 +881,199 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return "(missing)";
 }
 
+[[nodiscard]] std::string MaterialDisplayName(const EditorSceneContext& sceneContext, std::uint64_t id) {
+    if (id == 0U) {
+        return "None";
+    }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    if (const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id }); metadata != nullptr) {
+        return metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
+    }
+    return "Missing material asset " + std::to_string(id);
+}
+
+[[nodiscard]] std::optional<kb::render::RenderMeshAssetData> LoadMeshAssetData(const EditorSceneContext& sceneContext, std::uint64_t meshAssetId) {
+    if (meshAssetId == 0U) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ meshAssetId });
+    if (metadata == nullptr) {
+        return std::nullopt;
+    }
+    const std::optional<std::filesystem::path> resolved = ResolveAssetPhysicalPath(manager, *metadata);
+    if (!resolved.has_value()) {
+        return std::nullopt;
+    }
+
+    kb::render::RenderMeshAssetLoader loader;
+    kb::assets::AssetLoadResult result = loader.Load(kb::assets::AssetLoadRequest{
+        .metadata = *metadata,
+        .resolvedPath = *resolved,
+    });
+    if (!result.Succeeded() || result.asset == nullptr) {
+        return std::nullopt;
+    }
+    std::shared_ptr<kb::render::RenderMeshAssetData> mesh = std::static_pointer_cast<kb::render::RenderMeshAssetData>(result.asset);
+    return mesh == nullptr ? std::nullopt : std::optional<kb::render::RenderMeshAssetData>{ *mesh };
+}
+
+[[nodiscard]] int MeshRendererMaterialSlotRows(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer) {
+    std::uint32_t rows = std::max<std::uint32_t>(1U, renderer.materialSlotOverrideCount);
+    if (const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId)) {
+        rows = std::max<std::uint32_t>(rows, static_cast<std::uint32_t>(std::max(mesh->materialSlots.size(), mesh->materialNames.size())));
+    }
+    return static_cast<int>(std::min<std::uint32_t>(rows, kb::scene::kMaxMeshRendererMaterialSlotOverrides));
+}
+
+[[nodiscard]] std::string MeshRendererMaterialSlotLabel(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
+    std::string label = "Slot " + std::to_string(slotIndex);
+    if (mesh.has_value() && slotIndex < mesh->materialNames.size() && !mesh->materialNames[slotIndex].empty()) {
+        label += " (" + mesh->materialNames[slotIndex] + ")";
+    }
+    return label;
+}
+
+[[nodiscard]] InspectorPropertyId MeshRendererMaterialSlotProperty(std::uint32_t slotIndex) noexcept {
+    switch (slotIndex) {
+    case 0U:
+        return InspectorPropertyId::MeshRendererMaterialSlot0;
+    case 1U:
+        return InspectorPropertyId::MeshRendererMaterialSlot1;
+    case 2U:
+        return InspectorPropertyId::MeshRendererMaterialSlot2;
+    case 3U:
+        return InspectorPropertyId::MeshRendererMaterialSlot3;
+    case 4U:
+        return InspectorPropertyId::MeshRendererMaterialSlot4;
+    case 5U:
+        return InspectorPropertyId::MeshRendererMaterialSlot5;
+    case 6U:
+        return InspectorPropertyId::MeshRendererMaterialSlot6;
+    case 7U:
+        return InspectorPropertyId::MeshRendererMaterialSlot7;
+    default:
+        return InspectorPropertyId::None;
+    }
+}
+
+[[nodiscard]] std::string AlphaModeName(kb::render::RenderMaterialAlphaMode mode) {
+    return MaterialAssetFormatter::AlphaModeName(mode);
+}
+
+[[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+}
+
+[[nodiscard]] std::string_view MaterialDocumentLabel(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialInstance" ? std::string_view{ "Material Instance" } : std::string_view{ "Render Material" };
+}
+
+[[nodiscard]] EditorMaterialPreviewTelemetry MaterialPreviewTelemetryFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
+    return EditorMaterialPreviewTelemetryBuilder::Build(
+        sceneContext.Scene().Assets().Manager(),
+        metadata.id,
+        material.has_value() ? &*material : nullptr,
+        true);
+}
+
+[[nodiscard]] int MaterialPreviewTelemetryRows(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    return 4 + static_cast<int>(std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows));
+}
+
+[[nodiscard]] int MaterialPreviewBodyHeight(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    return kDividerHeight
+        + kMaterialPreviewGap
+        + kMaterialPreviewHeight
+        + kMaterialPreviewGap
+        + MaterialPreviewTelemetryRows(telemetry) * (kFieldRowHeight + kDividerHeight);
+}
+
+[[nodiscard]] int MaterialPreviewSectionHeight(const InspectorPanelState& inspector, const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+    if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return kSectionHeaderHeight;
+    }
+    return kSectionHeaderHeight + MaterialPreviewBodyHeight(telemetry);
+}
+
+[[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content, int y) noexcept {
+    return Rect(
+        content.left + kMaterialPreviewPadding,
+        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap,
+        content.right - kMaterialPreviewPadding,
+        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap + kMaterialPreviewHeight);
+}
+
+[[nodiscard]] std::optional<RECT> MaterialPreviewRectInContent(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    const EditorAssetBrowserState& browser = sceneContext.AssetBrowser();
+    if (!browser.InspectorAsset().IsValid()) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(browser.InspectorAsset());
+    if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
+        return std::nullopt;
+    }
+    if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return std::nullopt;
+    }
+
+    const int y = content.top + kHeaderHeight + kPanelPadTop;
+    RECT frame = MaterialPreviewFrameRect(content, y);
+    return Shrink(frame, 1, 1, 1, 1);
+}
+
+void DrawTelemetryRow(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    std::string_view label,
+    std::string_view value) {
+    DrawFieldRow(dc, Rect(content.left, y, content.right, y + kFieldRowHeight), theme, inspector, InspectorSectionId::MaterialPreview, InspectorPropertyId::None, label, value);
+    y += kFieldRowHeight;
+    DrawDivider(dc, content.left, content.right, y);
+    y += kDividerHeight;
+}
+
+[[nodiscard]] int DrawMaterialPreview(
+    HDC dc,
+    RECT content,
+    int y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::assets::AssetMetadata& metadata) {
+    const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
+    DrawSectionHeader(dc, Rect(content.left, y, content.right, y + kSectionHeaderHeight), theme, inspector, InspectorSectionId::MaterialPreview, HeroIconKind::Eye, "Preview");
+    y += kSectionHeaderHeight;
+    if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        return y + kSectionGap;
+    }
+
+    DrawDivider(dc, content.left, content.right, y);
+    y += kDividerHeight;
+    const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
+    DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
+    {
+        ScopedFont font(12, FW_NORMAL);
+        const ScopedGdiObject selectedFont(dc, font.handle);
+        Text(dc, frame, telemetry.materialLoaded ? "Material preview" : "Material fallback preview", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+    y = frame.bottom + kMaterialPreviewGap;
+
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
+    DrawTelemetryRow(dc, content, y, theme, inspector, "Missing Textures", FormatUInt64(telemetry.missingTextureCount));
+    const std::size_t shown = std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows);
+    for (std::size_t index = 0; index < shown; ++index) {
+        DrawTelemetryRow(dc, content, y, theme, inspector, index == 0U ? "Diagnostic" : "", telemetry.missingTextures[index]);
+    }
+    return y + kSectionGap;
+}
+
 // --- Inline Value Type dropdown (shared geometry for paint + hit-test) ---
 constexpr int kValueTypeOptionCount = 4;
 constexpr std::array<std::string_view, kValueTypeOptionCount> kValueTypeLabels{ "Bool", "Axis1D", "Axis2D", "Axis3D" };
@@ -959,6 +1155,57 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
     section.Field("", "Add Mapping", InspectorPropertyId::InputMappingAdd);
 }
 
+void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const InspectorPanelState& inspector = sceneContext.Inspector();
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
+
+    const std::string headerLabel = std::string{ MaterialDocumentLabel(metadata) } + (sceneContext.HasDirtyMaterialAssetEdit() ? " *" : "");
+    DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, headerLabel);
+    int y = content.top + kHeaderHeight + kPanelPadTop;
+    y = DrawMaterialPreview(dc, content, y, theme, inspector, sceneContext, metadata);
+    if (!material.has_value()) {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        section.Field("Status", "Material source could not be read.");
+        section.Field("Id", FormatUInt64(metadata.id.value));
+        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
+        return;
+    }
+    {
+        const bool editable = metadata.type == "RenderMaterial";
+        const auto property = [editable](InspectorPropertyId id) noexcept {
+            return editable ? id : InspectorPropertyId::None;
+        };
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Material, HeroIconKind::AdjustmentsHorizontal, "Material");
+        section.Float("Base R", FormatFloat(material->desc.baseColor[0]), property(InspectorPropertyId::MaterialBaseColorR));
+        section.Float("Base G", FormatFloat(material->desc.baseColor[1]), property(InspectorPropertyId::MaterialBaseColorG));
+        section.Float("Base B", FormatFloat(material->desc.baseColor[2]), property(InspectorPropertyId::MaterialBaseColorB));
+        section.Float("Base A", FormatFloat(material->desc.baseColor[3]), property(InspectorPropertyId::MaterialBaseColorA));
+        section.Float("Metallic", FormatFloat(material->desc.metallicFactor), property(InspectorPropertyId::MaterialMetallicFactor));
+        section.Float("Roughness", FormatFloat(material->desc.roughnessFactor), property(InspectorPropertyId::MaterialRoughnessFactor));
+        section.Float("Normal Scale", FormatFloat(material->desc.normalScale), property(InspectorPropertyId::MaterialNormalScale));
+        section.Float("Occlusion", FormatFloat(material->desc.occlusionStrength), property(InspectorPropertyId::MaterialOcclusionStrength));
+        section.Float("Emissive R", FormatFloat(material->desc.emissiveColor[0]), property(InspectorPropertyId::MaterialEmissiveColorR));
+        section.Float("Emissive G", FormatFloat(material->desc.emissiveColor[1]), property(InspectorPropertyId::MaterialEmissiveColorG));
+        section.Float("Emissive B", FormatFloat(material->desc.emissiveColor[2]), property(InspectorPropertyId::MaterialEmissiveColorB));
+        section.Float("Emissive Strength", FormatFloat(material->desc.emissiveStrength), property(InspectorPropertyId::MaterialEmissiveStrength));
+        section.Float("Alpha Cutoff", FormatFloat(material->desc.alphaCutoff), property(InspectorPropertyId::MaterialAlphaCutoff));
+        section.Field("Alpha Mode", AlphaModeName(material->desc.alphaMode), property(InspectorPropertyId::MaterialAlphaMode));
+        section.Bool("Double Sided", material->desc.doubleSided, property(InspectorPropertyId::MaterialDoubleSided));
+        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+        section.Field("Albedo", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.albedoTextureAssetId), property(InspectorPropertyId::MaterialAlbedoTexture));
+        section.Field("Normal", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.normalTextureAssetId), property(InspectorPropertyId::MaterialNormalTexture));
+        section.Field("Metallic-Roughness", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.metallicRoughnessTextureAssetId), property(InspectorPropertyId::MaterialMetallicRoughnessTexture));
+        section.Field("Occlusion", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.occlusionTextureAssetId), property(InspectorPropertyId::MaterialOcclusionTexture));
+        section.Field("Emissive", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.emissiveTextureAssetId), property(InspectorPropertyId::MaterialEmissiveTexture));
+        y = section.Bottom() + kSectionGap;
+    }
+    {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        section.Field("Id", FormatUInt64(metadata.id.value));
+        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
+    }
+}
+
 void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
     const EditorAssetBrowserState& state = sceneContext.AssetBrowser();
@@ -979,6 +1226,10 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         }
         if (metadata->type == "InputMappingContext") {
             PaintInputMappingContextAsset(dc, content, theme, sceneContext, *metadata);
+            return;
+        }
+        if (IsMaterialDocument(*metadata)) {
+            PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
 
@@ -1051,6 +1302,29 @@ void PaintAudioListenerSection(
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::AudioListener, HeroIconKind::Gamepad2, "Audio Listener");
     section.Bool("Enabled", audioListener.enabled, InspectorPropertyId::AudioListenerEnabled);
     section.Bool("Primary", audioListener.primary, InspectorPropertyId::AudioListenerPrimary);
+    y = section.Bottom() + kSectionGap;
+}
+
+void PaintMeshRendererSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const EditorSceneContext& sceneContext,
+    const kb::scene::MeshRendererComponent& renderer) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer");
+    section.Field("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh);
+    section.Field("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial);
+    const int slotRows = MeshRendererMaterialSlotRows(sceneContext, renderer);
+    section.Field("Material Slots", std::to_string(slotRows));
+    const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
+    for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
+        const std::uint64_t materialId = slotIndex < renderer.materialSlotOverrideCount ? renderer.materialSlotAssetIds[slotIndex] : 0U;
+        section.Field(MeshRendererMaterialSlotLabel(mesh, slotIndex), MaterialDisplayName(sceneContext, materialId), MeshRendererMaterialSlotProperty(slotIndex));
+    }
+    section.Bool("Casts Shadow", renderer.castsShadow);
+    section.Bool("Receives Shadow", renderer.receivesShadow);
     y = section.Bottom() + kSectionGap;
 }
 
@@ -1134,6 +1408,9 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
         y = section.Bottom() + kSectionGap;
     }
+    if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
+        PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
+    }
     if (const kb::scene::AudioSourceComponent* audioSource = scene.Components().AudioSources().TryGet(selected); audioSource != nullptr) {
         PaintAudioSourceSection(dc, content, y, theme, inspector, sceneContext, *audioSource);
     }
@@ -1153,6 +1430,10 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
 [[nodiscard]] int InputMappingRows(const EditorSceneContext& sceneContext, kb::assets::AssetId id) {
     const std::optional<kb::input::InputMappingContextAsset> context = sceneContext.ReadInputMappingContextAsset(id);
     return static_cast<int>((context.has_value() ? context->mappings.size() : 0U) * 5U + 1U);
+}
+
+[[nodiscard]] int MaterialRows() noexcept {
+    return 20;
 }
 
 [[nodiscard]] int AssetSectionRows(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -1182,6 +1463,12 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         height += SectionHeight(inspector, InspectorSectionId::InputMappings, InputMappingRows(sceneContext, metadata.id));
         return height;
     }
+    if (IsMaterialDocument(metadata)) {
+        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata)) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Material, MaterialRows()) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
+        return height;
+    }
 
     if (EditorTexturePreviewService::IsTextureAsset(metadata)) {
         const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(metadata);
@@ -1205,6 +1492,9 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
+    }
+    if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5 + MeshRendererMaterialSlotRows(sceneContext, *renderer)) + kSectionGap;
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
@@ -1435,6 +1725,76 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestMaterialPreviewSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    const EditorSceneContext& sceneContext,
+    const kb::assets::AssetMetadata& metadata,
+    int x,
+    int yPoint,
+    int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::MaterialPreview, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (!state.IsCollapsed(InspectorSectionId::MaterialPreview)) {
+        const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
+        y += MaterialPreviewBodyHeight(telemetry) - kDividerHeight;
+    }
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestMaterialSection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Material, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::Material)) {
+        return {};
+    }
+    const std::array<InspectorPropertyId, 13> floatRows{ {
+        InspectorPropertyId::MaterialBaseColorR,
+        InspectorPropertyId::MaterialBaseColorG,
+        InspectorPropertyId::MaterialBaseColorB,
+        InspectorPropertyId::MaterialBaseColorA,
+        InspectorPropertyId::MaterialMetallicFactor,
+        InspectorPropertyId::MaterialRoughnessFactor,
+        InspectorPropertyId::MaterialNormalScale,
+        InspectorPropertyId::MaterialOcclusionStrength,
+        InspectorPropertyId::MaterialEmissiveColorR,
+        InspectorPropertyId::MaterialEmissiveColorG,
+        InspectorPropertyId::MaterialEmissiveColorB,
+        InspectorPropertyId::MaterialEmissiveStrength,
+        InspectorPropertyId::MaterialAlphaCutoff,
+    } };
+    for (const InspectorPropertyId property : floatRows) {
+        if (InspectorPanelRenderer::Hit hit = HitFloatRow(RowRect(content, y), InspectorSectionId::Material, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Material, InspectorPropertyId::MaterialAlphaMode, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Material, InspectorPropertyId::MaterialDoubleSided, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    const std::array<InspectorPropertyId, 5> textureRows{ {
+        InspectorPropertyId::MaterialAlbedoTexture,
+        InspectorPropertyId::MaterialNormalTexture,
+        InspectorPropertyId::MaterialMetallicRoughnessTexture,
+        InspectorPropertyId::MaterialOcclusionTexture,
+        InspectorPropertyId::MaterialEmissiveTexture,
+    } };
+    for (const InspectorPropertyId property : textureRows) {
+        if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Material, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        AdvanceRow(y);
+    }
+    return {};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestMultiSelection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) noexcept {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
@@ -1494,6 +1854,26 @@ int InspectorPanelRenderer::MaxScrollOffset(const RECT& content, const EditorSce
     const RECT viewport = ContentViewportRect(content, false);
     const int contentHeight = ContentHeight(ContentViewportRect(content, true), sceneContext);
     return std::max(0, contentHeight - RectHeight(viewport));
+}
+
+std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
+    const int maxScroll = MaxScrollOffset(content, sceneContext);
+    const bool scrollable = maxScroll > 0;
+    const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
+    RECT inner = ContentViewportRect(content, scrollable);
+    OffsetRect(&inner, 0, -scroll);
+
+    const std::optional<RECT> preview = MaterialPreviewRectInContent(inner, sceneContext);
+    if (!preview.has_value()) {
+        return std::nullopt;
+    }
+
+    const RECT viewport = ContentViewportRect(content, scrollable);
+    RECT clipped{};
+    if (IntersectRect(&clipped, &*preview, &viewport) == 0 || RectWidth(clipped) <= 2 || RectHeight(clipped) <= 2) {
+        return std::nullopt;
+    }
+    return clipped;
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
@@ -1618,6 +1998,20 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         if (metadata != nullptr && metadata->type == "InputMappingContext") {
             return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
         }
+        if (metadata != nullptr && IsMaterialDocument(*metadata)) {
+            if (InspectorPanelRenderer::Hit hit = HitTestMaterialPreviewSection(viewport, state, sceneContext, *metadata, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            y += kSectionGap;
+            if (InspectorPanelRenderer::Hit hit = HitTestMaterialSection(viewport, state, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            y += kSectionGap;
+            if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Asset, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            return {};
+        }
         if (metadata != nullptr) {
             if (EditorTexturePreviewService::IsTextureAsset(*metadata)) {
                 const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(*metadata);
@@ -1706,6 +2100,42 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             }
             AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::Script, InspectorPropertyId::ScriptEnabled, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::MeshRenderer, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (!state.IsCollapsed(InspectorSectionId::MeshRenderer)) {
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMesh, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMaterial, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            const int slotRows = MeshRendererMaterialSlotRows(sceneContext, *renderer);
+            for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, MeshRendererMaterialSlotProperty(slotIndex), x, scrolledY); hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                AdvanceRow(y);
+            }
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
+            }
+            AdvanceRow(y);
+            if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);

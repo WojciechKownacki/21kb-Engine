@@ -1,6 +1,7 @@
 #include "inspection/InspectorMeshRendererTextBuilder.hpp"
 
 #include <cstdio>
+#include <string>
 
 namespace kb::editor {
 
@@ -16,6 +17,12 @@ void InspectorMeshRendererTextBuilder::Append(std::string& text, const kb::scene
         renderer.castsShadow ? "true" : "false",
         renderer.receivesShadow ? "true" : "false");
     text += component;
+    for (std::uint32_t slotIndex = 0U; slotIndex < renderer.materialSlotOverrideCount && slotIndex < kb::scene::kMaxMeshRendererMaterialSlotOverrides; ++slotIndex) {
+        text += "\nMaterial slot ";
+        text += std::to_string(slotIndex);
+        text += ": ";
+        text += renderer.materialSlotAssetIds[slotIndex] == 0U ? "None" : std::to_string(renderer.materialSlotAssetIds[slotIndex]);
+    }
 }
 
 } // namespace kb::editor

@@ -4,6 +4,7 @@
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
+#include "rendering/MaterialPreviewViewportKeys.hpp"
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/EditorSceneViewportRegionBuilder.hpp"
 
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -53,6 +55,96 @@ constexpr std::uint32_t kMaxEditorViewportIndex =
     return clipped;
 }
 
+[[nodiscard]] RECT WindowRectInHostClient(HWND window, HWND host) noexcept {
+    if (window == nullptr || host == nullptr || IsWindow(window) == 0 || IsWindow(host) == 0) {
+        return {};
+    }
+
+    RECT rect{};
+    if (GetWindowRect(window, &rect) == 0) {
+        return {};
+    }
+
+    POINT points[2]{
+        POINT{rect.left, rect.top},
+        POINT{rect.right, rect.bottom},
+    };
+    static_cast<void>(MapWindowPoints(nullptr, host, points, 2U));
+
+    return RECT{
+        .left = points[0].x,
+        .top = points[0].y,
+        .right = points[1].x,
+        .bottom = points[1].y,
+    };
+}
+
+void EnsureParentChildClipping(HWND parent) noexcept {
+    if (parent == nullptr || IsWindow(parent) == 0) {
+        return;
+    }
+
+    const LONG_PTR style = GetWindowLongPtrW(parent, GWL_STYLE);
+    if (style == 0) {
+        return;
+    }
+
+    constexpr LONG_PTR requiredStyle = WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    if ((style & requiredStyle) == requiredStyle) {
+        return;
+    }
+
+    SetWindowLongPtrW(parent, GWL_STYLE, style | requiredStyle);
+    SetWindowPos(parent, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
+}
+
+[[nodiscard]] const char* DiagnosticKindLabel(render::SceneRenderDiagnosticKind kind) noexcept {
+    switch (kind) {
+    case render::SceneRenderDiagnosticKind::MissingMeshBinding:
+        return "missing mesh binding";
+    case render::SceneRenderDiagnosticKind::MissingMeshResource:
+        return "missing mesh resource";
+    case render::SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat:
+        return "unsupported mesh vertex format";
+    case render::SceneRenderDiagnosticKind::MissingMaterialBinding:
+        return "missing material binding";
+    case render::SceneRenderDiagnosticKind::MissingMaterialResource:
+        return "missing material resource";
+    case render::SceneRenderDiagnosticKind::MissingTextureBinding:
+        return "missing texture binding";
+    case render::SceneRenderDiagnosticKind::MissingTextureResource:
+        return "missing texture resource";
+    case render::SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath:
+        return "unresolved material texture path";
+    case render::SceneRenderDiagnosticKind::DroppedInstances:
+        return "dropped instances";
+    }
+    return "unknown render diagnostic";
+}
+
+[[nodiscard]] std::string RendererFailureDetail(const render::Renderer& renderer) {
+    const render::SceneRenderDiagnostics& diagnostics = renderer.LastSceneDiagnostics();
+    if (diagnostics.events.empty()) {
+        return "Renderer submission failed without scene diagnostics.";
+    }
+
+    const render::SceneRenderDiagnosticEvent& event = diagnostics.events.front();
+    std::string detail = std::string{"Renderer diagnostic: "} + DiagnosticKindLabel(event.kind);
+    if (event.entityId != 0U) {
+        detail += " entity=" + std::to_string(event.entityId);
+    }
+    if (event.meshAssetId != 0U) {
+        detail += " meshAsset=" + std::to_string(event.meshAssetId);
+    }
+    if (event.materialAssetId != 0U) {
+        detail += " materialAsset=" + std::to_string(event.materialAssetId);
+    }
+    if (event.instanceCount != 0U) {
+        detail += " instances=" + std::to_string(event.instanceCount);
+    }
+    return detail;
+}
+
 } // namespace
 
 EditorSceneBgfxViewport::Win32Surface::Win32Surface(HWND window) noexcept
@@ -90,6 +182,11 @@ void EditorSceneBgfxViewport::Configure(HINSTANCE instance, HWND parent, EditorR
     instance_ = instance;
     defaultParent_ = parent;
     backendSettings_ = backendSettings;
+    EnsureParentChildClipping(parent);
+}
+
+void EditorSceneBgfxViewport::SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept {
+    errorReporter_ = std::move(reporter);
 }
 
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
@@ -132,21 +229,50 @@ void EditorSceneBgfxViewport::SyncHostSurfaceLayouts(HWND parent, std::span<cons
         if (layoutChanged) {
             surface->layoutBounds = layoutBounds;
             surface->hasLayoutBounds = true;
-            if (surface->window != nullptr && IsWindow(surface->window) != 0) {
-                static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
-            }
             RequestPresent();
         }
 
-        if (surface->window != nullptr && IsWindow(surface->window) != 0 && IsWindowVisible(surface->window) == 0) {
+        if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+            static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
+        }
+
+        if (surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) == 0) {
             RequestPresent();
         }
-        surface->presentedInCurrentPaint = true;
+        hostSurfaceStore_.MarkLayoutActive(*surface);
     }
 
     if (hostSurfaceStore_.HasVisibleUnpresentedForHost(parent)) {
         RequestPresent();
     }
+}
+
+void EditorSceneBgfxViewport::SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept {
+    if (parent == nullptr) {
+        return;
+    }
+
+    hostSurfaceStore_.MarkHostNotPresented(parent);
+    for (const HostSurfaceLayout& layout : layouts) {
+        const RECT layoutBounds = ClipRectToClient(parent, layout.bounds);
+        if (RectWidth(layoutBounds) == 0U || RectHeight(layoutBounds) == 0U) {
+            continue;
+        }
+
+        HostSurface* surface = hostSurfaceStore_.Ensure(parent, layout.viewportKey);
+        if (surface == nullptr) {
+            continue;
+        }
+
+        surface->layoutBounds = layoutBounds;
+        surface->hasLayoutBounds = true;
+        if (surface->window != nullptr && IsWindow(surface->window) != 0) {
+            static_cast<void>(EnsureHostSurfaceWindow(*surface, layoutBounds));
+        }
+        hostSurfaceStore_.MarkLayoutActive(*surface);
+    }
+
+    hostSurfaceStore_.HideUnpresentedForHost(parent);
 }
 
 void EditorSceneBgfxViewport::Shutdown() {
@@ -169,6 +295,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     presentRequested_ = true;
     renderFailed_ = false;
     renderFailureReported_ = false;
+    failureDetail_.clear();
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -179,6 +306,7 @@ void EditorSceneBgfxViewport::BeginPaintLayout(HWND parent) noexcept {
     paintParent_ = parent;
     pendingPresents_.clear();
     pendingSubmissions_.clear();
+    failureDetail_.clear();
     sessionStore_.MarkHostNotPresented(parent);
     hostSurfaceStore_.MarkHostNotPresented(parent);
 }
@@ -231,6 +359,11 @@ void EditorSceneBgfxViewport::Present(HDC dc, HWND parent, const RECT& rect, con
 
 void EditorSceneBgfxViewport::Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings) {
     Present(nullptr, parent, rect, scene, EditorTheme{}, settings);
+}
+
+bool EditorSceneBgfxViewport::IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept {
+    const HostSurface* surface = FindHostSurface(host, key);
+    return surface != nullptr && surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0 && IsWindowVisible(surface->clipWindow) != 0;
 }
 
 void EditorSceneBgfxViewport::Hide() noexcept {
@@ -309,15 +442,19 @@ bool EditorSceneBgfxViewport::EnsureContextWindow() {
     return true;
 }
 
-bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect) {
+bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits) {
     if (surface.host == nullptr || RectWidth(rect) == 0U || RectHeight(rect) == 0U || !EnsureWindowClass()) {
         return false;
     }
 
-    bool needsPositionUpdate = !RectEquals(surface.rect, rect);
+    EnsureParentChildClipping(surface.host);
+    preserveBits = preserveBits || ShouldPreserveHostSurfaceBits(surface.key);
+    const RECT actualRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+    bool needsPositionUpdate = !RectEquals(surface.rect, rect) || !RectEquals(actualRect, rect);
     bool needsRegionUpdate = needsPositionUpdate;
-    if (surface.window == nullptr || IsWindow(surface.window) == 0) {
-        surface.window = CreateWindowExW(
+
+    if (surface.clipWindow == nullptr || IsWindow(surface.clipWindow) == 0) {
+        surface.clipWindow = CreateWindowExW(
             0,
             kSceneViewportClassName,
             L"",
@@ -330,36 +467,108 @@ bool EditorSceneBgfxViewport::EnsureHostSurfaceWindow(HostSurface& surface, cons
             nullptr,
             instance_,
             this);
-        if (surface.window == nullptr) {
+        if (surface.clipWindow == nullptr) {
             return false;
         }
         needsPositionUpdate = false;
         needsRegionUpdate = true;
-    } else if (GetParent(surface.window) != surface.host) {
+    } else if (GetParent(surface.clipWindow) != surface.host) {
+        ShowWindow(surface.clipWindow, SW_HIDE);
+        SetParent(surface.clipWindow, surface.host);
+        needsPositionUpdate = true;
+        needsRegionUpdate = true;
+    }
+
+    if (surface.window == nullptr || IsWindow(surface.window) == 0) {
+        surface.window = CreateWindowExW(
+            0,
+            kSceneViewportClassName,
+            L"",
+            WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            0,
+            0,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            surface.clipWindow,
+            nullptr,
+            instance_,
+            this);
+        if (surface.window == nullptr) {
+            return false;
+        }
+        needsRegionUpdate = true;
+    } else if (GetParent(surface.window) != surface.clipWindow) {
         ShowWindow(surface.window, SW_HIDE);
-        SetParent(surface.window, surface.host);
+        SetParent(surface.window, surface.clipWindow);
         needsPositionUpdate = true;
         needsRegionUpdate = true;
     }
 
     if (needsPositionUpdate) {
-        SetWindowPos(
-            surface.window,
+        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+        if (!preserveBits) {
+            flags |= SWP_NOCOPYBITS;
+        }
+        if (SetWindowPos(
+            surface.clipWindow,
             HWND_BOTTOM,
             rect.left,
             rect.top,
             static_cast<int>(RectWidth(rect)),
             static_cast<int>(RectHeight(rect)),
-            SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS);
+            flags) == 0) {
+            return false;
+        }
+
+        const RECT movedRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+        if (!RectEquals(movedRect, rect)) {
+            if (SetWindowPos(
+                surface.clipWindow,
+                HWND_BOTTOM,
+                rect.left,
+                rect.top,
+                static_cast<int>(RectWidth(rect)),
+                static_cast<int>(RectHeight(rect)),
+                flags) == 0) {
+                return false;
+            }
+            const RECT retryRect = WindowRectInHostClient(surface.clipWindow, surface.host);
+            if (!RectEquals(retryRect, rect)) {
+                return false;
+            }
+        }
+
+        if (SetWindowPos(
+            surface.window,
+            HWND_TOP,
+            0,
+            0,
+            static_cast<int>(RectWidth(rect)),
+            static_cast<int>(RectHeight(rect)),
+            flags) == 0) {
+            return false;
+        }
     }
 
     if (needsRegionUpdate) {
-        HRGN combinedRegion = EditorSceneViewportRegionBuilder::BuildCombinedRegion(rect, std::span<const RECT>{&rect, 1U});
-        if (combinedRegion == nullptr) {
+        const RECT windowRegionRect{0, 0, static_cast<LONG>(RectWidth(rect)), static_cast<LONG>(RectHeight(rect))};
+        HRGN clipRegion = CreateRectRgn(windowRegionRect.left, windowRegionRect.top, windowRegionRect.right, windowRegionRect.bottom);
+        if (clipRegion == nullptr) {
             return false;
         }
-        if (SetWindowRgn(surface.window, combinedRegion, FALSE) == 0) {
-            DeleteObject(combinedRegion);
+        if (SetWindowRgn(surface.clipWindow, clipRegion, FALSE) == 0) {
+            DeleteObject(clipRegion);
+            return false;
+        }
+
+        HRGN renderRegion = preserveBits
+            ? CreateRectRgn(windowRegionRect.left, windowRegionRect.top, windowRegionRect.right, windowRegionRect.bottom)
+            : EditorSceneViewportRegionBuilder::BuildCombinedRegion(windowRegionRect, std::span<const RECT>{&windowRegionRect, 1U});
+        if (renderRegion == nullptr) {
+            return false;
+        }
+        if (SetWindowRgn(surface.window, renderRegion, FALSE) == 0) {
+            DeleteObject(renderRegion);
             return false;
         }
     }
@@ -393,6 +602,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     config.preferredBgfxRendererType = preferredBackend == bgfx::RendererType::Count ? -1 : static_cast<std::int32_t>(preferredBackend);
 
     if (!renderer_.Initialize(surface, &config)) {
+        SetFailureDetail("Renderer initialization failed for this viewport. Material preview and scene view cannot use separate bgfx renderer instances in the same process.");
         return false;
     }
 
@@ -403,16 +613,21 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
 
 bool EditorSceneBgfxViewport::EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height) {
     if (surface.window == nullptr || !renderer_.IsInitialized()) {
+        SetFailureDetail("Present target creation was requested before the viewport renderer or native child surface was ready.");
         return false;
     }
-    return surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
+    if (!surface.presentTarget.Ensure(render::NativeWindowFramebufferDesc{
         .nativeWindow = surface.window,
         .width = width,
         .height = height,
         .colorFormat = bgfx::TextureFormat::BGRA8,
         .depthFormat = bgfx::TextureFormat::Count,
         .flushBeforeRecreate = true,
-    });
+    })) {
+        SetFailureDetail("Native window framebuffer creation failed for the viewport present surface.");
+        return false;
+    }
+    return true;
 }
 
 void EditorSceneBgfxViewport::HideHostSurface(HostSurface& surface) noexcept {
@@ -479,7 +694,21 @@ void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
     }
 
     renderFailureReported_ = true;
-    MessageBoxA(nullptr, reason == nullptr ? "Scene render failed. The editor will stay open, but the scene viewport was disabled." : reason, "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
+    std::string message = reason == nullptr ? "Scene render failed. The editor will stay open, but the scene viewport was disabled." : reason;
+    if (!failureDetail_.empty()) {
+        message += "\n\nDetails: ";
+        message += failureDetail_;
+    }
+    if (errorReporter_) {
+        errorReporter_(message);
+    }
+    MessageBoxA(nullptr, message.c_str(), "21kb Editor - Scene Render Failed", MB_OK | MB_ICONERROR);
+}
+
+void EditorSceneBgfxViewport::SetFailureDetail(std::string detail) {
+    if (!detail.empty()) {
+        failureDetail_ = std::move(detail);
+    }
 }
 
 bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
@@ -527,6 +756,10 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     return true;
 }
 
+bool EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept {
+    return viewportKey == kInspectorMaterialPreviewViewportKey || viewportKey == kMaterialEditorPreviewViewportKey;
+}
+
 LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     auto* viewport = reinterpret_cast<EditorSceneBgfxViewport*>(GetWindowLongPtrW(window, GWLP_USERDATA));
 
@@ -537,9 +770,12 @@ LRESULT CALLBACK EditorSceneBgfxViewport::WindowProc(HWND window, UINT message, 
         return TRUE;
     }
     case WM_ERASEBKGND: {
-        RECT client{};
-        if (GetClientRect(window, &client) != 0) {
-            FillRect(reinterpret_cast<HDC>(wparam), &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        const HostSurface* surface = viewport == nullptr ? nullptr : viewport->hostSurfaceStore_.FindByWindow(window);
+        if (surface == nullptr || !ShouldPreserveHostSurfaceBits(surface->key)) {
+            RECT client{};
+            if (GetClientRect(window, &client) != 0) {
+                FillRect(reinterpret_cast<HDC>(wparam), &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+            }
         }
         return TRUE;
     }

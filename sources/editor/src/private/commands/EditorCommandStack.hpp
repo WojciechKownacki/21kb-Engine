@@ -21,10 +21,16 @@ public:
 
     [[nodiscard]] std::size_t UndoCount() const noexcept;
     [[nodiscard]] std::size_t RedoCount() const noexcept;
+    [[nodiscard]] bool LastCompletedCommandAffectsSceneDocument() const noexcept;
+    [[nodiscard]] bool LastCompletedCommandAffectsHierarchySelection() const noexcept;
 
 private:
+    void CaptureCompletedCommandMetadata(const IEditorCommand& command) noexcept;
+
     std::vector<std::unique_ptr<IEditorCommand>> undoStack_;
     std::vector<std::unique_ptr<IEditorCommand>> redoStack_;
+    bool lastCompletedCommandAffectsSceneDocument_ = true;
+    bool lastCompletedCommandAffectsHierarchySelection_ = true;
 };
 
 } // namespace kb::editor

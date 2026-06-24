@@ -1,5 +1,9 @@
 #pragma once
 
+#include "assets/EditorAssetBrowserState.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -17,11 +21,21 @@ enum class EditorAssetBrowserDoubleClickResult {
     BrowserNavigation,
     SceneOpened,
     ScriptEditorOpened,
+    MaterialEditorOpened,
 };
 
 class EditorAssetBrowserDoubleClickHandler {
 public:
     EditorAssetBrowserDoubleClickHandler() = delete;
+
+    [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleMaterialAssetDoubleClick(
+        const kb::assets::AssetMetadata& metadata,
+        EditorAssetBrowserState& state,
+        kb::assets::AssetManager& manager) {
+        return (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance") && state.SelectAsset(metadata.id, manager)
+            ? EditorAssetBrowserDoubleClickResult::MaterialEditorOpened
+            : EditorAssetBrowserDoubleClickResult::None;
+    }
 
     [[nodiscard]] static EditorAssetBrowserDoubleClickResult HandleDoubleClick(HWND owner, const RECT& content, int x, int y, EditorSceneContext& sceneContext);
 };

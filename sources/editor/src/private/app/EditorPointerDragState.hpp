@@ -29,6 +29,8 @@ struct EditorPointerDragState {
     bool assetCreatesMeshEntity = false;
     bool assetAddsBehaviour = false;
     bool assetAssignsAudioClip = false;
+    bool assetAssignsMaterial = false;
+    bool assetAssignsTexture = false;
     kb::scene::SceneEntity meshScenePreview{};
     bool meshScenePreviewCommitted = false;
     bool meshPreviewUpdatePending = false;
@@ -61,6 +63,8 @@ struct EditorPointerDragState {
         assetCreatesMeshEntity = false;
         assetAddsBehaviour = false;
         assetAssignsAudioClip = false;
+        assetAssignsMaterial = false;
+        assetAssignsTexture = false;
         meshScenePreview = {};
         meshScenePreviewCommitted = false;
         meshPreviewUpdatePending = false;

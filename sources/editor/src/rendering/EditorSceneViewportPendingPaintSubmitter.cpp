@@ -51,14 +51,17 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::BuildPendingSubmissions(std
 bool EditorSceneBgfxViewport::PendingPaintSubmitter::PrepareHostSurfaceBatch(const PendingPresentBatch& batch, HostSurface*& surface) {
     surface = viewport_.EnsureHostSurface(batch.host, batch.viewportKey);
     if (surface == nullptr) {
+        viewport_.SetFailureDetail("Could not allocate or resolve the host surface entry for a queued viewport present.");
         return false;
     }
+    viewport_.hostSurfaceStore_.MarkLayoutActive(*surface);
     if (surface->presentedInCurrentPaint) {
         surface = nullptr;
         return true;
     }
 
     if (!viewport_.EnsureHostSurfaceWindow(*surface, batch.surfaceRect)) {
+        viewport_.SetFailureDetail("Native child window creation or update failed for a queued viewport present.");
         return false;
     }
 
@@ -77,6 +80,7 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::AppendHostSubmissions(const
         }
         render::Renderer::SceneFrameSubmission submission{};
         if (!PendingSubmissionBuilder::Build(*present, surface, clearTarget, submission)) {
+            viewport_.SetFailureDetail("Viewport submission assembly failed before renderer submission.");
             return false;
         }
         viewport_.pendingSubmissions_.push_back(submission);
@@ -98,12 +102,14 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
         viewport_.renderer_.SetDefaultPostProcessSettings(settings);
     }
     if (!viewport_.renderer_.BeginFrame()) {
+        viewport_.SetFailureDetail("Renderer BeginFrame failed while presenting queued editor viewports.");
         return false;
     }
 
     const bool submitted = viewport_.renderer_.SubmitScenes(viewport_.pendingSubmissions_);
     viewport_.renderer_.EndFrame();
     if (!submitted) {
+        viewport_.SetFailureDetail("Renderer SubmitScenes failed while presenting queued editor viewports.");
         return false;
     }
     for (const PendingPresent& present : viewport_.pendingPresents_) {

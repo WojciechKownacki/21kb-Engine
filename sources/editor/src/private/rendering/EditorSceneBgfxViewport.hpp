@@ -15,9 +15,12 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -48,6 +51,7 @@ public:
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
+        render::SceneRenderLightingConfig lightingConfig{};
         bool shadowPassEnabled = true;
         bool postProcessEnabled = true;
         bool selectionMaskEnabled = true;
@@ -73,11 +77,13 @@ public:
     EditorSceneBgfxViewport() = default;
 
     void Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept;
+    void SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept;
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;
     void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
+    void SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
@@ -87,16 +93,19 @@ public:
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
+    [[nodiscard]] bool IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept;
     void Hide() noexcept;
 
 private:
     struct HostSurface {
         HWND host = nullptr;
         std::uint64_t key = 0;
+        HWND clipWindow = nullptr;
         HWND window = nullptr;
         RECT rect{};
         RECT layoutBounds{};
         bool presentedInCurrentPaint = false;
+        bool layoutActiveInCurrentPaint = false;
         bool hasLayoutBounds = false;
         render::NativeWindowFramebuffer presentTarget;
     };
@@ -109,6 +118,7 @@ private:
         [[nodiscard]] HostSurface* FindByWindow(HWND window) noexcept;
         void MarkHostNotPresented(HWND host) noexcept;
         [[nodiscard]] bool HasVisibleUnpresentedForHost(HWND host) const noexcept;
+        void MarkLayoutActive(HostSurface& surface) noexcept;
         void Hide(HostSurface& surface) noexcept;
         void HideUnpresentedForHost(HWND host) noexcept;
         void ReleaseWindow(HWND window) noexcept;
@@ -235,7 +245,7 @@ private:
     [[nodiscard]] HostSurface* FindHostSurface(HWND host, std::uint64_t key) noexcept;
     [[nodiscard]] bool EnsureWindowClass();
     [[nodiscard]] bool EnsureContextWindow();
-    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect);
+    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits = false);
     [[nodiscard]] bool EnsureRenderer();
     [[nodiscard]] bool EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height);
     void HideHostSurface(HostSurface& surface) noexcept;
@@ -244,9 +254,11 @@ private:
     void ShutdownGpuResources() noexcept;
     void ShutdownSessionFramebuffers() noexcept;
     [[nodiscard]] bool SubmitPendingPaint();
+    void SetFailureDetail(std::string detail);
     void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
     [[nodiscard]] bool QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
+    [[nodiscard]] static bool ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 
@@ -261,6 +273,8 @@ private:
     bool presentRequested_ = true;
     bool renderFailed_ = false;
     bool renderFailureReported_ = false;
+    std::function<void(std::string_view)> errorReporter_{};
+    std::string failureDetail_{};
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;

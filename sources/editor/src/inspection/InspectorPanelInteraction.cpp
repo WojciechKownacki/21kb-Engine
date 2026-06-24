@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -25,6 +26,8 @@
 
 namespace kb::editor {
 namespace {
+
+[[nodiscard]] std::string FormatCompactFloat(float value);
 
 [[nodiscard]] bool HandleScriptClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
@@ -99,6 +102,162 @@ namespace {
     return result.ec == std::errc{} && result.ptr == last;
 }
 
+[[nodiscard]] bool IsMaterialFloatProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MaterialBaseColorR:
+    case InspectorPropertyId::MaterialBaseColorG:
+    case InspectorPropertyId::MaterialBaseColorB:
+    case InspectorPropertyId::MaterialBaseColorA:
+    case InspectorPropertyId::MaterialMetallicFactor:
+    case InspectorPropertyId::MaterialRoughnessFactor:
+    case InspectorPropertyId::MaterialNormalScale:
+    case InspectorPropertyId::MaterialOcclusionStrength:
+    case InspectorPropertyId::MaterialEmissiveColorR:
+    case InspectorPropertyId::MaterialEmissiveColorG:
+    case InspectorPropertyId::MaterialEmissiveColorB:
+    case InspectorPropertyId::MaterialEmissiveStrength:
+    case InspectorPropertyId::MaterialAlphaCutoff:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool ReadMaterialFloat(const kb::render::RenderMaterialAssetData& material, InspectorPropertyId property, float& value) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MaterialBaseColorR:
+        value = material.desc.baseColor[0];
+        return true;
+    case InspectorPropertyId::MaterialBaseColorG:
+        value = material.desc.baseColor[1];
+        return true;
+    case InspectorPropertyId::MaterialBaseColorB:
+        value = material.desc.baseColor[2];
+        return true;
+    case InspectorPropertyId::MaterialBaseColorA:
+        value = material.desc.baseColor[3];
+        return true;
+    case InspectorPropertyId::MaterialMetallicFactor:
+        value = material.desc.metallicFactor;
+        return true;
+    case InspectorPropertyId::MaterialRoughnessFactor:
+        value = material.desc.roughnessFactor;
+        return true;
+    case InspectorPropertyId::MaterialNormalScale:
+        value = material.desc.normalScale;
+        return true;
+    case InspectorPropertyId::MaterialOcclusionStrength:
+        value = material.desc.occlusionStrength;
+        return true;
+    case InspectorPropertyId::MaterialEmissiveColorR:
+        value = material.desc.emissiveColor[0];
+        return true;
+    case InspectorPropertyId::MaterialEmissiveColorG:
+        value = material.desc.emissiveColor[1];
+        return true;
+    case InspectorPropertyId::MaterialEmissiveColorB:
+        value = material.desc.emissiveColor[2];
+        return true;
+    case InspectorPropertyId::MaterialEmissiveStrength:
+        value = material.desc.emissiveStrength;
+        return true;
+    case InspectorPropertyId::MaterialAlphaCutoff:
+        value = material.desc.alphaCutoff;
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool WriteMaterialFloat(EditorSceneContext& sceneContext, kb::assets::AssetId asset, InspectorPropertyId property, float value) {
+    switch (property) {
+    case InspectorPropertyId::MaterialBaseColorR:
+        return sceneContext.SetMaterialBaseColor(asset, 0, value);
+    case InspectorPropertyId::MaterialBaseColorG:
+        return sceneContext.SetMaterialBaseColor(asset, 1, value);
+    case InspectorPropertyId::MaterialBaseColorB:
+        return sceneContext.SetMaterialBaseColor(asset, 2, value);
+    case InspectorPropertyId::MaterialBaseColorA:
+        return sceneContext.SetMaterialBaseColor(asset, 3, value);
+    case InspectorPropertyId::MaterialMetallicFactor:
+        return sceneContext.SetMaterialMetallicFactor(asset, value);
+    case InspectorPropertyId::MaterialRoughnessFactor:
+        return sceneContext.SetMaterialRoughnessFactor(asset, value);
+    case InspectorPropertyId::MaterialNormalScale:
+        return sceneContext.SetMaterialNormalScale(asset, value);
+    case InspectorPropertyId::MaterialOcclusionStrength:
+        return sceneContext.SetMaterialOcclusionStrength(asset, value);
+    case InspectorPropertyId::MaterialEmissiveColorR:
+        return sceneContext.SetMaterialEmissiveColor(asset, 0, value);
+    case InspectorPropertyId::MaterialEmissiveColorG:
+        return sceneContext.SetMaterialEmissiveColor(asset, 1, value);
+    case InspectorPropertyId::MaterialEmissiveColorB:
+        return sceneContext.SetMaterialEmissiveColor(asset, 2, value);
+    case InspectorPropertyId::MaterialEmissiveStrength:
+        return sceneContext.SetMaterialEmissiveStrength(asset, value);
+    case InspectorPropertyId::MaterialAlphaCutoff:
+        return sceneContext.SetMaterialAlphaCutoff(asset, value);
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] std::optional<EditorMaterialTextureSlot> MaterialTextureSlotForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MaterialAlbedoTexture:
+        return EditorMaterialTextureSlot::Albedo;
+    case InspectorPropertyId::MaterialNormalTexture:
+        return EditorMaterialTextureSlot::Normal;
+    case InspectorPropertyId::MaterialMetallicRoughnessTexture:
+        return EditorMaterialTextureSlot::MetallicRoughness;
+    case InspectorPropertyId::MaterialOcclusionTexture:
+        return EditorMaterialTextureSlot::Occlusion;
+    case InspectorPropertyId::MaterialEmissiveTexture:
+        return EditorMaterialTextureSlot::Emissive;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<std::uint32_t> MeshRendererMaterialSlotForProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::MeshRendererMaterialSlot0:
+        return 0U;
+    case InspectorPropertyId::MeshRendererMaterialSlot1:
+        return 1U;
+    case InspectorPropertyId::MeshRendererMaterialSlot2:
+        return 2U;
+    case InspectorPropertyId::MeshRendererMaterialSlot3:
+        return 3U;
+    case InspectorPropertyId::MeshRendererMaterialSlot4:
+        return 4U;
+    case InspectorPropertyId::MeshRendererMaterialSlot5:
+        return 5U;
+    case InspectorPropertyId::MeshRendererMaterialSlot6:
+        return 6U;
+    case InspectorPropertyId::MeshRendererMaterialSlot7:
+        return 7U;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    sceneContext.Inspector().EndTextEdit();
+    if (hit.kind != InspectorHitKind::TextField) {
+        return true;
+    }
+    if (hit.property == InspectorPropertyId::MeshRendererMaterial) {
+        static_cast<void>(sceneContext.CycleMeshRendererMaterialAsset(entity));
+        return true;
+    }
+    if (const std::optional<std::uint32_t> slot = MeshRendererMaterialSlotForProperty(hit.property)) {
+        static_cast<void>(sceneContext.CycleMeshRendererMaterialSlotAsset(entity, *slot));
+        return true;
+    }
+    return true;
+}
+
 [[nodiscard]] bool EvaluateMath(std::string_view text, float currentValue, float& output) noexcept {
     text = Trim(text);
     if (text.empty()) {
@@ -152,6 +311,42 @@ namespace {
     }
 
     output = value;
+    return true;
+}
+
+[[nodiscard]] bool HandleMaterialClick(EditorSceneContext& sceneContext, const InspectorPanelRenderer::Hit& hit, int x, int y) {
+    const kb::assets::AssetId asset = sceneContext.AssetBrowser().InspectorAsset();
+    if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::MaterialDoubleSided) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(sceneContext.ToggleMaterialDoubleSided(asset));
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MaterialAlphaMode) {
+        sceneContext.Inspector().EndTextEdit();
+        static_cast<void>(sceneContext.CycleMaterialAlphaMode(asset));
+        return true;
+    }
+    if (hit.kind == InspectorHitKind::TextField) {
+        const std::optional<EditorMaterialTextureSlot> slot = MaterialTextureSlotForProperty(hit.property);
+        if (slot.has_value()) {
+            sceneContext.Inspector().EndTextEdit();
+            static_cast<void>(sceneContext.CycleMaterialTextureAsset(asset, *slot));
+            return true;
+        }
+    }
+    if (hit.kind == InspectorHitKind::FloatField && IsMaterialFloatProperty(hit.property)) {
+        const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(asset);
+        float value = 0.0F;
+        if (material.has_value() && ReadMaterialFloat(*material, hit.property, value)) {
+            if (sceneContext.BeginMaterialAssetFloatEdit(asset, hit.property)) {
+                sceneContext.Inspector().BeginFloatDrag(hit.property, value, x, y);
+            } else {
+                sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+            }
+        }
+        return true;
+    }
+    sceneContext.Inspector().EndTextEdit();
     return true;
 }
 
@@ -284,12 +479,18 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     if (assetSelected && hit.section == InspectorSectionId::InputMappings) {
         return InspectorInputInteraction::HandleMappingClick(sceneContext, hit);
     }
+    if (assetSelected && hit.section == InspectorSectionId::Material) {
+        return HandleMaterialClick(sceneContext, hit, x, y);
+    }
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         return true;
     }
 
     if (hit.section == InspectorSectionId::Script) {
         return HandleScriptClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::MeshRenderer) {
+        return HandleMeshRendererClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::AddComponent) {
         return HandleAddComponentClick(sceneContext, entity, hit);
@@ -326,13 +527,28 @@ bool InspectorPanelInteraction::HandlePointerDrag(EditorSceneContext& sceneConte
     if (!sceneContext.Inspector().IsDraggingFloat()) {
         return false;
     }
+    const InspectorPropertyId property = sceneContext.Inspector().DraggedProperty();
+    if (sceneContext.AssetBrowser().SelectionKind() == EditorAssetBrowserSelectionKind::Asset && IsMaterialFloatProperty(property)) {
+        if (!sceneContext.HasActiveMaterialAssetEdit()) {
+            sceneContext.Inspector().EndFloatDrag();
+            return true;
+        }
+        const int dx = x - sceneContext.Inspector().DragStartX();
+        const int dy = y - sceneContext.Inspector().DragStartY();
+        if (std::abs(dx) + std::abs(dy) < 2) {
+            return true;
+        }
+        sceneContext.Inspector().MarkFloatDragMoved();
+        const float delta = static_cast<float>(dx - dy) * StepFor(property) * 0.08F;
+        static_cast<void>(sceneContext.ApplyActiveMaterialAssetFloatEdit(sceneContext.Inspector().DragStartValue() + delta));
+        return true;
+    }
     const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
     if (!sceneContext.Scene().Entities().IsAlive(entity)) {
         sceneContext.CancelActiveTransformEdit();
         sceneContext.Inspector().EndFloatDrag();
         return true;
     }
-    const InspectorPropertyId property = sceneContext.Inspector().DraggedProperty();
     const int dx = x - sceneContext.Inspector().DragStartX();
     const int dy = y - sceneContext.Inspector().DragStartY();
     if (std::abs(dx) + std::abs(dy) < 2) {
@@ -357,6 +573,17 @@ bool InspectorPanelInteraction::HandlePointerUp(EditorSceneContext& sceneContext
     const bool moved = inspector.FloatDragMoved();
     const float startValue = inspector.DragStartValue();
     inspector.EndFloatDrag();
+    if (IsMaterialFloatProperty(property)) {
+        if (moved) {
+            static_cast<void>(sceneContext.CommitActiveMaterialAssetEdit());
+        } else {
+            sceneContext.CancelActiveMaterialAssetEdit();
+        }
+        if (!moved && property != InspectorPropertyId::None) {
+            inspector.BeginTextEdit(property, FormatCompactFloat(startValue));
+        }
+        return true;
+    }
     if (moved) {
         static_cast<void>(sceneContext.CommitActiveTransformEdit());
     } else {
@@ -436,6 +663,19 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             const int index = inspector.EditIndex();
             if (index >= 0 && ParseFloat(inspector.EditBuffer(), scale)) {
                 static_cast<void>(sceneContext.SetInputMappingScale(sceneContext.AssetBrowser().InspectorAsset(), static_cast<std::size_t>(index), scale));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
+        if (IsMaterialFloatProperty(inspector.EditedProperty())) {
+            const kb::assets::AssetId asset = sceneContext.AssetBrowser().InspectorAsset();
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(asset);
+            float currentValue = 0.0F;
+            float value = 0.0F;
+            if (material.has_value() &&
+                ReadMaterialFloat(*material, inspector.EditedProperty(), currentValue) &&
+                EvaluateMath(inspector.EditBuffer(), currentValue, value)) {
+                static_cast<void>(WriteMaterialFloat(sceneContext, asset, inspector.EditedProperty(), value));
             }
             inspector.EndTextEdit();
             return true;

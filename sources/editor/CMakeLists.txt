@@ -34,6 +34,7 @@ add_executable(kb_editor WIN32
     src/app/EditorDropPanelResolver.cpp
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
+    src/app/EditorMaterialAssetInspectorDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
@@ -86,6 +87,7 @@ add_executable(kb_editor WIN32
     src/app/EditorWindowPointerHandler.cpp
     src/app/EditorWindowToolbarPointerHandler.cpp
     src/app/EditorWindowInvalidator.cpp
+    src/app/EditorWindowResizeInteraction.cpp
     src/app/EditorWindowResizeHandler.cpp
     src/app/EditorWindowMessageRouter.cpp
     src/app/main.cpp
@@ -294,6 +296,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorDropPanelResolver.hpp
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
+    src/private/app/EditorMaterialAssetInspectorDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
     src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
@@ -351,6 +354,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorWindowPointerHandler.hpp
     src/private/app/EditorWindowToolbarPointerHandler.hpp
     src/private/app/EditorWindowInvalidator.hpp
+    src/private/app/EditorWindowResizeInteraction.hpp
     src/private/app/EditorWindowResizeHandler.hpp
     src/private/inspection/InspectorInputInteraction.hpp
     src/private/inspection/InspectorAudioTextBuilder.hpp
@@ -360,6 +364,9 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorComponentLabelFormatter.hpp
     src/private/inspection/InspectorEntitySummaryTextBuilder.hpp
     src/private/inspection/InspectorLightTextBuilder.hpp
+    src/private/inspection/EditorValueFormatter.hpp
+    src/private/inspection/InspectorMaterialTextureSlotFormatter.hpp
+    src/private/inspection/MaterialAssetFormatter.hpp
     src/private/inspection/InspectorMeshRendererTextBuilder.hpp
     src/private/inspection/InspectorMultiSelectionTextBuilder.hpp
     src/private/inspection/InspectorPanelTextBuilder.hpp
@@ -389,6 +396,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/EditorBgfxBackendSelector.hpp
     src/private/rendering/ConsoleDetailTextOverlay.hpp
     src/private/rendering/EditorToolbarRenderer.hpp
+    src/private/rendering/EditorHostSurfaceLayoutResolver.hpp
     src/private/rendering/EditorPanelContentResolver.hpp
     src/private/rendering/EditorRenderBackendSettings.hpp
     src/private/rendering/EditorSurfaceKind.hpp
@@ -436,6 +444,7 @@ add_executable(kb_editor WIN32
     src/private/rendering/HeroIconPathPainter.hpp
     src/private/rendering/HeroIconPainter.hpp
     src/private/rendering/InspectorPanelRenderer.hpp
+    src/private/rendering/MaterialEditorPanelRenderer.hpp
     src/private/rendering/PanelContentRenderer.hpp
     src/private/rendering/ProjectFilesAssetListRenderer.hpp
     src/private/rendering/ProjectFilesAssetIconResolver.hpp
@@ -513,6 +522,7 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneCommandController.hpp
     src/private/scene/EditorSceneContext.hpp
     src/private/scene/EditorSceneHierarchyActions.hpp
+    src/private/scene/EditorSceneMaterialAssetActions.hpp
     src/private/scene/EditorSceneMeshAssetActions.hpp
     src/private/scene/EditorSceneObjectEditCommands.hpp
     src/private/scene/EditorSceneObjectEditTypes.hpp
@@ -521,6 +531,17 @@ add_executable(kb_editor WIN32
     src/private/scene/EditorSceneViewportStateStore.hpp
     src/private/scene/EditorViewportCameraState.hpp
     src/private/scene/EditorViewportPreviewState.hpp
+    src/private/scene/material/EditorMaterialAssetAuthoring.hpp
+    src/private/scene/material/EditorMaterialAssetEditCommand.hpp
+    src/private/scene/material/EditorMaterialAssetGateway.hpp
+    src/private/scene/material/EditorEmbeddedMaterialAssetWriter.hpp
+    src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
+    src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
+    src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewTelemetry.hpp
     src/private/scene/transform_edit/EditorSceneTransformChange.hpp
     src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp
     src/private/scene/transform_edit/EditorSceneTransformEditApplier.hpp
@@ -561,6 +582,7 @@ add_executable(kb_editor WIN32
     src/rendering/EditorDragOverlayRenderer.cpp
     src/rendering/EditorBgfxBackendSelector.cpp
     src/rendering/EditorGdiRenderer.cpp
+    src/rendering/EditorHostSurfaceLayoutResolver.cpp
     src/rendering/EditorPanelContentResolver.cpp
     src/rendering/EditorRenderBackendSettings.cpp
     src/rendering/EditorSceneBgfxViewport.cpp
@@ -605,6 +627,7 @@ add_executable(kb_editor WIN32
     src/rendering/HeroIconPathPainter.cpp
     src/rendering/HeroIconPainter.cpp
     src/rendering/InspectorPanelRenderer.cpp
+    src/rendering/MaterialEditorPanelRenderer.cpp
     src/inspection/InspectorInputInteraction.cpp
     src/inspection/InspectorPanelInteraction.cpp
     src/inspection/InspectorPanelState.cpp
@@ -659,6 +682,9 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
+    src/inspection/InspectorMaterialTextureSlotFormatter.cpp
+    src/inspection/EditorValueFormatter.cpp
+    src/inspection/MaterialAssetFormatter.cpp
     src/inspection/InspectorMeshRendererTextBuilder.cpp
     src/inspection/InspectorMultiSelectionTextBuilder.cpp
     src/inspection/InspectorPanelTextBuilder.cpp
@@ -684,6 +710,7 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneCommandController.cpp
     src/scene/EditorSceneContext.cpp
     src/scene/EditorSceneHierarchyActions.cpp
+    src/scene/EditorSceneMaterialAssetActions.cpp
     src/scene/EditorSceneMeshAssetActions.cpp
     src/scene/EditorSceneObjectEditCommands.cpp
     src/scene/EditorScenePrefabActions.cpp
@@ -691,6 +718,16 @@ add_executable(kb_editor WIN32
     src/scene/EditorSceneViewportStateStore.cpp
     src/scene/EditorViewportCameraState.cpp
     src/scene/EditorViewportPreviewState.cpp
+    src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetEditCommand.cpp
+    src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
+    src/scene/material/EditorEmbeddedMaterialExtractor.cpp
+    src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
+    src/scene/material_preview/EditorMaterialPreviewScene.cpp
+    src/scene/material_preview/EditorMaterialPreviewTelemetry.cpp
     src/scene/transform_edit/EditorSceneTransformCommitBuilder.cpp
     src/scene/transform_edit/EditorSceneTransformEditApplier.cpp
     src/scene/transform_edit/EditorSceneTransformEditController.cpp
@@ -822,6 +859,7 @@ if(BUILD_TESTING)
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorInspectorTests.cpp
+        tests/EditorMaterialAssetAuthoringTests.cpp
         tests/EditorRuntimeTests.cpp
         tests/EditorPlayModeSceneSessionTests.cpp
         tests/EditorCommandStackTests.cpp
@@ -906,12 +944,24 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySearchState.cpp
         src/scene/EditorHierarchySelectionNormalizer.cpp
         src/scene/EditorHierarchySelectionState.cpp
+        src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
+        src/scene/EditorSceneMaterialAssetActions.cpp
         src/scene/EditorSceneMeshAssetActions.cpp
         src/scene/EditorScenePrefabActions.cpp
         src/scene/EditorViewportCameraState.cpp
         src/scene/EditorViewportPreviewState.cpp
+    src/scene/material/EditorMaterialAssetAuthoring.cpp
+    src/scene/material/EditorMaterialAssetEditCommand.cpp
+    src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
+    src/scene/material/EditorEmbeddedMaterialExtractor.cpp
+    src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+    src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
+        src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
+        src/scene/material_preview/EditorMaterialPreviewScene.cpp
+        src/scene/material_preview/EditorMaterialPreviewTelemetry.cpp
         src/app/EditorPlayModeState.cpp
         src/app/EditorPlayModeSceneSession.cpp
         src/app/EditorShellInteractionState.cpp
@@ -922,6 +972,10 @@ if(BUILD_TESTING)
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
+        src/inspection/InspectorMaterialTextureSlotFormatter.cpp
+    src/inspection/EditorValueFormatter.cpp
+    src/inspection/MaterialAssetFormatter.cpp
+        src/inspection/InspectorPanelState.cpp
     )
 
     target_include_directories(kb_editor_tests
@@ -934,6 +988,7 @@ if(BUILD_TESTING)
     target_link_libraries(kb_editor_tests
         PRIVATE
             kb_engine
+            kb_renderer
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)

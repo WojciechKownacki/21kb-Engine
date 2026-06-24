@@ -55,7 +55,7 @@ EditorSceneBgfxViewport::HostSurface* EditorSceneBgfxViewport::HostSurfaceStore:
     }
 
     const auto iter = std::ranges::find_if(hostSurfaces_, [window](const std::unique_ptr<HostSurface>& surface) {
-        return surface != nullptr && surface->window == window;
+        return surface != nullptr && (surface->window == window || surface->clipWindow == window);
     });
     return iter == hostSurfaces_.end() ? nullptr : iter->get();
 }
@@ -64,6 +64,7 @@ void EditorSceneBgfxViewport::HostSurfaceStore::MarkHostNotPresented(HWND host) 
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr && surface->host == host) {
             surface->presentedInCurrentPaint = false;
+            surface->layoutActiveInCurrentPaint = false;
         }
     }
 }
@@ -72,35 +73,43 @@ bool EditorSceneBgfxViewport::HostSurfaceStore::HasVisibleUnpresentedForHost(HWN
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
         if (surface != nullptr &&
             surface->host == host &&
-            !surface->presentedInCurrentPaint &&
-            surface->window != nullptr &&
-            IsWindow(surface->window) != 0 &&
-            IsWindowVisible(surface->window) != 0) {
+            !surface->layoutActiveInCurrentPaint &&
+            surface->clipWindow != nullptr &&
+            IsWindow(surface->clipWindow) != 0 &&
+            IsWindowVisible(surface->clipWindow) != 0) {
             return true;
         }
     }
     return false;
 }
 
+void EditorSceneBgfxViewport::HostSurfaceStore::MarkLayoutActive(HostSurface& surface) noexcept {
+    surface.layoutActiveInCurrentPaint = true;
+}
+
 void EditorSceneBgfxViewport::HostSurfaceStore::Hide(HostSurface& surface) noexcept {
     // Only repaint the uncovered host area on the visible -> hidden transition.
     // Invalidating every call would busy-loop the editor frame while a non-Scene
     // tab is active (each hide would post a fresh WM_PAINT).
-    const bool wasVisible = surface.window != nullptr && IsWindow(surface.window) != 0 && IsWindowVisible(surface.window) != 0;
+    const bool wasVisible = surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0 && IsWindowVisible(surface.clipWindow) != 0;
     if (surface.window != nullptr && IsWindow(surface.window) != 0) {
         ShowWindow(surface.window, SW_HIDE);
+    }
+    if (surface.clipWindow != nullptr && IsWindow(surface.clipWindow) != 0) {
+        ShowWindow(surface.clipWindow, SW_HIDE);
     }
     if (wasVisible && surface.host != nullptr && IsWindow(surface.host) != 0 && RectWidth(surface.rect) > 0U && RectHeight(surface.rect) > 0U) {
         InvalidateRect(surface.host, &surface.rect, FALSE);
     }
     surface.presentedInCurrentPaint = false;
+    surface.layoutActiveInCurrentPaint = false;
     surface.layoutBounds = {};
     surface.hasLayoutBounds = false;
 }
 
 void EditorSceneBgfxViewport::HostSurfaceStore::HideUnpresentedForHost(HWND host) noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->host == host && !surface->presentedInCurrentPaint) {
+        if (surface != nullptr && surface->host == host && !surface->layoutActiveInCurrentPaint) {
             Hide(*surface);
         }
     }
@@ -111,10 +120,18 @@ void EditorSceneBgfxViewport::HostSurfaceStore::ReleaseWindow(HWND window) noexc
     if (surface == nullptr) {
         return;
     }
-    surface->presentTarget.Shutdown();
-    surface->window = nullptr;
+    if (surface->window == window) {
+        surface->presentTarget.Shutdown();
+        surface->window = nullptr;
+    }
+    if (surface->clipWindow == window) {
+        surface->presentTarget.Shutdown();
+        surface->clipWindow = nullptr;
+        surface->window = nullptr;
+    }
     surface->rect = {};
     surface->presentedInCurrentPaint = false;
+    surface->layoutActiveInCurrentPaint = false;
     surface->layoutBounds = {};
     surface->hasLayoutBounds = false;
 }
@@ -139,8 +156,16 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
         } else {
             surface->window = nullptr;
         }
+        if (surface->clipWindow != nullptr && IsWindow(surface->clipWindow) != 0) {
+            const HWND window = surface->clipWindow;
+            surface->clipWindow = nullptr;
+            DestroyWindow(window);
+        } else {
+            surface->clipWindow = nullptr;
+        }
         surface->rect = {};
         surface->presentedInCurrentPaint = false;
+        surface->layoutActiveInCurrentPaint = false;
         surface->layoutBounds = {};
         surface->hasLayoutBounds = false;
     }
@@ -148,17 +173,38 @@ void EditorSceneBgfxViewport::HostSurfaceStore::DestroyWindows() noexcept {
 
 void EditorSceneBgfxViewport::HostSurfaceStore::ShowPresentedWindows() noexcept {
     for (const std::unique_ptr<HostSurface>& surface : hostSurfaces_) {
-        if (surface != nullptr && surface->presentedInCurrentPaint && surface->window != nullptr && IsWindow(surface->window) != 0) {
-            if (IsWindowVisible(surface->window) == 0) {
-                SetWindowPos(
-                    surface->window,
-                    HWND_BOTTOM,
-                    surface->rect.left,
-                    surface->rect.top,
-                    static_cast<int>(RectWidth(surface->rect)),
-                    static_cast<int>(RectHeight(surface->rect)),
-                    SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOCOPYBITS | SWP_SHOWWINDOW);
-            }
+        if (surface == nullptr ||
+            !surface->presentedInCurrentPaint ||
+            surface->clipWindow == nullptr ||
+            surface->window == nullptr ||
+            IsWindow(surface->clipWindow) == 0 ||
+            IsWindow(surface->window) == 0) {
+            continue;
+        }
+
+        UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOREDRAW | SWP_SHOWWINDOW;
+        if (!EditorSceneBgfxViewport::ShouldPreserveHostSurfaceBits(surface->key)) {
+            flags |= SWP_NOCOPYBITS;
+        }
+        if (IsWindowVisible(surface->clipWindow) == 0) {
+            SetWindowPos(
+                surface->clipWindow,
+                HWND_BOTTOM,
+                surface->rect.left,
+                surface->rect.top,
+                static_cast<int>(RectWidth(surface->rect)),
+                static_cast<int>(RectHeight(surface->rect)),
+                flags);
+        }
+        if (IsWindowVisible(surface->window) == 0) {
+            SetWindowPos(
+                surface->window,
+                HWND_TOP,
+                0,
+                0,
+                static_cast<int>(RectWidth(surface->rect)),
+                static_cast<int>(RectHeight(surface->rect)),
+                flags);
         }
     }
 }

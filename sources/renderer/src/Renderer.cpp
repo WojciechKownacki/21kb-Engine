@@ -367,7 +367,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    const bool temporalJitterEnabled = defaultPostProcessSettings_.temporalJitterEnabled && !desc.editorSceneOverlaysEnabled;
+    const bool temporalJitterEnabled = desc.postProcessEnabled && defaultPostProcessSettings_.temporalJitterEnabled && !desc.editorSceneOverlaysEnabled;
     const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
     if (overlayCamera != nullptr) {
         jitteredCamera = *overlayCamera;

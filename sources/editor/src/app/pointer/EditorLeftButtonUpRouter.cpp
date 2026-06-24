@@ -10,6 +10,7 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 
 namespace kb::editor {
 
@@ -40,6 +41,13 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     shellInteraction_.ClearPressedTransport();
     if (sceneContext_.IsHierarchyScrollbarDragging()) {
         sceneContext_.EndHierarchyScrollbarDrag();
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsMaterialGraphNodeDragging()) {
+        static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;
@@ -77,7 +85,9 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         // selection now (preview in the Inspector). A real drag changes nothing.
         if (!wasDragging) {
             const kb::assets::AssetId pending = sceneContext_.AssetBrowser().TakePendingPreviewAsset();
-            if (pending.IsValid() && sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
+            if (pending.IsValid() &&
+                sceneContext_.PrepareMaterialAssetSelectionChange(pending) &&
+                sceneContext_.AssetBrowser().SelectAsset(pending, sceneContext_.Scene().Assets().Manager())) {
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }
         } else {
@@ -101,7 +111,13 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
         return;
     }
 
+    const DockPointerDrag* activeDockDrag = dockController_.ActiveDrag();
+    const bool endingSplitterDrag = activeDockDrag != nullptr && activeDockDrag->kind == DockHitKind::Splitter;
     if (dockController_.HandlePointerUp(messageWindow)) {
+        if (endingSplitterDrag && messageWindow == mainWindow_) {
+            EditorHostSurfaceLayoutResolver::SyncMainWindow(mainWindow_, dockModel_, metrics_, sceneContext_, sceneViewport_);
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
         sceneViewport_.RequestPresent();
     }
 }
