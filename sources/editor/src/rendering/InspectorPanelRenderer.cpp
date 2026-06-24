@@ -961,8 +961,16 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return MaterialAssetFormatter::AlphaModeName(mode);
 }
 
+[[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+}
+
+[[nodiscard]] std::string_view MaterialDocumentLabel(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialInstance" ? std::string_view{ "Material Instance" } : std::string_view{ "Render Material" };
+}
+
 [[nodiscard]] EditorMaterialPreviewTelemetry MaterialPreviewTelemetryFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
-    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(metadata.id);
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
     return EditorMaterialPreviewTelemetryBuilder::Build(
         sceneContext.Scene().Assets().Manager(),
         metadata.id,
@@ -1003,7 +1011,7 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
         return std::nullopt;
     }
     const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(browser.InspectorAsset());
-    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+    if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
         return std::nullopt;
     }
     if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
@@ -1149,34 +1157,46 @@ void PaintInputMappingContextAsset(HDC dc, RECT content, const EditorTheme& them
 
 void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const InspectorPanelState& inspector = sceneContext.Inspector();
-    const kb::render::RenderMaterialAssetData material = sceneContext.ReadMaterialAsset(metadata.id).value_or(kb::render::RenderMaterialAssetData{});
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
 
-    DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, sceneContext.HasDirtyMaterialAssetEdit() ? "Render Material *" : "Render Material");
+    const std::string headerLabel = std::string{ MaterialDocumentLabel(metadata) } + (sceneContext.HasDirtyMaterialAssetEdit() ? " *" : "");
+    DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name, headerLabel);
     int y = content.top + kHeaderHeight + kPanelPadTop;
     y = DrawMaterialPreview(dc, content, y, theme, inspector, sceneContext, metadata);
+    if (!material.has_value()) {
+        SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
+        section.Field("Status", "Material source could not be read.");
+        section.Field("Id", FormatUInt64(metadata.id.value));
+        section.Field("Virtual Path", NormalizePath(metadata.virtualPath));
+        return;
+    }
     {
+        const bool editable = metadata.type == "RenderMaterial";
+        const auto property = [editable](InspectorPropertyId id) noexcept {
+            return editable ? id : InspectorPropertyId::None;
+        };
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Material, HeroIconKind::AdjustmentsHorizontal, "Material");
-        section.Float("Base R", FormatFloat(material.desc.baseColor[0]), InspectorPropertyId::MaterialBaseColorR);
-        section.Float("Base G", FormatFloat(material.desc.baseColor[1]), InspectorPropertyId::MaterialBaseColorG);
-        section.Float("Base B", FormatFloat(material.desc.baseColor[2]), InspectorPropertyId::MaterialBaseColorB);
-        section.Float("Base A", FormatFloat(material.desc.baseColor[3]), InspectorPropertyId::MaterialBaseColorA);
-        section.Float("Metallic", FormatFloat(material.desc.metallicFactor), InspectorPropertyId::MaterialMetallicFactor);
-        section.Float("Roughness", FormatFloat(material.desc.roughnessFactor), InspectorPropertyId::MaterialRoughnessFactor);
-        section.Float("Normal Scale", FormatFloat(material.desc.normalScale), InspectorPropertyId::MaterialNormalScale);
-        section.Float("Occlusion", FormatFloat(material.desc.occlusionStrength), InspectorPropertyId::MaterialOcclusionStrength);
-        section.Float("Emissive R", FormatFloat(material.desc.emissiveColor[0]), InspectorPropertyId::MaterialEmissiveColorR);
-        section.Float("Emissive G", FormatFloat(material.desc.emissiveColor[1]), InspectorPropertyId::MaterialEmissiveColorG);
-        section.Float("Emissive B", FormatFloat(material.desc.emissiveColor[2]), InspectorPropertyId::MaterialEmissiveColorB);
-        section.Float("Emissive Strength", FormatFloat(material.desc.emissiveStrength), InspectorPropertyId::MaterialEmissiveStrength);
-        section.Float("Alpha Cutoff", FormatFloat(material.desc.alphaCutoff), InspectorPropertyId::MaterialAlphaCutoff);
-        section.Field("Alpha Mode", AlphaModeName(material.desc.alphaMode), InspectorPropertyId::MaterialAlphaMode);
-        section.Bool("Double Sided", material.desc.doubleSided, InspectorPropertyId::MaterialDoubleSided);
+        section.Float("Base R", FormatFloat(material->desc.baseColor[0]), property(InspectorPropertyId::MaterialBaseColorR));
+        section.Float("Base G", FormatFloat(material->desc.baseColor[1]), property(InspectorPropertyId::MaterialBaseColorG));
+        section.Float("Base B", FormatFloat(material->desc.baseColor[2]), property(InspectorPropertyId::MaterialBaseColorB));
+        section.Float("Base A", FormatFloat(material->desc.baseColor[3]), property(InspectorPropertyId::MaterialBaseColorA));
+        section.Float("Metallic", FormatFloat(material->desc.metallicFactor), property(InspectorPropertyId::MaterialMetallicFactor));
+        section.Float("Roughness", FormatFloat(material->desc.roughnessFactor), property(InspectorPropertyId::MaterialRoughnessFactor));
+        section.Float("Normal Scale", FormatFloat(material->desc.normalScale), property(InspectorPropertyId::MaterialNormalScale));
+        section.Float("Occlusion", FormatFloat(material->desc.occlusionStrength), property(InspectorPropertyId::MaterialOcclusionStrength));
+        section.Float("Emissive R", FormatFloat(material->desc.emissiveColor[0]), property(InspectorPropertyId::MaterialEmissiveColorR));
+        section.Float("Emissive G", FormatFloat(material->desc.emissiveColor[1]), property(InspectorPropertyId::MaterialEmissiveColorG));
+        section.Float("Emissive B", FormatFloat(material->desc.emissiveColor[2]), property(InspectorPropertyId::MaterialEmissiveColorB));
+        section.Float("Emissive Strength", FormatFloat(material->desc.emissiveStrength), property(InspectorPropertyId::MaterialEmissiveStrength));
+        section.Float("Alpha Cutoff", FormatFloat(material->desc.alphaCutoff), property(InspectorPropertyId::MaterialAlphaCutoff));
+        section.Field("Alpha Mode", AlphaModeName(material->desc.alphaMode), property(InspectorPropertyId::MaterialAlphaMode));
+        section.Bool("Double Sided", material->desc.doubleSided, property(InspectorPropertyId::MaterialDoubleSided));
         const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-        section.Field("Albedo", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material.desc.albedoTextureAssetId), InspectorPropertyId::MaterialAlbedoTexture);
-        section.Field("Normal", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material.desc.normalTextureAssetId), InspectorPropertyId::MaterialNormalTexture);
-        section.Field("Metallic-Roughness", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material.desc.metallicRoughnessTextureAssetId), InspectorPropertyId::MaterialMetallicRoughnessTexture);
-        section.Field("Occlusion", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material.desc.occlusionTextureAssetId), InspectorPropertyId::MaterialOcclusionTexture);
-        section.Field("Emissive", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material.desc.emissiveTextureAssetId), InspectorPropertyId::MaterialEmissiveTexture);
+        section.Field("Albedo", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.albedoTextureAssetId), property(InspectorPropertyId::MaterialAlbedoTexture));
+        section.Field("Normal", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.normalTextureAssetId), property(InspectorPropertyId::MaterialNormalTexture));
+        section.Field("Metallic-Roughness", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.metallicRoughnessTextureAssetId), property(InspectorPropertyId::MaterialMetallicRoughnessTexture));
+        section.Field("Occlusion", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.occlusionTextureAssetId), property(InspectorPropertyId::MaterialOcclusionTexture));
+        section.Field("Emissive", InspectorMaterialTextureSlotFormatter::DisplayName(manager, material->desc.emissiveTextureAssetId), property(InspectorPropertyId::MaterialEmissiveTexture));
         y = section.Bottom() + kSectionGap;
     }
     {
@@ -1208,7 +1228,7 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
             PaintInputMappingContextAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
-        if (metadata->type == "RenderMaterial") {
+        if (IsMaterialDocument(*metadata)) {
             PaintMaterialAsset(dc, content, theme, sceneContext, *metadata);
             return;
         }
@@ -1443,7 +1463,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         height += SectionHeight(inspector, InspectorSectionId::InputMappings, InputMappingRows(sceneContext, metadata.id));
         return height;
     }
-    if (metadata.type == "RenderMaterial") {
+    if (IsMaterialDocument(metadata)) {
         height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata)) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Material, MaterialRows()) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
@@ -1978,7 +1998,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         if (metadata != nullptr && metadata->type == "InputMappingContext") {
             return HitTestInputMappingSection(viewport, state, sceneContext, metadata->id, x, scrolledY, y);
         }
-        if (metadata != nullptr && metadata->type == "RenderMaterial") {
+        if (metadata != nullptr && IsMaterialDocument(*metadata)) {
             if (InspectorPanelRenderer::Hit hit = HitTestMaterialPreviewSection(viewport, state, sceneContext, *metadata, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
                 return hit;
             }

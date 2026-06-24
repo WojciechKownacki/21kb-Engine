@@ -8,6 +8,13 @@
 #include <string>
 
 namespace kb::render {
+namespace {
+
+[[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
+    return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
+
+} // namespace
 
 std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept {
     std::string key = "RenderMeshEmbeddedMaterial:";
@@ -100,6 +107,45 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
         resolved.desc.layerMaskTextureAssetId = textureAssetId != 0U ? textureAssetId : resolved.desc.layerMaskTextureAssetId;
     }
     return resolved;
+}
+
+ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata) const {
+    if (metadata.type == "RenderMaterial") {
+        const kb::assets::AssetHandle<RenderMaterialAssetData> asset = manager.Load<RenderMaterialAssetData>(metadata.id);
+        if (!asset.IsLoaded()) {
+            return {};
+        }
+        return ResolvedRuntimeMaterialAsset{
+            .material = ResolveLoadedMaterial(manager, metadata, *asset),
+            .contentHash = metadata.contentHash,
+            .resolved = true,
+        };
+    }
+
+    if (metadata.type != "RenderMaterialInstance") {
+        return {};
+    }
+
+    const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+    if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
+        return {};
+    }
+    const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
+    if (parentMetadata == nullptr || parentMetadata->type != "RenderMaterial") {
+        return {};
+    }
+    const kb::assets::AssetHandle<RenderMaterialAssetData> parent = manager.Load<RenderMaterialAssetData>(parentMetadata->id);
+    if (!parent.IsLoaded()) {
+        return {};
+    }
+
+    return ResolvedRuntimeMaterialAsset{
+        .material = ResolveLoadedMaterial(manager, *parentMetadata, *parent),
+        .contentHash = HashCombine(metadata.contentHash, parentMetadata->contentHash),
+        .resolved = true,
+    };
 }
 
 std::uint64_t RuntimeMaterialResolver::ResolveTextureAssetId(

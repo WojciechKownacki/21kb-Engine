@@ -36,6 +36,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::CreateMaterialInstance:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.CreateMaterialInstanceAsset(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::NewInputAction: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateInputActionAsset(destinationFolder);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 
 #include <cstdint>
@@ -18,6 +19,12 @@ struct ResolvedRuntimeMaterialDesc {
     std::uint32_t unresolvedTexturePathCount = 0;
 };
 
+struct ResolvedRuntimeMaterialAsset {
+    ResolvedRuntimeMaterialDesc material{};
+    std::uint64_t contentHash = 0;
+    bool resolved = false;
+};
+
 class RuntimeMaterialResolver {
 public:
     [[nodiscard]] static std::uint64_t EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept;
@@ -31,6 +38,10 @@ public:
         const kb::assets::AssetManager& manager,
         const kb::assets::AssetMetadata& materialMetadata,
         const RenderMaterialAssetData& materialAsset) const;
+
+    [[nodiscard]] ResolvedRuntimeMaterialAsset ResolveAsset(
+        kb::assets::AssetManager& manager,
+        const kb::assets::AssetMetadata& metadata) const;
 
 private:
     [[nodiscard]] std::uint64_t ResolveTextureAssetId(

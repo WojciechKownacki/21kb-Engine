@@ -6,6 +6,8 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 
 #include <memory>
 #include <optional>
@@ -36,10 +38,14 @@ std::optional<std::filesystem::path> EditorMaterialAssetGateway::ResolveFolder(c
 }
 
 std::filesystem::path EditorMaterialAssetGateway::UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName) {
-    std::filesystem::path candidate = folder / (std::string{ baseName } + std::string{ kMaterialExtension });
+    return UniqueFilePath(folder, baseName, kMaterialExtension);
+}
+
+std::filesystem::path EditorMaterialAssetGateway::UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName, std::string_view extension) {
+    std::filesystem::path candidate = folder / (std::string{ baseName } + std::string{ extension });
     int suffix = 1;
     while (std::filesystem::exists(candidate)) {
-        candidate = folder / (std::string{ baseName } + std::to_string(suffix) + std::string{ kMaterialExtension });
+        candidate = folder / (std::string{ baseName } + std::to_string(suffix) + std::string{ extension });
         ++suffix;
     }
     return candidate;
@@ -79,8 +85,13 @@ void EditorMaterialAssetGateway::EnsureMaterialLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
 }
 
+void EditorMaterialAssetGateway::EnsureMaterialInstanceLoader() {
+    static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
+}
+
 void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& path) {
     EnsureMaterialLoader();
+    EnsureMaterialInstanceLoader();
     kb::assets::AssetManager& manager = scene_.Assets().Manager();
     static_cast<void>(scene_.Assets().Discover());
     if (const std::optional<std::filesystem::path> created = manager.Mounts().ToVirtual(path)) {
@@ -92,6 +103,14 @@ void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& 
 
 bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset) {
     if (!kb::render::RenderMaterialAssetWriter::Save(path, asset)) {
+        return false;
+    }
+    DiscoverAndSelect(path);
+    return true;
+}
+
+bool EditorMaterialAssetGateway::WriteNewMaterialInstance(const std::filesystem::path& path, const kb::render::RenderMaterialInstanceAssetData& asset) {
+    if (!kb::render::RenderMaterialInstanceAssetWriter::Save(path, asset)) {
         return false;
     }
     DiscoverAndSelect(path);

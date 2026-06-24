@@ -26,6 +26,7 @@
 #include "engine/project/ProjectDescriptorWriter.hpp"
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
@@ -63,6 +64,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <iterator>
 #include <memory>
@@ -124,6 +126,13 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
 
 [[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
+}
+
+[[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.physicalPath.empty()) {
+        return metadata.physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
 }
 
 [[nodiscard]] std::uint64_t MaterialTextureSlotValue(const kb::render::RenderMaterialAssetData& asset, EditorMaterialTextureSlot slot) noexcept {
@@ -308,6 +317,7 @@ void RegisterEditorRenderAssetLoaders(kb::scene::Scene& scene) {
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMeshAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
 }
 
@@ -1573,6 +1583,10 @@ bool EditorSceneContext::CreateMaterialAsset(const std::filesystem::path& virtua
     return MaterialAssetAuthoring().Create(virtualFolder);
 }
 
+bool EditorSceneContext::CreateMaterialInstanceAsset(kb::assets::AssetId parentMaterial) {
+    return MaterialAssetAuthoring().CreateInstance(parentMaterial);
+}
+
 bool EditorSceneContext::ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId) {
     EditorEmbeddedMaterialExtractor extractor{ *scene_, assetBrowser_, console_ };
     return extractor.Extract(meshAssetId).Succeeded();
@@ -1617,6 +1631,9 @@ bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
 
 bool EditorSceneContext::PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset) {
     if (!HasDirtyMaterialAssetEdit() || nextAsset == assetBrowser_.InspectorAsset()) {
+        if (nextAsset != assetBrowser_.InspectorAsset()) {
+            static_cast<void>(ClearMaterialGraphNodeSelection());
+        }
         return true;
     }
     console_.Warning("Materials", "Unsaved material value edit. Press Enter to save it or Escape to discard it before selecting another asset.");
@@ -1657,6 +1674,30 @@ std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMater
     return EditorMaterialAssetGateway::Read(*scene_, id);
 }
 
+std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMaterialDocumentAsset(kb::assets::AssetId id) const {
+    const kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr) {
+        return std::nullopt;
+    }
+    if (metadata->type == "RenderMaterial") {
+        return ReadMaterialAsset(id);
+    }
+    if (metadata->type != "RenderMaterialInstance") {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path path = ResolveAssetPath(manager, *metadata);
+    if (path.empty()) {
+        return std::nullopt;
+    }
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> instance = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(path);
+    if (!instance.has_value() || !instance->parentMaterialAssetId.IsValid()) {
+        return std::nullopt;
+    }
+    return ReadMaterialAsset(instance->parentMaterialAssetId);
+}
+
 const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
     return materialPreviewScene_->SceneFor(*scene_, id);
 }
@@ -1667,6 +1708,167 @@ const EditorMaterialPreviewTelemetry& EditorSceneContext::MaterialPreviewTelemet
 
 std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
     return materialPreviewScene_->Revision();
+}
+
+std::uint32_t EditorSceneContext::SelectedMaterialGraphNodeId() const noexcept {
+    return selectedMaterialGraphNodeId_;
+}
+
+bool EditorSceneContext::SelectMaterialGraphNode(std::uint32_t nodeId) noexcept {
+    if (selectedMaterialGraphNodeId_ == nodeId) {
+        return false;
+    }
+    selectedMaterialGraphNodeId_ = nodeId;
+    return true;
+}
+
+bool EditorSceneContext::ClearMaterialGraphNodeSelection() noexcept {
+    if (selectedMaterialGraphNodeId_ == 0U) {
+        return false;
+    }
+    selectedMaterialGraphNodeId_ = 0U;
+    return true;
+}
+
+float EditorSceneContext::MaterialGraphZoom() const noexcept {
+    return materialGraphZoom_;
+}
+
+int EditorSceneContext::MaterialGraphPanX() const noexcept {
+    return materialGraphPanX_;
+}
+
+int EditorSceneContext::MaterialGraphPanY() const noexcept {
+    return materialGraphPanY_;
+}
+
+bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta) noexcept {
+    return ZoomMaterialGraph(wheelDelta, 0, 0);
+}
+
+bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept {
+    constexpr float minZoom = 0.45F;
+    constexpr float maxZoom = 1.60F;
+    const float step = wheelDelta > 0 ? 1.10F : 0.90F;
+    const float previousZoom = materialGraphZoom_;
+    const float zoom = std::clamp(previousZoom * step, minZoom, maxZoom);
+    if (std::fabs(zoom - previousZoom) < 0.0001F) {
+        return false;
+    }
+    const float graphFocusX = (static_cast<float>(focusCanvasX - materialGraphPanX_) / std::max(0.1F, previousZoom));
+    const float graphFocusY = (static_cast<float>(focusCanvasY - materialGraphPanY_) / std::max(0.1F, previousZoom));
+    materialGraphZoom_ = zoom;
+    materialGraphPanX_ = focusCanvasX - static_cast<int>(std::lround(graphFocusX * zoom));
+    materialGraphPanY_ = focusCanvasY - static_cast<int>(std::lround(graphFocusY * zoom));
+    return true;
+}
+
+int EditorSceneContext::MaterialGraphNodeOffsetX(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
+    for (const MaterialGraphNodeViewOffset& offset : materialGraphNodeOffsets_) {
+        if (offset.assetId == assetId && offset.nodeId == nodeId) {
+            return offset.offsetX;
+        }
+    }
+    return 0;
+}
+
+int EditorSceneContext::MaterialGraphNodeOffsetY(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
+    for (const MaterialGraphNodeViewOffset& offset : materialGraphNodeOffsets_) {
+        if (offset.assetId == assetId && offset.nodeId == nodeId) {
+            return offset.offsetY;
+        }
+    }
+    return 0;
+}
+
+bool EditorSceneContext::BeginMaterialGraphNodeDrag(kb::assets::AssetId assetId, std::uint32_t nodeId, int x, int y) noexcept {
+    if (!assetId.IsValid() || nodeId == 0U) {
+        return false;
+    }
+    materialGraphDragAssetId_ = assetId;
+    materialGraphDragNodeId_ = nodeId;
+    materialGraphDragStartX_ = x;
+    materialGraphDragStartY_ = y;
+    materialGraphDragStartOffsetX_ = MaterialGraphNodeOffsetX(assetId, nodeId);
+    materialGraphDragStartOffsetY_ = MaterialGraphNodeOffsetY(assetId, nodeId);
+    materialGraphNodeDragging_ = true;
+    return true;
+}
+
+bool EditorSceneContext::DragMaterialGraphNode(int x, int y) noexcept {
+    if (!materialGraphNodeDragging_ || !materialGraphDragAssetId_.IsValid() || materialGraphDragNodeId_ == 0U) {
+        return false;
+    }
+    const int deltaX = static_cast<int>(std::lround(static_cast<float>(x - materialGraphDragStartX_) / std::max(0.1F, materialGraphZoom_)));
+    const int deltaY = static_cast<int>(std::lround(static_cast<float>(y - materialGraphDragStartY_) / std::max(0.1F, materialGraphZoom_)));
+    const int newOffsetX = materialGraphDragStartOffsetX_ + deltaX;
+    const int newOffsetY = materialGraphDragStartOffsetY_ + deltaY;
+    for (MaterialGraphNodeViewOffset& offset : materialGraphNodeOffsets_) {
+        if (offset.assetId == materialGraphDragAssetId_ && offset.nodeId == materialGraphDragNodeId_) {
+            if (offset.offsetX == newOffsetX && offset.offsetY == newOffsetY) {
+                return false;
+            }
+            offset.offsetX = newOffsetX;
+            offset.offsetY = newOffsetY;
+            return true;
+        }
+    }
+    materialGraphNodeOffsets_.push_back(MaterialGraphNodeViewOffset{
+        .assetId = materialGraphDragAssetId_,
+        .nodeId = materialGraphDragNodeId_,
+        .offsetX = newOffsetX,
+        .offsetY = newOffsetY,
+    });
+    return true;
+}
+
+bool EditorSceneContext::EndMaterialGraphNodeDrag() noexcept {
+    if (!materialGraphNodeDragging_) {
+        return false;
+    }
+    materialGraphNodeDragging_ = false;
+    materialGraphDragAssetId_ = {};
+    materialGraphDragNodeId_ = 0U;
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialGraphNodeDragging() const noexcept {
+    return materialGraphNodeDragging_;
+}
+
+bool EditorSceneContext::BeginMaterialGraphPan(int x, int y) noexcept {
+    materialGraphPanStartX_ = x;
+    materialGraphPanStartY_ = y;
+    materialGraphPanStartOffsetX_ = materialGraphPanX_;
+    materialGraphPanStartOffsetY_ = materialGraphPanY_;
+    materialGraphPanning_ = true;
+    return true;
+}
+
+bool EditorSceneContext::DragMaterialGraphPan(int x, int y) noexcept {
+    if (!materialGraphPanning_) {
+        return false;
+    }
+    const int newPanX = materialGraphPanStartOffsetX_ + (x - materialGraphPanStartX_);
+    const int newPanY = materialGraphPanStartOffsetY_ + (y - materialGraphPanStartY_);
+    if (newPanX == materialGraphPanX_ && newPanY == materialGraphPanY_) {
+        return false;
+    }
+    materialGraphPanX_ = newPanX;
+    materialGraphPanY_ = newPanY;
+    return true;
+}
+
+bool EditorSceneContext::EndMaterialGraphPan() noexcept {
+    if (!materialGraphPanning_) {
+        return false;
+    }
+    materialGraphPanning_ = false;
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialGraphPanning() const noexcept {
+    return materialGraphPanning_;
 }
 
 bool EditorSceneContext::SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value) {

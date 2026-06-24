@@ -3,11 +3,82 @@
 #include "docking/DockLeafPanelOrder.hpp"
 #include "docking/DockModelQueries.hpp"
 
-namespace kb::editor {
+#include <algorithm>
 
-EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root) noexcept
+namespace kb::editor {
+namespace {
+
+[[nodiscard]] DockRect MakeRect(int x, int y, int width, int height) noexcept {
+    return DockRect{
+        .x = x,
+        .y = y,
+        .width = std::max(0, width),
+        .height = std::max(0, height),
+    };
+}
+
+[[nodiscard]] DockLayout MaximizeLeafLayout(const DockLayout& base, std::uint32_t leafId, int tabStripHeight, int tabMinWidth, int tabWidth) {
+    DockLayout maximized{};
+    maximized.menu = base.menu;
+    maximized.toolbar = base.toolbar;
+    maximized.workspace = base.workspace;
+    if (base.workspace.Empty()) {
+        return maximized;
+    }
+
+    DockLeafLayout leaf{
+        .leafId = leafId,
+        .frame = base.workspace,
+        .tabStrip = MakeRect(base.workspace.x + 1, base.workspace.y + 1, std::max(0, base.workspace.width - 2), tabStripHeight),
+        .content = MakeRect(base.workspace.x + 1, base.workspace.y + tabStripHeight + 1, std::max(0, base.workspace.width - 2), std::max(0, base.workspace.height - tabStripHeight - 2)),
+        .activePanelId = 0,
+    };
+
+    int panelCount = 0;
+    for (const DockPanelLayout& panel : base.panels) {
+        if (panel.leafId == leafId) {
+            ++panelCount;
+            if (panel.active) {
+                leaf.activePanelId = panel.panelId;
+            }
+        }
+    }
+    if (panelCount <= 0) {
+        return maximized;
+    }
+
+    maximized.leaves.push_back(leaf);
+    const int maxTabWidth = std::max(1, tabWidth);
+    const int minTabWidth = std::clamp(tabMinWidth, 1, maxTabWidth);
+    const int resolvedTabWidth = std::clamp(leaf.tabStrip.width / std::max(1, panelCount), minTabWidth, maxTabWidth);
+    int tabX = leaf.tabStrip.x;
+
+    for (const DockPanelLayout& panel : base.panels) {
+        if (panel.leafId != leafId) {
+            continue;
+        }
+        maximized.panels.push_back(DockPanelLayout{
+            .panelId = panel.panelId,
+            .leafId = leafId,
+            .frame = leaf.frame,
+            .tabStrip = leaf.tabStrip,
+            .tab = MakeRect(tabX, leaf.tabStrip.y, std::min(resolvedTabWidth, leaf.tabStrip.x + leaf.tabStrip.width - tabX), tabStripHeight),
+            .content = leaf.content,
+            .contentClip = leaf.content,
+            .active = panel.active,
+        });
+        tabX += resolvedTabWidth;
+    }
+
+    return maximized;
+}
+
+} // namespace
+
+EditorDockModelQueries::EditorDockModelQueries(const DockPanelCollection& panels, const DockNode* root, std::uint32_t maximizedLeafId) noexcept
     : panels_(panels)
-    , root_(root) {}
+    , root_(root)
+    , maximizedLeafId_(maximizedLeafId) {}
 
 const std::vector<DockPanel>& EditorDockModelQueries::Panels() const noexcept {
     return panels_.All();
@@ -31,7 +102,11 @@ DockLayout EditorDockModelQueries::BuildLayout(
     int tabWidth,
     int splitterSize,
     int panelPadding) const {
-    return DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, panelPadding);
+    DockLayout layout = DockModelQueries::BuildLayout(root_, clientWidth, clientHeight, menuHeight, toolbarHeight, tabStripHeight, tabMinWidth, tabWidth, splitterSize, panelPadding);
+    if (maximizedLeafId_ == 0) {
+        return layout;
+    }
+    return MaximizeLeafLayout(layout, maximizedLeafId_, tabStripHeight, tabMinWidth, tabWidth);
 }
 
 DockHit EditorDockModelQueries::HitTest(const DockLayout& layout, int x, int y) const {

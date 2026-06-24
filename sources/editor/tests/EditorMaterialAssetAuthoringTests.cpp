@@ -9,6 +9,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
@@ -174,6 +175,9 @@ void RunCreateMaterialAssetThroughEditorAuthoringTest() {
     kb::editor::tests::Require(loaded->materialTypeVersion == kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion, "Editor material authoring did not write the built-in PBR material type version");
     kb::editor::tests::Require(loaded->hasExplicitMaterialType, "Editor material authoring did not write explicit material type metadata");
     kb::editor::tests::Require(loaded->hasExplicitMaterialTypeVersion, "Editor material authoring did not write explicit material type version metadata");
+    kb::editor::tests::Require(loaded->graph.hasExplicitDocumentVersion, "Editor material authoring did not write explicit material graph version metadata");
+    kb::editor::tests::Require(loaded->graph.nodes.size() == 1U, "Editor material authoring did not create the default material graph node");
+    kb::editor::tests::Require(loaded->graph.nodes.front().kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput, "Editor material authoring did not create a material output node");
     const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> runtimeLoaded = scene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(metadata->id);
     kb::editor::tests::Require(runtimeLoaded.IsLoaded(), "Editor material authoring did not make the created material loadable through AssetManager");
     kb::editor::tests::Require(loaded->desc.baseColor[0] == 1.0F && loaded->desc.baseColor[1] == 1.0F && loaded->desc.baseColor[2] == 1.0F && loaded->desc.baseColor[3] == 1.0F, "Editor material authoring did not preserve default white base color");
@@ -182,6 +186,43 @@ void RunCreateMaterialAssetThroughEditorAuthoringTest() {
     kb::editor::tests::Require(loaded->desc.alphaMode == kb::render::RenderMaterialAlphaMode::Opaque, "Editor material authoring did not preserve default alpha mode");
     kb::editor::tests::Require(!loaded->desc.doubleSided, "Editor material authoring did not preserve default double-sided flag");
     kb::editor::tests::Require(console.Count(kb::editor::EditorConsoleLevel::Info) == 1U, "Editor material authoring should report one successful creation message");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
+void RunCreateMaterialInstanceAssetThroughEditorAuthoringTest() {
+    CleanTempRoot();
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(TempRoot() / "Project"), "Material instance authoring test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material instance authoring test could not create parent material");
+
+    const kb::assets::AssetMetadata* parent = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(parent != nullptr && parent->type == "RenderMaterial", "Material instance authoring test did not discover parent material metadata");
+    const kb::assets::AssetId parentId = parent->id;
+    kb::editor::tests::Require(authoring.CreateInstance(parentId), "Editor material authoring did not create a material instance asset");
+
+    const std::filesystem::path instancePath = TempRoot() / "Project" / "Assets" / "Materials" / "NewMaterialInstance.kbmatinst";
+    kb::editor::tests::Require(std::filesystem::exists(instancePath), "Editor material authoring did not write NewMaterialInstance.kbmatinst");
+
+    const kb::assets::AssetMetadata* instanceMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterialInstance.kbmatinst");
+    kb::editor::tests::Require(instanceMetadata != nullptr, "Editor material authoring did not register the created material instance");
+    kb::editor::tests::Require(instanceMetadata->type == "RenderMaterialInstance", "Editor material authoring registered the wrong material instance asset type");
+    kb::editor::tests::Require(browser.SelectedAsset() == instanceMetadata->id, "Editor material authoring did not select the created material instance asset");
+
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> loaded = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(instancePath);
+    kb::editor::tests::Require(loaded.has_value(), "Editor material authoring wrote a material instance file that could not be loaded");
+    kb::editor::tests::Require(loaded->documentVersion == kb::render::kRenderMaterialInstanceAssetDocumentVersion, "Material instance did not preserve document version");
+    kb::editor::tests::Require(loaded->hasExplicitDocumentVersion, "Material instance did not write explicit document version metadata");
+    kb::editor::tests::Require(loaded->parentMaterialAssetId == parentId, "Material instance did not reference the selected parent material asset id");
+
+    const kb::assets::AssetHandle<kb::render::RenderMaterialInstanceAssetData> runtimeLoaded = scene.Assets().Manager().Load<kb::render::RenderMaterialInstanceAssetData>(instanceMetadata->id);
+    kb::editor::tests::Require(runtimeLoaded.IsLoaded(), "Editor material authoring did not make the created material instance loadable through AssetManager");
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -450,6 +491,7 @@ namespace kb::editor::tests {
 
 void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
+    RunCreateMaterialInstanceAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
     RunMaterialTextureSlotAuthoringTest();
     RunMaterialTextureSlotValidationTest();

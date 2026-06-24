@@ -10,6 +10,7 @@ namespace kb::editor {
 
 class EditorDockController;
 class EditorDockModel;
+class EditorSceneContext;
 class EditorSceneBgfxViewport;
 struct EditorMetrics;
 
@@ -20,6 +21,7 @@ public:
         HWND mainWindow,
         EditorDockModel& dockModel,
         EditorDockController& dockController,
+        EditorSceneContext& sceneContext,
         EditorSceneBgfxViewport& sceneViewport,
         const EditorMetrics& metrics) noexcept;
 
@@ -31,6 +33,7 @@ private:
     HWND mainWindow_ = nullptr;
     EditorDockModel& dockModel_;
     EditorDockController& dockController_;
+    EditorSceneContext& sceneContext_;
     EditorSceneBgfxViewport& sceneViewport_;
     const EditorMetrics& metrics_;
 };

@@ -83,6 +83,7 @@ public:
     [[nodiscard]] bool PresentRequested() const noexcept;
     void ClearPresentRequest() noexcept;
     void SyncHostSurfaceLayouts(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
+    void SyncHostSurfaceLayoutsForResize(HWND parent, std::span<const HostSurfaceLayout> layouts) noexcept;
     void Shutdown();
     void BeginPaintLayout() noexcept;
     void BeginPaintLayout(HWND parent) noexcept;
@@ -92,12 +93,14 @@ public:
     void Present(HDC dc, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HDC dc, HWND parent, const RECT& rect, const kb::scene::Scene& scene, const EditorTheme& theme, const PresentSettings& settings);
     void Present(HWND parent, const RECT& rect, const kb::scene::Scene& scene, const PresentSettings& settings);
+    [[nodiscard]] bool IsHostSurfaceVisible(HWND host, std::uint64_t key) noexcept;
     void Hide() noexcept;
 
 private:
     struct HostSurface {
         HWND host = nullptr;
         std::uint64_t key = 0;
+        HWND clipWindow = nullptr;
         HWND window = nullptr;
         RECT rect{};
         RECT layoutBounds{};
@@ -242,7 +245,7 @@ private:
     [[nodiscard]] HostSurface* FindHostSurface(HWND host, std::uint64_t key) noexcept;
     [[nodiscard]] bool EnsureWindowClass();
     [[nodiscard]] bool EnsureContextWindow();
-    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect);
+    [[nodiscard]] bool EnsureHostSurfaceWindow(HostSurface& surface, const RECT& rect, bool preserveBits = false);
     [[nodiscard]] bool EnsureRenderer();
     [[nodiscard]] bool EnsurePresentTarget(HostSurface& surface, std::uint32_t width, std::uint32_t height);
     void HideHostSurface(HostSurface& surface) noexcept;
@@ -255,6 +258,7 @@ private:
     void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
     [[nodiscard]] bool QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
+    [[nodiscard]] static bool ShouldPreserveHostSurfaceBits(std::uint64_t viewportKey) noexcept;
 
     static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 

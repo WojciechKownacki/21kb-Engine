@@ -56,6 +56,27 @@ void WriteTexturePath(std::ostream& output, const char* name, std::string_view p
     }
 }
 
+void WriteGraph(std::ostream& output, const RenderMaterialGraphDocument& graph) {
+    if (graph.nodes.empty() && graph.links.empty()) {
+        return;
+    }
+    output << "graphVersion " << (graph.documentVersion == 0U ? kRenderMaterialGraphDocumentVersion : graph.documentVersion) << '\n';
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        output << "graphNode "
+            << node.id << ' '
+            << RenderMaterialGraphNodeKindName(node.kind) << ' '
+            << node.positionX << ' '
+            << node.positionY << '\n';
+    }
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        output << "graphLink "
+            << link.fromNodeId << ' '
+            << link.fromPin << ' '
+            << link.toNodeId << ' '
+            << link.toPin << '\n';
+    }
+}
+
 [[nodiscard]] const char* AlphaModeName(RenderMaterialAlphaMode mode) noexcept {
     switch (mode) {
     case RenderMaterialAlphaMode::Opaque:
@@ -626,13 +647,14 @@ bool RenderMaterialAssetWriter::Save(const std::filesystem::path& path, const Re
 }
 
 void RenderMaterialAssetWriter::Write(std::ostream& output, const RenderMaterialAssetData& asset) {
-    output << "# KB material instance\n";
+    output << "# KB material\n";
     output << "version " << (asset.documentVersion == 0U ? kRenderMaterialAssetDocumentVersion : asset.documentVersion) << '\n';
     output << "materialType " << (asset.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : asset.materialType) << '\n';
     output << "materialTypeVersion " << (asset.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : asset.materialTypeVersion) << '\n';
     for (const IRenderMaterialAssetPropertyWriter* writer : PropertyWriters()) {
         writer->Write(output, asset);
     }
+    WriteGraph(output, asset.graph);
 }
 
 } // namespace kb::render

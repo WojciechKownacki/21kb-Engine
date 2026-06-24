@@ -1,6 +1,8 @@
 #include "resources/RenderMaterialAssetParser.hpp"
 
 #include "resources/RenderMaterialAssetFieldParser.hpp"
+#include "resources/RenderMaterialGraphFieldParser.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 
 #include <cmath>
@@ -415,7 +417,7 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
                     .line = lineNumber,
                     .field = "materialType",
                     .message = rest.empty()
-                        ? "Material type is required for material instance assets."
+                        ? "Material type is required for material assets."
                         : "Unsupported material type '" + std::string{ rest } + "'.",
                     .text = std::string{ trimmed },
                 });
@@ -451,6 +453,12 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
             }
             asset.materialTypeVersion = version;
             asset.hasExplicitMaterialTypeVersion = true;
+            continue;
+        }
+
+        const RenderMaterialGraphFieldParseResult graphField = RenderMaterialGraphFieldParser::Apply(keyword, rest, lineNumber, asset, diagnostics);
+        if (graphField != RenderMaterialGraphFieldParseResult::Unknown) {
+            sawMaterialProperty = true;
             continue;
         }
 
@@ -551,6 +559,9 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
             .message = "Material asset does not contain any material properties.",
             .text = {},
         });
+    }
+    if (sawMaterialProperty && asset.graph.nodes.empty()) {
+        asset.graph = MakeDefaultRenderMaterialGraphDocument();
     }
 
     return RenderMaterialAssetParseResult{

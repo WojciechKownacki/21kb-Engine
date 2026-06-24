@@ -5,6 +5,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 
 #include <algorithm>
 #include <optional>
@@ -78,13 +79,44 @@ EditorMaterialAssetAuthoring::EditorMaterialAssetAuthoring(kb::scene::Scene& sce
 bool EditorMaterialAssetAuthoring::Create(const std::filesystem::path& virtualFolder) {
     const std::optional<std::filesystem::path> folder = gateway_.ResolveFolder(virtualFolder);
     if (!folder.has_value()) {
-        console_.Error("Materials", "Could not resolve a physical folder for the new material instance.");
+        console_.Error("Materials", "Could not resolve a physical folder for the new material.");
         return false;
     }
 
     const std::filesystem::path path = EditorMaterialAssetGateway::UniqueFilePath(*folder, "NewMaterial");
     kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     if (!gateway_.WriteNewMaterial(path, material)) {
+        console_.Error("Materials", "Material asset could not be written: " + path.generic_string());
+        return false;
+    }
+
+    console_.Info("Materials", "Material asset created: " + path.generic_string());
+    return true;
+}
+
+bool EditorMaterialAssetAuthoring::CreateInstance(kb::assets::AssetId parentMaterial) {
+    const kb::assets::AssetMetadata* parent = gateway_.Scene().Assets().Manager().Registry().Find(parentMaterial);
+    if (parent == nullptr || parent->type != "RenderMaterial") {
+        console_.Error("Materials", "Material instance creation requires a parent material asset.");
+        return false;
+    }
+
+    std::filesystem::path parentPath = parent->physicalPath;
+    if (parentPath.empty()) {
+        const std::optional<std::filesystem::path> resolved = gateway_.Scene().Assets().Manager().Mounts().Resolve(parent->virtualPath);
+        if (!resolved.has_value()) {
+            console_.Error("Materials", "Parent material path could not be resolved for material instance creation.");
+            return false;
+        }
+        parentPath = *resolved;
+    }
+
+    kb::render::RenderMaterialInstanceAssetData instance{};
+    instance.parentMaterialAssetId = parentMaterial;
+    const std::filesystem::path baseName = parentPath.stem().string() + std::string{ "Instance" };
+    const std::filesystem::path path = EditorMaterialAssetGateway::UniqueFilePath(parentPath.parent_path(), baseName.string(), ".kbmatinst");
+    if (!gateway_.WriteNewMaterialInstance(path, instance)) {
         console_.Error("Materials", "Material instance asset could not be written: " + path.generic_string());
         return false;
     }

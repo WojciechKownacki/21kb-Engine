@@ -28,6 +28,7 @@ private:
     DockPanelCollection panels_;
     std::unique_ptr<DockNode> root_;
     std::uint32_t nextNodeId_ = 1;
+    std::uint32_t maximizedLeafId_ = 0;
 };
 
 } // namespace kb::editor

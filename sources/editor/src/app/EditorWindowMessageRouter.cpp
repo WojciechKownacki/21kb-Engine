@@ -86,12 +86,12 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             context_.pointerDrag,
         }.Paint(messageWindow);
         return 0;
+    case WM_ENTERSIZEMOVE:
+        return EditorWindowResizeHandler::HandleEnterSizeMove(messageWindow, context_.sceneViewport);
     case WM_SIZE:
-        context_.sceneViewport.RequestPresent();
-        return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows);
+        return EditorWindowResizeHandler::HandleSize(messageWindow, wparam, lparam, context_.dockModel, context_.floatingWindows, context_.sceneViewport);
     case WM_EXITSIZEMOVE:
-        context_.sceneViewport.RequestPresent();
-        return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow);
+        return EditorWindowResizeHandler::HandlePlacementChanged(messageWindow, context_.sceneViewport);
     case WM_CANCELMODE:
         EditorSceneViewportCameraController{
             context_.mainWindow,
@@ -195,6 +195,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         }
         break;
     case WM_TIMER:
+        if (EditorWindowResizeHandler::HandleTimer(messageWindow, wparam, context_.sceneViewport)) {
+            return 0;
+        }
         if (EditorSceneViewportCameraController{
                 context_.mainWindow,
                 context_.dockModel,

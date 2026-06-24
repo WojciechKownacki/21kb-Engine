@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/IAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 
 #include <cstddef>
@@ -19,10 +20,9 @@ inline constexpr std::uint32_t kRenderMaterialAssetDocumentVersion = 1U;
 inline constexpr const char* kRenderMaterialAssetBuiltInPbrType = "builtin.pbr";
 inline constexpr std::uint32_t kRenderMaterialAssetBuiltInPbrTypeVersion = 1U;
 
-/// RenderMaterialAssetData represents a Material Instance asset (.kbmat file).
-/// It stores parameter values and texture references for a specific material
-/// instance, using a Material Type (e.g., builtin.pbr) as its shader contract.
-/// This is NOT a Material Graph or Material Type definition.
+/// RenderMaterialAssetData represents a Material asset (.kbmat file).
+/// It stores the parent material defaults and shader contract metadata used by
+/// material instances and direct material assignments.
 struct RenderMaterialAssetData {
     std::uint32_t documentVersion = kRenderMaterialAssetDocumentVersion;
     bool hasExplicitDocumentVersion = false;
@@ -44,6 +44,7 @@ struct RenderMaterialAssetData {
     std::string anisotropyTexturePath;
     std::string decalTexturePath;
     std::string layerMaskTexturePath;
+    RenderMaterialGraphDocument graph{};
 };
 
 enum class RenderMaterialAssetParseDiagnosticCode : std::uint8_t {
@@ -62,6 +63,11 @@ enum class RenderMaterialAssetParseDiagnosticCode : std::uint8_t {
     InvalidMaterialTypeVersion,
     UnsupportedMaterialTypeVersion,
     TextureColorSpaceExpectation,
+    InvalidGraphField,
+    UnsupportedGraphVersion,
+    InvalidGraphNode,
+    DuplicateGraphNode,
+    InvalidGraphLink,
 };
 
 enum class RenderMaterialAssetParseDiagnosticSeverity : std::uint8_t {

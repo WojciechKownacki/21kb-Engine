@@ -12,11 +12,11 @@ EditorDockModel::EditorDockModel()
 EditorDockModel::~EditorDockModel() = default;
 
 EditorDockModelQueries EditorDockModel::Queries() const noexcept {
-    return EditorDockModelQueries{ panels_, root_.get() };
+    return EditorDockModelQueries{ panels_, root_.get(), maximizedLeafId_ };
 }
 
 EditorDockModelCommands EditorDockModel::Commands() noexcept {
-    return EditorDockModelCommands{ panels_, root_, nextNodeId_ };
+    return EditorDockModelCommands{ panels_, root_, nextNodeId_, maximizedLeafId_ };
 }
 
 } // namespace kb::editor

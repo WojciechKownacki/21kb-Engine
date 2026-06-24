@@ -11,7 +11,9 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 
@@ -26,9 +28,42 @@ namespace {
     return metadata == nullptr ? 0U : metadata->contentHash;
 }
 
+[[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
+    return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
+
+[[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.physicalPath.empty()) {
+        return metadata.physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+[[nodiscard]] std::uint64_t MaterialDocumentContentHash(const kb::scene::Scene& scene, kb::assets::AssetId materialAssetId) {
+    const kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(materialAssetId);
+    if (metadata == nullptr) {
+        return 0U;
+    }
+    if (metadata->type != "RenderMaterialInstance") {
+        return metadata->contentHash;
+    }
+
+    const std::filesystem::path path = ResolveAssetPath(manager, *metadata);
+    if (path.empty()) {
+        return metadata->contentHash;
+    }
+    const std::optional<kb::render::RenderMaterialInstanceAssetData> instance = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(path);
+    if (!instance.has_value() || !instance->parentMaterialAssetId.IsValid()) {
+        return metadata->contentHash;
+    }
+    return HashCombine(metadata->contentHash, MaterialContentHash(scene, instance->parentMaterialAssetId));
+}
+
 void RegisterPreviewLoaders(kb::assets::AssetManager& manager) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<EditorMaterialPreviewMeshLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderTextureAssetLoader>()));
 }
 
@@ -109,7 +144,7 @@ void AddPreviewLighting(kb::scene::Scene& scene) {
 
 const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(const kb::scene::Scene& sourceScene, kb::assets::AssetId materialAssetId) {
     const std::uint64_t sourceRevision = sourceScene.Assets().Manager().Revision();
-    const std::uint64_t contentHash = MaterialContentHash(sourceScene, materialAssetId);
+    const std::uint64_t contentHash = MaterialDocumentContentHash(sourceScene, materialAssetId);
     if (scene_ == nullptr || materialAssetId_.value != materialAssetId.value || sourceAssetRevision_ != sourceRevision || materialContentHash_ != contentHash) {
         Rebuild(sourceScene, materialAssetId);
     }
@@ -140,16 +175,24 @@ void EditorMaterialPreviewScene::Rebuild(const kb::scene::Scene& sourceScene, kb
     CopyAssetRegistry(sourceScene.Assets().Manager(), targetManager);
     RegisterPreviewMesh(targetManager);
 
-    const std::optional<kb::render::RenderMaterialAssetData> material = EditorMaterialAssetGateway::Read(sourceScene, materialAssetId);
-    AddPreviewMesh(*scene_, materialAssetId, material.has_value());
+    const kb::assets::AssetMetadata* metadata = targetManager.Registry().Find(materialAssetId);
+    const kb::render::ResolvedRuntimeMaterialAsset resolved = metadata != nullptr
+        ? kb::render::RuntimeMaterialResolver{}.ResolveAsset(targetManager, *metadata)
+        : kb::render::ResolvedRuntimeMaterialAsset{};
+    kb::render::RenderMaterialAssetData telemetryMaterial{};
+    if (resolved.resolved) {
+        telemetryMaterial.desc = resolved.material.desc;
+    }
+
+    AddPreviewMesh(*scene_, materialAssetId, resolved.resolved);
     AddPreviewCamera(*scene_);
     AddPreviewLighting(*scene_);
     scene_->Runtime().SynchronizeTransforms();
 
-    telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(sourceScene.Assets().Manager(), materialAssetId, material.has_value() ? &*material : nullptr, true);
+    telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(targetManager, materialAssetId, resolved.resolved ? &telemetryMaterial : nullptr, true);
     materialAssetId_ = materialAssetId;
     sourceAssetRevision_ = sourceScene.Assets().Manager().Revision();
-    materialContentHash_ = MaterialContentHash(sourceScene, materialAssetId);
+    materialContentHash_ = MaterialDocumentContentHash(sourceScene, materialAssetId);
     ++revision_;
 }
 

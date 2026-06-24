@@ -95,6 +95,7 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
     const int x = GET_X_LPARAM(lparam);
     const int y = GET_Y_LPARAM(lparam);
     const bool leftButtonDown = (wparam & MK_LBUTTON) != 0;
+    const bool rightButtonDown = (wparam & MK_RBUTTON) != 0;
     EditorMouseMoveRouter mouseMove(
         mainWindow_,
         dockModel_,
@@ -105,7 +106,7 @@ LRESULT EditorWindowPointerHandler::HandleMouseMove(HWND messageWindow, WPARAM w
         shellInteraction_,
         pointerDrag_,
         metrics_);
-    mouseMove.Handle(messageWindow, x, y, leftButtonDown);
+    mouseMove.Handle(messageWindow, x, y, leftButtonDown, rightButtonDown);
     return 0;
 }
 
@@ -144,6 +145,12 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
 }
 
 LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow) {
+    if (sceneContext_.IsMaterialGraphPanning()) {
+        static_cast<void>(sceneContext_.EndMaterialGraphPan());
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return 0;
+    }
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     static_cast<void>(sceneCamera.HandleButtonUp(messageWindow));
     return 0;

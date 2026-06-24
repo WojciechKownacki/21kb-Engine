@@ -9,6 +9,7 @@
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
 
 #include <optional>
@@ -125,6 +126,18 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     pointerDrag_.Clear();
+
+    const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+    if (materialEditorContent.has_value() && x >= materialEditorContent->left && x < materialEditorContent->right && y >= materialEditorContent->top && y < materialEditorContent->bottom) {
+        const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+        if (MaterialEditorPanelPointInRect(layout.graphCanvas, x, y)) {
+            static_cast<void>(sceneContext_.BeginMaterialGraphPan(x, y));
+            SetCapture(messageWindow);
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+    }
+
     EditorSceneViewportCameraController sceneCamera(mainWindow_, dockModel_, floatingWindows_, metrics_, sceneContext_, sceneViewport_);
     if (sceneCamera.HandleRightButtonDown(messageWindow, x, y)) {
         return;

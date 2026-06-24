@@ -1,6 +1,7 @@
 #include "rendering/DockWorkspaceTabStripRenderer.hpp"
 
 #if defined(_WIN32)
+#include "rendering/DockTabControlGeometry.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconPainter.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
@@ -108,18 +109,40 @@ void DrawTabLabel(HDC dc, RECT rect, const char* text, COLORREF color) {
     DrawTextA(dc, text, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
+void DrawTabClose(HDC dc, const DockRect& tab, bool active, const EditorTheme& theme) {
+    const DockRect closeDock = DockTabControlGeometry::CloseRect(tab);
+    if (closeDock.Empty()) {
+        return;
+    }
+
+    const RECT close = GdiDrawing::ToRect(closeDock);
+    const COLORREF mark = GdiDrawing::ToColorRef(active ? theme.textSecondary : theme.textDisabled);
+    const int inset = std::max(4, closeDock.width / 4);
+    HPEN pen = CreatePen(PS_SOLID, 1, mark);
+    {
+        const ScopedGdiObject selectedPen(dc, pen);
+        MoveToEx(dc, close.left + inset, close.top + inset, nullptr);
+        LineTo(dc, close.right - inset, close.bottom - inset);
+        MoveToEx(dc, close.right - inset - 1, close.top + inset, nullptr);
+        LineTo(dc, close.left + inset - 1, close.bottom - inset);
+    }
+    DeleteObject(pen);
+}
+
 void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel& panel, const EditorTheme& theme) {
     HeroIconKind icon{};
     if (!TabIconForPanel(panel.kind, icon)) {
         RECT titleRect = TabTitleRect(panelLayout.tab);
+        titleRect.right -= DockTabControlGeometry::TextRightPadding;
         GdiDrawing::DrawTabText(dc, titleRect, panel.title.c_str(), GdiDrawing::ToColorRef(panelLayout.active ? theme.textPrimary : theme.textSecondary));
+        DrawTabClose(dc, panelLayout.tab, panelLayout.active, theme);
         return;
     }
 
     const RECT tab = GdiDrawing::ToRect(panelLayout.tab);
     const int tabWidth = std::max(0, static_cast<int>(tab.right - tab.left));
     const int textWidth = MeasureTextWidth(dc, panel.title.c_str());
-    const int maxTextWidth = std::max(0, tabWidth - (kTabHorizontalPadding * 2) - kTabIconSize - kTabIconGap);
+    const int maxTextWidth = std::max(0, tabWidth - (kTabHorizontalPadding * 2) - kTabIconSize - kTabIconGap - DockTabControlGeometry::TextRightPadding);
     const int visibleTextWidth = std::min(textWidth, maxTextWidth);
     const int groupWidth = kTabIconSize + kTabIconGap + visibleTextWidth;
     const int groupLeft = tab.left + std::max(kTabHorizontalPadding, (tabWidth - groupWidth) / 2);
@@ -129,8 +152,9 @@ void DrawTabContent(HDC dc, const DockPanelLayout& panelLayout, const DockPanel&
     const RECT iconRect{ groupLeft, iconTop, groupLeft + kTabIconSize, iconTop + kTabIconSize };
     HeroIconPainter::Draw(dc, iconRect, icon, color, icon == HeroIconKind::Gamepad2 ? 2 : 1);
 
-    RECT textRect{ iconRect.right + kTabIconGap, tab.top + kTabTextVerticalOffset, tab.right - kTabHorizontalPadding, tab.bottom };
+    RECT textRect{ iconRect.right + kTabIconGap, tab.top + kTabTextVerticalOffset, tab.right - DockTabControlGeometry::TextRightPadding, tab.bottom };
     DrawTabLabel(dc, textRect, panel.title.c_str(), color);
+    DrawTabClose(dc, panelLayout.tab, panelLayout.active, theme);
 }
 
 [[nodiscard]] bool SameRect(const RECT& a, const RECT& b) noexcept {
