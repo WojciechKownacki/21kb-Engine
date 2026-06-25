@@ -54,6 +54,8 @@ constexpr int kFieldRowHeight = 24;
 constexpr int kValueHeight = 20;
 constexpr int kRowPadX = 16;
 constexpr int kValuePadX = 10;
+constexpr int kAssetPickerButtonSize = 18;
+constexpr int kAssetPickerButtonGap = 3;
 constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
@@ -386,6 +388,49 @@ void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPan
     DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
 }
 
+[[nodiscard]] RECT AssetPickerButtonRect(RECT valueRect) noexcept {
+    const int top = CenteredY(valueRect, kAssetPickerButtonSize);
+    return Rect(valueRect.right - kAssetPickerButtonSize - 1, top, valueRect.right - 1, top + kAssetPickerButtonSize);
+}
+
+[[nodiscard]] RECT AssetPickerTextRect(RECT valueRect) noexcept {
+    valueRect.right -= kAssetPickerButtonSize + kAssetPickerButtonGap;
+    return valueRect;
+}
+
+void DrawAssetFieldRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    InspectorPropertyId buttonProperty,
+    std::string_view label,
+    std::string_view value) {
+    if (RowHovered(state, property) || RowHovered(state, buttonProperty)) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
+    RECT textRect = AssetPickerTextRect(valueRect);
+    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
+    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
+
+    ScopedFont labelFont(12, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    DrawValueBox(dc, textRect, theme, value, valueHovered);
+
+    const RECT button = AssetPickerButtonRect(valueRect);
+    DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
+    RECT icon = Shrink(button, 3, 3, 3, 3);
+    HeroIconPainter::Draw(dc, icon, HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
+}
+
 [[nodiscard]] RECT CheckboxRectForRow(RECT row) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);
@@ -432,6 +477,14 @@ public:
             return;
         }
         DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value);
+        Advance();
+    }
+
+    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty) {
+        if (collapsed_) {
+            return;
+        }
+        DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value);
         Advance();
     }
 
@@ -753,12 +806,13 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     int y,
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
+    const kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata,
     bool deferPreviewWork) {
     EditorMeshPreviewService& previews = EditorMeshPreviewCache();
     const EditorMeshPreviewSettings previewSettings = MeshPreviewSettingsFromState(inspector);
-    const EditorMeshThumbnailStats* stats = deferPreviewWork ? previews.CachedStatsFor(metadata) : previews.StatsFor(metadata);
-    const EditorMeshThumbnailImage* image = deferPreviewWork ? previews.CachedPreviewFor(metadata, previewSettings) : previews.PreviewFor(metadata, previewSettings);
+    const EditorMeshThumbnailStats* stats = deferPreviewWork ? previews.CachedStatsFor(metadata) : previews.StatsFor(manager, metadata);
+    const EditorMeshThumbnailImage* image = deferPreviewWork ? previews.CachedPreviewFor(metadata, previewSettings) : previews.PreviewFor(manager, metadata, previewSettings);
     if (image == nullptr && stats == nullptr) {
         const bool meshLikeAsset = metadata.type == "RenderMesh" || metadata.importCategory == "Mesh";
         if (!deferPreviewWork || !meshLikeAsset) {
@@ -1221,13 +1275,13 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
         y += kHeaderHeight + kPanelPadTop;
         y = DrawTextureDetails(dc, content, y, theme, inspector, *metadata);
-        y = DrawMeshPreview(dc, content, y, theme, inspector, *metadata, deferMeshPreviewWork);
+        y = DrawMeshPreview(dc, content, y, theme, inspector, manager, *metadata, deferMeshPreviewWork);
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
         if (!metadata->importCategory.empty()) {
             section.Field("Category", metadata->importCategory);
         }
         if (!deferMeshPreviewWork) {
-            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(*metadata)) {
+            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, *metadata)) {
                 section.Field("Vertices", FormatUInt64(stats->vertexCount));
                 section.Field("Indices", FormatUInt64(stats->indexCount));
                 section.Field("Triangles", FormatUInt64(stats->triangleCount));
@@ -1235,7 +1289,7 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
                 section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
                 section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
             }
-            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(*metadata)) {
+            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, *metadata)) {
                 const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
                 for (std::size_t index = 0; index < shown; ++index) {
                     section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
@@ -1299,16 +1353,19 @@ void PaintMeshRendererSection(
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer");
-    section.Field("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh);
-    section.Field("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial);
+    section.AssetField("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker);
+    section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
     const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
         renderer,
         mesh,
         [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
-    for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
-        section.Field(row.label, row.value, MeshRendererMaterialSlotProperty(row.slotIndex));
-    }
+    const InspectorMeshRendererMaterialSlotRow* primaryOverride = slotRows.empty() ? nullptr : &slotRows.front();
+    section.AssetField(
+        primaryOverride != nullptr ? primaryOverride->label : "Material Override",
+        primaryOverride != nullptr ? primaryOverride->value : "None",
+        primaryOverride != nullptr ? MeshRendererMaterialSlotProperty(primaryOverride->slotIndex) : InspectorPropertyId::MeshRendererMaterialSlot0,
+        InspectorPropertyId::MeshRendererMaterialOverridePicker);
     section.Bool("Casts Shadow", renderer.castsShadow);
     section.Bool("Receives Shadow", renderer.receivesShadow);
     y = section.Bottom() + kSectionGap;
@@ -1426,10 +1483,11 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     int rows = metadata.importCategory.empty() ? 0 : 1;
     const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
     if (!deferMeshPreviewWork) {
-        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(metadata); stats != nullptr) {
+        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, metadata); stats != nullptr) {
             rows += 6;
         }
-        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(metadata); validation != nullptr) {
+        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, metadata); validation != nullptr) {
             rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
         }
     }
@@ -1463,7 +1521,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
             ? kSectionHeaderHeight + kSectionGap
             : kSectionHeaderHeight + kDividerHeight + imageHeight + 20 + kSectionGap;
     }
-    if (EditorMeshPreviewCache().StatsFor(metadata) != nullptr) {
+    if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), metadata) != nullptr) {
         height += MeshPreviewPanelHeight(content) + kSectionGap;
     }
     height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
@@ -1480,12 +1538,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer->meshAssetId);
-        const std::size_t slotRows = InspectorMeshRendererMaterialSlotModel::Build(
-            *renderer,
-            mesh,
-            [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); }).size();
-        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 4 + static_cast<int>(slotRows)) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5) + kSectionGap;
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
@@ -1548,6 +1601,25 @@ void AdvanceRow(int& y) noexcept;
     RECT value = ValueRectForRow(row);
     if (Contains(value, x, y)) {
         return MakeHit(InspectorHitKind::TextField, section, property, value);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitAssetFieldRow(
+    RECT row,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    InspectorPropertyId buttonProperty,
+    int x,
+    int y) noexcept {
+    const RECT value = ValueRectForRow(row);
+    const RECT button = AssetPickerButtonRect(value);
+    if (Contains(button, x, y)) {
+        return MakeHit(InspectorHitKind::TextField, section, buttonProperty, button);
+    }
+    const RECT text = AssetPickerTextRect(value);
+    if (Contains(text, x, y)) {
+        return MakeHit(InspectorHitKind::TextField, section, property, text);
     }
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
@@ -2016,7 +2088,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                     y += kSectionGap;
                 }
             }
-            if (EditorMeshPreviewCache().StatsFor(*metadata) != nullptr) {
+            if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), *metadata) != nullptr) {
                 const RECT preview = MeshPreviewPanelRect(viewport, y);
                 const RECT toolbar = MeshPreviewToolbarRect(preview);
                 const std::array<InspectorPropertyId, 4> properties = MeshPreviewToolbarProperties();
@@ -2103,11 +2175,11 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::MeshRenderer)) {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMesh, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMaterial, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
@@ -2116,12 +2188,13 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 *renderer,
                 mesh,
                 [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
-            for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
-                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, MeshRendererMaterialSlotProperty(row.slotIndex), x, scrolledY); hit.kind != InspectorHitKind::None) {
-                    return hit;
-                }
-                AdvanceRow(y);
+            const InspectorPropertyId overrideProperty = slotRows.empty()
+                ? InspectorPropertyId::MeshRendererMaterialSlot0
+                : MeshRendererMaterialSlotProperty(slotRows.front().slotIndex);
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, overrideProperty, InspectorPropertyId::MeshRendererMaterialOverridePicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
+                return hit;
             }
+            AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }

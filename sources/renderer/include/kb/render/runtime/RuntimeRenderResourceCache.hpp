@@ -43,6 +43,9 @@ struct RuntimeRenderResourceEnsureContext {
     RuntimeMaterialResolver& materialResolver;
     SceneRenderDiagnostics& diagnostics;
     std::uint32_t& unresolvedMaterialTexturePathCount;
+    std::uint32_t& defaultMaterialFallbackCount;
+    std::uint32_t& errorMaterialFallbackCount;
+    std::uint32_t& materialResolverDiagnosticCount;
     std::uint64_t currentFrame = 0;
 };
 

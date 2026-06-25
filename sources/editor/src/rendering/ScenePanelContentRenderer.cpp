@@ -34,6 +34,8 @@ struct SceneViewportRenderProfileDesc {
     bool selectionMaskEnabled = false;
     bool selectionOutlineEnabled = false;
     bool gpuDrivenRuntimeDispatchEnabled = false;
+    bool autoExposureEnabled = false;
+    bool editorStudioLightEnabled = false;
 };
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
@@ -130,6 +132,8 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
+            .autoExposureEnabled = false,
+            .editorStudioLightEnabled = true,
         };
     case EditorViewportRenderProfile::Lit:
         return SceneViewportRenderProfileDesc{
@@ -139,6 +143,8 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
+            .autoExposureEnabled = false,
+            .editorStudioLightEnabled = false,
         };
     case EditorViewportRenderProfile::GamePreview:
         return SceneViewportRenderProfileDesc{
@@ -148,9 +154,30 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = true,
+            .autoExposureEnabled = true,
+            .editorStudioLightEnabled = false,
         };
     }
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
+}
+
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(const SceneViewportRenderProfileDesc& renderProfile) noexcept {
+    kb::render::SceneRenderLightingConfig lighting{};
+    if (!renderProfile.editorStudioLightEnabled) {
+        return lighting;
+    }
+
+    lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;
+    lighting.ambientColor = { 0.10F, 0.115F, 0.13F };
+    lighting.environmentZenithColor = { 0.34F, 0.40F, 0.48F };
+    lighting.environmentGroundColor = { 0.055F, 0.06F, 0.07F };
+    lighting.environmentDiffuseIntensity = 0.70F;
+    lighting.environmentSpecularIntensity = 0.18F;
+    lighting.editorPreviewKeyLightEnabled = true;
+    lighting.editorPreviewKeyLightDirection = { 0.35F, -0.62F, 0.70F };
+    lighting.editorPreviewKeyLightColor = { 1.0F, 0.96F, 0.90F };
+    lighting.editorPreviewKeyLightIntensity = 1.85F;
+    return lighting;
 }
 
 [[nodiscard]] std::vector<std::uint64_t> SelectedEntityIds(const EditorSceneContext& sceneContext) {
@@ -246,6 +273,9 @@ struct SceneViewportRenderProfileDesc {
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
     const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
+    kb::render::ScenePostProcessSettings postProcessSettings{};
+    postProcessSettings.outputTransform.autoExposure.enabled = renderProfile.autoExposureEnabled;
+    postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled = renderProfile.autoExposureEnabled;
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
@@ -281,6 +311,8 @@ struct SceneViewportRenderProfileDesc {
         .editorGizmo = gizmo,
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
+        .lightingConfig = BuildViewportLightingConfig(renderProfile),
+        .postProcessSettings = postProcessSettings,
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,
         .selectionMaskEnabled = postProcessEnabled && renderProfile.selectionMaskEnabled,

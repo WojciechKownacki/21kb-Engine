@@ -162,6 +162,10 @@ struct SceneRenderLightingConfig {
     std::array<float, 3> environmentGroundColor{ 0.08F, 0.075F, 0.065F };
     float environmentDiffuseIntensity = 1.0F;
     float environmentSpecularIntensity = 0.25F;
+    bool editorPreviewKeyLightEnabled = false;
+    std::array<float, 3> editorPreviewKeyLightDirection{ 0.35F, -0.62F, 0.70F };
+    std::array<float, 3> editorPreviewKeyLightColor{ 1.0F, 0.96F, 0.90F };
+    float editorPreviewKeyLightIntensity = 0.0F;
     SceneRenderIblConfig ibl{};
     SceneRenderGlobalIlluminationMode globalIllumination = SceneRenderGlobalIlluminationMode::Disabled;
     std::uint32_t shadowMapSize = 1024U;
@@ -322,6 +326,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     MissingTextureBinding,
     MissingTextureResource,
     UnresolvedMaterialTexturePath,
+    MissingMaterialAsset,
+    InvalidMaterialAsset,
     DroppedInstances,
 };
 

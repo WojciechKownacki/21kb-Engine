@@ -17,6 +17,28 @@ namespace {
 
 } // namespace
 
+bool EditorSceneMeshAssetActions::IsMeshAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMesh" || metadata.importCategory == "Model" || metadata.importCategory == "Mesh";
+}
+
+bool EditorSceneMeshAssetActions::AssignMesh(
+    kb::scene::Scene& scene,
+    kb::scene::SceneEntity entity,
+    kb::assets::AssetId meshAssetId) {
+    if (!scene.Entities().IsAlive(entity)) {
+        return false;
+    }
+
+    kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(entity);
+    if (renderer == nullptr) {
+        return false;
+    }
+
+    renderer->meshAssetId = meshAssetId.value;
+    scene.Components().MeshRenderers().MarkModified(entity);
+    return true;
+}
+
 kb::scene::SceneEntity EditorSceneMeshAssetActions::CreateMeshEntity(
     kb::scene::Scene& scene,
     kb::assets::AssetId meshAssetId,

@@ -2,6 +2,7 @@
 
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "engine/scene/BehaviourComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -68,11 +69,43 @@ void RunRestorePreservesBehaviourComponentTest() {
         "Play mode restore did not preserve BehaviourComponent fields");
 }
 
+void RunRestoreMultipleRootMeshRenderersTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cube A" });
+    const kb::scene::SceneObject second = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "Cube B" });
+    Require(first.IsValid() && second.IsValid(), "Play mode multi-root mesh test objects were not created");
+    scene.Components().MeshRenderers().Set(first.Entity(), kb::scene::MeshRendererComponent{
+        .meshAssetId = 101U,
+        .materialAssetId = 201U,
+    });
+    scene.Components().MeshRenderers().Set(second.Entity(), kb::scene::MeshRendererComponent{
+        .meshAssetId = 102U,
+        .materialAssetId = 202U,
+    });
+
+    EditorPlayModeSceneSession session;
+    Require(session.Begin(scene, "PlayModeMultiRootMeshSnapshot"), "Play mode multi-root mesh snapshot was not captured");
+    scene.Entities().Destroy(first);
+    scene.Entities().Destroy(second);
+    Require(scene.Hierarchy().RootEntities().empty(), "Play mode multi-root mesh test did not remove scene roots");
+
+    Require(session.Restore(scene), "Play mode multi-root mesh snapshot was not restored");
+    Require(!session.Active(), "Play mode multi-root mesh session should clear after restore");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    Require(roots.size() == 2U, "Play mode multi-root mesh restore did not restore both roots");
+    const kb::scene::MeshRendererComponent* firstRenderer = scene.Components().MeshRenderers().TryGet(roots[0]);
+    const kb::scene::MeshRendererComponent* secondRenderer = scene.Components().MeshRenderers().TryGet(roots[1]);
+    Require(firstRenderer != nullptr && secondRenderer != nullptr, "Play mode multi-root mesh restore dropped MeshRenderer components");
+    Require(firstRenderer->meshAssetId == 101U && firstRenderer->materialAssetId == 201U, "Play mode multi-root mesh restore changed first renderer asset ids");
+    Require(secondRenderer->meshAssetId == 102U && secondRenderer->materialAssetId == 202U, "Play mode multi-root mesh restore changed second renderer asset ids");
+}
+
 } // namespace
 
 void RunEditorPlayModeSceneSessionTests() {
     RunRestoreRevertsRuntimeMutationTest();
     RunRestorePreservesBehaviourComponentTest();
+    RunRestoreMultipleRootMeshRenderersTest();
 }
 
 } // namespace kb::editor::tests

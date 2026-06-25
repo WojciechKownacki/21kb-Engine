@@ -175,10 +175,7 @@ void EditorMaterialPreviewScene::Rebuild(const kb::scene::Scene& sourceScene, kb
     CopyAssetRegistry(sourceScene.Assets().Manager(), targetManager);
     RegisterPreviewMesh(targetManager);
 
-    const kb::assets::AssetMetadata* metadata = targetManager.Registry().Find(materialAssetId);
-    const kb::render::ResolvedRuntimeMaterialAsset resolved = metadata != nullptr
-        ? kb::render::RuntimeMaterialResolver{}.ResolveAsset(targetManager, *metadata)
-        : kb::render::ResolvedRuntimeMaterialAsset{};
+    const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(targetManager, materialAssetId);
     kb::render::RenderMaterialAssetData telemetryMaterial{};
     if (resolved.resolved) {
         telemetryMaterial.desc = resolved.material.desc;

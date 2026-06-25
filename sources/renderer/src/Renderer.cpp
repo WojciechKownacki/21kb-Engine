@@ -34,6 +34,24 @@
 
 namespace kb::render {
 
+namespace {
+
+void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::optional<ScenePostProcessSettings>& settingsOverride) noexcept {
+    if (!settingsOverride.has_value()) {
+        return;
+    }
+
+    const ScenePostProcessSettings& settings = *settingsOverride;
+    output.postProcessSettings = settings;
+    output.outputTransform = settings.outputTransform;
+    output.bloomEnabled = settings.bloomEnabled && settings.bloomStrength > 0.0F;
+    output.fxaaEnabled = settings.fxaaEnabled;
+    output.temporalAntiAliasingEnabled = settings.temporalAntiAliasingEnabled;
+    output.tonemapEnabled = settings.tonemapEnabled;
+}
+
+} // namespace
+
 Renderer::Renderer() = default;
 
 Renderer::~Renderer() {
@@ -242,6 +260,9 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastSceneExposureStats_.reserve(submissions.size());
     lastSceneDiagnostics_.Clear();
     lastUnresolvedMaterialTexturePathCount_ = 0U;
+    lastDefaultMaterialFallbackCount_ = 0U;
+    lastErrorMaterialFallbackCount_ = 0U;
+    lastMaterialResolverDiagnosticCount_ = 0U;
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
         return false;
@@ -338,6 +359,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .materialResolver = runtimeMaterialResolver_,
         .diagnostics = lastSceneDiagnostics_,
         .unresolvedMaterialTexturePathCount = lastUnresolvedMaterialTexturePathCount_,
+        .defaultMaterialFallbackCount = lastDefaultMaterialFallbackCount_,
+        .errorMaterialFallbackCount = lastErrorMaterialFallbackCount_,
+        .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
     SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
@@ -447,6 +471,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .outputColor = desc.postProcess.finalTexture,
                 .extent = desc.target.viewport.extent,
             });
+            ApplyPostProcessSettingsOverride(postProcessOutput, desc.postProcessSettings);
         }
         if (!postProcessOutput.IsValid()) {
             return false;
@@ -597,6 +622,9 @@ Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexc
         .syncStats = syncStats,
         .defaultLightingConfig = defaultSceneLightingConfig_,
         .unresolvedMaterialTexturePathCount = lastUnresolvedMaterialTexturePathCount_,
+        .defaultMaterialFallbackCount = lastDefaultMaterialFallbackCount_,
+        .errorMaterialFallbackCount = lastErrorMaterialFallbackCount_,
+        .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .scenePassSubmitStatsCapacity = static_cast<std::uint32_t>(lastScenePassSubmitStats_.capacity()),
         .shadowMapSize = defaultShadowMap_.Size(),
         .shadowMapAllocationBytes = defaultShadowMap_.AllocationBytes(),

@@ -2496,6 +2496,28 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     return true;
 }
 
+bool EditorSceneContext::SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
+        console_.Warning("Inspector", "Mesh assignment ignored for invalid entity.");
+        return false;
+    }
+    if (!scene_->Components().MeshRenderers().Has(entity)) {
+        console_.Warning("Inspector", "Selected entity does not have a Mesh Renderer component.");
+        return false;
+    }
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneMeshAssetActions::IsMeshAsset(*metadata)) {
+            console_.Warning("Inspector", "Only mesh assets can be assigned to a Mesh Renderer.");
+            return false;
+        }
+    }
+
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh" : "Clear Mesh", [this, entity, assetId]() {
+        return EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId);
+    });
+}
+
 bool EditorSceneContext::SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
     if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Inspector", "Material assignment ignored for invalid entity.");
@@ -2877,6 +2899,9 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
         hierarchySearch_,
         pendingSceneTransactionLabel_,
         sceneRenderRevision_,
+        sceneRenderDirtyBaseRevision_,
+        sceneRenderDirtyEntityIds_,
+        sceneRenderFullDirty_,
         sceneDocumentDirty_,
         hierarchyRowsDirty_,
     };

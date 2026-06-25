@@ -184,6 +184,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
     validateTexture(material->albedoTexture, material->albedoTextureAssetId);
     validateTexture(material->normalTexture, material->normalTextureAssetId);
     validateTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId);
+    validateTexture(material->occlusionTexture, material->occlusionTextureAssetId);
     validateTexture(material->emissiveTexture, material->emissiveTextureAssetId);
 }
 
@@ -197,13 +198,16 @@ std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
         instance.materialSlotAssetIds[section.materialSlot] != 0U) {
         return instance.materialSlotAssetIds[section.materialSlot];
     }
+    if (batch.materialAssetId != 0U) {
+        return batch.materialAssetId;
+    }
     if (meshResource != nullptr && section.materialSlot < meshResource->materialSlots.size()) {
         const std::uint64_t defaultMaterialAssetId = meshResource->materialSlots[section.materialSlot].defaultMaterialAssetId;
         if (defaultMaterialAssetId != 0U) {
             return defaultMaterialAssetId;
         }
     }
-    return batch.materialAssetId;
+    return 0U;
 }
 
 } // namespace kb::render

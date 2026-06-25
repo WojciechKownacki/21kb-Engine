@@ -37,6 +37,9 @@ public:
         EditorHierarchySearchState& hierarchySearch,
         std::optional<std::string>& pendingTransactionLabel,
         std::uint64_t& sceneRenderRevision,
+        std::uint64_t& sceneRenderDirtyBaseRevision,
+        std::vector<std::uint64_t>& sceneRenderDirtyEntityIds,
+        bool& sceneRenderFullDirty,
         bool& sceneDocumentDirty,
         bool& hierarchyRowsDirty) noexcept;
 
@@ -62,6 +65,9 @@ private:
     EditorHierarchySearchState& hierarchySearch_;
     std::optional<std::string>& pendingTransactionLabel_;
     std::uint64_t& sceneRenderRevision_;
+    std::uint64_t& sceneRenderDirtyBaseRevision_;
+    std::vector<std::uint64_t>& sceneRenderDirtyEntityIds_;
+    bool& sceneRenderFullDirty_;
     bool& sceneDocumentDirty_;
     bool& hierarchyRowsDirty_;
 };

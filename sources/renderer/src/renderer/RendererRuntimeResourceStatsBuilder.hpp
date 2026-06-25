@@ -23,6 +23,9 @@ struct RendererRuntimeResourceStatsBuildDesc {
     EcsRenderSceneSynchronizerStats syncStats{};
     SceneRenderLightingConfig defaultLightingConfig{};
     std::uint32_t unresolvedMaterialTexturePathCount = 0;
+    std::uint32_t defaultMaterialFallbackCount = 0;
+    std::uint32_t errorMaterialFallbackCount = 0;
+    std::uint32_t materialResolverDiagnosticCount = 0;
     std::uint32_t scenePassSubmitStatsCapacity = 0;
     std::uint32_t shadowMapSize = 0;
     std::uint64_t shadowMapAllocationBytes = 0;

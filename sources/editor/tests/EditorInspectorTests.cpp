@@ -30,6 +30,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
@@ -220,6 +221,24 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
 
     std::filesystem::remove(sceneFile, cleanupError);
     std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
+}
+
+void RunMeshRendererMeshAssignmentActionTest() {
+    kb::scene::Scene scene;
+    const kb::assets::AssetId meshId{ 0x4D455348A5510001ULL };
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh Target" });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
+
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh", .importCategory = "Model" }), "RenderMesh model asset should be accepted as mesh");
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh" }), "RenderMesh asset should be accepted as mesh without import category");
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .importCategory = "Mesh" }), "Mesh import category should be accepted as mesh");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMaterial" }), "Non-mesh asset should be rejected as mesh");
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::AssignMesh(scene, entity, meshId), "Mesh Renderer mesh action did not assign a mesh asset");
+    const kb::scene::MeshRendererComponent* assigned = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(assigned != nullptr && assigned->meshAssetId == meshId.value, "Mesh Renderer mesh action did not store meshAssetId");
+    kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::AssignMesh(scene, entity, {}), "Mesh Renderer mesh action did not clear meshAssetId");
+    const kb::scene::MeshRendererComponent* cleared = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(cleared != nullptr && cleared->meshAssetId == 0U, "Mesh Renderer mesh action did not clear meshAssetId");
 }
 
 void RunMeshRendererMaterialSlotModelTest() {
@@ -618,6 +637,11 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     submitRenderer.Shutdown();
 
     const std::uint64_t firstRevision = preview.Revision();
+    kb::render::RenderMaterialAssetData updatedMaterial{};
+    updatedMaterial.desc.baseColor[0] = 0.18F;
+    updatedMaterial.desc.baseColor[1] = 0.72F;
+    updatedMaterial.desc.baseColor[2] = 0.44F;
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(materialFile, updatedMaterial), "Material preview hot reload test could not write changed material fixture");
     static_cast<void>(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
         .id = materialId,
         .type = "RenderMaterial",
@@ -629,6 +653,7 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     }));
     static_cast<void>(preview.SceneFor(source, materialId));
     kb::editor::tests::Require(preview.Revision() > firstRevision, "Material preview scene did not rebuild after material content hash changed");
+    kb::editor::tests::Require(preview.Telemetry().missingTextureCount == 0U, "Material preview scene did not reload the changed material document");
 
     std::filesystem::remove(materialFile, cleanupError);
 }
@@ -725,6 +750,7 @@ void RunEditorInspectorTests() {
     RunMaterialTextureSlotDiagnosticTest();
     RunAudioAssetAssignmentTest();
     RunMaterialAssetAssignmentSavesInSceneTest();
+    RunMeshRendererMeshAssignmentActionTest();
     RunMeshRendererMaterialSlotModelTest();
     RunMaterialCreateAssignSaveReloadE2ETest();
     RunMaterialRenamePreservesMeshRendererAssignmentTest();
