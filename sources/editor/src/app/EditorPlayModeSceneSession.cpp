@@ -26,9 +26,7 @@ bool EditorPlayModeSceneSession::Restore(kb::scene::Scene& scene) {
     }
 
     const bool restored = kb::scene::SceneDocumentService::LoadIntoScene(scene, *snapshot_);
-    if (restored) {
-        Clear();
-    }
+    Clear();
     return restored;
 }
 

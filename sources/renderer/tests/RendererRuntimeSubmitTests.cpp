@@ -1,14 +1,18 @@
 #include "RendererTestSupport.hpp"
 
 #include "engine/assets/AssetMetadata.hpp"
+#include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneLightingAccess.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -16,7 +20,9 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -24,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -229,6 +236,61 @@ void WriteMaterialWithTexturePaths(
         << "emissiveTexture " << emissiveTexturePath << "\n";
 }
 
+[[nodiscard]] std::optional<std::filesystem::path> FindWorkspaceProjectAssets() {
+    std::filesystem::path cursor = std::filesystem::current_path();
+    for (int depth = 0; depth < 8; ++depth) {
+        const std::filesystem::path assets = cursor / "Project" / "Assets";
+        std::error_code error;
+        if (std::filesystem::is_regular_file(assets / "Cube.21kb", error) &&
+            std::filesystem::is_regular_file(assets / "Scenes" / "Main.21kbscene", error)) {
+            return assets;
+        }
+        if (!cursor.has_parent_path()) {
+            break;
+        }
+        cursor = cursor.parent_path();
+    }
+    return std::nullopt;
+}
+
+void RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_runtime_material_resolver";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Runtime material resolver test could not create temp root");
+
+    const std::filesystem::path brokenMaterialPath = root / "broken.kbmat";
+    {
+        std::ofstream output{ brokenMaterialPath, std::ios::trunc };
+        output << "roughnessFactor broken\n";
+    }
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Runtime material resolver test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Runtime material resolver test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "Runtime material resolver test did not discover the broken material");
+    const kb::assets::AssetMetadata* brokenMetadata = manager.Registry().FindByPath("/Game/broken.kbmat");
+    Require(brokenMetadata != nullptr && brokenMetadata->type == "RenderMaterial", "Runtime material resolver test discovered wrong material metadata");
+
+    RuntimeMaterialResolver resolver;
+    const ResolvedRuntimeMaterialAsset missing = resolver.ResolveAsset(manager, kb::assets::AssetId{ 404404U });
+    Require(missing.resolved, "Runtime material resolver should resolve missing materials to a fallback");
+    Require(missing.status == RuntimeMaterialResolveStatus::DefaultMaterial, "Missing material asset should use the default material fallback");
+    Require(missing.diagnostics.size() == 1U && missing.diagnostics[0].kind == RuntimeMaterialResolveDiagnosticKind::MissingMaterialAsset, "Missing material asset should report a typed diagnostic");
+    Require(NearlyEqual(missing.material.desc.baseColor[0], 1.0F) && NearlyEqual(missing.material.desc.baseColor[1], 1.0F), "Default material fallback should be white");
+
+    const ResolvedRuntimeMaterialAsset broken = resolver.ResolveAsset(manager, *brokenMetadata);
+    Require(broken.resolved, "Runtime material resolver should resolve invalid materials to a fallback");
+    Require(broken.status == RuntimeMaterialResolveStatus::ErrorMaterial, "Invalid material asset should use the error material fallback");
+    Require(!broken.diagnostics.empty(), "Invalid material asset should expose parser diagnostics");
+    Require(broken.diagnostics[0].kind == RuntimeMaterialResolveDiagnosticKind::MaterialLoadFailed, "Invalid material diagnostic should be typed as a load failure");
+    Require(broken.diagnostics[0].message.find("invalid_float") != std::string::npos, "Invalid material diagnostic should preserve parser diagnostic code");
+    Require(NearlyEqual(broken.material.desc.baseColor[0], 1.0F) && NearlyEqual(broken.material.desc.baseColor[1], 0.0F) && NearlyEqual(broken.material.desc.baseColor[2], 1.0F), "Error material fallback should be magenta");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void WriteReloadableMaterial(
     const std::filesystem::path& path,
     float red,
@@ -240,6 +302,75 @@ void WriteReloadableMaterial(
         << "roughnessFactor " << roughness << "\n"
         << "alphaMode OPAQUE\n"
         << "albedoTextureAssetId " << albedoTextureId << "\n";
+}
+
+void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_missing_material_fallback";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Missing material fallback test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    WriteTriangleObj(meshPath);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Missing material fallback test could not register mesh loader");
+    Require(manager.Mounts().Mount("Game", root), "Missing material fallback test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "Missing material fallback test did not discover mesh asset");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Missing material fallback test discovered wrong mesh metadata");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Missing Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = 404404U,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Missing material fallback test renderer did not initialize");
+    Require(renderer.BeginFrame(), "Missing material fallback test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "Missing material fallback test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.defaultMaterialFallbackCount == 1U, "Missing material fallback should increment runtime default material fallback stats");
+    Require(runtimeStats.errorMaterialFallbackCount == 0U, "Missing material fallback should not increment runtime error material fallback stats");
+    Require(runtimeStats.materialResolverDiagnosticCount == 1U, "Missing material fallback should report one resolver diagnostic");
+    Require(runtimeStats.cachedMaterialCount == 1U, "Missing material fallback should register a runtime material resource");
+    Require(!renderer.LastSceneSubmitStats().HasMissingResources(), "Missing material fallback should keep submit resources valid");
+
+    bool foundMissingMaterialDiagnostic = false;
+    for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
+        if (event.kind == SceneRenderDiagnosticKind::MissingMaterialAsset && event.materialAssetId == 404404U) {
+            foundMissingMaterialDiagnostic = true;
+        }
+    }
+    Require(foundMissingMaterialDiagnostic, "Missing material fallback should emit a render diagnostic");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
 }
 
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
@@ -537,6 +668,28 @@ void RunRendererReloadsChangedRuntimeMaterialAssetTest() {
     Require(NearlyEqual(firstMaterial->roughnessFactor, 0.7F), "Initial runtime material resource did not use first asset roughness");
     renderer.EndFrame();
 
+    {
+        std::ofstream output{ materialPath, std::ios::trunc };
+        output
+            << "version 1\n"
+            << "materialType builtin.pbr\n"
+            << "materialTypeVersion 1\n"
+            << "roughnessFactor broken\n";
+    }
+    Require(renderer.BeginFrame(), "Renderer did not begin steady-state material cache frame");
+    Require(renderer.SubmitScene(scene, desc), "Renderer did not submit steady-state material cache frame");
+    const SceneRenderSubmitStats steadySubmitStats = renderer.LastSceneSubmitStats();
+    Require(steadySubmitStats.meshDrawCommandCacheHitCount == 1U, "Unchanged material metadata should reuse the cached draw command");
+    Require(steadySubmitStats.meshDrawCommandCacheMissCount == 0U, "Unchanged material metadata should not rebuild draw command cache");
+    const RenderMaterialHandle steadyHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* steadyMaterial = resources->FindMaterial(steadyHandle);
+    Require(steadyHandle.IsValid() && steadyMaterial != nullptr, "Unchanged material metadata should keep a valid cached material resource");
+    Require(steadyHandle == firstHandle, "Unchanged material metadata should keep the cached material handle");
+    Require(steadyMaterial == firstMaterial, "Unchanged material metadata should keep the cached material resource");
+    Require(NearlyEqual(steadyMaterial->baseColor[0], 0.2F), "Runtime steady-state should not reparse material files without registry rediscovery");
+    Require(NearlyEqual(steadyMaterial->roughnessFactor, 0.7F), "Runtime steady-state should not replace cached material with an undiscovered file edit");
+    renderer.EndFrame();
+
     WriteReloadableMaterial(materialPath, 0.9F, 0.35F, textureAssetId);
     Require(manager.DiscoverMountedAssets() >= 3U, "Runtime material reload test did not rediscover changed material asset");
     materialMetadata = manager.Registry().FindByPath("/Game/reloadable.kbmat");
@@ -674,6 +827,132 @@ void RunRendererSubmitsMaterialInstanceAssetInHeadlessNoopTest() {
     renderer.EndFrame();
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
+}
+
+void RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest() {
+    const std::optional<std::filesystem::path> projectAssets = FindWorkspaceProjectAssets();
+    if (!projectAssets.has_value()) {
+        return;
+    }
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Workspace scene test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Workspace scene test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "Workspace scene test could not register material instance loader");
+    Require(manager.Mounts().Mount("Game", *projectAssets), "Workspace scene test could not mount Project/Assets");
+    Require(manager.DiscoverMountedAssets() >= 1U, "Workspace scene test did not discover project assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/Cube.21kb");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/NewMaterial.kbmat");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Workspace Cube.21kb was not discovered as RenderMesh");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Workspace NewMaterial.kbmat was not discovered as RenderMaterial");
+
+    const kb::assets::AssetHandle<RenderMeshAssetData> loadedMesh = manager.Load<RenderMeshAssetData>(meshMetadata->id);
+    const kb::assets::AssetHandle<RenderMaterialAssetData> loadedMaterial = manager.Load<RenderMaterialAssetData>(materialMetadata->id);
+    Require(loadedMesh.IsLoaded(), "Workspace Cube.21kb could not be loaded as RenderMeshAssetData before scene reopen");
+    Require(loadedMaterial.IsLoaded(), "Workspace NewMaterial.kbmat could not be loaded as RenderMaterialAssetData before scene reopen");
+
+    const std::filesystem::path scenePath = *projectAssets / "Scenes" / "Main.21kbscene";
+    Require(kb::scene::SceneDocumentService::LoadFileIntoScene(scene, scenePath), "Workspace Main.21kbscene could not be loaded into a scene");
+    const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+    Require(roots.size() == 1U, "Workspace Main.21kbscene should load one root entity for the cube test");
+    const kb::scene::MeshRendererComponent* rendererComponent = scene.Components().MeshRenderers().TryGet(roots.front());
+    const kb::scene::TransformComponent* rootTransform = scene.Transforms().TryGet(roots.front());
+    Require(rendererComponent != nullptr, "Workspace Main.21kbscene root did not keep its Mesh Renderer");
+    Require(rootTransform != nullptr, "Workspace Main.21kbscene root did not keep its Transform");
+    Require(rendererComponent->meshAssetId == meshMetadata->id.value, "Workspace Main.21kbscene Mesh Renderer mesh id does not match discovered Cube.21kb id");
+    Require(rendererComponent->materialAssetId == materialMetadata->id.value, "Workspace Main.21kbscene Mesh Renderer material id does not match discovered NewMaterial.kbmat id");
+    std::uint32_t visitedMeshRendererCount = 0U;
+    scene.Components().Visitors().ForEachMeshRenderer(
+        [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent&, void* context) {
+            auto* count = static_cast<std::uint32_t*>(context);
+            ++(*count);
+        },
+        &visitedMeshRendererCount);
+    Require(visitedMeshRendererCount == 1U, "Workspace Main.21kbscene Mesh Renderer is stored but not visible to ECS render iteration");
+
+    const kb::scene::SceneEntity cameraEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Workspace Runtime Test Camera",
+        .transform = TransformAt(0.0F, 0.0F, -6.0F),
+    });
+    scene.Components().Cameras().Set(cameraEntity, kb::scene::CameraComponent{
+        .projection = kb::scene::CameraProjection::Perspective,
+        .verticalFovDegrees = 60.0F,
+        .orthographicHeight = 10.0F,
+        .nearClip = 0.01F,
+        .farClip = 100.0F,
+        .primary = true,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 2U,
+        .cachedMaterials = 4U,
+        .frameReferencedMeshes = 2U,
+        .frameReferencedMaterials = 4U,
+        .scenePassSubmitStats = 2U,
+        .renderSceneMeshProxies = 4U,
+        .renderSceneDrawGroupKeys = 4U,
+        .meshResourceSlots = 2U,
+        .materialResourceSlots = 4U,
+        .meshBindings = 2U,
+        .materialBindings = 4U,
+        .syncMeshProxies = 4U,
+        .syncTransformCacheEntries = 4U,
+        .syncTransformResolvingEntries = 4U,
+    });
+    Require(renderer.Initialize(surface, &config), "Workspace scene renderer did not initialize in headless Noop mode");
+    RenderResourceRegistry directResources;
+    const RenderMeshHandle directMeshHandle = directResources.RegisterMesh(loadedMesh->desc);
+    Require(directMeshHandle.IsValid(), "Workspace Cube.21kb loaded but its mesh desc could not register as a runtime mesh resource");
+    directResources.Shutdown();
+    Require(renderer.BeginFrame(), "Workspace scene renderer did not begin a frame");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 4U,
+            .maxVisibleInstances = 8U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+    Require(renderer.SubmitScene(scene, desc), "Workspace reopened scene did not submit to the runtime renderer");
+
+    const SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Workspace scene test could not inspect runtime render resources");
+    const RenderMeshHandle meshHandle = resourceMap->ResolveMesh(meshMetadata->id.value);
+    const RenderMaterialHandle materialHandle = resourceMap->ResolveMaterial(materialMetadata->id.value);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(materialHandle);
+    Require(meshHandle.IsValid(), "Workspace reopened scene did not bind Cube.21kb to a runtime mesh handle");
+    Require(materialHandle.IsValid() && materialResource != nullptr, "Workspace reopened scene did not bind NewMaterial.kbmat to a runtime material handle");
+    Require(NearlyEqual(materialResource->baseColor[0], loadedMaterial->desc.baseColor[0]) &&
+            NearlyEqual(materialResource->baseColor[1], loadedMaterial->desc.baseColor[1]) &&
+            NearlyEqual(materialResource->baseColor[2], loadedMaterial->desc.baseColor[2]),
+        "Workspace runtime material resource did not preserve NewMaterial base color");
+    Require(!submitStats.HasMissingResources(), "Workspace reopened scene reported missing mesh or material resources");
+    Require(submitStats.submittedMeshCount == 1U, "Workspace reopened scene did not submit the cube mesh");
+    Require(submitStats.submittedDrawCallCount == 1U, "Workspace reopened scene did not emit one cube draw call");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
 }
 
 void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
@@ -838,9 +1117,12 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 } // namespace
 
 void RunRendererRuntimeSubmitTests() {
+    RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
+    RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunRendererSubmitsMaterialInstanceAssetInHeadlessNoopTest();
+    RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }

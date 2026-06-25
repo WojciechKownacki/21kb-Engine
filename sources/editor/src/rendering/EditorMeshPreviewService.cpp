@@ -1,7 +1,9 @@
 #include "rendering/EditorMeshPreviewService.hpp"
 
+#include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "rendering/EditorMeshPreviewRasterizer.hpp"
 #include "rendering/EditorMeshThumbnailDiskCache.hpp"
 
@@ -55,6 +57,33 @@ constexpr std::size_t kMaxCachedPreviewVariants = 16U;
 
 [[nodiscard]] bool HasImage(const EditorMeshThumbnailImage& image) noexcept {
     return image.width > 0 && image.height > 0 && !image.bgra.empty();
+}
+
+[[nodiscard]] std::uint64_t PreviewMaterialCacheKey(const kb::assets::AssetManager* manager) noexcept {
+    return manager == nullptr ? 0U : manager->Revision();
+}
+
+void ApplyResolvedPreviewMaterial(
+    const kb::assets::AssetManager* manager,
+    const kb::render::RenderMeshAssetData& mesh,
+    EditorMeshPreviewGeometry& geometry) {
+    if (manager == nullptr || mesh.materialSlots.empty()) {
+        return;
+    }
+
+    const std::uint64_t materialAssetId = mesh.materialSlots.front().defaultMaterialAssetId;
+    if (materialAssetId == 0U) {
+        return;
+    }
+
+    kb::assets::AssetManager& mutableManager = const_cast<kb::assets::AssetManager&>(*manager);
+    const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(mutableManager, kb::assets::AssetId{ materialAssetId });
+    if (!resolved.resolved) {
+        return;
+    }
+    std::copy(std::begin(resolved.material.desc.baseColor), std::end(resolved.material.desc.baseColor), std::begin(geometry.materialBaseColor));
+    std::copy(std::begin(resolved.material.desc.emissiveColor), std::end(resolved.material.desc.emissiveColor), std::begin(geometry.materialEmissiveColor));
+    geometry.materialEmissiveStrength = resolved.material.desc.emissiveStrength;
 }
 
 void AddIssue(EditorMeshValidationResult& result, EditorMeshValidationSeverity severity, std::string message) {
@@ -203,11 +232,19 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::a
 }
 
 const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
+    return PreviewFor(nullptr, metadata, settings);
+}
+
+const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
+    return PreviewFor(&manager, metadata, settings);
+}
+
+const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
 
-    Entry& entry = EnsureEntry(metadata);
+    Entry& entry = EnsureEntry(manager, metadata);
     if (entry.state != EntryState::Ready) {
         return nullptr;
     }
@@ -243,24 +280,40 @@ const EditorMeshThumbnailImage* EditorMeshPreviewService::PreviewFor(const kb::a
 }
 
 const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::assets::AssetMetadata& metadata) {
+    return StatsFor(nullptr, metadata);
+}
+
+const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+    return StatsFor(&manager, metadata);
+}
+
+const EditorMeshThumbnailStats* EditorMeshPreviewService::StatsFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
 
-    const Entry& entry = EnsureEntry(metadata);
+    const Entry& entry = EnsureEntry(manager, metadata);
     return entry.state == EntryState::Ready ? &entry.stats : nullptr;
 }
 
 const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const kb::assets::AssetMetadata& metadata) {
+    return ValidationFor(nullptr, metadata);
+}
+
+const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+    return ValidationFor(&manager, metadata);
+}
+
+const EditorMeshValidationResult* EditorMeshPreviewService::ValidationFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
     if (!IsMeshAsset(metadata)) {
         return nullptr;
     }
 
-    Entry& entry = EnsureEntry(metadata);
+    Entry& entry = EnsureEntry(manager, metadata);
     if (entry.state != EntryState::Ready) {
         return nullptr;
     }
-    if (entry.validation.issues.empty() && EnsureGeometry(metadata, entry)) {
+    if (entry.validation.issues.empty() && EnsureGeometry(manager, metadata, entry)) {
         entry.validation = ValidateGeometry(entry.geometry);
     }
     return &entry.validation;
@@ -309,10 +362,15 @@ bool EditorMeshPreviewService::IsMeshAsset(const kb::assets::AssetMetadata& meta
 }
 
 std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEntry(const kb::assets::AssetMetadata& metadata) {
+    return BuildEntry(nullptr, metadata);
+}
+
+std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
     Entry cached;
     cached.contentHash = metadata.contentHash;
+    cached.materialContentHash = PreviewMaterialCacheKey(manager);
     cached.state = EntryState::Ready;
-    if (EditorMeshThumbnailDiskCache::Load(metadata, cached.thumbnail, cached.preview, cached.stats)) {
+    if (manager == nullptr && EditorMeshThumbnailDiskCache::Load(metadata, cached.thumbnail, cached.preview, cached.stats)) {
         return cached;
     }
 
@@ -328,8 +386,10 @@ std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEn
 
     Entry entry;
     entry.contentHash = metadata.contentHash;
+    entry.materialContentHash = PreviewMaterialCacheKey(manager);
     entry.state = EntryState::Ready;
     entry.geometry = std::move(geometry);
+    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.stats = entry.geometry.stats;
     entry.validation = ValidateGeometry(entry.geometry);
@@ -337,16 +397,22 @@ std::optional<EditorMeshPreviewService::Entry> EditorMeshPreviewService::BuildEn
 }
 
 EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(const kb::assets::AssetMetadata& metadata) {
+    return EnsureEntry(nullptr, metadata);
+}
+
+EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata) {
+    const std::uint64_t materialContentHash = PreviewMaterialCacheKey(manager);
     const auto existing = entries_.find(metadata.id.value);
-    if (existing != entries_.end() && existing->second.contentHash == metadata.contentHash) {
+    if (existing != entries_.end() && existing->second.contentHash == metadata.contentHash && existing->second.materialContentHash == materialContentHash) {
         return existing->second;
     }
 
     Entry entry;
-    if (std::optional<Entry> built = BuildEntry(metadata)) {
+    if (std::optional<Entry> built = BuildEntry(manager, metadata)) {
         entry = std::move(*built);
     } else {
         entry.contentHash = metadata.contentHash;
+        entry.materialContentHash = materialContentHash;
         entry.state = EntryState::Failed;
     }
 
@@ -357,6 +423,10 @@ EditorMeshPreviewService::Entry& EditorMeshPreviewService::EnsureEntry(const kb:
 }
 
 bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetMetadata& metadata, Entry& entry) {
+    return EnsureGeometry(nullptr, metadata, entry);
+}
+
+bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, Entry& entry) {
     if (entry.geometryLoaded) {
         return !entry.geometry.positions.empty();
     }
@@ -366,6 +436,7 @@ bool EditorMeshPreviewService::EnsureGeometry(const kb::assets::AssetMetadata& m
         return false;
     }
     entry.geometry = EditorMeshPreviewRasterizer::ExtractGeometry(*mesh);
+    ApplyResolvedPreviewMaterial(manager, *mesh, entry.geometry);
     entry.geometryLoaded = true;
     entry.validation = ValidateGeometry(entry.geometry);
     if (entry.stats.vertexCount == 0U) {

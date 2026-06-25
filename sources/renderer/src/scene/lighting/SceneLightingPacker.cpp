@@ -105,6 +105,32 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
     return true;
 }
 
+bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
+    if (!config.editorPreviewKeyLightEnabled || config.editorPreviewKeyLightIntensity <= 0.0F || slot >= kMaxSceneForwardLights) {
+        return false;
+    }
+
+    float x = config.editorPreviewKeyLightDirection[0];
+    float y = config.editorPreviewKeyLightDirection[1];
+    float z = config.editorPreviewKeyLightDirection[2];
+    Normalize(x, y, z);
+
+    const std::uint32_t offset = slot * 4U;
+    lighting.dirKind[offset + 0U] = x;
+    lighting.dirKind[offset + 1U] = y;
+    lighting.dirKind[offset + 2U] = z;
+    lighting.dirKind[offset + 3U] = LightKindValue(RenderLightKind::Directional);
+    lighting.positionRange[offset + 0U] = 0.0F;
+    lighting.positionRange[offset + 1U] = 0.0F;
+    lighting.positionRange[offset + 2U] = 0.0F;
+    lighting.positionRange[offset + 3U] = 0.0F;
+    lighting.colorIntensity[offset + 0U] = std::max(config.editorPreviewKeyLightColor[0], 0.0F);
+    lighting.colorIntensity[offset + 1U] = std::max(config.editorPreviewKeyLightColor[1], 0.0F);
+    lighting.colorIntensity[offset + 2U] = std::max(config.editorPreviewKeyLightColor[2], 0.0F);
+    lighting.colorIntensity[offset + 3U] = std::max(config.editorPreviewKeyLightIntensity, 0.0F);
+    return true;
+}
+
 [[nodiscard]] std::uint32_t ClampedForwardLightBudget(SceneRenderLightingConfig config) noexcept {
     if (config.maxForwardLights == 0U) {
         return 0U;
@@ -225,12 +251,18 @@ PackedSceneLighting SceneLightingPacker::Build(
     stats.forwardLightCapacity = capacity;
     const std::array<float, 4> cameraPosition = CameraPosition(camera);
     const SceneForwardLightSelection selection = SceneForwardLightSelector::Select(renderScene.LightProxies(), capacity, cameraPosition, stats, config);
+    std::uint32_t submittedSceneLightCount = 0U;
     for (std::uint32_t slot = 0U; slot < selection.selectedCount; ++slot) {
         if (selection.selected[slot].light != nullptr && PackLight(*selection.selected[slot].light, slot, lighting)) {
             ++stats.submittedForwardLightCount;
+            ++submittedSceneLightCount;
         }
     }
-    stats.skippedForwardLightCount = selection.validLightCount - stats.submittedForwardLightCount;
+    if (stats.submittedForwardLightCount < capacity &&
+        PackEditorPreviewKeyLight(config, stats.submittedForwardLightCount, lighting)) {
+        ++stats.submittedForwardLightCount;
+    }
+    stats.skippedForwardLightCount = selection.validLightCount - submittedSceneLightCount;
     lighting.params[0] = static_cast<float>(stats.submittedForwardLightCount);
     return lighting;
 }
