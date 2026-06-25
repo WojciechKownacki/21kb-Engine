@@ -771,6 +771,9 @@ add_executable(kb_editor WIN32
     ../../third_party/heroicons/optimized/16/solid/list-bullet.svg
     ../../third_party/heroicons/optimized/24/solid/cube.svg
     ../../third_party/heroicons/optimized/24/solid/folder.svg
+    ../../third_party/heroicons/optimized/24/solid/sun.svg
+    content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt
+    content/EditorShell/Icons/SceneView/sun-solid.svg
     ../../third_party/lucide/LICENSE
     ../../third_party/lucide/README.third_party.md
     ../../third_party/lucide/icons/gamepad-2.svg
@@ -800,6 +803,13 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/sun-solid.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -807,6 +817,13 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/sun-solid.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
     VERBATIM
 )
 

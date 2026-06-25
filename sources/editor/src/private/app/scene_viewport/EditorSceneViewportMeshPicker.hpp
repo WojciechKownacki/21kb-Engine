@@ -15,6 +15,13 @@ public:
     EditorSceneViewportMeshPicker() = delete;
 
     [[nodiscard]] static EditorSceneViewportPickResult PickNearest(const kb::scene::Scene& scene, const EditorSceneViewportRay& ray);
+    [[nodiscard]] static EditorSceneViewportPickResult PickNearest(
+        const kb::scene::Scene& scene,
+        const EditorViewportCameraState& camera,
+        const RECT& renderArea,
+        float screenX,
+        float screenY,
+        const EditorSceneViewportRay& ray);
     [[nodiscard]] static std::vector<kb::scene::SceneEntity> PickInsideRect(
         const kb::scene::Scene& scene,
         const EditorViewportCameraState& camera,
