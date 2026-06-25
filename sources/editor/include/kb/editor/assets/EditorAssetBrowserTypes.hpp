@@ -41,10 +41,12 @@ enum class EditorAssetContextTargetKind {
 
 enum class EditorAssetContextCommand {
     None,
+    Open,
     Import,
     NewFolder,
     NewLuaScript,
     NewMaterial,
+    Duplicate,
     CreateMaterialInstance,
     NewInputAction,
     NewInputAxis,
@@ -56,6 +58,7 @@ enum class EditorAssetContextCommand {
     AddSpotLight,
     Rename,
     Delete,
+    FindReferences,
     Refresh,
 };
 

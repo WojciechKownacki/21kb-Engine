@@ -553,6 +553,7 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
+            .materialAssetId = 999U,
             .instances = {
                 SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
                 SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .model = IdentityMatrix() },
@@ -568,9 +569,9 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
     });
 
     Require(result.commands.size() == 2U, "MeshPipeline did not emit one command per mesh section");
-    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not use section material slot 0 default material");
+    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not prefer section material slot 0 default material over the main material fallback");
     Require(result.commands[0].indexStart == 0U && result.commands[0].indexCount == 6U, "MeshPipeline section 0 did not preserve index range");
-    Require(result.commands[1].materialAssetId == 102U, "MeshPipeline did not use section material slot 1 default material");
+    Require(result.commands[1].materialAssetId == 102U, "MeshPipeline did not prefer section material slot 1 default material over the main material fallback");
     Require(result.commands[1].indexStart == 6U && result.commands[1].indexCount == 12U, "MeshPipeline section 1 did not preserve index range");
     Require(result.commands[0].instances.size() == 2U && result.commands[1].instances.size() == 2U, "MeshPipeline section commands did not preserve instancing");
 }
@@ -602,6 +603,7 @@ void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
+            .materialAssetId = 999U,
             .instances = {
                 SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
                 overridden,
@@ -617,7 +619,7 @@ void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
     });
 
     Require(result.commands.size() == 2U, "MeshPipeline did not split section commands by material slot override");
-    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not keep the default slot material command");
+    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not keep the default slot material command ahead of the main material fallback");
     Require(result.commands[0].instances.size() == 1U && result.commands[0].instances[0].entityId == 1U, "MeshPipeline put the wrong instance in the default material command");
     Require(result.commands[1].materialAssetId == 201U, "MeshPipeline did not use the instance material slot override");
     Require(result.commands[1].instances.size() == 1U && result.commands[1].instances[0].entityId == 2U, "MeshPipeline put the wrong instance in the override material command");

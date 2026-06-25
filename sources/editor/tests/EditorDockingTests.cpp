@@ -348,6 +348,26 @@ void RunMaterialEditorPanelActivationTest() {
     kb::editor::tests::Require(active != nullptr && active->active, "Material Editor panel did not become active after activation");
 }
 
+void RunClosedMaterialEditorReopensInRightDockTest() {
+    kb::editor::EditorDockModel model;
+    const kb::editor::DockLayout initialLayout = BuildDefaultLayout(model);
+    const kb::editor::DockLeafLayout* inspectorLeaf = FindLeafForPanel(initialLayout, 4U);
+    kb::editor::tests::Require(inspectorLeaf != nullptr, "Inspector leaf should exist before reopening Material Editor");
+
+    kb::editor::tests::Require(model.Commands().ClosePanel(10U), "Closing Material Editor tab should succeed");
+    const kb::editor::DockLayout closedLayout = BuildDefaultLayout(model);
+    kb::editor::tests::Require(FindPanelLayout(closedLayout, 10U) == nullptr, "Closed Material Editor tab should leave the layout");
+
+    kb::editor::tests::Require(
+        model.Commands().ActivatePanelKind(kb::editor::DockPanelKind::MaterialEditor, kb::editor::DockArea::Right),
+        "Double-click activation should reopen a closed Material Editor panel");
+    const kb::editor::DockLayout reopenedLayout = BuildDefaultLayout(model);
+    const kb::editor::DockPanelLayout* reopened = FindPanelLayout(reopenedLayout, 10U);
+    const kb::editor::DockPanelLayout* inspector = FindPanelLayout(reopenedLayout, 4U);
+    kb::editor::tests::Require(reopened != nullptr && reopened->active, "Reopened Material Editor should be active");
+    kb::editor::tests::Require(inspector != nullptr && reopened->leafId == inspector->leafId, "Reopened Material Editor should return to the right dock group");
+}
+
 void RunEditorDockingTests() {
     RunTabActivationPreservesOrderTest();
     RunClosePanelRemovesTabFromLayoutTest();
@@ -362,6 +382,7 @@ void RunEditorDockingTests() {
     RunMainToolbarTransportButtonsAreVerticallyCenteredTest();
     RunDefaultWorkspaceRegistersMaterialEditorPanelTest();
     RunMaterialEditorPanelActivationTest();
+    RunClosedMaterialEditorReopensInRightDockTest();
 }
 
 } // namespace kb::editor::tests

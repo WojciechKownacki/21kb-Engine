@@ -240,27 +240,32 @@ void RunEditMaterialAssetThroughEditorAuthoringTest() {
     kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material edit test could not create a material asset");
     const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
     kb::editor::tests::Require(metadata != nullptr, "Material edit test did not discover created material metadata");
-    const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> loadedBeforeEdit = scene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(metadata->id);
+    const kb::assets::AssetId materialId = metadata->id;
+    const std::uint64_t contentHashBeforeEdit = metadata->contentHash;
+    const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> loadedBeforeEdit = scene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(materialId);
     kb::editor::tests::Require(loadedBeforeEdit.IsLoaded(), "Material edit test could not load created material into runtime cache");
 
-    kb::editor::tests::Require(authoring.SetBaseColor(metadata->id, 0, 1.25F), "Material edit test could not set base color red");
-    kb::editor::tests::Require(authoring.SetBaseColor(metadata->id, 1, 0.5F), "Material edit test could not set base color green");
-    kb::editor::tests::Require(authoring.SetBaseColor(metadata->id, 2, -0.25F), "Material edit test could not set base color blue");
-    kb::editor::tests::Require(authoring.SetBaseColor(metadata->id, 3, 0.75F), "Material edit test could not set base color alpha");
-    kb::editor::tests::Require(authoring.SetMetallicFactor(metadata->id, 2.0F), "Material edit test could not set metallic factor");
-    kb::editor::tests::Require(authoring.SetRoughnessFactor(metadata->id, -2.0F), "Material edit test could not set roughness factor");
-    kb::editor::tests::Require(authoring.SetNormalScale(metadata->id, -3.0F), "Material edit test could not set normal scale");
-    kb::editor::tests::Require(authoring.SetOcclusionStrength(metadata->id, 0.25F), "Material edit test could not set occlusion strength");
-    kb::editor::tests::Require(authoring.SetEmissiveColor(metadata->id, 0, 0.1F), "Material edit test could not set emissive red");
-    kb::editor::tests::Require(authoring.SetEmissiveColor(metadata->id, 1, 0.2F), "Material edit test could not set emissive green");
-    kb::editor::tests::Require(authoring.SetEmissiveColor(metadata->id, 2, 0.3F), "Material edit test could not set emissive blue");
-    kb::editor::tests::Require(authoring.SetEmissiveStrength(metadata->id, -1.0F), "Material edit test could not set emissive strength");
-    kb::editor::tests::Require(authoring.SetAlphaCutoff(metadata->id, 0.45F), "Material edit test could not set alpha cutoff");
-    kb::editor::tests::Require(authoring.SetAlphaMode(metadata->id, kb::render::RenderMaterialAlphaMode::Mask), "Material edit test could not set alpha mode");
-    kb::editor::tests::Require(authoring.CycleAlphaMode(metadata->id), "Material edit test could not cycle alpha mode");
-    kb::editor::tests::Require(authoring.ToggleDoubleSided(metadata->id), "Material edit test could not toggle double-sided flag");
+    kb::editor::tests::Require(authoring.SetBaseColor(materialId, 0, 1.25F), "Material edit test could not set base color red");
+    kb::editor::tests::Require(authoring.SetBaseColor(materialId, 1, 0.5F), "Material edit test could not set base color green");
+    kb::editor::tests::Require(authoring.SetBaseColor(materialId, 2, -0.25F), "Material edit test could not set base color blue");
+    kb::editor::tests::Require(authoring.SetBaseColor(materialId, 3, 0.75F), "Material edit test could not set base color alpha");
+    kb::editor::tests::Require(authoring.SetMetallicFactor(materialId, 2.0F), "Material edit test could not set metallic factor");
+    kb::editor::tests::Require(authoring.SetRoughnessFactor(materialId, -2.0F), "Material edit test could not set roughness factor");
+    kb::editor::tests::Require(authoring.SetNormalScale(materialId, -3.0F), "Material edit test could not set normal scale");
+    kb::editor::tests::Require(authoring.SetOcclusionStrength(materialId, 0.25F), "Material edit test could not set occlusion strength");
+    kb::editor::tests::Require(authoring.SetEmissiveColor(materialId, 0, 0.1F), "Material edit test could not set emissive red");
+    kb::editor::tests::Require(authoring.SetEmissiveColor(materialId, 1, 0.2F), "Material edit test could not set emissive green");
+    kb::editor::tests::Require(authoring.SetEmissiveColor(materialId, 2, 0.3F), "Material edit test could not set emissive blue");
+    kb::editor::tests::Require(authoring.SetEmissiveStrength(materialId, -1.0F), "Material edit test could not set emissive strength");
+    kb::editor::tests::Require(authoring.SetAlphaCutoff(materialId, 0.45F), "Material edit test could not set alpha cutoff");
+    kb::editor::tests::Require(authoring.SetAlphaMode(materialId, kb::render::RenderMaterialAlphaMode::Mask), "Material edit test could not set alpha mode");
+    kb::editor::tests::Require(authoring.CycleAlphaMode(materialId), "Material edit test could not cycle alpha mode");
+    kb::editor::tests::Require(authoring.ToggleDoubleSided(materialId), "Material edit test could not toggle double-sided flag");
 
-    kb::editor::tests::Require(!scene.Assets().Manager().IsLoaded(metadata->id), "Material edit should unload stale runtime cache after save");
+    const kb::assets::AssetMetadata* editedMetadata = scene.Assets().Manager().Registry().Find(materialId);
+    kb::editor::tests::Require(editedMetadata != nullptr, "Material edit test lost material metadata after save");
+    kb::editor::tests::Require(editedMetadata->contentHash != contentHashBeforeEdit, "Material edit should update registry content hash for Project Files thumbnail refresh");
+    kb::editor::tests::Require(!scene.Assets().Manager().IsLoaded(materialId), "Material edit should unload stale runtime cache after save");
     const std::filesystem::path materialPath = TempRoot() / "Project" / "Assets" / "Materials" / "NewMaterial.kbmat";
     const std::optional<kb::render::RenderMaterialAssetData> edited = kb::render::RenderMaterialAssetLoader::LoadMaterial(materialPath);
     kb::editor::tests::Require(edited.has_value(), "Material edit test wrote an unreadable material file");
@@ -274,6 +279,100 @@ void RunEditMaterialAssetThroughEditorAuthoringTest() {
     kb::editor::tests::Require(kb::editor::tests::NearlyEqual(edited->desc.alphaCutoff, 0.45F), "Material edit test did not persist alpha cutoff");
     kb::editor::tests::Require(edited->desc.alphaMode == kb::render::RenderMaterialAlphaMode::Blend, "Material edit test did not persist cycled alpha mode");
     kb::editor::tests::Require(edited->desc.doubleSided, "Material edit test did not persist double-sided flag");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
+void RunMaterialCreateEditSaveReopenE2ETest() {
+    CleanTempRoot();
+
+    const std::filesystem::path projectRoot = TempRoot() / "Project";
+    const std::filesystem::path materialPath = projectRoot / "Assets" / "Materials" / "NewMaterial.kbmat";
+    kb::assets::AssetId createdMaterialId{};
+    {
+        kb::scene::Scene scene;
+        kb::editor::EditorAssetBrowserState browser;
+        kb::editor::EditorConsoleState console;
+        kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Material E2E test could not mount project assets");
+
+        kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+        kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material E2E test could not create a material asset");
+        const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+        kb::editor::tests::Require(metadata != nullptr, "Material E2E test did not discover created material metadata");
+        createdMaterialId = metadata->id;
+
+        kb::editor::tests::Require(authoring.SetBaseColor(createdMaterialId, 0, 0.125F), "Material E2E test could not set base color red");
+        kb::editor::tests::Require(authoring.SetBaseColor(createdMaterialId, 1, 0.5F), "Material E2E test could not set base color green");
+        kb::editor::tests::Require(authoring.SetBaseColor(createdMaterialId, 2, 0.875F), "Material E2E test could not set base color blue");
+        kb::editor::tests::Require(authoring.SetBaseColor(createdMaterialId, 3, 0.625F), "Material E2E test could not set base color alpha");
+        kb::editor::tests::Require(authoring.SetRoughnessFactor(createdMaterialId, 0.375F), "Material E2E test could not set roughness");
+
+        kb::editor::tests::Require(std::filesystem::exists(materialPath), "Material E2E test did not save the edited material file");
+        kb::editor::tests::Require(!scene.Assets().Manager().IsLoaded(createdMaterialId), "Material E2E edit should unload stale runtime cache after save");
+    }
+
+    kb::scene::Scene reopenedScene;
+    kb::editor::tests::Require(reopenedScene.Assets().MountProject(projectRoot), "Material E2E reopen test could not mount project assets");
+    kb::editor::tests::Require(reopenedScene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()), "Material E2E reopen test could not register material loader");
+    kb::editor::tests::Require(reopenedScene.Assets().Discover() >= 1U, "Material E2E reopen test did not discover saved assets");
+    const kb::assets::AssetMetadata* reopenedMetadata = reopenedScene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(reopenedMetadata != nullptr, "Material E2E reopen test did not rediscover material metadata");
+    kb::editor::tests::Require(reopenedMetadata->type == "RenderMaterial", "Material E2E reopen test rediscovered material with wrong type");
+
+    const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> reopened = reopenedScene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(reopenedMetadata->id);
+    kb::editor::tests::Require(reopened.IsLoaded(), "Material E2E reopen test could not load material through AssetManager");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(reopened->desc.baseColor[0], 0.125F) &&
+            kb::editor::tests::NearlyEqual(reopened->desc.baseColor[1], 0.5F) &&
+            kb::editor::tests::NearlyEqual(reopened->desc.baseColor[2], 0.875F) &&
+            kb::editor::tests::NearlyEqual(reopened->desc.baseColor[3], 0.625F),
+        "Material E2E reopen test did not preserve base color");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(reopened->desc.roughnessFactor, 0.375F), "Material E2E reopen test did not preserve roughness");
+
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
+void RunDuplicateMaterialAssetPreservesParametersTest() {
+    CleanTempRoot();
+
+    const std::filesystem::path projectRoot = TempRoot() / "Project";
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Material duplicate test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material duplicate test could not create source material");
+    const kb::assets::AssetMetadata* sourceMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(sourceMetadata != nullptr, "Material duplicate test did not discover source material");
+    const kb::assets::AssetId sourceId = sourceMetadata->id;
+    kb::editor::tests::Require(authoring.SetBaseColor(sourceId, 0, 0.25F), "Material duplicate test could not set red");
+    kb::editor::tests::Require(authoring.SetBaseColor(sourceId, 1, 0.5F), "Material duplicate test could not set green");
+    kb::editor::tests::Require(authoring.SetBaseColor(sourceId, 2, 0.75F), "Material duplicate test could not set blue");
+    kb::editor::tests::Require(authoring.SetBaseColor(sourceId, 3, 0.875F), "Material duplicate test could not set alpha");
+    kb::editor::tests::Require(authoring.SetMetallicFactor(sourceId, 0.625F), "Material duplicate test could not set metallic");
+    kb::editor::tests::Require(authoring.SetRoughnessFactor(sourceId, 0.375F), "Material duplicate test could not set roughness");
+
+    kb::editor::EditorMaterialAssetGateway gateway{ scene, browser };
+    const std::optional<std::filesystem::path> duplicatePath = gateway.DuplicateMaterial(sourceId);
+    kb::editor::tests::Require(duplicatePath.has_value(), "Material duplicate test could not duplicate material");
+    kb::editor::tests::Require(duplicatePath->filename() == "NewMaterialCopy.kbmat", "Material duplicate should use a stable copy filename");
+
+    const kb::assets::AssetMetadata* duplicateMetadata = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterialCopy.kbmat");
+    kb::editor::tests::Require(duplicateMetadata != nullptr, "Material duplicate test did not discover duplicate metadata");
+    kb::editor::tests::Require(duplicateMetadata->id != sourceId, "Material duplicate should have a different asset id");
+    kb::editor::tests::Require(duplicateMetadata->type == "RenderMaterial", "Material duplicate should remain a RenderMaterial asset");
+
+    const std::optional<kb::render::RenderMaterialAssetData> duplicate = kb::render::RenderMaterialAssetLoader::LoadMaterial(duplicateMetadata->physicalPath);
+    kb::editor::tests::Require(duplicate.has_value(), "Material duplicate test wrote an unreadable duplicate file");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(duplicate->desc.baseColor[0], 0.25F) &&
+            kb::editor::tests::NearlyEqual(duplicate->desc.baseColor[1], 0.5F) &&
+            kb::editor::tests::NearlyEqual(duplicate->desc.baseColor[2], 0.75F) &&
+            kb::editor::tests::NearlyEqual(duplicate->desc.baseColor[3], 0.875F),
+        "Material duplicate should preserve base color parameters");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(duplicate->desc.metallicFactor, 0.625F), "Material duplicate should preserve metallic factor");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(duplicate->desc.roughnessFactor, 0.375F), "Material duplicate should preserve roughness factor");
 
     std::error_code error;
     std::filesystem::remove_all(TempRoot(), error);
@@ -493,6 +592,8 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunCreateMaterialAssetThroughEditorAuthoringTest();
     RunCreateMaterialInstanceAssetThroughEditorAuthoringTest();
     RunEditMaterialAssetThroughEditorAuthoringTest();
+    RunMaterialCreateEditSaveReopenE2ETest();
+    RunDuplicateMaterialAssetPreservesParametersTest();
     RunMaterialTextureSlotAuthoringTest();
     RunMaterialTextureSlotValidationTest();
     RunMaterialAssetEditCommandUndoRedoTest();

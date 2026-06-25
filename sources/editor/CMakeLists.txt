@@ -35,6 +35,7 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorMaterialAssetInspectorDropHandler.cpp
+    src/app/EditorMaterialAssetSceneDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
@@ -297,6 +298,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorMaterialAssetInspectorDropHandler.hpp
+    src/private/app/EditorMaterialAssetSceneDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
     src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
@@ -682,6 +684,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
+    src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
     src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp
@@ -721,6 +724,7 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorMaterialReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -947,14 +951,17 @@ if(BUILD_TESTING)
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
-        src/scene/EditorSceneMaterialAssetActions.cpp
-        src/scene/EditorSceneMeshAssetActions.cpp
-        src/scene/EditorScenePrefabActions.cpp
-        src/scene/EditorViewportCameraState.cpp
-        src/scene/EditorViewportPreviewState.cpp
-    src/scene/material/EditorMaterialAssetAuthoring.cpp
+          src/scene/EditorSceneMaterialAssetActions.cpp
+          src/scene/EditorSceneMeshAssetActions.cpp
+          src/scene/EditorScenePrefabActions.cpp
+          src/scene/EditorViewportCameraState.cpp
+          src/scene/EditorViewportPreviewState.cpp
+          src/app/scene_viewport/EditorSceneViewportMath.cpp
+          src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
+      src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorMaterialReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -969,9 +976,11 @@ if(BUILD_TESTING)
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
+        src/rendering/ProjectFilesAssetIconResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
+        src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp

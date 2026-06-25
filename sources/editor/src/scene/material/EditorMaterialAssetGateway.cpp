@@ -117,6 +117,29 @@ bool EditorMaterialAssetGateway::WriteNewMaterialInstance(const std::filesystem:
     return true;
 }
 
+std::optional<std::filesystem::path> EditorMaterialAssetGateway::DuplicateMaterial(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* metadata = scene_.Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        return std::nullopt;
+    }
+
+    const std::optional<std::filesystem::path> sourcePath = ResolveFile(scene_, id);
+    if (!sourcePath.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::optional<kb::render::RenderMaterialAssetData> material = kb::render::RenderMaterialAssetLoader::LoadMaterial(*sourcePath);
+    if (!material.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path duplicatePath = UniqueFilePath(sourcePath->parent_path(), sourcePath->stem().string() + std::string{ "Copy" });
+    if (!WriteNewMaterial(duplicatePath, *material)) {
+        return std::nullopt;
+    }
+    return duplicatePath;
+}
+
 bool EditorMaterialAssetGateway::Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate) {
     std::optional<kb::render::RenderMaterialAssetData> asset = Read(scene_, id);
     if (!asset.has_value()) {

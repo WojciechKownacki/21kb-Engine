@@ -6,6 +6,9 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "engine/assets/AssetManager.hpp"
+#if defined(_WIN32)
+#include "rendering/ProjectFilesAssetIconResolver.hpp"
+#endif
 
 #include <algorithm>
 #include <filesystem>
@@ -79,6 +82,37 @@ void RunFilteringTest() {
     state.SetSearchQuery("readme");
     assets = state.AssetRows(manager);
     kb::editor::tests::Require(assets.size() == 1 && assets[0].metadata.type == "Text", "Asset browser recursive search should include descendants");
+}
+
+void RunMaterialSearchAndFilterTest() {
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(Metadata("BrassCoat", "RenderMaterial", "/Game/Props/BrassCoat.kbmat")));
+    static_cast<void>(manager.RegisterAsset(Metadata("HeroCoatOverride", "RenderMaterialInstance", "/Game/Characters/HeroCoatOverride.kbmatinst")));
+    static_cast<void>(manager.RegisterAsset(Metadata("HeroMesh", "RenderMesh", "/Game/Characters/HeroMesh.gltf")));
+    static_cast<void>(manager.RegisterAsset(Metadata("BrushTexture", "RenderTexture", "/Game/Props/BrushTexture.ktx")));
+
+    kb::editor::EditorAssetBrowserState state;
+    static_cast<void>(state.SelectFolder("/Game", manager));
+    state.SetRecursive(true);
+    state.SetSearchQuery("materialy");
+    std::vector<kb::editor::EditorAssetItemRow> assets = state.AssetRows(manager);
+    kb::editor::tests::Require(assets.size() == 2, "Asset browser material search should find every material asset type");
+    kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterial"; }), "Asset browser material search missed RenderMaterial");
+    kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterialInstance"; }), "Asset browser material search missed RenderMaterialInstance");
+    kb::editor::tests::Require(std::ranges::none_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMesh" || row.metadata.type == "RenderTexture"; }), "Asset browser material search should not include non-material assets");
+
+    const std::vector<std::string> types = state.AssetTypes(manager);
+    kb::editor::tests::Require(std::ranges::find(types, "Materials") != types.end(), "Asset browser type filters should expose a combined Materials filter");
+    for (std::size_t index = 0; index <= types.size() && state.TypeFilter() != "Materials"; ++index) {
+        state.CycleTypeFilter(manager);
+    }
+    kb::editor::tests::Require(state.TypeFilter() == "Materials", "Asset browser type cycling should reach the combined Materials filter");
+    state.ClearSearch();
+    assets = state.AssetRows(manager);
+    kb::editor::tests::Require(assets.size() == 2, "Asset browser Materials filter should include both material asset types");
+    kb::editor::tests::Require(std::ranges::all_of(assets, [](const kb::editor::EditorAssetItemRow& row) {
+        return row.metadata.type == "RenderMaterial" || row.metadata.type == "RenderMaterialInstance";
+    }), "Asset browser Materials filter should exclude non-material assets");
 }
 
 void RunSelectionAndTypeCycleTest() {
@@ -408,7 +442,19 @@ void RunMaterialContextMenuCommandTest() {
     kb::editor::tests::Require(material != nullptr, "Asset browser material command test did not register material asset");
     kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, material->id, manager), "Asset browser should open a material asset context menu");
     const std::vector<kb::editor::EditorAssetContextMenuItem> materialItems = state.ContextMenuItems(manager);
-    kb::editor::tests::Require(!materialItems.empty() && materialItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialInstance, "Material asset context menu should expose Create Material Instance first");
+    const std::vector<kb::editor::EditorAssetContextCommand> expectedMaterialCommands{
+        kb::editor::EditorAssetContextCommand::Open,
+        kb::editor::EditorAssetContextCommand::Duplicate,
+        kb::editor::EditorAssetContextCommand::CreateMaterialInstance,
+        kb::editor::EditorAssetContextCommand::Rename,
+        kb::editor::EditorAssetContextCommand::Delete,
+        kb::editor::EditorAssetContextCommand::FindReferences,
+        kb::editor::EditorAssetContextCommand::Refresh,
+    };
+    kb::editor::tests::Require(materialItems.size() == expectedMaterialCommands.size(), "Material asset context menu should expose the production material command set");
+    for (std::size_t index = 0; index < expectedMaterialCommands.size(); ++index) {
+        kb::editor::tests::Require(materialItems[index].command == expectedMaterialCommands[index], "Material asset context menu command order is incorrect");
+    }
 
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
     kb::editor::tests::Require(mesh != nullptr, "Asset browser material command test did not register mesh asset");
@@ -439,6 +485,16 @@ void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
     kb::editor::tests::Require(instanceResult == kb::editor::EditorAssetBrowserDoubleClickResult::MaterialEditorOpened, "Double-clicking a material instance asset should request Material Editor activation");
     kb::editor::tests::Require(state.InspectorAsset() == instance->id, "Double-clicking a material instance asset should select it for the Material Editor");
 }
+
+void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
+    const kb::assets::AssetMetadata material = Metadata("StudioPaint", "RenderMaterial", "/Game/Materials/StudioPaint.kbmat");
+    const kb::assets::AssetMetadata instance = Metadata("StudioPaint_Inst", "RenderMaterialInstance", "/Game/Materials/StudioPaint_Inst.kbmatinst");
+    const kb::assets::AssetMetadata mesh = Metadata("StudioMesh", "RenderMesh", "/Game/Meshes/StudioMesh.gltf");
+
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(material), "Project Files should classify material assets for the preview thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(instance), "Project Files should classify material instances for the preview thumbnail path");
+    kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(mesh), "Project Files should keep mesh assets on the mesh thumbnail path");
+}
 #endif
 
 } // namespace
@@ -448,6 +504,7 @@ namespace kb::editor::tests {
 void RunEditorAssetBrowserTests() {
     RunFolderTreeTest();
     RunFilteringTest();
+    RunMaterialSearchAndFilterTest();
     RunSelectionAndTypeCycleTest();
     RunMultiSelectionStateTest();
     RunTextEditStateTest();
@@ -463,6 +520,7 @@ void RunEditorAssetBrowserTests() {
     RunImportCommandHitTestTest();
     RunMaterialContextMenuCommandTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
+    RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
 #endif
 }
 
