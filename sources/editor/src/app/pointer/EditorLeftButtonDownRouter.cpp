@@ -136,6 +136,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 return;
             }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
+                if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
+                    sceneContext_.CloseMaterialEditorAsset();
+                }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }
@@ -153,10 +156,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
-        const kb::assets::AssetId materialId = sceneContext_.AssetBrowser().InspectorAsset();
+        const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
         const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
         if (command != MaterialEditorPanelCommand::None) {
             switch (command) {
+            case MaterialEditorPanelCommand::Info:
+                static_cast<void>(sceneContext_.MaterialEditor().ToggleInfoPanel());
+                break;
+            case MaterialEditorPanelCommand::ApplyToSelection:
+                static_cast<void>(sceneContext_.ApplyMaterialToSelectedMeshRenderers(materialId));
+                break;
             case MaterialEditorPanelCommand::Save:
                 static_cast<void>(sceneContext_.SaveMaterialEditorAsset(materialId));
                 break;

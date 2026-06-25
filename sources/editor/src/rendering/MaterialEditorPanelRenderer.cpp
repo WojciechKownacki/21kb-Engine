@@ -26,17 +26,19 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace kb::editor {
 namespace {
 
 constexpr int kHeaderHeight = MaterialEditorPanelMetrics::HeaderHeight;
 constexpr int kPadding = MaterialEditorPanelMetrics::Padding;
-constexpr int kGraphNodeHeaderHeight = 46;
-constexpr int kGraphNodeBodyTopPadding = 18;
-constexpr int kGraphNodePinRowHeight = 38;
+constexpr int kGraphNodeHeaderHeight = MaterialEditorPanelMetrics::GraphNodeHeaderHeight;
+constexpr int kGraphNodeBodyTopPadding = MaterialEditorPanelMetrics::GraphNodeBodyTopPadding;
+constexpr int kGraphNodePinRowHeight = MaterialEditorPanelMetrics::GraphNodePinRowHeight;
 constexpr int kGraphNodePinRadius = 8;
 constexpr int kGraphNodeCornerDiameter = 18;
 
@@ -55,17 +57,19 @@ void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasi
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, RGB(221, 226, 232), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawHeader(HDC dc, const RECT& content, bool dirty) {
+void DrawHeader(HDC dc, const RECT& content, bool dirty, bool infoVisible) {
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, header, RGB(32, 35, 39));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
-    DrawText(dc, RECT{ header.left + kPadding, header.top, layout.saveButton.left - 10, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
+    DrawText(dc, RECT{ header.left + kPadding, header.top, layout.infoButton.left - 10, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
+    DrawCommandButton(dc, layout.infoButton, "Info", infoVisible);
+    DrawCommandButton(dc, layout.applyButton, "Apply To Selection", false);
     DrawCommandButton(dc, layout.saveButton, "Save", dirty);
     DrawCommandButton(dc, layout.revertButton, "Revert", false);
     DrawCommandButton(dc, layout.validateButton, "Validate", false);
     if (dirty) {
-        DrawText(dc, RECT{ header.left + kPadding, header.top, layout.saveButton.left - 10, header.bottom }, "Unsaved changes", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        DrawText(dc, RECT{ header.left + kPadding, header.top, layout.infoButton.left - 10, header.bottom }, "Unsaved changes", RGB(223, 178, 91), 11, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -390,9 +394,11 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
 }
 
 struct MaterialEditorDocumentView {
-    kb::render::RenderMaterialAssetData material{};
+    std::optional<kb::render::RenderMaterialAssetData> material{};
     std::string assetKind;
     kb::assets::AssetId parentMaterialAssetId{};
+    std::vector<std::string> diagnostics;
+    bool hasErrorDiagnostic = false;
 };
 
 [[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept {
@@ -406,18 +412,57 @@ struct MaterialEditorDocumentView {
     return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
 }
 
+void AppendMaterialDiagnostics(std::vector<std::string>& lines, bool& hasError, const kb::render::RenderMaterialAssetParseResult& result) {
+    const MaterialEditorPanelDiagnosticRows rows = MaterialEditorPanelRenderer::DiagnosticRows(result);
+    hasError = hasError || rows.hasError;
+    lines.insert(lines.end(), rows.rows.begin(), rows.rows.end());
+}
+
+void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& hasError, const kb::render::RenderMaterialInstanceAssetParseResult& result) {
+    for (const kb::render::RenderMaterialInstanceAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        hasError = true;
+        std::ostringstream line;
+        line << "Error " << kb::render::RenderMaterialInstanceAssetParseDiagnosticCodeName(diagnostic.code);
+        if (diagnostic.line > 0U) {
+            line << " line " << diagnostic.line;
+        }
+        if (!diagnostic.field.empty()) {
+            line << " " << diagnostic.field;
+        }
+        line << ": " << diagnostic.message;
+        if (!diagnostic.text.empty()) {
+            line << " [" << diagnostic.text << "]";
+        }
+        lines.push_back(line.str());
+    }
+}
+
 [[nodiscard]] std::optional<MaterialEditorDocumentView> ReadDocumentView(
     const EditorSceneContext& sceneContext,
     const kb::assets::AssetMetadata& metadata) {
-    if (metadata.type == "RenderMaterial") {
-        const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialAsset(metadata.id);
-        if (!material.has_value()) {
-            return std::nullopt;
-        }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const std::filesystem::path path = ResolveAssetPath(manager, metadata);
+    if (path.empty()) {
         return MaterialEditorDocumentView{
-            .material = *material,
+            .material = std::nullopt,
+            .assetKind = metadata.type == "RenderMaterialInstance" ? "Material Instance" : "Material",
+            .parentMaterialAssetId = {},
+            .diagnostics = { "Error file_open_failed: Material document path could not be resolved." },
+            .hasErrorDiagnostic = true,
+        };
+    }
+
+    if (metadata.type == "RenderMaterial") {
+        kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        std::vector<std::string> diagnostics;
+        bool hasError = false;
+        AppendMaterialDiagnostics(diagnostics, hasError, result);
+        return MaterialEditorDocumentView{
+            .material = std::move(result.asset),
             .assetKind = "Material",
             .parentMaterialAssetId = {},
+            .diagnostics = std::move(diagnostics),
+            .hasErrorDiagnostic = hasError,
         };
     }
 
@@ -425,23 +470,37 @@ struct MaterialEditorDocumentView {
         return std::nullopt;
     }
 
-    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
-    const std::filesystem::path instancePath = ResolveAssetPath(manager, metadata);
-    if (instancePath.empty()) {
-        return std::nullopt;
+    kb::render::RenderMaterialInstanceAssetParseResult instance = kb::render::RenderMaterialInstanceAssetLoader::LoadInstanceWithDiagnostics(path, metadata.id);
+    std::vector<std::string> diagnostics;
+    bool hasError = false;
+    AppendMaterialInstanceDiagnostics(diagnostics, hasError, instance);
+    if (!instance.asset.has_value() || !instance.asset->parentMaterialAssetId.IsValid()) {
+        return MaterialEditorDocumentView{
+            .material = std::nullopt,
+            .assetKind = "Material Instance",
+            .parentMaterialAssetId = {},
+            .diagnostics = std::move(diagnostics),
+            .hasErrorDiagnostic = true,
+        };
     }
-    const std::optional<kb::render::RenderMaterialInstanceAssetData> instance = kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(instancePath);
-    if (!instance.has_value() || !instance->parentMaterialAssetId.IsValid()) {
-        return std::nullopt;
-    }
-    const std::optional<kb::render::RenderMaterialAssetData> parent = sceneContext.ReadMaterialAsset(instance->parentMaterialAssetId);
-    if (!parent.has_value()) {
-        return std::nullopt;
+
+    const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance.asset->parentMaterialAssetId);
+    const std::filesystem::path parentPath = parentMetadata != nullptr ? ResolveAssetPath(manager, *parentMetadata) : std::filesystem::path{};
+    kb::render::RenderMaterialAssetParseResult parent = parentPath.empty()
+        ? kb::render::RenderMaterialAssetParseResult{}
+        : kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(parentPath, instance.asset->parentMaterialAssetId);
+    if (parentPath.empty()) {
+        diagnostics.push_back("Error missing_parent_material: Parent material asset could not be resolved.");
+        hasError = true;
+    } else {
+        AppendMaterialDiagnostics(diagnostics, hasError, parent);
     }
     return MaterialEditorDocumentView{
-        .material = *parent,
+        .material = std::move(parent.asset),
         .assetKind = "Material Instance",
-        .parentMaterialAssetId = instance->parentMaterialAssetId,
+        .parentMaterialAssetId = instance.asset->parentMaterialAssetId,
+        .diagnostics = std::move(diagnostics),
+        .hasErrorDiagnostic = hasError,
     };
 }
 
@@ -465,6 +524,73 @@ void DrawAssetBadge(
     DrawText(dc, RECT{ layout.assetBadge.left + 10, layout.assetBadge.top + 28, layout.assetBadge.right - 10, layout.assetBadge.bottom - 6 }, document.assetKind.c_str(), RGB(126, 201, 143), 10);
 }
 
+void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const MaterialEditorDocumentView& document) {
+    if (document.diagnostics.empty() || RectWidth(layout.diagnosticsPanel) < 160 || RectHeight(layout.diagnosticsPanel) < 72) {
+        return;
+    }
+
+    const COLORREF border = document.hasErrorDiagnostic ? RGB(151, 76, 76) : RGB(137, 109, 54);
+    const COLORREF titleColor = document.hasErrorDiagnostic ? RGB(247, 171, 171) : RGB(239, 203, 127);
+    DrawGraphOverlay(dc, layout.diagnosticsPanel, RGB(29, 26, 24), border);
+    DrawText(dc, RECT{ layout.diagnosticsPanel.left + 10, layout.diagnosticsPanel.top + 6, layout.diagnosticsPanel.right - 10, layout.diagnosticsPanel.top + 28 }, "Diagnostics", titleColor, 12, FW_SEMIBOLD);
+    const int rowTop = layout.diagnosticsPanel.top + 32;
+    const int rowHeight = 22;
+    const int availableRows = (static_cast<int>(layout.diagnosticsPanel.bottom) - rowTop - 8) / rowHeight;
+    const std::size_t visibleRows = static_cast<std::size_t>(std::max(0, availableRows));
+    const std::size_t count = std::min(visibleRows, document.diagnostics.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        const RECT row{
+            layout.diagnosticsPanel.left + 10,
+            rowTop + static_cast<int>(index) * rowHeight,
+            layout.diagnosticsPanel.right - 10,
+            rowTop + static_cast<int>(index + 1U) * rowHeight,
+        };
+        DrawText(dc, row, document.diagnostics[index].c_str(), RGB(224, 220, 211), 10);
+    }
+    if (document.diagnostics.size() > count && count > 0U) {
+        const std::string more = "+" + std::to_string(document.diagnostics.size() - count) + " more";
+        DrawText(dc, RECT{ layout.diagnosticsPanel.left + 10, layout.diagnosticsPanel.bottom - 24, layout.diagnosticsPanel.right - 10, layout.diagnosticsPanel.bottom - 6 }, more.c_str(), RGB(168, 159, 145), 10, FW_NORMAL, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
+void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const MaterialEditorPanelDetailsRows& rows) {
+    if (RectWidth(layout.detailsPanel) < 220 || RectHeight(layout.detailsPanel) < 140) {
+        return;
+    }
+
+    DrawGraphOverlay(dc, layout.detailsPanel, RGB(22, 25, 29), RGB(54, 61, 71));
+    DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 8, layout.detailsPanel.right - 10, layout.detailsPanel.top + 30 }, rows.title.c_str(), RGB(235, 238, 243), 12, FW_SEMIBOLD);
+    DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 34, layout.detailsPanel.right - 10, layout.detailsPanel.top + 54 }, "Parameters", RGB(126, 201, 143), 10, FW_SEMIBOLD);
+
+    int y = layout.detailsPanel.top + 56;
+    const int rowHeight = 18;
+    const int bottom = layout.detailsPanel.bottom - 10;
+    std::size_t parameterCount = 0U;
+    for (const std::string& row : rows.parameterRows) {
+        if (y + rowHeight > bottom || parameterCount >= 7U) {
+            break;
+        }
+        DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += rowHeight;
+        ++parameterCount;
+    }
+
+    if (y + 28 <= bottom) {
+        y += 6;
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Texture Slots", RGB(126, 181, 223), 10, FW_SEMIBOLD);
+        y += 22;
+    }
+    std::size_t slotCount = 0U;
+    for (const std::string& row : rows.textureSlotRows) {
+        if (y + rowHeight > bottom || slotCount >= 6U) {
+            break;
+        }
+        DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+        y += rowHeight;
+        ++slotCount;
+    }
+}
+
 void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     const std::optional<MaterialEditorDocumentView> document = ReadDocumentView(sceneContext, metadata);
@@ -476,9 +602,21 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         return;
     }
 
-    DrawGraphCanvas(dc, content, document->material.graph, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
+    if (document->material.has_value()) {
+        DrawGraphCanvas(dc, content, document->material->graph, sceneContext, metadata.id, sceneContext.SelectedMaterialGraphNodeId());
+    } else {
+        DrawGraphGrid(dc, layout.graphCanvas);
+        DrawText(dc, layout.graphCanvas, "Material document could not be parsed.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
     DrawPreviewOverlay(dc, layout, telemetry);
     DrawAssetBadge(dc, layout, metadata, *document);
+    DrawDiagnosticsPanel(dc, layout, *document);
+    if (sceneContext.MaterialEditor().InfoPanelVisible()) {
+        DrawDetailsPanel(
+            dc,
+            layout,
+            MaterialEditorPanelRenderer::DetailsRows(kb::render::GetBuiltInPbrMaterialTypeSchema(), sceneContext.MaterialEditor().SelectedNodeId()));
+    }
 }
 
 } // namespace
@@ -486,16 +624,16 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
-    DrawHeader(dc, content, sceneContext.HasDirtyMaterialAssetEdit());
+    DrawHeader(dc, content, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
 
-    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+    const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
     const kb::assets::AssetMetadata* metadata = assetId.IsValid()
         ? sceneContext.Scene().Assets().Manager().Registry().Find(assetId)
         : nullptr;
 
     if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
         const RECT body{ content.left, content.top + kHeaderHeight, content.right, content.bottom };
-        DrawText(dc, body, "Select a Material (.kbmat) or Material Instance (.kbmatinst) in Project Files to inspect it here.", RGB(86, 92, 100), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        DrawText(dc, body, "Double-click a Material (.kbmat) or Material Instance (.kbmatinst) in Project Files to edit it here.", RGB(86, 92, 100), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
         return;
     }
 
@@ -503,7 +641,7 @@ void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const Edito
 }
 
 std::optional<RECT> MaterialEditorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+    const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
     if (!assetId.IsValid()) {
         return std::nullopt;
     }

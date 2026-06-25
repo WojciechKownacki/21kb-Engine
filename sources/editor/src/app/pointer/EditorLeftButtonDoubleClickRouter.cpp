@@ -63,20 +63,10 @@ bool EditorLeftButtonDoubleClickRouter::Handle(HWND messageWindow, int x, int y)
         return false;
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::ScriptEditorOpened) {
-        for (const DockPanel& panel : dockModel_.Queries().Panels()) {
-            if (panel.kind == DockPanelKind::ScriptEditor) {
-                dockModel_.Commands().ActivatePanel(panel.id);
-                break;
-            }
-        }
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::ScriptEditor, DockArea::Center));
     }
     if (assetResult == EditorAssetBrowserDoubleClickResult::MaterialEditorOpened) {
-        for (const DockPanel& panel : dockModel_.Queries().Panels()) {
-            if (panel.kind == DockPanelKind::MaterialEditor) {
-                dockModel_.Commands().ActivatePanel(panel.id);
-                break;
-            }
-        }
+        static_cast<void>(dockModel_.Commands().ActivatePanelKind(DockPanelKind::MaterialEditor, DockArea::Right));
     }
     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
     return true;

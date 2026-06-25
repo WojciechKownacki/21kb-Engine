@@ -99,8 +99,7 @@ constexpr int kMaxMessagesPerPump = 128;
     return lighting;
 }
 
-[[nodiscard]] const kb::assets::AssetMetadata* SelectedMaterialMetadata(const EditorSceneContext& sceneContext) noexcept {
-    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+[[nodiscard]] const kb::assets::AssetMetadata* MaterialMetadataForAsset(const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept {
     if (!assetId.IsValid()) {
         return nullptr;
     }
@@ -226,34 +225,35 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         return false;
     }
 
-    const kb::assets::AssetMetadata* metadata = SelectedMaterialMetadata(state.sceneContext);
-
     struct PreviewTarget {
         std::optional<RECT> rect;
         std::uint64_t viewportKey;
+        const kb::assets::AssetMetadata* metadata = nullptr;
     };
+    const kb::assets::AssetMetadata* inspectorMetadata = MaterialMetadataForAsset(state.sceneContext, state.sceneContext.AssetBrowser().InspectorAsset());
+    const kb::assets::AssetMetadata* materialEditorMetadata = MaterialMetadataForAsset(state.sceneContext, state.sceneContext.MaterialEditor().OpenAssetId());
     const PreviewTarget targets[2] = {
         PreviewTarget{
-            metadata != nullptr && inspectorContent.has_value()
+            inspectorMetadata != nullptr && inspectorContent.has_value()
                 ? InspectorPanelRenderer::MaterialPreviewRect(*inspectorContent, state.sceneContext)
                 : std::nullopt,
-            kInspectorMaterialPreviewViewportKey},
+            kInspectorMaterialPreviewViewportKey,
+            inspectorMetadata},
         PreviewTarget{
-            metadata != nullptr && materialEditorContent.has_value()
+            materialEditorMetadata != nullptr && materialEditorContent.has_value()
                 ? MaterialEditorPanelRenderer::MaterialPreviewRect(*materialEditorContent, state.sceneContext)
                 : std::nullopt,
-            kMaterialEditorPreviewViewportKey},
+            kMaterialEditorPreviewViewportKey,
+            materialEditorMetadata},
     };
 
     bool presented = false;
-    if (metadata != nullptr) {
-        const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(metadata->id);
-        for (const PreviewTarget& target : targets) {
-            if (target.rect.has_value()) {
-                const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *target.rect, target.viewportKey);
-                state.sceneViewport.Present(host, *target.rect, previewScene, settings);
-                presented = true;
-            }
+    for (const PreviewTarget& target : targets) {
+        if (target.metadata != nullptr && target.rect.has_value()) {
+            const kb::scene::Scene& previewScene = state.sceneContext.MaterialPreviewScene(target.metadata->id);
+            const EditorSceneBgfxViewport::PresentSettings settings = BuildMaterialPreviewSettings(state.sceneContext, *target.rect, target.viewportKey);
+            state.sceneViewport.Present(host, *target.rect, previewScene, settings);
+            presented = true;
         }
     }
     return presented;

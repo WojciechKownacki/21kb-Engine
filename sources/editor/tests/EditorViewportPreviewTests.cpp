@@ -2,6 +2,13 @@
 #include "EditorTestSuites.hpp"
 
 #include "app/EditorPlayModeState.hpp"
+#include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
@@ -171,6 +178,31 @@ void RunViewportCameraTrackDirectionTest() {
     kb::editor::tests::Require(afterTrack.y < beforeTrack.y, "Dragging track mode up should move camera down");
 }
 
+void RunViewportMeshPickerNearestMeshRendererTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity farEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Far Mesh" });
+    const kb::scene::SceneEntity nearEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Near Mesh" });
+    const kb::scene::SceneEntity offRay = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Off Ray Mesh" });
+
+    scene.Components().MeshRenderers().Set(farEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 101U });
+    scene.Components().MeshRenderers().Set(nearEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 202U });
+    scene.Components().MeshRenderers().Set(offRay, kb::scene::MeshRendererComponent{ .meshAssetId = 303U });
+
+    scene.Transforms().Set(farEntity, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F } });
+    scene.Transforms().Set(nearEntity, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F } });
+    scene.Transforms().Set(offRay, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F } });
+
+    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        kb::editor::EditorSceneViewportRay{
+            .origin = kb::scene::Vec3{ 0.0F, 0.0F, -8.0F },
+            .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+        });
+
+    kb::editor::tests::Require(pick.IsValid(), "Viewport mesh picker should hit a Mesh Renderer under the ray");
+    kb::editor::tests::Require(pick.entity == nearEntity, "Viewport mesh picker should choose the nearest Mesh Renderer under the ray");
+}
+
 void RunRenderBackendSettingsTest() {
     kb::editor::EditorRenderBackendSettings settings;
     kb::editor::tests::Require(settings.Backend() == kb::editor::EditorRenderBackend::Auto, "Render backend should default to Auto");
@@ -235,6 +267,7 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraNavigationTest();
     RunViewportCameraOrbitTest();
     RunViewportCameraTrackDirectionTest();
+    RunViewportMeshPickerNearestMeshRendererTest();
     RunRenderBackendSettingsTest();
     RunPlayModeStateTest();
 }

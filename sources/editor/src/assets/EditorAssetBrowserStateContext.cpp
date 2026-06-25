@@ -3,14 +3,36 @@
 #include "assets/EditorAssetBrowserPathUtils.hpp"
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+}
+
+[[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
+    std::vector<EditorAssetContextMenuItem> items{
+        EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" },
+    };
+    if (metadata.type == "RenderMaterial") {
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialInstance, .label = "Create Material Instance", .separatorAfter = true });
+    }
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete" });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::FindReferences, .label = "Find References", .separatorAfter = true });
+    items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Refresh, .label = "Refresh" });
+    return items;
+}
+
+} // namespace
 
 std::vector<EditorAssetContextMenuItem> EditorAssetBrowserState::ContextMenuItems(const kb::assets::AssetManager& manager) const {
     const bool assetExists = manager.Registry().Find(contextMenu_.TargetAsset()) != nullptr;
     std::vector<EditorAssetContextMenuItem> items = contextMenu_.Items(assetExists, ContextMenuTargetFolderCanMutate(manager));
     if (contextMenu_.TargetKind() == EditorAssetContextTargetKind::Asset) {
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(contextMenu_.TargetAsset());
-        if (metadata != nullptr && metadata->type == "RenderMaterial") {
-            items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialInstance, .label = "Create Material Instance", .separatorAfter = true });
+        if (metadata != nullptr && IsMaterialAsset(*metadata)) {
+            return MaterialContextMenuItems(*metadata);
         }
         if (metadata != nullptr && (metadata->type == "RenderMesh" || metadata->importCategory == "Mesh")) {
             items.insert(items.begin(), EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::ExtractMaterials, .label = "Extract Material Instances", .separatorAfter = true });

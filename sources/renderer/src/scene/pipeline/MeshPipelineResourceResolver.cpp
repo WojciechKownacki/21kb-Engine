@@ -197,13 +197,13 @@ std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
         instance.materialSlotAssetIds[section.materialSlot] != 0U) {
         return instance.materialSlotAssetIds[section.materialSlot];
     }
-    if (batch.materialAssetId != 0U) {
-        return batch.materialAssetId;
+    if (meshResource != nullptr && section.materialSlot < meshResource->materialSlots.size()) {
+        const std::uint64_t defaultMaterialAssetId = meshResource->materialSlots[section.materialSlot].defaultMaterialAssetId;
+        if (defaultMaterialAssetId != 0U) {
+            return defaultMaterialAssetId;
+        }
     }
-    if (meshResource == nullptr || section.materialSlot >= meshResource->materialSlots.size()) {
-        return 0U;
-    }
-    return meshResource->materialSlots[section.materialSlot].defaultMaterialAssetId;
+    return batch.materialAssetId;
 }
 
 } // namespace kb::render

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "assets/EditorAssetBrowserState.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "rendering/EditorMeshThumbnailService.hpp"
 #include "rendering/GdiDrawing.hpp"
 #include "rendering/HeroIconGdiplusRuntime.hpp"
@@ -10,18 +11,22 @@
 #include "rendering/ProjectFilesAssetTileMetrics.hpp"
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/ProjectFilesTileTextRenderer.hpp"
+#include "rendering/gdi/ScopedBrush.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
 #include "rendering/gdi/ScopedPen.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <limits>
 #include <iterator>
 #include <memory>
+#include <string>
 
 #pragma warning(push, 0)
 #include <objidl.h>
@@ -47,6 +52,24 @@ struct ProjectFilesTextureThumbnailImage {
     int width = 0;
     int height = 0;
     std::vector<std::uint32_t> bgra;
+};
+
+struct ProjectFilesMaterialPreviewImage {
+    int width = 0;
+    int height = 0;
+    std::vector<std::uint32_t> bgra;
+};
+
+struct ProjectFilesMaterialPreviewStyle {
+    COLORREF baseColor = RGB(194, 168, 116);
+    float roughness = 0.65F;
+    bool loadedFromAsset = false;
+};
+
+struct ProjectFilesMaterialPreviewCacheEntry {
+    std::uint64_t contentHash = 0U;
+    std::filesystem::path physicalPath;
+    ProjectFilesMaterialPreviewStyle style;
 };
 
 class ScopedComStream {
@@ -85,6 +108,39 @@ private:
         return ThumbnailRect(tile, visual);
     }
     return rect;
+}
+
+[[nodiscard]] RECT MaterialPreviewRect(const RECT& tile, const ProjectFilesAssetTileVisualLayout& visual) noexcept {
+    RECT rect = ThumbnailRect(tile, visual);
+    const int size = std::max(24, std::min(Draw::RectWidth(rect), Draw::RectHeight(rect)));
+    const int centerX = (rect.left + rect.right) / 2;
+    const int centerY = (rect.top + rect.bottom) / 2;
+    return RECT{ centerX - size / 2, centerY - size / 2, centerX - size / 2 + size, centerY - size / 2 + size };
+}
+
+[[nodiscard]] int ToColorByte(float value) noexcept {
+    return std::clamp(static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F)), 0, 255);
+}
+
+[[nodiscard]] COLORREF ToColorRef(float red, float green, float blue) noexcept {
+    return RGB(ToColorByte(red), ToColorByte(green), ToColorByte(blue));
+}
+
+[[nodiscard]] ProjectFilesMaterialPreviewStyle MaterialPreviewStyleFromAsset(const kb::assets::AssetMetadata& metadata) {
+    ProjectFilesMaterialPreviewStyle style{};
+    if (metadata.type != "RenderMaterial" || metadata.physicalPath.empty()) {
+        return style;
+    }
+
+    const std::optional<kb::render::RenderMaterialAssetData> material = kb::render::RenderMaterialAssetLoader::LoadMaterial(metadata.physicalPath);
+    if (!material.has_value()) {
+        return style;
+    }
+
+    style.baseColor = ToColorRef(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
+    style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
+    style.loadedFromAsset = true;
+    return style;
 }
 
 [[nodiscard]] std::uint16_t ReadLe16(const std::vector<std::uint8_t>& data, std::size_t offset) noexcept {
@@ -327,6 +383,54 @@ private:
     return cache;
 }
 
+class ProjectFilesMaterialPreviewStyleCache {
+public:
+    [[nodiscard]] const ProjectFilesMaterialPreviewStyle* StyleFor(const kb::assets::AssetMetadata& metadata) {
+        if (!ProjectFilesAssetIconResolver::IsMaterial(metadata)) {
+            return nullptr;
+        }
+
+        const std::uint64_t key = CacheKey(metadata);
+        if (const auto found = styles_.find(key); found != styles_.end()) {
+            ProjectFilesMaterialPreviewCacheEntry& entry = found->second;
+            if (entry.contentHash == metadata.contentHash && entry.physicalPath == metadata.physicalPath) {
+                return &entry.style;
+            }
+            entry = ProjectFilesMaterialPreviewCacheEntry{
+                .contentHash = metadata.contentHash,
+                .physicalPath = metadata.physicalPath,
+                .style = MaterialPreviewStyleFromAsset(metadata),
+            };
+            return &entry.style;
+        }
+
+        auto [iter, inserted] = styles_.emplace(
+            key,
+            ProjectFilesMaterialPreviewCacheEntry{
+                .contentHash = metadata.contentHash,
+                .physicalPath = metadata.physicalPath,
+                .style = MaterialPreviewStyleFromAsset(metadata),
+            });
+        static_cast<void>(inserted);
+        return &iter->second.style;
+    }
+
+private:
+    [[nodiscard]] static std::uint64_t CacheKey(const kb::assets::AssetMetadata& metadata) {
+        if (metadata.id.IsValid()) {
+            return metadata.id.value;
+        }
+        return static_cast<std::uint64_t>(std::hash<std::string>{}(kb::assets::NormalizeAssetPath(metadata.virtualPath) + ":" + metadata.type));
+    }
+
+    std::unordered_map<std::uint64_t, ProjectFilesMaterialPreviewCacheEntry> styles_;
+};
+
+[[nodiscard]] ProjectFilesMaterialPreviewStyleCache& MaterialPreviewStyleCache() {
+    static ProjectFilesMaterialPreviewStyleCache cache;
+    return cache;
+}
+
 void DrawThumbnailBitmap(HDC dc, const RECT& target, const EditorMeshThumbnailImage& image) {
     if (image.width <= 0 || image.height <= 0 || image.bgra.empty() || target.right <= target.left || target.bottom <= target.top) {
         return;
@@ -413,6 +517,155 @@ void DrawTextureThumbnailBitmap(HDC dc, const RECT& target, const ProjectFilesTe
     Rectangle(dc, target.left, target.top, target.right, target.bottom);
 }
 
+[[nodiscard]] float ColorChannel(COLORREF color, int shift) noexcept {
+    return static_cast<float>((color >> shift) & 0xFF) / 255.0F;
+}
+
+[[nodiscard]] std::uint8_t ToByte(float value) noexcept {
+    return static_cast<std::uint8_t>(std::clamp(static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F)), 0, 255));
+}
+
+[[nodiscard]] std::uint32_t PackBgra(float red, float green, float blue, float alpha = 1.0F) noexcept {
+    return static_cast<std::uint32_t>(ToByte(blue))
+        | (static_cast<std::uint32_t>(ToByte(green)) << 8U)
+        | (static_cast<std::uint32_t>(ToByte(red)) << 16U)
+        | (static_cast<std::uint32_t>(ToByte(alpha)) << 24U);
+}
+
+[[nodiscard]] std::uint32_t CompositeOver(std::uint32_t background, float red, float green, float blue, float alpha) noexcept {
+    const float inv = 1.0F - alpha;
+    const float bgB = static_cast<float>(background & 0xFFU) / 255.0F;
+    const float bgG = static_cast<float>((background >> 8U) & 0xFFU) / 255.0F;
+    const float bgR = static_cast<float>((background >> 16U) & 0xFFU) / 255.0F;
+    return PackBgra(red * alpha + bgR * inv, green * alpha + bgG * inv, blue * alpha + bgB * inv);
+}
+
+[[nodiscard]] float SmoothCoverage(float signedDistance) noexcept {
+    return std::clamp(signedDistance + 0.5F, 0.0F, 1.0F);
+}
+
+[[nodiscard]] ProjectFilesMaterialPreviewImage RenderMaterialPreviewImage(int width, int height, const ProjectFilesMaterialPreviewStyle& style, bool selected) {
+    ProjectFilesMaterialPreviewImage image{ .width = width, .height = height };
+    image.bgra.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+
+    const COLORREF frameFill = selected ? RGB(31, 34, 39) : RGB(24, 27, 31);
+    const COLORREF frameBorder = selected ? RGB(123, 143, 170) : RGB(48, 54, 62);
+    const std::uint32_t fill = PackBgra(ColorChannel(frameFill, 0), ColorChannel(frameFill, 8), ColorChannel(frameFill, 16));
+    const std::uint32_t border = PackBgra(ColorChannel(frameBorder, 0), ColorChannel(frameBorder, 8), ColorChannel(frameBorder, 16));
+    std::fill(image.bgra.begin(), image.bgra.end(), fill);
+
+    for (int x = 0; x < width; ++x) {
+        image.bgra[static_cast<std::size_t>(x)] = border;
+        image.bgra[static_cast<std::size_t>(height - 1) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x)] = border;
+    }
+    for (int y = 0; y < height; ++y) {
+        image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(width)] = border;
+        image.bgra[static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(width - 1)] = border;
+    }
+
+    const COLORREF baseColor = style.loadedFromAsset ? style.baseColor : Draw::Blend(style.baseColor, RGB(232, 212, 170), 34);
+    const float baseR = ColorChannel(baseColor, 0);
+    const float baseG = ColorChannel(baseColor, 8);
+    const float baseB = ColorChannel(baseColor, 16);
+    const float radius = static_cast<float>(std::max(8, std::min(width - 14, height - 14))) * 0.5F;
+    const float centerX = static_cast<float>(width) * 0.5F;
+    const float centerY = static_cast<float>(height) * 0.5F;
+    const float shadowCenterY = centerY + radius * 0.72F;
+    const float shadowRx = radius * 0.78F;
+    const float shadowRy = std::max(2.0F, radius * 0.18F);
+    const float roughness = std::clamp(style.roughness, 0.0F, 1.0F);
+
+    constexpr float lightX = -0.46F;
+    constexpr float lightY = -0.62F;
+    constexpr float lightZ = 0.63F;
+    constexpr float halfX = -0.27F;
+    constexpr float halfY = -0.36F;
+    constexpr float halfZ = 0.89F;
+
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
+            const float px = static_cast<float>(x) + 0.5F;
+            const float py = static_cast<float>(y) + 0.5F;
+
+            const float shadowDx = (px - (centerX + radius * 0.10F)) / shadowRx;
+            const float shadowDy = (py - shadowCenterY) / shadowRy;
+            const float shadowDistance = shadowDx * shadowDx + shadowDy * shadowDy;
+            if (shadowDistance < 1.0F) {
+                const float shadowAlpha = std::pow(1.0F - shadowDistance, 1.35F) * 0.24F;
+                image.bgra[index] = CompositeOver(image.bgra[index], 0.02F, 0.025F, 0.032F, shadowAlpha);
+            }
+
+            const float nx = (px - centerX) / radius;
+            const float ny = (py - centerY) / radius;
+            const float distance2 = nx * nx + ny * ny;
+            if (distance2 > 1.08F) {
+                continue;
+            }
+
+            const float distance = std::sqrt(distance2);
+            const float coverage = SmoothCoverage((1.0F - distance) * radius);
+            if (coverage <= 0.0F) {
+                continue;
+            }
+
+            const float nz = std::sqrt(std::max(0.0F, 1.0F - distance2));
+            const float diffuse = std::max(0.0F, nx * lightX + ny * lightY + nz * lightZ);
+            const float lowerShade = 1.0F - std::max(0.0F, ny) * 0.28F;
+            const float rim = std::pow(std::clamp(1.0F - nz, 0.0F, 1.0F), 1.85F) * (selected ? 0.28F : 0.18F);
+            const float specPower = 72.0F - roughness * 54.0F;
+            const float specular = std::pow(std::max(0.0F, nx * halfX + ny * halfY + nz * halfZ), specPower) * (0.62F - roughness * 0.38F);
+            const float sheen = std::pow(std::max(0.0F, (-nx * 0.35F) + (-ny * 0.72F) + (nz * 0.60F)), 18.0F) * 0.10F;
+            const float shade = (0.34F + diffuse * 0.66F) * lowerShade;
+
+            float red = baseR * shade + rim * 0.28F + specular + sheen;
+            float green = baseG * shade + rim * 0.28F + specular + sheen;
+            float blue = baseB * shade + rim * 0.30F + specular + sheen;
+
+            const float edgeDarken = std::clamp((distance - 0.78F) / 0.22F, 0.0F, 1.0F) * 0.22F;
+            red *= 1.0F - edgeDarken;
+            green *= 1.0F - edgeDarken;
+            blue *= 1.0F - edgeDarken;
+
+            image.bgra[index] = CompositeOver(image.bgra[index], red, green, blue, coverage);
+        }
+    }
+    return image;
+}
+
+void DrawMaterialPreviewBall(HDC dc, const RECT& target, const ProjectFilesMaterialPreviewStyle& style, bool selected) {
+    RECT frame = Draw::Inset(target, 2, 2);
+    const int width = Draw::RectWidth(frame);
+    const int height = Draw::RectHeight(frame);
+    if (width <= 2 || height <= 2) {
+        return;
+    }
+
+    const ProjectFilesMaterialPreviewImage image = RenderMaterialPreviewImage(width, height, style, selected);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = image.width;
+    info.bmiHeader.biHeight = -image.height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    static_cast<void>(StretchDIBits(
+        dc,
+        frame.left,
+        frame.top,
+        width,
+        height,
+        0,
+        0,
+        image.width,
+        image.height,
+        image.bgra.data(),
+        &info,
+        DIB_RGB_COLORS,
+        SRCCOPY));
+}
+
 void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetFolderRow& folder, bool highlighted, const EditorAssetBrowserState& state) {
     Frame::Paint(dc, tile, theme, highlighted, highlighted && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
@@ -431,6 +684,8 @@ void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAsse
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
     if (const ProjectFilesTextureThumbnailImage* texture = TextureThumbnailCache().ThumbnailFor(asset.metadata)) {
         DrawTextureThumbnailBitmap(dc, TexturePreviewRect(tile, visual), *texture);
+    } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata)) {
+        DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
     } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {

@@ -1503,6 +1503,20 @@ void RunRegisteredPrefabFullComponentOverrideLifecycleTest() {
     const kb::scene::ScenePrefabInstance appliedInstance = scene.Prefabs().Instantiate(prefabHandle);
     const kb::scene::AudioSourceComponent* appliedAudioSource = scene.Components().AudioSources().TryGet(appliedInstance.ObjectAt(rootNode).Entity());
     kb::tests::Require(appliedAudioSource != nullptr && kb::tests::NearlyEqual(appliedAudioSource->volume, 0.15F), "Full component prefab apply did not update future instances");
+
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 40, .materialAssetId = 77, .materialSlotAssetIds = { 42, 99 }, .materialSlotOverrideCount = 2 });
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "meshRenderer.materialAssetId"), "Full component prefab apply did not accept mesh renderer materialAssetId");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "meshRenderer.materialSlotOverrideCount"), "Full component prefab apply did not accept mesh renderer material slot override count");
+    kb::tests::Require(scene.Prefabs().ApplyOverride(instance.Handle(), rootNode, "meshRenderer.materialSlotAssetId.1"), "Full component prefab apply did not accept mesh renderer material slot override id");
+    const kb::scene::ScenePrefabInstance appliedMaterialInstance = scene.Prefabs().Instantiate(prefabHandle);
+    const kb::scene::MeshRendererComponent* appliedMeshRenderer = scene.Components().MeshRenderers().TryGet(appliedMaterialInstance.ObjectAt(rootNode).Entity());
+    kb::tests::Require(
+        appliedMeshRenderer != nullptr &&
+            appliedMeshRenderer->materialAssetId == 77 &&
+            appliedMeshRenderer->materialSlotOverrideCount == 2 &&
+            appliedMeshRenderer->materialSlotAssetIds[0] == 42 &&
+            appliedMeshRenderer->materialSlotAssetIds[1] == 99,
+        "Full component prefab apply did not update future mesh renderer material slots");
 }
 
 void RunPrefabApplyRejectsDetachedTrackedChildTest() {
