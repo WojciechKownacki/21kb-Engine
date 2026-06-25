@@ -27,6 +27,8 @@ bool InspectorPanelState::IsCollapsed(InspectorSectionId section) const noexcept
         return audioListenerCollapsed_;
     case InspectorSectionId::MeshRenderer:
         return meshRendererCollapsed_;
+    case InspectorSectionId::Light:
+        return lightCollapsed_;
     case InspectorSectionId::Folder:
         return folderCollapsed_;
     case InspectorSectionId::InputAction:
@@ -67,6 +69,9 @@ void InspectorPanelState::ToggleCollapsed(InspectorSectionId section) noexcept {
         break;
     case InspectorSectionId::MeshRenderer:
         target = &meshRendererCollapsed_;
+        break;
+    case InspectorSectionId::Light:
+        target = &lightCollapsed_;
         break;
     case InspectorSectionId::Folder:
         target = &folderCollapsed_;

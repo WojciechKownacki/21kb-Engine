@@ -19,6 +19,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -552,6 +553,63 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     report.Check(wrongTypeWarning != context.Console().Entries().end(), "Rejected wrong-type material slot assignment reports a warning");
 }
 
+void RunInspectorLightComponentSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::scene::SceneEntity lightEntity = context.CreateLightObject(kb::scene::LightKind::Point);
+    report.Check(lightEntity.IsValid(), "Create Point Light from editor command");
+    report.Check(context.Scene().Components().Lights().Has(lightEntity), "Created Point Light owns a real Light component");
+    context.SelectEntity(lightEntity);
+
+    InspectorPanelRenderer::Hit typeHit{};
+    InspectorPanelRenderer::Hit intensityHit{};
+    InspectorPanelRenderer::Hit castsShadowHit{};
+    for (int y = kContent.top; y < kContent.bottom; ++y) {
+        for (int x = kContent.left; x < kContent.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+            if (hit.section != InspectorSectionId::Light) {
+                continue;
+            }
+            if (typeHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightKind) {
+                typeHit = hit;
+            }
+            if (intensityHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::FloatField && hit.property == InspectorPropertyId::LightIntensity) {
+                intensityHit = hit;
+            }
+            if (castsShadowHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightCastsShadow) {
+                castsShadowHit = hit;
+            }
+        }
+    }
+
+    report.Check(typeHit.kind != InspectorHitKind::None, "Light Inspector exposes the light type field");
+    report.Check(intensityHit.kind != InspectorHitKind::None, "Light Inspector exposes editable intensity");
+    report.Check(castsShadowHit.kind != InspectorHitKind::None, "Light Inspector exposes shadow toggle");
+
+    if (intensityHit.kind != InspectorHitKind::None) {
+        const POINT point = Center(intensityHit.rect);
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, intensityHit, point.x, point.y), "Clicking Light intensity starts editing");
+        context.Inspector().ClearText();
+        context.Inspector().InsertText("4.25");
+        report.Check(InspectorPanelInteraction::HandleKeyDown(nullptr, context, static_cast<WPARAM>(0x0D)), "Committing Light intensity is handled");
+        const kb::scene::LightComponent* light = context.Scene().Components().Lights().TryGet(lightEntity);
+        report.Check(light != nullptr && std::abs(light->intensity - 4.25F) < 0.001F, "Committed Light intensity updates the runtime component");
+    }
+
+    if (castsShadowHit.kind != InspectorHitKind::None) {
+        const POINT point = Center(castsShadowHit.rect);
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, castsShadowHit, point.x, point.y), "Clicking Light shadow toggle is handled");
+        const kb::scene::LightComponent* light = context.Scene().Components().Lights().TryGet(lightEntity);
+        report.Check(light != nullptr && !light->castsShadow, "Light shadow toggle updates the runtime component");
+    }
+
+    if (typeHit.kind != InspectorHitKind::None) {
+        const POINT point = Center(typeHit.rect);
+        report.Check(InspectorPanelInteraction::HandlePointerDown(context, typeHit, point.x, point.y), "Clicking Light type cycles the component kind");
+        const kb::scene::LightComponent* light = context.Scene().Components().Lights().TryGet(lightEntity);
+        report.Check(light != nullptr && light->kind == kb::scene::LightKind::Spot, "Point Light cycles to Spot Light through the Inspector");
+    }
+}
+
 void RunPrefabPlacementSuite(Report& report) {
     EditorSceneContext context;
 
@@ -849,6 +907,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
+    RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);
