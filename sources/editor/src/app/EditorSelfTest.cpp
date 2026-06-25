@@ -435,14 +435,29 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             materialHit.property == InspectorPropertyId::MeshRendererMaterial,
         "Inspector Mesh Renderer Material row hit-tests as the main material assignment target");
 
+    InspectorPanelRenderer::Hit materialPickerHit{};
+    InspectorPanelRenderer::Hit overridePickerHit{};
     InspectorPanelRenderer::Hit slotHit{};
-    for (int y = kContent.top; y < kContent.bottom && slotHit.kind == InspectorHitKind::None; ++y) {
-        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, 360, y);
-        if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMaterialSlot1) {
-            slotHit = hit;
+    for (int y = kContent.top; y < kContent.bottom; ++y) {
+        for (int x = kContent.left; x < kContent.right; ++x) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, x, y);
+            if (hit.section != InspectorSectionId::MeshRenderer) {
+                continue;
+            }
+            if (materialPickerHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialPicker) {
+                materialPickerHit = hit;
+            }
+            if (slotHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialSlot0) {
+                slotHit = hit;
+            }
+            if (overridePickerHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker) {
+                overridePickerHit = hit;
+            }
         }
     }
-    report.Check(slotHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer slot row hit-tests as a concrete material slot target");
+    report.Check(materialPickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material row exposes a material picker button");
+    report.Check(slotHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer material override row hit-tests as a concrete material slot target");
+    report.Check(overridePickerHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer Material Override row exposes a material picker button");
 
     const kb::assets::AssetId materialId{ 31337U };
     report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
@@ -461,17 +476,26 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             emptySlotClicked->materialSlotAssetIds[1] == 0U,
         "Clicking an empty Mesh Renderer material override keeps it as None");
 
+    context.AcknowledgeSceneRenderSubmitted();
+    report.Check(!context.SceneRenderFullDirty(), "Scene render dirty acknowledgement clears full sync before material assignment");
     report.Check(context.SetMeshRendererMaterialAsset(mesh, materialId), "Assign Mesh Renderer main material through command path");
+    report.Check(context.SceneRenderFullDirty(), "Assigning Mesh Renderer main material marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* mainAssigned = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(mainAssigned != nullptr && mainAssigned->materialAssetId == materialId.value, "Mesh Renderer main material assignment stores the material asset id");
+    context.AcknowledgeSceneRenderSubmitted();
     report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer main material assignment");
+    report.Check(context.SceneRenderFullDirty(), "Undoing Mesh Renderer main material assignment marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* mainUndone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(mainUndone != nullptr && mainUndone->materialAssetId == 0U, "Undo restores the previous Mesh Renderer main material");
+    context.AcknowledgeSceneRenderSubmitted();
     report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer main material assignment");
+    report.Check(context.SceneRenderFullDirty(), "Redoing Mesh Renderer main material assignment marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* mainRedone = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(mainRedone != nullptr && mainRedone->materialAssetId == materialId.value, "Redo reapplies the Mesh Renderer main material");
 
+    context.AcknowledgeSceneRenderSubmitted();
     report.Check(context.SetMeshRendererMaterialSlotAsset(mesh, 1U, materialId), "Assign Mesh Renderer material slot through command path");
+    report.Check(context.SceneRenderFullDirty(), "Assigning Mesh Renderer material slot marks scene rendering for resync");
     const kb::scene::MeshRendererComponent* assigned = context.Scene().Components().MeshRenderers().TryGet(mesh);
     report.Check(
         assigned != nullptr &&

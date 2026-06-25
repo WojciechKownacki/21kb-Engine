@@ -36,6 +36,7 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorMaterialAssetInspectorDropHandler.cpp
     src/app/EditorMaterialAssetSceneDropHandler.cpp
+    src/app/EditorMeshAssetInspectorDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
@@ -299,6 +300,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorMaterialAssetInspectorDropHandler.hpp
     src/private/app/EditorMaterialAssetSceneDropHandler.hpp
+    src/private/app/EditorMeshAssetInspectorDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
     src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
@@ -375,6 +377,8 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorRigidbodyTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
+    src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
@@ -566,6 +570,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp

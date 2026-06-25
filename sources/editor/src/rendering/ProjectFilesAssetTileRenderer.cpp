@@ -62,7 +62,9 @@ struct ProjectFilesMaterialPreviewImage {
 
 struct ProjectFilesMaterialPreviewStyle {
     COLORREF baseColor = RGB(194, 168, 116);
+    COLORREF emissiveColor = RGB(0, 0, 0);
     float roughness = 0.65F;
+    float emissiveStrength = 1.0F;
     bool loadedFromAsset = false;
 };
 
@@ -138,7 +140,9 @@ private:
     }
 
     style.baseColor = ToColorRef(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
+    style.emissiveColor = ToColorRef(material->desc.emissiveColor[0], material->desc.emissiveColor[1], material->desc.emissiveColor[2]);
     style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
+    style.emissiveStrength = std::clamp(material->desc.emissiveStrength, 0.0F, 64.0F);
     style.loadedFromAsset = true;
     return style;
 }
@@ -567,6 +571,9 @@ void DrawTextureThumbnailBitmap(HDC dc, const RECT& target, const ProjectFilesTe
     const float baseR = ColorChannel(baseColor, 0);
     const float baseG = ColorChannel(baseColor, 8);
     const float baseB = ColorChannel(baseColor, 16);
+    const float emissiveR = ColorChannel(style.emissiveColor, 0) * style.emissiveStrength;
+    const float emissiveG = ColorChannel(style.emissiveColor, 8) * style.emissiveStrength;
+    const float emissiveB = ColorChannel(style.emissiveColor, 16) * style.emissiveStrength;
     const float radius = static_cast<float>(std::max(8, std::min(width - 14, height - 14))) * 0.5F;
     const float centerX = static_cast<float>(width) * 0.5F;
     const float centerY = static_cast<float>(height) * 0.5F;
@@ -618,9 +625,9 @@ void DrawTextureThumbnailBitmap(HDC dc, const RECT& target, const ProjectFilesTe
             const float sheen = std::pow(std::max(0.0F, (-nx * 0.35F) + (-ny * 0.72F) + (nz * 0.60F)), 18.0F) * 0.10F;
             const float shade = (0.34F + diffuse * 0.66F) * lowerShade;
 
-            float red = baseR * shade + rim * 0.28F + specular + sheen;
-            float green = baseG * shade + rim * 0.28F + specular + sheen;
-            float blue = baseB * shade + rim * 0.30F + specular + sheen;
+            float red = baseR * shade + emissiveR + rim * 0.28F + specular + sheen;
+            float green = baseG * shade + emissiveG + rim * 0.28F + specular + sheen;
+            float blue = baseB * shade + emissiveB + rim * 0.30F + specular + sheen;
 
             const float edgeDarken = std::clamp((distance - 0.78F) / 0.22F, 0.0F, 1.0F) * 0.22F;
             red *= 1.0F - edgeDarken;
@@ -678,7 +685,14 @@ void DrawFolderTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAss
     }
 }
 
-void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAssetItemRow& asset, const EditorAssetBrowserState& state, EditorMeshThumbnailService& meshThumbnails) {
+void DrawAssetTile(
+    HDC dc,
+    RECT tile,
+    const EditorTheme& theme,
+    const EditorAssetItemRow& asset,
+    const EditorAssetBrowserState& state,
+    const kb::assets::AssetManager& manager,
+    EditorMeshThumbnailService& meshThumbnails) {
     Frame::Paint(dc, tile, theme, asset.selected, asset.selected && state.IsSelectionFocused());
     const int namePoint = Metrics::NamePointSize(tile);
     const ProjectFilesAssetTileVisualLayout visual = Metrics::ResolveVisualLayout(tile);
@@ -686,7 +700,7 @@ void DrawAssetTile(HDC dc, RECT tile, const EditorTheme& theme, const EditorAsse
         DrawTextureThumbnailBitmap(dc, TexturePreviewRect(tile, visual), *texture);
     } else if (const ProjectFilesMaterialPreviewStyle* materialStyle = MaterialPreviewStyleCache().StyleFor(asset.metadata)) {
         DrawMaterialPreviewBall(dc, MaterialPreviewRect(tile, visual), *materialStyle, asset.selected);
-    } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(asset.metadata)) {
+    } else if (const EditorMeshThumbnailImage* thumbnail = meshThumbnails.PreviewFor(manager, asset.metadata)) {
         DrawThumbnailBitmap(dc, ThumbnailRect(tile, visual), *thumbnail);
     } else {
         const ProjectFilesAssetIcon icon = ProjectFilesAssetIconResolver::Resolve(asset.metadata, asset.selected);
@@ -732,6 +746,7 @@ void ProjectFilesAssetTileRenderer::Paint(
     const EditorAssetBrowserLayoutRects& layout,
     const EditorTheme& theme,
     const EditorAssetBrowserState& state,
+    const kb::assets::AssetManager& manager,
     EditorMeshThumbnailService& meshThumbnails,
     const std::vector<EditorAssetFolderRow>& folders,
     const std::vector<EditorAssetItemRow>& assets) {
@@ -770,7 +785,7 @@ void ProjectFilesAssetTileRenderer::Paint(
             --relative;
         }
         if (relative >= 0 && relative < static_cast<int>(assets.size())) {
-            DrawAssetTile(dc, tile, theme, assets[static_cast<std::size_t>(relative)], state, meshThumbnails);
+            DrawAssetTile(dc, tile, theme, assets[static_cast<std::size_t>(relative)], state, manager, meshThumbnails);
         }
     }
     RestoreDC(dc, -1);

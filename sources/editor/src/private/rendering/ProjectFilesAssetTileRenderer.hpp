@@ -6,6 +6,10 @@
 
 #include <vector>
 
+namespace kb::assets {
+class AssetManager;
+}
+
 namespace kb::editor {
 
 #if defined(_WIN32)
@@ -22,6 +26,7 @@ public:
         const EditorAssetBrowserLayoutRects& layout,
         const EditorTheme& theme,
         const EditorAssetBrowserState& state,
+        const kb::assets::AssetManager& manager,
         EditorMeshThumbnailService& meshThumbnails,
         const std::vector<EditorAssetFolderRow>& folders,
         const std::vector<EditorAssetItemRow>& assets);

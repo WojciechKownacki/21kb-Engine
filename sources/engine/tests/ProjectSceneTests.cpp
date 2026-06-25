@@ -227,6 +227,16 @@ void RunSceneDocumentRoundTripTest() {
     const kb::scene::AudioListenerComponent* audioListener = target.Components().AudioListeners().TryGet(roots[1]);
     const kb::scene::BehaviourComponent* behaviour = target.Components().Behaviours().TryGet(restoredChildren[0]);
     Require(meshRenderer != nullptr && meshRenderer->meshAssetId == 41 && !meshRenderer->castsShadow, "Scene document mesh renderer did not roundtrip");
+    std::uint32_t iteratedMeshRenderers = 0U;
+    target.Components().Visitors().ForEachMeshRenderer(
+        [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& renderer, void* context) {
+            if (renderer.meshAssetId == 41) {
+                auto* count = static_cast<std::uint32_t*>(context);
+                ++(*count);
+            }
+        },
+        &iteratedMeshRenderers);
+    Require(iteratedMeshRenderers == 1U, "Scene document mesh renderer did not roundtrip into runtime component iteration");
     Require(light != nullptr && light->kind == kb::scene::LightKind::Directional && NearlyEqual(light->intensity, 3.0F), "Scene document light did not roundtrip");
     Require(camera != nullptr && camera->primary && NearlyEqual(camera->orthographicHeight, 16.0F), "Scene document camera did not roundtrip");
     Require(rigidbody != nullptr && rigidbody->bodyType == kb::scene::RigidbodyBodyType::Dynamic && NearlyEqual(rigidbody->mass, 8.0F) && NearlyEqual(rigidbody->linearVelocity.z, 3.0F) && NearlyEqual(rigidbody->angularVelocity.y, 4.0F) && NearlyEqual(rigidbody->gravityScale, 0.5F), "Scene document rigidbody did not roundtrip");

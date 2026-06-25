@@ -65,6 +65,9 @@ struct EditorMeshPreviewGeometry {
     std::vector<EditorMeshPreviewVector3> positions{};
     std::vector<EditorMeshPreviewVector3> normals{};
     std::vector<std::uint32_t> indices{};
+    float materialBaseColor[4]{ 0.74F, 0.86F, 1.0F, 1.0F };
+    float materialEmissiveColor[3]{};
+    float materialEmissiveStrength = 1.0F;
 };
 
 enum class EditorMeshValidationSeverity : std::uint8_t {
