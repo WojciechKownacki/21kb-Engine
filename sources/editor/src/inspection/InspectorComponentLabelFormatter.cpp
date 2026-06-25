@@ -10,6 +10,12 @@ const char* InspectorComponentLabelFormatter::LightKindName(kb::scene::LightKind
         return "Point";
     case kb::scene::LightKind::Spot:
         return "Spot";
+    case kb::scene::LightKind::AreaRect:
+        return "Area Rect";
+    case kb::scene::LightKind::AreaDisk:
+        return "Area Disk";
+    case kb::scene::LightKind::Tube:
+        return "Tube";
     }
     return "Unknown";
 }

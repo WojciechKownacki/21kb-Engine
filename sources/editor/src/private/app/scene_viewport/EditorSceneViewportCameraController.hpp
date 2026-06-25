@@ -42,7 +42,7 @@ private:
     [[nodiscard]] bool QueueActivePointerMove(HWND messageWindow, int x, int y);
     [[nodiscard]] bool ApplyActiveKeyboardFlight(HWND messageWindow, float deltaSeconds);
     void InvalidateActiveToolbar(HWND messageWindow) const noexcept;
-    void StartCapture(HWND messageWindow) noexcept;
+    void StartCapture(HWND messageWindow, bool hideCursor) noexcept;
     void StopCapture(HWND messageWindow) noexcept;
 
     HWND mainWindow_ = nullptr;

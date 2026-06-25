@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/overlay/EditorLightWireframe.hpp"
 #include "kb/render/frame/RenderTargetDesc.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
@@ -7,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace kb::render {
@@ -22,6 +24,7 @@ struct SceneGizmoPassDesc {
     int hoveredAxis = -1;
     int draggedAxis = -1;
     std::uint8_t mode = 0U;
+    std::span<const EditorLightWireframeDesc> lightWireframes{};
     bool visible = false;
 
     [[nodiscard]] bool IsValid() const noexcept;

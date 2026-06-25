@@ -49,6 +49,7 @@ public:
         bool editorSceneOverlaysEnabled = true;
         render::RenderSceneSubmitDesc::EditorGridDesc editorGrid{};
         render::RenderSceneSubmitDesc::EditorGizmoDesc editorGizmo{};
+        std::vector<render::EditorLightWireframeDesc> editorLightWireframes;
         render::RenderSceneSubmitDesc::EditorSelectionBoxDesc editorSelectionBox{};
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
