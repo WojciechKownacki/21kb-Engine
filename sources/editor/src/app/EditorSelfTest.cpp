@@ -6,6 +6,7 @@
 #include "project/EditorProjectPaths.hpp"
 #include "rendering/PluginsPanelRenderer.hpp"
 #include "rendering/InspectorPanelRenderer.hpp"
+#include "inspection/InspectorPanelInteraction.hpp"
 #include "rendering/ProjectSettingsPanelLayout.hpp"
 #include "rendering/ProjectSettingsPanelRenderer.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
@@ -18,6 +19,7 @@
 #include "engine/input/InputSubsystem.hpp"
 #include "engine/project/ProjectManager.hpp"
 #include "engine/scene/ColliderComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/RigidbodyComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponents.hpp"
@@ -29,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <optional>
@@ -416,6 +419,115 @@ void RunSelectionTransformSuite(Report& report) {
     report.Check(std::abs(movedSecond.localPosition.x - 12.0F) < 0.001F, "Redo reapplies second entity transform");
 }
 
+void RunInspectorMaterialDropTargetSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::scene::SceneEntity mesh = context.CreateHierarchyObject();
+    report.Check(mesh.IsValid(), "Create mesh entity for inspector material drop target");
+    kb::scene::MeshRendererComponent renderer{ .meshAssetId = 909U };
+    renderer.materialSlotOverrideCount = 2U;
+    context.Scene().Components().MeshRenderers().Set(mesh, renderer);
+    context.SelectEntity(mesh);
+
+    const InspectorPanelRenderer::Hit materialHit = InspectorPanelRenderer::HitTest(kContent, context, 360, 240);
+    report.Check(
+        materialHit.kind == InspectorHitKind::TextField &&
+            materialHit.section == InspectorSectionId::MeshRenderer &&
+            materialHit.property == InspectorPropertyId::MeshRendererMaterial,
+        "Inspector Mesh Renderer Material row hit-tests as the main material assignment target");
+
+    InspectorPanelRenderer::Hit slotHit{};
+    for (int y = kContent.top; y < kContent.bottom && slotHit.kind == InspectorHitKind::None; ++y) {
+        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(kContent, context, 360, y);
+        if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMaterialSlot1) {
+            slotHit = hit;
+        }
+    }
+    report.Check(slotHit.kind != InspectorHitKind::None, "Inspector Mesh Renderer slot row hit-tests as a concrete material slot target");
+
+    const kb::assets::AssetId materialId{ 31337U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = materialId,
+                     .type = "RenderMaterial",
+                     .name = "DropSlotMaterial",
+                     .virtualPath = "/Game/Materials/DropSlotMaterial.kbmat",
+                     .runtimeLoadable = true,
+                 }),
+        "Register material asset for inspector slot assignment");
+    report.Check(InspectorPanelInteraction::HandlePointerDown(context, slotHit, 360, 240), "Clicking an empty Mesh Renderer material override is handled");
+    const kb::scene::MeshRendererComponent* emptySlotClicked = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        emptySlotClicked != nullptr &&
+            emptySlotClicked->materialSlotOverrideCount == 2U &&
+            emptySlotClicked->materialSlotAssetIds[1] == 0U,
+        "Clicking an empty Mesh Renderer material override keeps it as None");
+
+    report.Check(context.SetMeshRendererMaterialAsset(mesh, materialId), "Assign Mesh Renderer main material through command path");
+    const kb::scene::MeshRendererComponent* mainAssigned = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(mainAssigned != nullptr && mainAssigned->materialAssetId == materialId.value, "Mesh Renderer main material assignment stores the material asset id");
+    report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer main material assignment");
+    const kb::scene::MeshRendererComponent* mainUndone = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(mainUndone != nullptr && mainUndone->materialAssetId == 0U, "Undo restores the previous Mesh Renderer main material");
+    report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer main material assignment");
+    const kb::scene::MeshRendererComponent* mainRedone = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(mainRedone != nullptr && mainRedone->materialAssetId == materialId.value, "Redo reapplies the Mesh Renderer main material");
+
+    report.Check(context.SetMeshRendererMaterialSlotAsset(mesh, 1U, materialId), "Assign Mesh Renderer material slot through command path");
+    const kb::scene::MeshRendererComponent* assigned = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        assigned != nullptr &&
+            assigned->materialSlotOverrideCount == 2U &&
+            assigned->materialSlotAssetIds[1] == materialId.value,
+        "Mesh Renderer material slot assignment stores the dropped material asset id");
+    report.Check(context.UndoSceneCommand(), "Undo Mesh Renderer material slot assignment");
+    const kb::scene::MeshRendererComponent* slotUndone = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        slotUndone != nullptr &&
+            slotUndone->materialSlotOverrideCount == 2U &&
+            slotUndone->materialSlotAssetIds[1] == 0U,
+        "Undo restores the previous Mesh Renderer material slot override");
+    report.Check(context.RedoSceneCommand(), "Redo Mesh Renderer material slot assignment");
+    const kb::scene::MeshRendererComponent* slotRedone = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        slotRedone != nullptr &&
+            slotRedone->materialSlotOverrideCount == 2U &&
+            slotRedone->materialSlotAssetIds[1] == materialId.value,
+        "Redo reapplies the Mesh Renderer material slot override");
+    report.Check(InspectorPanelInteraction::HandlePointerDown(context, slotHit, 360, 240), "Clicking an assigned Mesh Renderer material override is handled");
+    const kb::scene::MeshRendererComponent* slotClearedByClick = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        slotClearedByClick != nullptr &&
+            slotClearedByClick->materialSlotAssetIds[1] == 0U,
+        "Clicking an assigned Mesh Renderer material override clears it to None");
+    report.Check(context.SetMeshRendererMaterialSlotAsset(mesh, 1U, materialId), "Reassign Mesh Renderer material slot before rejection test");
+
+    const kb::assets::AssetId wrongTypeId{ 31338U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = wrongTypeId,
+                     .type = "RenderTexture",
+                     .name = "WrongTypeTexture",
+                     .virtualPath = "/Game/Textures/WrongTypeTexture.ktx",
+                     .runtimeLoadable = true,
+                 }),
+        "Register wrong-type asset for inspector material slot rejection");
+    const std::size_t consoleCountBeforeWrongDrop = context.Console().Entries().size();
+    report.Check(!context.SetMeshRendererMaterialSlotAsset(mesh, 1U, wrongTypeId), "Reject wrong-type asset for Mesh Renderer material slot");
+    const kb::scene::MeshRendererComponent* rejected = context.Scene().Components().MeshRenderers().TryGet(mesh);
+    report.Check(
+        rejected != nullptr &&
+            rejected->materialSlotOverrideCount == 2U &&
+            rejected->materialSlotAssetIds[1] == materialId.value,
+        "Rejected wrong-type material slot assignment leaves the existing override unchanged");
+    const auto wrongTypeWarning = std::find_if(
+        context.Console().Entries().begin() + static_cast<std::ptrdiff_t>(consoleCountBeforeWrongDrop),
+        context.Console().Entries().end(),
+        [](const EditorConsoleEntry& entry) {
+            return entry.level == EditorConsoleLevel::Warning &&
+                entry.category == "Inspector" &&
+                entry.message.find("Only material assets can be assigned to a Mesh Renderer slot.") != std::string::npos;
+        });
+    report.Check(wrongTypeWarning != context.Console().Entries().end(), "Rejected wrong-type material slot assignment reports a warning");
+}
+
 void RunPrefabPlacementSuite(Report& report) {
     EditorSceneContext context;
 
@@ -712,6 +824,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
     RunSuiteInScratch(report, "script_log", &RunScriptLogSuite);
     RunSuiteInScratch(report, "plugins", &RunPluginsPanelSuite);

@@ -10,6 +10,7 @@
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
+#include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
@@ -918,22 +919,6 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return mesh == nullptr ? std::nullopt : std::optional<kb::render::RenderMeshAssetData>{ *mesh };
 }
 
-[[nodiscard]] int MeshRendererMaterialSlotRows(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer) {
-    std::uint32_t rows = std::max<std::uint32_t>(1U, renderer.materialSlotOverrideCount);
-    if (const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId)) {
-        rows = std::max<std::uint32_t>(rows, static_cast<std::uint32_t>(std::max(mesh->materialSlots.size(), mesh->materialNames.size())));
-    }
-    return static_cast<int>(std::min<std::uint32_t>(rows, kb::scene::kMaxMeshRendererMaterialSlotOverrides));
-}
-
-[[nodiscard]] std::string MeshRendererMaterialSlotLabel(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
-    std::string label = "Slot " + std::to_string(slotIndex);
-    if (mesh.has_value() && slotIndex < mesh->materialNames.size() && !mesh->materialNames[slotIndex].empty()) {
-        label += " (" + mesh->materialNames[slotIndex] + ")";
-    }
-    return label;
-}
-
 [[nodiscard]] InspectorPropertyId MeshRendererMaterialSlotProperty(std::uint32_t slotIndex) noexcept {
     switch (slotIndex) {
     case 0U:
@@ -1316,12 +1301,13 @@ void PaintMeshRendererSection(
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer");
     section.Field("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh);
     section.Field("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial);
-    const int slotRows = MeshRendererMaterialSlotRows(sceneContext, renderer);
-    section.Field("Material Slots", std::to_string(slotRows));
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
-    for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
-        const std::uint64_t materialId = slotIndex < renderer.materialSlotOverrideCount ? renderer.materialSlotAssetIds[slotIndex] : 0U;
-        section.Field(MeshRendererMaterialSlotLabel(mesh, slotIndex), MaterialDisplayName(sceneContext, materialId), MeshRendererMaterialSlotProperty(slotIndex));
+    const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
+        renderer,
+        mesh,
+        [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
+    for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
+        section.Field(row.label, row.value, MeshRendererMaterialSlotProperty(row.slotIndex));
     }
     section.Bool("Casts Shadow", renderer.castsShadow);
     section.Bool("Receives Shadow", renderer.receivesShadow);
@@ -1494,7 +1480,12 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5 + MeshRendererMaterialSlotRows(sceneContext, *renderer)) + kSectionGap;
+        const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer->meshAssetId);
+        const std::size_t slotRows = InspectorMeshRendererMaterialSlotModel::Build(
+            *renderer,
+            mesh,
+            [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); }).size();
+        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 4 + static_cast<int>(slotRows)) + kSectionGap;
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
@@ -2120,13 +2111,13 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
-                return hit;
-            }
-            AdvanceRow(y);
-            const int slotRows = MeshRendererMaterialSlotRows(sceneContext, *renderer);
-            for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
-                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, MeshRendererMaterialSlotProperty(slotIndex), x, scrolledY); hit.kind != InspectorHitKind::None) {
+            const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer->meshAssetId);
+            const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
+                *renderer,
+                mesh,
+                [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
+            for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
+                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, MeshRendererMaterialSlotProperty(row.slotIndex), x, scrolledY); hit.kind != InspectorHitKind::None) {
                     return hit;
                 }
                 AdvanceRow(y);

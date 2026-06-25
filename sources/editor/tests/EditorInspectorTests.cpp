@@ -1,6 +1,8 @@
 #include "EditorTestSupport.hpp"
 #include "EditorTestSuites.hpp"
 
+#include "assets/EditorAssetBrowserState.hpp"
+#include "console/EditorConsoleState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/audio/AudioSettings.hpp"
@@ -9,14 +11,17 @@
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneDocumentService.hpp"
+#include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
+#include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
 #include "inspection/InspectorPanelState.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
@@ -25,6 +30,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "scene/EditorSceneAudioAssetActions.hpp"
 #include "scene/EditorSceneMaterialAssetActions.hpp"
+#include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
@@ -33,12 +39,17 @@
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/ScenePrefabs.hpp"
+#include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/MaterialEditorState.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bgfx/bgfx.h>
 #include <cstddef>
 #include <filesystem>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -211,6 +222,232 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
     std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
 }
 
+void RunMeshRendererMaterialSlotModelTest() {
+    kb::render::RenderMeshAssetData mesh;
+    mesh.materialNames = { "Body", "Trim" };
+    mesh.materialSlots = {
+        kb::render::RenderMaterialSlotDesc{ .defaultMaterialAssetId = 201U },
+        kb::render::RenderMaterialSlotDesc{ .defaultMaterialAssetId = 202U },
+    };
+
+    kb::scene::MeshRendererComponent renderer{ .meshAssetId = 77U, .materialAssetId = 100U };
+    renderer.materialSlotOverrideCount = 2U;
+    renderer.materialSlotAssetIds[1] = 303U;
+
+    const auto materialName = [](std::uint64_t id) {
+        switch (id) {
+        case 201U:
+            return std::string{ "BodyDefault" };
+        case 202U:
+            return std::string{ "TrimDefault" };
+        case 303U:
+            return std::string{ "TrimOverride" };
+        default:
+            return std::string{ "None" };
+        }
+    };
+
+    const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> rows =
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(renderer, mesh, materialName);
+    kb::editor::tests::Require(rows.size() == 2U, "Mesh Renderer material slot model should expose mesh material slots");
+    kb::editor::tests::Require(rows[0].label == "Material Override", "Mesh Renderer material slot model should show the primary override as a simple material field");
+    kb::editor::tests::Require(rows[0].value == "None", "Mesh Renderer material slot model should show empty overrides as None");
+    kb::editor::tests::Require(rows[1].hasOverride, "Mesh Renderer material slot model should mark explicit slot overrides");
+    kb::editor::tests::Require(rows[1].label.find("Material Override 2") != std::string::npos, "Mesh Renderer material slot model should keep extra material overrides readable");
+    kb::editor::tests::Require(rows[1].value == "TrimOverride", "Mesh Renderer material slot model should show only the assigned override material");
+
+    kb::scene::MeshRendererComponent noSlotRenderer{ .meshAssetId = 88U, .materialAssetId = 400U };
+    const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> emptyRows =
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(noSlotRenderer, kb::render::RenderMeshAssetData{}, materialName);
+    kb::editor::tests::Require(emptyRows.empty(), "Mesh Renderer material slot model should not invent slots when mesh has none");
+
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "SlotDefaultMesh" });
+    scene.Components().MeshRenderers().Set(entity, renderer);
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, {}),
+        "Mesh Renderer material slot clear should accept an empty material asset id");
+    const kb::scene::MeshRendererComponent* cleared = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(cleared != nullptr && cleared->materialSlotOverrideCount == 0U, "Mesh Renderer material slot clear should trim cleared overrides");
+    const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> clearedRows =
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(*cleared, mesh, materialName);
+    kb::editor::tests::Require(
+        clearedRows.size() == 2U && !clearedRows[1].hasOverride && clearedRows[1].value == "None",
+        "Mesh Renderer material slot clear should show the override as empty in the UI model");
+}
+
+void RunMaterialCreateAssignSaveReloadE2ETest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_editor_material_assign_e2e_project";
+    const std::filesystem::path sceneFile = projectRoot / "Assets" / "Scenes" / "MaterialAssignment.21kbscene";
+    const std::filesystem::path prefabFile = projectRoot / "Assets" / "Prefabs" / "MaterialAssignment.kbprefab";
+    std::error_code cleanupError;
+    std::filesystem::remove_all(projectRoot, cleanupError);
+    std::filesystem::create_directories(sceneFile.parent_path(), cleanupError);
+    std::filesystem::create_directories(prefabFile.parent_path(), cleanupError);
+    kb::editor::tests::Require(!cleanupError, "Material assignment E2E test could not create project folders");
+
+    kb::scene::Scene source;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(source.Assets().MountProject(projectRoot), "Material assignment E2E test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ source, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material assignment E2E test could not create material asset");
+    const kb::assets::AssetMetadata* materialMetadata = source.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Material assignment E2E test did not discover created material metadata");
+    const kb::assets::AssetId materialId = materialMetadata->id;
+
+    const kb::scene::SceneObject mesh = source.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MaterialAssignedMesh" });
+    source.Components().MeshRenderers().Set(mesh.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 9001U });
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(source, mesh.Entity(), materialId), "Material assignment E2E test could not assign material to Mesh Renderer");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(source, mesh.Entity(), 1U, materialId), "Material assignment E2E test could not assign material slot override");
+    const kb::scene::MeshRendererComponent* assigned = source.Components().MeshRenderers().TryGet(mesh.Entity());
+    kb::editor::tests::Require(assigned != nullptr && assigned->materialAssetId == materialId.value, "Material assignment E2E test did not update source Mesh Renderer");
+    kb::editor::tests::Require(
+        assigned != nullptr && assigned->materialSlotOverrideCount == 2U && assigned->materialSlotAssetIds[1] == materialId.value,
+        "Material assignment E2E test did not update source Mesh Renderer material slot override");
+
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::Save(source, sceneFile, "MaterialAssignment"), "Material assignment E2E test could not save scene");
+
+    kb::scene::Scene reopenedScene;
+    kb::editor::tests::Require(reopenedScene.Assets().MountProject(projectRoot), "Material assignment E2E scene reopen could not mount project assets");
+    kb::editor::tests::Require(reopenedScene.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()), "Material assignment E2E scene reopen could not register material loader");
+    kb::editor::tests::Require(reopenedScene.Assets().Discover() >= 1U, "Material assignment E2E scene reopen did not discover project assets");
+    const kb::assets::AssetMetadata* reopenedMaterial = reopenedScene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(reopenedMaterial != nullptr && reopenedMaterial->id == materialId, "Material assignment E2E scene reopen did not preserve material asset id");
+    const kb::assets::AssetHandle<kb::render::RenderMaterialAssetData> loadedMaterial = reopenedScene.Assets().Manager().Load<kb::render::RenderMaterialAssetData>(reopenedMaterial->id);
+    kb::editor::tests::Require(loadedMaterial.IsLoaded(), "Material assignment E2E scene reopen could not load created material asset");
+    kb::editor::tests::Require(kb::scene::SceneDocumentService::LoadFileIntoScene(reopenedScene, sceneFile), "Material assignment E2E test could not reload saved scene");
+    const std::vector<kb::scene::SceneEntity> sceneRoots = reopenedScene.Hierarchy().RootEntities();
+    kb::editor::tests::Require(sceneRoots.size() == 1U, "Material assignment E2E reloaded scene did not contain one mesh root");
+    const kb::scene::MeshRendererComponent* sceneRenderer = reopenedScene.Components().MeshRenderers().TryGet(sceneRoots.front());
+    kb::editor::tests::Require(sceneRenderer != nullptr && sceneRenderer->materialAssetId == materialId.value, "Material assignment E2E reloaded scene did not preserve material assignment");
+    kb::editor::tests::Require(
+        sceneRenderer != nullptr && sceneRenderer->materialSlotOverrideCount == 2U && sceneRenderer->materialSlotAssetIds[1] == materialId.value,
+        "Material assignment E2E reloaded scene did not preserve material slot override assignment");
+
+    const kb::scene::ScenePrefabHandle prefabHandle = source.Prefabs().CreateAsset(mesh, "MaterialAssignment", prefabFile);
+    kb::editor::tests::Require(prefabHandle.IsValid(), "Material assignment E2E test could not save prefab asset");
+    kb::scene::Scene reopenedPrefabScene;
+    const kb::scene::ScenePrefabHandle loadedPrefab = reopenedPrefabScene.Prefabs().Load(prefabFile);
+    kb::editor::tests::Require(loadedPrefab.IsValid(), "Material assignment E2E test could not reload saved prefab");
+    const kb::scene::ScenePrefabInstance prefabInstance = reopenedPrefabScene.Prefabs().Instantiate(loadedPrefab);
+    kb::editor::tests::Require(!prefabInstance.Empty() && prefabInstance.ObjectCount() == 1U, "Material assignment E2E reloaded prefab did not instantiate one mesh");
+    const kb::scene::MeshRendererComponent* prefabRenderer = reopenedPrefabScene.Components().MeshRenderers().TryGet(prefabInstance.ObjectAt(0U).Entity());
+    kb::editor::tests::Require(prefabRenderer != nullptr && prefabRenderer->materialAssetId == materialId.value, "Material assignment E2E reloaded prefab did not preserve material assignment");
+    kb::editor::tests::Require(
+        prefabRenderer != nullptr && prefabRenderer->materialSlotOverrideCount == 2U && prefabRenderer->materialSlotAssetIds[1] == materialId.value,
+        "Material assignment E2E reloaded prefab did not preserve material slot override assignment");
+
+    std::filesystem::remove_all(projectRoot, cleanupError);
+}
+
+void RunMaterialRenamePreservesMeshRendererAssignmentTest() {
+    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "21kb_editor_material_rename_project";
+    std::error_code cleanupError;
+    std::filesystem::remove_all(projectRoot, cleanupError);
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::EditorConsoleState console;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Material rename test could not mount project assets");
+
+    kb::editor::EditorMaterialAssetAuthoring authoring{ scene, browser, console };
+    kb::editor::tests::Require(authoring.Create("/Game/Materials"), "Material rename test could not create material asset");
+    const kb::assets::AssetMetadata* material = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/NewMaterial.kbmat");
+    kb::editor::tests::Require(material != nullptr, "Material rename test did not discover material asset");
+    const kb::assets::AssetId materialId = material->id;
+
+    const kb::scene::SceneObject mesh = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "RenamedMaterialMesh" });
+    scene.Components().MeshRenderers().Set(mesh.Entity(), kb::scene::MeshRendererComponent{ .meshAssetId = 7001U });
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(scene, mesh.Entity(), materialId), "Material rename test could not assign material");
+
+    kb::editor::tests::Require(scene.Assets().Manager().RenameAsset(materialId, "RenamedMaterial"), "Material rename test could not rename material asset");
+    const kb::assets::AssetMetadata* renamedById = scene.Assets().Manager().Registry().Find(materialId);
+    const kb::assets::AssetMetadata* renamedByPath = scene.Assets().Manager().Registry().FindByPath("/Game/Materials/RenamedMaterial.kbmat");
+    kb::editor::tests::Require(renamedById != nullptr, "Material rename should keep metadata addressable by original asset id");
+    kb::editor::tests::Require(renamedByPath != nullptr && renamedByPath->id == materialId, "Material rename should keep the original asset id on the renamed path");
+    const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(mesh.Entity());
+    kb::editor::tests::Require(renderer != nullptr && renderer->materialAssetId == materialId.value, "Material rename should not change Mesh Renderer material asset id");
+
+    std::filesystem::remove_all(projectRoot, cleanupError);
+}
+
+void RunMaterialReferenceFinderReportsMeshRendererUsageTest() {
+    kb::scene::Scene scene;
+    const kb::assets::AssetId materialId{ 501U };
+    const kb::assets::AssetId unusedMaterialId{ 777U };
+
+    const kb::scene::SceneObject mainMaterialMesh = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "MainMaterialMesh" });
+    scene.Components().MeshRenderers().Set(mainMaterialMesh.Entity(), kb::scene::MeshRendererComponent{
+        .meshAssetId = 11U,
+        .materialAssetId = materialId.value,
+    });
+
+    const kb::scene::SceneObject slotMaterialMesh = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{ .name = "SlotMaterialMesh" });
+    kb::scene::MeshRendererComponent slotRenderer{ .meshAssetId = 12U };
+    slotRenderer.materialSlotAssetIds[2] = materialId.value;
+    slotRenderer.materialSlotOverrideCount = 3U;
+    scene.Components().MeshRenderers().Set(slotMaterialMesh.Entity(), slotRenderer);
+
+    const std::vector<std::string> references = kb::editor::EditorMaterialReferenceFinder::FindSceneReferences(scene, materialId);
+    kb::editor::tests::Require(references.size() == 2U, "Material reference finder should report main material and slot override references");
+    kb::editor::tests::Require(std::ranges::any_of(references, [](const std::string& reference) {
+        return reference.find("MainMaterialMesh") != std::string::npos && reference.find("Material") != std::string::npos;
+    }), "Material reference finder missed main material reference");
+    kb::editor::tests::Require(std::ranges::any_of(references, [](const std::string& reference) {
+        return reference.find("SlotMaterialMesh") != std::string::npos && reference.find("Slot 2") != std::string::npos;
+    }), "Material reference finder missed slot override reference");
+    kb::editor::tests::Require(kb::editor::EditorMaterialReferenceFinder::FindSceneReferences(scene, unusedMaterialId).empty(), "Material reference finder should not report unrelated material ids");
+}
+
+void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
+    kb::render::RenderMaterialAssetData material{};
+    material.documentVersion = kb::render::kRenderMaterialAssetDocumentVersion;
+    material.hasExplicitDocumentVersion = true;
+    material.materialType = kb::render::kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.hasExplicitMaterialType = true;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    const kb::assets::AssetId materialId{ 0x21414ULL };
+    const kb::assets::AssetId meshId{ 0x21415ULL };
+
+    kb::editor::MaterialEditorState materialEditor;
+    materialEditor.Open(materialId, material);
+    kb::editor::tests::Require(materialEditor.OpenAssetId() == materialId, "Material Editor state did not store the opened material asset id");
+    kb::editor::tests::Require(materialEditor.WorkingCopy().has_value(), "Material Editor state did not capture a material working copy");
+    kb::editor::tests::Require(materialEditor.CleanSnapshot().has_value(), "Material Editor state did not capture a clean snapshot");
+    kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should open with a clean snapshot");
+    kb::editor::tests::Require(!materialEditor.InfoPanelVisible(), "Material Editor info panel should be hidden by default");
+    kb::editor::tests::Require(materialEditor.ToggleInfoPanel(), "Material Editor info panel toggle should report a state change");
+    kb::editor::tests::Require(materialEditor.InfoPanelVisible(), "Material Editor info panel toggle should show schema details");
+
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(kb::assets::AssetMetadata{
+        .id = meshId,
+        .type = "RenderMesh",
+        .name = "StateMesh",
+        .virtualPath = "/Game/Meshes/StateMesh.gltf",
+        .contentHash = 2U,
+        .runtimeLoadable = true,
+    }));
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(browser.SelectAsset(meshId, manager), "Material Editor state test could not select a different Inspector asset");
+    kb::editor::tests::Require(browser.InspectorAsset() == meshId, "Material Editor state test did not change Inspector asset selection");
+    kb::editor::tests::Require(materialEditor.OpenAssetId() == materialId, "Material Editor state should not follow Inspector asset selection");
+    kb::editor::tests::Require(materialEditor.SelectNode(1U), "Material Editor state should store selected graph node");
+    kb::editor::tests::Require(materialEditor.SelectedNodeId() == 1U, "Material Editor state did not expose selected graph node");
+    kb::editor::tests::Require(materialEditor.SelectParameter(kb::editor::InspectorPropertyId::MaterialRoughnessFactor), "Material Editor state should store selected parameter");
+
+    material.desc.roughnessFactor = 0.375F;
+    materialEditor.SetWorkingCopy(material);
+    kb::editor::tests::Require(materialEditor.Dirty(), "Material Editor state should mark mutated working copy dirty");
+    materialEditor.SetDiagnostics({ "Warning test: state diagnostic" }, false);
+    kb::editor::tests::Require(!materialEditor.Diagnostics().empty() && !materialEditor.DiagnosticsHaveError(), "Material Editor state should store diagnostics snapshot");
+    materialEditor.MarkSaved();
+    kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should clear dirty after saving snapshot");
+}
+
 void RunEditorMaterialSlotOverrideSyncTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
@@ -225,6 +462,29 @@ void RunEditorMaterialSlotOverrideSyncTest() {
     kb::editor::tests::Require(groups.size() == 1U && groups[0].instances.size() == 1U, "Editor material slot override sync did not produce one draw group");
     kb::editor::tests::Require(groups[0].instances[0].materialSlotOverrideCount == 2U, "Editor material slot override sync did not propagate override count");
     kb::editor::tests::Require(groups[0].instances[0].materialSlotAssetIds[1] == 303U, "Editor material slot override sync did not propagate override asset id");
+}
+
+void RunMaterialAssignmentUndoRedoTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
+    const auto currentMaterialId = [&scene]() -> std::uint64_t {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::editor::tests::Require(roots.size() == 1U, "Material assignment undo test expected one root entity");
+        const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(roots.front());
+        kb::editor::tests::Require(renderer != nullptr, "Material assignment undo test lost the Mesh Renderer component");
+        return renderer->materialAssetId;
+    };
+
+    kb::editor::tests::Require(scene.History().Record("Assign Mesh Material"), "Material assignment undo test could not record scene history");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(scene, entity, kb::assets::AssetId{ 404U }), "Material assignment undo test could not assign material");
+    kb::editor::tests::Require(currentMaterialId() == 404U, "Material assignment undo test did not assign the material id");
+
+    kb::editor::tests::Require(scene.History().Undo(), "Material assignment undo test could not undo scene history");
+    kb::editor::tests::Require(currentMaterialId() == 0U, "Material assignment undo did not restore the previous material id");
+
+    kb::editor::tests::Require(scene.History().Redo(), "Material assignment undo test could not redo scene history");
+    kb::editor::tests::Require(currentMaterialId() == 404U, "Material assignment redo did not restore the assigned material id");
 }
 
 void RunMaterialPreviewMeshFactoryTest() {
@@ -397,6 +657,9 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(layout.graphCanvas.bottom == content.bottom, "Material Editor graph should fill the tab height");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.previewFrame.left + 2, layout.previewFrame.top + 2), "Material preview should be an overlay inside the graph workspace");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.assetBadge.left + 2, layout.assetBadge.top + 2), "Material identity should be an overlay inside the graph workspace");
+    kb::editor::tests::Require(layout.infoButton.right <= layout.applyButton.left, "Material Editor Info command should sit directly before Apply To Selection");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.applyButton.left + 2, layout.applyButton.top + 2) == kb::editor::MaterialEditorPanelCommand::ApplyToSelection, "Material Editor should hit-test the Apply To Selection command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.revertButton.left + 2, layout.revertButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Revert, "Material Editor should hit-test the Revert command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
@@ -413,7 +676,41 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(outputNode->right > layout.graphCanvas.left + ((layout.graphCanvas.right - layout.graphCanvas.left) / 2), "Material Output should default to the right side of the graph workspace");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::GraphNodeAt(content, graph, outputNode->left + 8, outputNode->top + 8) == 1U, "Material Editor should hit-test the material output node");
     kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::GraphNodeAt(content, graph, layout.graphCanvas.left + 2, layout.graphCanvas.top + 2).has_value(), "Material Editor graph hit-test should ignore empty canvas space");
-    kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, layout.graphCanvas.left + 24, layout.graphCanvas.top + 80).has_value(), "Material Editor graph workspace should not expose inspector-style texture slot rows");
+    const int outputPinY =
+        outputNode->top
+        + kb::editor::MaterialEditorPanelMetrics::GraphNodeHeaderHeight
+        + kb::editor::MaterialEditorPanelMetrics::GraphNodeBodyTopPadding
+        + (kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight / 2);
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, outputNode->left + 12, outputPinY) == kb::editor::EditorMaterialTextureSlot::Albedo,
+        "Material Editor should hit-test the Base Color output pin as a texture slot");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, outputNode->left + 12, outputPinY + (3 * kb::editor::MaterialEditorPanelMetrics::GraphNodePinRowHeight))
+            == kb::editor::EditorMaterialTextureSlot::MetallicRoughness,
+        "Material Editor should map Metallic/Roughness output pins to the metallic-roughness texture slot");
+    kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, layout.graphCanvas.left + 24, layout.graphCanvas.top + 80).has_value(), "Material Editor graph workspace should ignore empty canvas texture drops");
+
+    const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(kb::render::GetBuiltInPbrMaterialTypeSchema(), 1U);
+    kb::editor::tests::Require(details.title.find("Selected Node #1") != std::string::npos, "Material Editor details should describe selected graph node context");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos; }), "Material Editor details should expose schema-driven baseColor parameter");
+    kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose schema-driven Base Color texture slot");
+    kb::editor::tests::Require(std::ranges::none_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos; }), "Material Editor details should not show unsupported advanced schema rows in MVP details");
+}
+
+void RunMaterialEditorParserDiagnosticRowsTest() {
+    std::istringstream input{
+        "version 1\n"
+        "materialType builtin.pbr\n"
+        "materialTypeVersion 1\n"
+        "unknownMaterialField 7\n"
+    };
+    const kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    const kb::editor::MaterialEditorPanelDiagnosticRows rows = kb::editor::MaterialEditorPanelRenderer::DiagnosticRows(result);
+    kb::editor::tests::Require(rows.hasError, "Material Editor diagnostic rows should preserve parser error severity");
+    kb::editor::tests::Require(rows.rows.size() == 1U, "Material Editor diagnostic rows should expose parser diagnostics");
+    kb::editor::tests::Require(rows.rows[0].find("unknown_field") != std::string::npos, "Material Editor diagnostic rows should include parser diagnostic code");
+    kb::editor::tests::Require(rows.rows[0].find("line 4") != std::string::npos, "Material Editor diagnostic rows should include parser line numbers");
+    kb::editor::tests::Require(rows.rows[0].find("unknownMaterialField") != std::string::npos, "Material Editor diagnostic rows should include parser field names");
 }
 #endif
 
@@ -428,12 +725,19 @@ void RunEditorInspectorTests() {
     RunMaterialTextureSlotDiagnosticTest();
     RunAudioAssetAssignmentTest();
     RunMaterialAssetAssignmentSavesInSceneTest();
+    RunMeshRendererMaterialSlotModelTest();
+    RunMaterialCreateAssignSaveReloadE2ETest();
+    RunMaterialRenamePreservesMeshRendererAssignmentTest();
+    RunMaterialReferenceFinderReportsMeshRendererUsageTest();
+    RunMaterialEditorStateIndependentFromInspectorSelectionTest();
     RunEditorMaterialSlotOverrideSyncTest();
+    RunMaterialAssignmentUndoRedoTest();
     RunMaterialPreviewMeshFactoryTest();
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
     RunMaterialValueFormatterTest();
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();
+    RunMaterialEditorParserDiagnosticRowsTest();
 #endif
 }
 

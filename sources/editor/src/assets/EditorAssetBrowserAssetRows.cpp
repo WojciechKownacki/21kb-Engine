@@ -4,9 +4,16 @@
 
 #include <algorithm>
 #include <set>
+#include <utility>
 
 namespace kb::editor {
 namespace {
+
+constexpr std::string_view kMaterialTypeFilter = "Materials";
+
+[[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+}
 
 [[nodiscard]] bool MatchesFolder(const std::filesystem::path& assetPath, const std::filesystem::path& selectedFolder, bool recursive) {
     if (recursive) {
@@ -15,19 +22,30 @@ namespace {
     return asset_browser::Normalize(asset_browser::ParentVirtualPath(assetPath)) == asset_browser::Normalize(selectedFolder);
 }
 
+[[nodiscard]] std::string SearchText(const kb::assets::AssetMetadata& metadata) {
+    std::string text = metadata.name + " " + metadata.type + " " + metadata.importCategory + " " + asset_browser::Normalize(metadata.virtualPath);
+    if (IsMaterialAsset(metadata)) {
+        text += " material materials materialy pbr shader surface .kbmat";
+        if (metadata.type == "RenderMaterialInstance") {
+            text += " instance material-instance .kbmatinst";
+        }
+    }
+    return asset_browser::Lower(std::move(text));
+}
+
 [[nodiscard]] bool MatchesSearch(const kb::assets::AssetMetadata& metadata, std::string_view searchQuery) {
     if (searchQuery.empty()) {
         return true;
     }
 
     const std::string query = asset_browser::Lower(std::string{ searchQuery });
-    return asset_browser::Lower(metadata.name).find(query) != std::string::npos
-        || asset_browser::Lower(metadata.type).find(query) != std::string::npos
-        || asset_browser::Lower(asset_browser::Normalize(metadata.virtualPath)).find(query) != std::string::npos;
+    return SearchText(metadata).find(query) != std::string::npos;
 }
 
 [[nodiscard]] bool MatchesType(const kb::assets::AssetMetadata& metadata, std::string_view typeFilter) {
-    return typeFilter.empty() || metadata.type == typeFilter;
+    return typeFilter.empty()
+        || metadata.type == typeFilter
+        || (typeFilter == kMaterialTypeFilter && IsMaterialAsset(metadata));
 }
 
 [[nodiscard]] bool MatchesTemplateFilter(const kb::assets::AssetMetadata& metadata, bool showTemplates) {
@@ -83,10 +101,15 @@ std::vector<EditorAssetItemRow> EditorAssetBrowserAssetRows::Build(
 
 std::vector<std::string> EditorAssetBrowserAssetRows::AssetTypes(const kb::assets::AssetManager& manager) {
     std::set<std::string> types;
+    bool hasMaterialAsset = false;
     for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
         if (!metadata.type.empty()) {
             types.insert(metadata.type);
         }
+        hasMaterialAsset = hasMaterialAsset || IsMaterialAsset(metadata);
+    }
+    if (hasMaterialAsset) {
+        types.insert(std::string{ kMaterialTypeFilter });
     }
     return { types.begin(), types.end() };
 }
