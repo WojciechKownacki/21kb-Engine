@@ -6,8 +6,12 @@
 
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -16,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <vector>
 
@@ -34,6 +39,8 @@ struct SceneViewportRenderProfileDesc {
     bool selectionMaskEnabled = false;
     bool selectionOutlineEnabled = false;
     bool gpuDrivenRuntimeDispatchEnabled = false;
+    bool autoExposureEnabled = false;
+    bool editorStudioLightEnabled = false;
 };
 
 [[nodiscard]] std::uint32_t RectWidth(const RECT& rect) noexcept {
@@ -130,6 +137,8 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
+            .autoExposureEnabled = false,
+            .editorStudioLightEnabled = true,
         };
     case EditorViewportRenderProfile::Lit:
         return SceneViewportRenderProfileDesc{
@@ -139,6 +148,8 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = false,
+            .autoExposureEnabled = false,
+            .editorStudioLightEnabled = false,
         };
     case EditorViewportRenderProfile::GamePreview:
         return SceneViewportRenderProfileDesc{
@@ -148,9 +159,30 @@ struct SceneViewportRenderProfileDesc {
             .selectionMaskEnabled = true,
             .selectionOutlineEnabled = true,
             .gpuDrivenRuntimeDispatchEnabled = true,
+            .autoExposureEnabled = true,
+            .editorStudioLightEnabled = false,
         };
     }
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
+}
+
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(const SceneViewportRenderProfileDesc& renderProfile) noexcept {
+    kb::render::SceneRenderLightingConfig lighting{};
+    if (!renderProfile.editorStudioLightEnabled) {
+        return lighting;
+    }
+
+    lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;
+    lighting.ambientColor = { 0.10F, 0.115F, 0.13F };
+    lighting.environmentZenithColor = { 0.34F, 0.40F, 0.48F };
+    lighting.environmentGroundColor = { 0.055F, 0.06F, 0.07F };
+    lighting.environmentDiffuseIntensity = 0.70F;
+    lighting.environmentSpecularIntensity = 0.18F;
+    lighting.editorPreviewKeyLightEnabled = true;
+    lighting.editorPreviewKeyLightDirection = { 0.35F, -0.62F, 0.70F };
+    lighting.editorPreviewKeyLightColor = { 1.0F, 0.96F, 0.90F };
+    lighting.editorPreviewKeyLightIntensity = 1.85F;
+    return lighting;
 }
 
 [[nodiscard]] std::vector<std::uint64_t> SelectedEntityIds(const EditorSceneContext& sceneContext) {
@@ -163,6 +195,129 @@ struct SceneViewportRenderProfileDesc {
         }
     }
     return ids;
+}
+
+[[nodiscard]] bool IsSelectedEntity(const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+
+    const std::vector<kb::scene::SceneEntity>& selected = sceneContext.SelectedHierarchyEntities();
+    return std::find(selected.begin(), selected.end(), entity) != selected.end();
+}
+
+struct LightWireframeBasis {
+    std::array<float, 3> right{1.0F, 0.0F, 0.0F};
+    std::array<float, 3> up{0.0F, 1.0F, 0.0F};
+    std::array<float, 3> forward{0.0F, 0.0F, 1.0F};
+};
+
+[[nodiscard]] LightWireframeBasis BasisFromQuat(kb::scene::Quat q) noexcept {
+    const float lengthSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (lengthSquared > 0.000001F) {
+        const float invLength = 1.0F / std::sqrt(lengthSquared);
+        q.x *= invLength;
+        q.y *= invLength;
+        q.z *= invLength;
+        q.w *= invLength;
+    } else {
+        q = kb::scene::Quat{};
+    }
+
+    const float x2 = q.x + q.x;
+    const float y2 = q.y + q.y;
+    const float z2 = q.z + q.z;
+    const float xx = q.x * x2;
+    const float xy = q.x * y2;
+    const float xz = q.x * z2;
+    const float yy = q.y * y2;
+    const float yz = q.y * z2;
+    const float zz = q.z * z2;
+    const float wx = q.w * x2;
+    const float wy = q.w * y2;
+    const float wz = q.w * z2;
+
+    return LightWireframeBasis{
+        .right = {1.0F - (yy + zz), xy + wz, xz - wy},
+        .up = {xy - wz, 1.0F - (xx + zz), yz + wx},
+        .forward = {xz + wy, yz - wx, 1.0F - (xx + yy)},
+    };
+}
+
+[[nodiscard]] std::array<float, 3> LightWireframeColor(const kb::scene::LightComponent& light) noexcept {
+    std::array<float, 3> color{
+        std::clamp(light.color.x, 0.0F, 1.0F),
+        std::clamp(light.color.y, 0.0F, 1.0F),
+        std::clamp(light.color.z, 0.0F, 1.0F),
+    };
+    const float brightest = std::max({color[0], color[1], color[2]});
+    if (brightest < 0.18F) {
+        color = {1.0F, 0.86F, 0.32F};
+    }
+    return color;
+}
+
+[[nodiscard]] kb::render::EditorLightWireframeKind ToEditorLightWireframeKind(kb::scene::LightKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::LightKind::Spot:
+        return kb::render::EditorLightWireframeKind::Spot;
+    case kb::scene::LightKind::Directional:
+        return kb::render::EditorLightWireframeKind::Directional;
+    case kb::scene::LightKind::Point:
+    default:
+        return kb::render::EditorLightWireframeKind::Point;
+    }
+}
+
+[[nodiscard]] std::array<float, 3> ToArray(kb::scene::Vec3 value) noexcept {
+    return {value.x, value.y, value.z};
+}
+
+[[nodiscard]] std::vector<kb::render::EditorLightWireframeDesc> BuildLightWireframes(
+    const EditorSceneContext& sceneContext,
+    const EditorViewportCameraState& viewportCamera,
+    const EditorViewportCameraAxes& viewportAxes,
+    std::uint32_t renderHeight) {
+    struct Context {
+        const EditorSceneContext* sceneContext = nullptr;
+        const EditorViewportCameraState* viewportCamera = nullptr;
+        const EditorViewportCameraAxes* viewportAxes = nullptr;
+        std::uint32_t renderHeight = 0U;
+        std::vector<kb::render::EditorLightWireframeDesc> wireframes;
+    } context{
+        .sceneContext = &sceneContext,
+        .viewportCamera = &viewportCamera,
+        .viewportAxes = &viewportAxes,
+        .renderHeight = renderHeight,
+    };
+
+    sceneContext.Scene().Components().Visitors().ForEachLight(
+        [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* opaque) {
+            auto& context = *static_cast<Context*>(opaque);
+            if (!context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
+                return;
+            }
+
+            const LightWireframeBasis basis = BasisFromQuat(transform.worldRotation);
+            const kb::scene::Vec3 position{transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z};
+            context.wireframes.push_back(kb::render::EditorLightWireframeDesc{
+                .kind = ToEditorLightWireframeKind(light.kind),
+                .position = {position.x, position.y, position.z},
+                .forward = basis.forward,
+                .right = basis.right,
+                .up = basis.up,
+                .iconRight = ToArray(context.viewportAxes->right),
+                .iconUp = ToArray(context.viewportAxes->up),
+                .color = LightWireframeColor(light),
+                .range = light.kind == kb::scene::LightKind::Directional ? 0.0F : std::max(0.0F, light.range),
+                .outerConeDegrees = light.outerConeDegrees,
+                .iconWorldScale = GizmoScreenSpaceScale(*context.viewportCamera, *context.viewportAxes, position, context.renderHeight) * 0.30F,
+                .selected = IsSelectedEntity(*context.sceneContext, entity),
+            });
+        },
+        &context);
+
+    return context.wireframes;
 }
 
 [[nodiscard]] SceneViewportToolbarEcsStats BuildEcsStats(const EditorSceneContext& sceneContext) {
@@ -246,6 +401,9 @@ struct SceneViewportRenderProfileDesc {
     const EditorViewportProfile profile = viewportState.Profile();
     const SceneViewportRenderProfileDesc renderProfile = RenderProfileDesc(viewportState.RenderProfile());
     const bool postProcessEnabled = renderProfile.postProcessEnabled && renderBackendSettings.PostProcessEnabled();
+    kb::render::ScenePostProcessSettings postProcessSettings{};
+    postProcessSettings.outputTransform.autoExposure.enabled = renderProfile.autoExposureEnabled;
+    postProcessSettings.outputTransform.autoExposure.temporalAdaptationEnabled = renderProfile.autoExposureEnabled;
     const std::uint32_t renderWidth = viewportState.RenderWidthForPanel(RectWidth(sceneRects.renderArea));
     const std::uint32_t renderHeight = viewportState.RenderHeightForPanel(RectHeight(sceneRects.renderArea));
     const EditorViewportCameraState& viewportCamera = sceneContext.ViewportCamera(panelId);
@@ -279,8 +437,11 @@ struct SceneViewportRenderProfileDesc {
             .visible = viewportState.GridVisible(),
         },
         .editorGizmo = gizmo,
+        .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
+        .lightingConfig = BuildViewportLightingConfig(renderProfile),
+        .postProcessSettings = postProcessSettings,
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,
         .selectionMaskEnabled = postProcessEnabled && renderProfile.selectionMaskEnabled,

@@ -35,6 +35,8 @@ add_executable(kb_editor WIN32
     src/app/EditorHierarchyEntityAssetDropHandler.cpp
     src/app/EditorHierarchyEntityHierarchyDropHandler.cpp
     src/app/EditorMaterialAssetInspectorDropHandler.cpp
+    src/app/EditorMaterialAssetSceneDropHandler.cpp
+    src/app/EditorMeshAssetInspectorDropHandler.cpp
     src/app/EditorMeshAssetSceneDropHandler.cpp
     src/app/EditorPrefabAssetSceneDropHandler.cpp
     src/app/EditorHierarchySearchInputHandler.cpp
@@ -297,6 +299,8 @@ add_executable(kb_editor WIN32
     src/private/app/EditorHierarchyEntityAssetDropHandler.hpp
     src/private/app/EditorHierarchyEntityHierarchyDropHandler.hpp
     src/private/app/EditorMaterialAssetInspectorDropHandler.hpp
+    src/private/app/EditorMaterialAssetSceneDropHandler.hpp
+    src/private/app/EditorMeshAssetInspectorDropHandler.hpp
     src/private/app/EditorMeshAssetSceneDropHandler.hpp
     src/private/app/EditorPrefabAssetSceneDropHandler.hpp
     src/private/app/EditorHierarchySearchInputHandler.hpp
@@ -373,6 +377,8 @@ add_executable(kb_editor WIN32
     src/private/inspection/InspectorRigidbodyTextBuilder.hpp
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
+    src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
     src/private/platform/win32/EditorSceneFileDialog.hpp
     src/private/platform/win32/EditorWindowClassRegistry.hpp
@@ -564,6 +570,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
     src/platform/win32/EditorWindowClassRegistry.cpp
@@ -682,6 +689,7 @@ add_executable(kb_editor WIN32
     src/inspection/InspectorComponentLabelFormatter.cpp
     src/inspection/InspectorEntitySummaryTextBuilder.cpp
     src/inspection/InspectorLightTextBuilder.cpp
+    src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
     src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp
@@ -721,6 +729,7 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorMaterialReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -762,6 +771,9 @@ add_executable(kb_editor WIN32
     ../../third_party/heroicons/optimized/16/solid/list-bullet.svg
     ../../third_party/heroicons/optimized/24/solid/cube.svg
     ../../third_party/heroicons/optimized/24/solid/folder.svg
+    ../../third_party/heroicons/optimized/24/solid/sun.svg
+    content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt
+    content/EditorShell/Icons/SceneView/sun-solid.svg
     ../../third_party/lucide/LICENSE
     ../../third_party/lucide/README.third_party.md
     ../../third_party/lucide/icons/gamepad-2.svg
@@ -791,6 +803,13 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/sun-solid.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVuSans.ttf"
@@ -798,6 +817,13 @@ add_custom_command(TARGET kb_editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Fonts/DejaVu-LICENSE.txt"
         "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Fonts/DejaVu-LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/sun-solid.svg"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/sun-solid.svg"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
+        "$<TARGET_FILE_DIR:kb_editor>/Content/EditorShell/Icons/SceneView/HEROICONS-LICENSE.txt"
     VERBATIM
 )
 
@@ -947,14 +973,17 @@ if(BUILD_TESTING)
         src/scene/EditorPluginCatalog.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
-        src/scene/EditorSceneMaterialAssetActions.cpp
-        src/scene/EditorSceneMeshAssetActions.cpp
-        src/scene/EditorScenePrefabActions.cpp
-        src/scene/EditorViewportCameraState.cpp
-        src/scene/EditorViewportPreviewState.cpp
-    src/scene/material/EditorMaterialAssetAuthoring.cpp
+          src/scene/EditorSceneMaterialAssetActions.cpp
+          src/scene/EditorSceneMeshAssetActions.cpp
+          src/scene/EditorScenePrefabActions.cpp
+          src/scene/EditorViewportCameraState.cpp
+          src/scene/EditorViewportPreviewState.cpp
+          src/app/scene_viewport/EditorSceneViewportMath.cpp
+          src/app/scene_viewport/EditorSceneViewportMeshPicker.cpp
+      src/scene/material/EditorMaterialAssetAuthoring.cpp
     src/scene/material/EditorMaterialAssetEditCommand.cpp
     src/scene/material/EditorMaterialAssetGateway.cpp
+    src/scene/material/EditorMaterialReferenceFinder.cpp
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
@@ -969,9 +998,11 @@ if(BUILD_TESTING)
         src/project/EditorProjectPaths.cpp
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
+        src/rendering/ProjectFilesAssetIconResolver.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp
+        src/inspection/InspectorMeshRendererMaterialSlotModel.cpp
         src/inspection/InspectorMaterialTextureSlotFormatter.cpp
     src/inspection/EditorValueFormatter.cpp
     src/inspection/MaterialAssetFormatter.cpp

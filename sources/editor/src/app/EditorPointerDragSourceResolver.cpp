@@ -27,7 +27,9 @@ namespace {
 }
 
 [[nodiscard]] bool IsMeshAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "RenderMesh" && metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model);
+    return metadata.type == "RenderMesh"
+        || metadata.importCategory == kb::assets::ToString(kb::assets::AssetImportCategory::Model)
+        || metadata.importCategory == "Mesh";
 }
 
 [[nodiscard]] bool IsAudioAsset(const kb::assets::AssetMetadata& metadata) {
@@ -35,7 +37,7 @@ namespace {
 }
 
 [[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "RenderMaterial";
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
 [[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) {

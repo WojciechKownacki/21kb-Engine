@@ -1,12 +1,29 @@
 #include "docking/EditorDockModelCommands.hpp"
 
 #include "docking/DockLeafPanelOrder.hpp"
+#include "docking/DockNodeFactory.hpp"
 #include "docking/DockNodeQuery.hpp"
 #include "docking/DockPanelDocking.hpp"
 #include "docking/DockTreeMutation.hpp"
 #include "docking/DockSplitterResizer.hpp"
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] DockNode* FirstLeaf(DockNode* node) noexcept {
+    if (node == nullptr) {
+        return nullptr;
+    }
+    if (node->kind == DockNode::Kind::Leaf) {
+        return node;
+    }
+    if (DockNode* first = FirstLeaf(node->first.get()); first != nullptr) {
+        return first;
+    }
+    return FirstLeaf(node->second.get());
+}
+
+} // namespace
 
 EditorDockModelCommands::EditorDockModelCommands(DockPanelCollection& panels, std::unique_ptr<DockNode>& root, std::uint32_t& nextNodeId, std::uint32_t& maximizedLeafId) noexcept
     : panels_(panels)
@@ -54,6 +71,48 @@ void EditorDockModelCommands::DockPanelTo(std::uint32_t panelId, const DockDropP
         panel->visible = true;
     }
     DockPanelDocking::Dock(panels_, root_, panelId, target, &EditorDockModelCommands::NextNodeIdCallback, this);
+}
+
+bool EditorDockModelCommands::ActivatePanelKind(DockPanelKind kind, DockArea fallbackArea) {
+    DockPanel* panel = nullptr;
+    for (const DockPanel& candidate : panels_.All()) {
+        if (candidate.kind == kind) {
+            panel = panels_.Find(candidate.id);
+            break;
+        }
+    }
+    if (panel == nullptr) {
+        return false;
+    }
+
+    DockNode* leaf = DockNodeQuery::FindLeafContaining(root_.get(), panel->id);
+    if (leaf == nullptr) {
+        const DockArea targetArea = panel->area == DockArea::Floating ? fallbackArea : panel->area;
+        for (const DockPanel& candidate : panels_.All()) {
+            if (candidate.id == panel->id || !candidate.visible || candidate.area != targetArea) {
+                continue;
+            }
+            leaf = DockNodeQuery::FindLeafContaining(root_.get(), candidate.id);
+            if (leaf != nullptr) {
+                break;
+            }
+        }
+        if (leaf == nullptr) {
+            leaf = FirstLeaf(root_.get());
+        }
+        if (leaf == nullptr) {
+            root_ = DockNodeFactory::MakeLeaf(NextNodeId(), { panel->id });
+            leaf = root_.get();
+        } else {
+            leaf->panels.push_back(panel->id);
+        }
+        panel->area = targetArea;
+    }
+
+    panel->visible = true;
+    leaf->activePanelId = panel->id;
+    maximizedLeafId_ = 0;
+    return true;
 }
 
 void EditorDockModelCommands::MoveFloatingPanel(std::uint32_t panelId, int x, int y) {

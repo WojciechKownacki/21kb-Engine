@@ -25,12 +25,14 @@ add_library(kb_renderer STATIC
     include/kb/render/frame/RenderViewportDesc.hpp
     include/kb/render/frame/RenderViewportViewIds.hpp
     include/kb/render/overlay/SceneGizmoPass.hpp
+    include/kb/render/overlay/EditorLightWireframe.hpp
     include/kb/render/overlay/SceneGridPass.hpp
     include/kb/render/overlay/SelectionOutlineCompositePass.hpp
     include/kb/render/post/PostProcessChain.hpp
     include/kb/render/post/PostProcessRenderTarget.hpp
     include/kb/render/post/SceneExposureMeter.hpp
     include/kb/render/post/SceneDisplayCompositeRenderer.hpp
+    include/kb/render/post/ScenePostProcessSettings.hpp
     include/kb/render/post/ScenePostProcessRenderer.hpp
     include/kb/render/post/ScenePostProcessTargets.hpp
     include/kb/render/resources/RenderHandles.hpp

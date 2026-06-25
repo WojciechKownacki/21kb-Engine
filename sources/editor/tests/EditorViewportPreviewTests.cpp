@@ -2,6 +2,14 @@
 #include "EditorTestSuites.hpp"
 
 #include "app/EditorPlayModeState.hpp"
+#include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneObjectDesc.hpp"
+#include "engine/scene/SceneTransforms.hpp"
 #include "rendering/EditorRenderBackendSettings.hpp"
 #include "scene/EditorViewportCameraState.hpp"
 #include "scene/EditorViewportPreviewState.hpp"
@@ -171,6 +179,97 @@ void RunViewportCameraTrackDirectionTest() {
     kb::editor::tests::Require(afterTrack.y < beforeTrack.y, "Dragging track mode up should move camera down");
 }
 
+void RunViewportMeshPickerNearestMeshRendererTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity farEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Far Mesh" });
+    const kb::scene::SceneEntity nearEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Near Mesh" });
+    const kb::scene::SceneEntity offRay = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Off Ray Mesh" });
+
+    scene.Components().MeshRenderers().Set(farEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 101U });
+    scene.Components().MeshRenderers().Set(nearEntity, kb::scene::MeshRendererComponent{ .meshAssetId = 202U });
+    scene.Components().MeshRenderers().Set(offRay, kb::scene::MeshRendererComponent{ .meshAssetId = 303U });
+
+    scene.Transforms().Set(farEntity, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 5.0F } });
+    scene.Transforms().Set(nearEntity, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 0.0F, 0.0F, 0.0F } });
+    scene.Transforms().Set(offRay, kb::scene::TransformComponent{ .localPosition = kb::scene::Vec3{ 5.0F, 0.0F, 0.0F } });
+
+    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        kb::editor::EditorSceneViewportRay{
+            .origin = kb::scene::Vec3{ 0.0F, 0.0F, -8.0F },
+            .direction = kb::scene::Vec3{ 0.0F, 0.0F, 1.0F },
+        });
+
+    kb::editor::tests::Require(pick.IsValid(), "Viewport mesh picker should hit a Mesh Renderer under the ray");
+    kb::editor::tests::Require(pick.entity == nearEntity, "Viewport mesh picker should choose the nearest Mesh Renderer under the ray");
+}
+
+kb::editor::EditorSceneViewportRay BuildViewportRay(
+    const kb::editor::EditorViewportCameraState& camera,
+    const RECT& renderArea,
+    float screenX,
+    float screenY) {
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    const float width = kb::editor::EditorSceneViewportMath::RectWidth(renderArea);
+    const float height = kb::editor::EditorSceneViewportMath::RectHeight(renderArea);
+    const float aspect = width / height;
+    const float tanHalfFov = std::tan(kb::editor::EditorSceneViewportMath::DegreesToRadians(camera.VerticalFovDegrees()) * 0.5F);
+    const float ndcX = (screenX / width) * 2.0F - 1.0F;
+    const float ndcY = 1.0F - (screenY / height) * 2.0F;
+    const kb::scene::Vec3 direction = kb::editor::EditorSceneViewportMath::Normalize(kb::editor::EditorSceneViewportMath::Add(
+        axes.forward,
+        kb::editor::EditorSceneViewportMath::Add(
+            kb::editor::EditorSceneViewportMath::Mul(axes.right, ndcX * tanHalfFov * aspect),
+            kb::editor::EditorSceneViewportMath::Mul(axes.up, ndcY * tanHalfFov))));
+    return kb::editor::EditorSceneViewportRay{
+        .origin = axes.position,
+        .direction = direction,
+    };
+}
+
+void RunViewportLightWireframePickerChoosesNestedInnerWireframeTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity outerLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Outer Point Light" });
+    const kb::scene::SceneEntity innerLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Inner Point Light" });
+
+    scene.Components().Lights().Set(outerLight, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .range = 3.0F,
+    });
+    scene.Components().Lights().Set(innerLight, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .range = 1.0F,
+    });
+
+    const kb::scene::Vec3 position{0.0F, 0.0F, 0.0F};
+    scene.Transforms().Set(outerLight, kb::scene::TransformComponent{ .localPosition = position, .worldPosition = position });
+    scene.Transforms().Set(innerLight, kb::scene::TransformComponent{ .localPosition = position, .worldPosition = position });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const RECT renderArea{0, 0, 960, 540};
+    const kb::editor::EditorViewportCameraAxes axes = camera.Axes();
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    const bool projected = kb::editor::EditorSceneViewportMath::WorldToScreen(
+        camera,
+        renderArea,
+        kb::editor::EditorSceneViewportMath::Add(position, kb::editor::EditorSceneViewportMath::Mul(axes.right, 1.0F)),
+        screenX,
+        screenY);
+
+    kb::editor::tests::Require(projected, "Point light wireframe test point should project into the viewport");
+    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        screenX,
+        screenY,
+        BuildViewportRay(camera, renderArea, screenX, screenY));
+
+    kb::editor::tests::Require(pick.IsValid(), "Viewport picker should hit a point light wireframe");
+    kb::editor::tests::Require(pick.entity == innerLight, "Viewport picker should choose the nested inner light wireframe");
+}
+
 void RunRenderBackendSettingsTest() {
     kb::editor::EditorRenderBackendSettings settings;
     kb::editor::tests::Require(settings.Backend() == kb::editor::EditorRenderBackend::Auto, "Render backend should default to Auto");
@@ -235,6 +334,8 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraNavigationTest();
     RunViewportCameraOrbitTest();
     RunViewportCameraTrackDirectionTest();
+    RunViewportMeshPickerNearestMeshRendererTest();
+    RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
     RunRenderBackendSettingsTest();
     RunPlayModeStateTest();
 }

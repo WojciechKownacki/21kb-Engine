@@ -19,9 +19,15 @@
 #include "app/scene_viewport/EditorSceneViewportObjectInteraction.hpp"
 #include "app/scene_viewport/EditorSceneViewportToolbarPointerController.hpp"
 #include "docking/DockMainLayoutResolver.hpp"
+#include "engine/scene/MeshRendererComponent.hpp"
+#include "engine/scene/SceneComponents.hpp"
+#include "kb/editor/theme/EditorTheme.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/DockTabControlGeometry.hpp"
+#include "platform/win32/EditorMaterialAssetPickerDialog.hpp"
+#include "platform/win32/EditorMeshAssetPickerDialog.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
 #include <algorithm>
@@ -136,6 +142,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 return;
             }
             if (dockModel_.Commands().ClosePanel(closeTab->panelId)) {
+                if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor) {
+                    sceneContext_.CloseMaterialEditorAsset();
+                }
                 sceneViewport_.RequestPresent();
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
             }
@@ -153,10 +162,16 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
         materialEditorContent.has_value() && PointInRect(*materialEditorContent, x, y)) {
-        const kb::assets::AssetId materialId = sceneContext_.AssetBrowser().InspectorAsset();
+        const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
         const MaterialEditorPanelCommand command = MaterialEditorPanelRenderer::CommandAt(*materialEditorContent, x, y);
         if (command != MaterialEditorPanelCommand::None) {
             switch (command) {
+            case MaterialEditorPanelCommand::Info:
+                static_cast<void>(sceneContext_.MaterialEditor().ToggleInfoPanel());
+                break;
+            case MaterialEditorPanelCommand::ApplyToSelection:
+                static_cast<void>(sceneContext_.ApplyMaterialToSelectedMeshRenderers(materialId));
+                break;
             case MaterialEditorPanelCommand::Save:
                 static_cast<void>(sceneContext_.SaveMaterialEditorAsset(materialId));
                 break;
@@ -290,6 +305,50 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (panelHit.inInspectorPanel) {
+        const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*panelHit.inspectorContent, sceneContext_, x, y);
+        if (hit.section == InspectorSectionId::MeshRenderer && hit.property == InspectorPropertyId::MeshRendererMeshPicker) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
+            if (renderer != nullptr) {
+                const EditorMeshAssetPickerDialog::Result result = EditorMeshAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{ renderer->meshAssetId });
+                if (result.accepted) {
+                    static_cast<void>(sceneContext_.SetMeshRendererMeshAsset(entity, result.assetId));
+                    sceneViewport_.RequestPresent();
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
+        if (hit.section == InspectorSectionId::MeshRenderer
+            && (hit.property == InspectorPropertyId::MeshRendererMaterialPicker || hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker)) {
+            const kb::scene::SceneEntity entity = sceneContext_.SelectedEntity();
+            const kb::scene::MeshRendererComponent* renderer = sceneContext_.Scene().Components().MeshRenderers().TryGet(entity);
+            if (renderer != nullptr) {
+                const bool overridePicker = hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker;
+                const std::uint64_t current = overridePicker
+                    ? (renderer->materialSlotOverrideCount > 0U ? renderer->materialSlotAssetIds[0] : 0U)
+                    : renderer->materialAssetId;
+                const EditorMaterialAssetPickerDialog::Result result = EditorMaterialAssetPickerDialog::Show(
+                    mainWindow_,
+                    MakeEditorDarkTheme(),
+                    sceneContext_,
+                    kb::assets::AssetId{ current });
+                if (result.accepted) {
+                    const bool assigned = overridePicker
+                        ? sceneContext_.SetMeshRendererMaterialSlotAsset(entity, 0U, result.assetId)
+                        : sceneContext_.SetMeshRendererMaterialAsset(entity, result.assetId);
+                    if (assigned) {
+                        sceneViewport_.RequestPresent();
+                    }
+                }
+            }
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         EditorInspectorPointerController inspectorPointer(sceneContext_);
         static_cast<void>(inspectorPointer.HandlePointerDown(*panelHit.inspectorContent, x, y));
         if (inspectorPointer.ShouldCaptureMouse()) {

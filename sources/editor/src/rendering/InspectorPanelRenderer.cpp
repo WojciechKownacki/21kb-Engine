@@ -4,12 +4,14 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneTransforms.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
+#include "inspection/InspectorMeshRendererMaterialSlotModel.hpp"
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
@@ -30,7 +32,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -53,6 +57,8 @@ constexpr int kFieldRowHeight = 24;
 constexpr int kValueHeight = 20;
 constexpr int kRowPadX = 16;
 constexpr int kValuePadX = 10;
+constexpr int kAssetPickerButtonSize = 18;
+constexpr int kAssetPickerButtonGap = 3;
 constexpr int kAxisLetterWidth = 11;
 constexpr int kAxisGap = 6;
 constexpr int kLaneGap = 5;
@@ -113,6 +119,42 @@ constexpr std::array<InspectorRowDefinition, 2> kAudioListenerRows{ {
 
 [[nodiscard]] COLORREF Rgb(int r, int g, int b) noexcept {
     return RGB(r, g, b);
+}
+
+[[nodiscard]] float ColorChannel(COLORREF color, int shift) noexcept {
+    return static_cast<float>((color >> shift) & 0xFFU) / 255.0F;
+}
+
+[[nodiscard]] int ToColorByte(float value) noexcept {
+    return std::clamp(static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F)), 0, 255);
+}
+
+[[nodiscard]] COLORREF ToColorRef(float red, float green, float blue) noexcept {
+    return RGB(ToColorByte(red), ToColorByte(green), ToColorByte(blue));
+}
+
+[[nodiscard]] std::uint32_t PackBgra(float red, float green, float blue) noexcept {
+    const std::uint32_t r = static_cast<std::uint32_t>(ToColorByte(red));
+    const std::uint32_t g = static_cast<std::uint32_t>(ToColorByte(green));
+    const std::uint32_t b = static_cast<std::uint32_t>(ToColorByte(blue));
+    return b | (g << 8U) | (r << 16U) | 0xFF000000U;
+}
+
+[[nodiscard]] std::uint32_t PackBgra(COLORREF color) noexcept {
+    return PackBgra(ColorChannel(color, 0), ColorChannel(color, 8), ColorChannel(color, 16));
+}
+
+[[nodiscard]] std::uint32_t CompositeOver(std::uint32_t background, float red, float green, float blue, float alpha) noexcept {
+    alpha = std::clamp(alpha, 0.0F, 1.0F);
+    const float inv = 1.0F - alpha;
+    const float bgB = static_cast<float>(background & 0xFFU) / 255.0F;
+    const float bgG = static_cast<float>((background >> 8U) & 0xFFU) / 255.0F;
+    const float bgR = static_cast<float>((background >> 16U) & 0xFFU) / 255.0F;
+    return PackBgra((red * alpha) + (bgR * inv), (green * alpha) + (bgG * inv), (blue * alpha) + (bgB * inv));
+}
+
+[[nodiscard]] float SmoothCoverage(float signedDistance) noexcept {
+    return std::clamp(signedDistance + 0.5F, 0.0F, 1.0F);
 }
 
 [[nodiscard]] COLORREF HoverFill(const EditorTheme& theme) noexcept {
@@ -385,6 +427,49 @@ void DrawFieldRow(HDC dc, RECT row, const EditorTheme& theme, const InspectorPan
     DrawValueBox(dc, valueRect, theme, shown, state.IsHovered(InspectorHitKind::TextField, section, property) || state.IsHovered(InspectorHitKind::FloatField, section, property) || editing);
 }
 
+[[nodiscard]] RECT AssetPickerButtonRect(RECT valueRect) noexcept {
+    const int top = CenteredY(valueRect, kAssetPickerButtonSize);
+    return Rect(valueRect.right - kAssetPickerButtonSize - 1, top, valueRect.right - 1, top + kAssetPickerButtonSize);
+}
+
+[[nodiscard]] RECT AssetPickerTextRect(RECT valueRect) noexcept {
+    valueRect.right -= kAssetPickerButtonSize + kAssetPickerButtonGap;
+    return valueRect;
+}
+
+void DrawAssetFieldRow(
+    HDC dc,
+    RECT row,
+    const EditorTheme& theme,
+    const InspectorPanelState& state,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    InspectorPropertyId buttonProperty,
+    std::string_view label,
+    std::string_view value) {
+    if (RowHovered(state, property) || RowHovered(state, buttonProperty)) {
+        GdiDrawing::FillRectColor(dc, row, HoverFill(theme));
+    }
+
+    RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
+    RECT valueRect = Rect(labelRect.right, CenteredY(row, kValueHeight), row.right - kRowPadX, CenteredY(row, kValueHeight) + kValueHeight);
+    RECT textRect = AssetPickerTextRect(valueRect);
+    const bool valueHovered = state.IsHovered(InspectorHitKind::TextField, section, property);
+    const bool buttonHovered = state.IsHovered(InspectorHitKind::TextField, section, buttonProperty);
+
+    ScopedFont labelFont(12, FW_SEMIBOLD);
+    {
+        const ScopedGdiObject selectedFont(dc, labelFont.handle);
+        Text(dc, labelRect, label, Color(theme.textSecondary));
+    }
+    DrawValueBox(dc, textRect, theme, value, valueHovered);
+
+    const RECT button = AssetPickerButtonRect(valueRect);
+    DrawFrame(dc, button, buttonHovered ? HoverFill(theme) : Color(theme.chrome), buttonHovered ? Color(theme.accent) : Color(theme.borderPanel));
+    RECT icon = Shrink(button, 3, 3, 3, 3);
+    HeroIconPainter::Draw(dc, icon, HeroIconKind::MagnifyingGlass, buttonHovered ? Color(theme.textPrimary) : Color(theme.textSecondary), 1);
+}
+
 [[nodiscard]] RECT CheckboxRectForRow(RECT row) noexcept {
     const RECT labelRect = Rect(row.left + kRowPadX, row.top, row.left + ((row.right - row.left) * 36 / 100), row.bottom);
     return CenteredRect(row, labelRect.right, kCheckboxSize, kCheckboxSize);
@@ -431,6 +516,14 @@ public:
             return;
         }
         DrawFieldRow(dc_, Row(), theme_, state_, section_, property, label, value);
+        Advance();
+    }
+
+    void AssetField(std::string_view label, std::string_view value, InspectorPropertyId property, InspectorPropertyId buttonProperty) {
+        if (collapsed_) {
+            return;
+        }
+        DrawAssetFieldRow(dc_, Row(), theme_, state_, section_, property, buttonProperty, label, value);
         Advance();
     }
 
@@ -752,12 +845,13 @@ void DrawMeshPreviewToolbar(HDC dc, RECT toolbar, const EditorTheme& theme, cons
     int y,
     const EditorTheme& theme,
     const InspectorPanelState& inspector,
+    const kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata,
     bool deferPreviewWork) {
     EditorMeshPreviewService& previews = EditorMeshPreviewCache();
     const EditorMeshPreviewSettings previewSettings = MeshPreviewSettingsFromState(inspector);
-    const EditorMeshThumbnailStats* stats = deferPreviewWork ? previews.CachedStatsFor(metadata) : previews.StatsFor(metadata);
-    const EditorMeshThumbnailImage* image = deferPreviewWork ? previews.CachedPreviewFor(metadata, previewSettings) : previews.PreviewFor(metadata, previewSettings);
+    const EditorMeshThumbnailStats* stats = deferPreviewWork ? previews.CachedStatsFor(metadata) : previews.StatsFor(manager, metadata);
+    const EditorMeshThumbnailImage* image = deferPreviewWork ? previews.CachedPreviewFor(metadata, previewSettings) : previews.PreviewFor(manager, metadata, previewSettings);
     if (image == nullptr && stats == nullptr) {
         const bool meshLikeAsset = metadata.type == "RenderMesh" || metadata.importCategory == "Mesh";
         if (!deferPreviewWork || !meshLikeAsset) {
@@ -918,22 +1012,6 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return mesh == nullptr ? std::nullopt : std::optional<kb::render::RenderMeshAssetData>{ *mesh };
 }
 
-[[nodiscard]] int MeshRendererMaterialSlotRows(const EditorSceneContext& sceneContext, const kb::scene::MeshRendererComponent& renderer) {
-    std::uint32_t rows = std::max<std::uint32_t>(1U, renderer.materialSlotOverrideCount);
-    if (const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId)) {
-        rows = std::max<std::uint32_t>(rows, static_cast<std::uint32_t>(std::max(mesh->materialSlots.size(), mesh->materialNames.size())));
-    }
-    return static_cast<int>(std::min<std::uint32_t>(rows, kb::scene::kMaxMeshRendererMaterialSlotOverrides));
-}
-
-[[nodiscard]] std::string MeshRendererMaterialSlotLabel(const std::optional<kb::render::RenderMeshAssetData>& mesh, std::uint32_t slotIndex) {
-    std::string label = "Slot " + std::to_string(slotIndex);
-    if (mesh.has_value() && slotIndex < mesh->materialNames.size() && !mesh->materialNames[slotIndex].empty()) {
-        label += " (" + mesh->materialNames[slotIndex] + ")";
-    }
-    return label;
-}
-
 [[nodiscard]] InspectorPropertyId MeshRendererMaterialSlotProperty(std::uint32_t slotIndex) noexcept {
     switch (slotIndex) {
     case 0U:
@@ -997,30 +1075,119 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return kSectionHeaderHeight + MaterialPreviewBodyHeight(telemetry);
 }
 
-[[nodiscard]] RECT MaterialPreviewFrameRect(const RECT& content, int y) noexcept {
-    return Rect(
-        content.left + kMaterialPreviewPadding,
-        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap,
-        content.right - kMaterialPreviewPadding,
-        y + kSectionHeaderHeight + kDividerHeight + kMaterialPreviewGap + kMaterialPreviewHeight);
+struct InspectorMaterialPreviewStyle {
+    COLORREF baseColor = RGB(104, 126, 130);
+    COLORREF emissiveColor = RGB(0, 0, 0);
+    float roughness = 0.65F;
+    float metallic = 0.0F;
+    float emissiveStrength = 0.0F;
+    bool loaded = false;
+};
+
+[[nodiscard]] InspectorMaterialPreviewStyle MaterialPreviewStyleFor(const std::optional<kb::render::RenderMaterialAssetData>& material) noexcept {
+    InspectorMaterialPreviewStyle style{};
+    if (!material.has_value()) {
+        return style;
+    }
+    style.baseColor = ToColorRef(material->desc.baseColor[0], material->desc.baseColor[1], material->desc.baseColor[2]);
+    style.emissiveColor = ToColorRef(material->desc.emissiveColor[0], material->desc.emissiveColor[1], material->desc.emissiveColor[2]);
+    style.roughness = std::clamp(material->desc.roughnessFactor, 0.0F, 1.0F);
+    style.metallic = std::clamp(material->desc.metallicFactor, 0.0F, 1.0F);
+    style.emissiveStrength = std::clamp(material->desc.emissiveStrength, 0.0F, 64.0F);
+    style.loaded = true;
+    return style;
 }
 
-[[nodiscard]] std::optional<RECT> MaterialPreviewRectInContent(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    const EditorAssetBrowserState& browser = sceneContext.AssetBrowser();
-    if (!browser.InspectorAsset().IsValid()) {
-        return std::nullopt;
-    }
-    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(browser.InspectorAsset());
-    if (metadata == nullptr || !IsMaterialDocument(*metadata)) {
-        return std::nullopt;
-    }
-    if (sceneContext.Inspector().IsCollapsed(InspectorSectionId::MaterialPreview)) {
-        return std::nullopt;
+void DrawStaticMaterialPreview(HDC dc, RECT frame, const InspectorMaterialPreviewStyle& style) {
+    frame = Shrink(frame, 1, 1, 1, 1);
+    const int width = RectWidth(frame);
+    const int height = RectHeight(frame);
+    if (width <= 4 || height <= 4) {
+        return;
     }
 
-    const int y = content.top + kHeaderHeight + kPanelPadTop;
-    RECT frame = MaterialPreviewFrameRect(content, y);
-    return Shrink(frame, 1, 1, 1, 1);
+    std::vector<std::uint32_t> pixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), PackBgra(RGB(7, 8, 10)));
+    const COLORREF baseColor = style.loaded ? style.baseColor : RGB(104, 126, 130);
+    const float baseR = ColorChannel(baseColor, 0);
+    const float baseG = ColorChannel(baseColor, 8);
+    const float baseB = ColorChannel(baseColor, 16);
+    const float emissiveR = ColorChannel(style.emissiveColor, 0) * style.emissiveStrength;
+    const float emissiveG = ColorChannel(style.emissiveColor, 8) * style.emissiveStrength;
+    const float emissiveB = ColorChannel(style.emissiveColor, 16) * style.emissiveStrength;
+
+    const float radius = static_cast<float>(std::max(12, std::min(width - 24, height - 22))) * 0.5F;
+    const float centerX = static_cast<float>(width) * 0.5F;
+    const float centerY = static_cast<float>(height) * 0.50F;
+    const float shadowCenterY = centerY + radius * 0.78F;
+    const float shadowRx = radius * 0.86F;
+    const float shadowRy = std::max(2.0F, radius * 0.18F);
+    const float roughness = std::clamp(style.roughness, 0.0F, 1.0F);
+    const float metal = std::clamp(style.metallic, 0.0F, 1.0F);
+
+    constexpr float lightX = -0.46F;
+    constexpr float lightY = -0.62F;
+    constexpr float lightZ = 0.63F;
+    constexpr float halfX = -0.27F;
+    constexpr float halfY = -0.36F;
+    constexpr float halfZ = 0.89F;
+
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) + static_cast<std::size_t>(x);
+            const float px = static_cast<float>(x) + 0.5F;
+            const float py = static_cast<float>(y) + 0.5F;
+
+            const float shadowDx = (px - (centerX + radius * 0.10F)) / shadowRx;
+            const float shadowDy = (py - shadowCenterY) / shadowRy;
+            const float shadowDistance = shadowDx * shadowDx + shadowDy * shadowDy;
+            if (shadowDistance < 1.0F) {
+                const float shadowAlpha = std::pow(1.0F - shadowDistance, 1.35F) * 0.30F;
+                pixels[index] = CompositeOver(pixels[index], 0.02F, 0.025F, 0.032F, shadowAlpha);
+            }
+
+            const float nx = (px - centerX) / radius;
+            const float ny = (py - centerY) / radius;
+            const float distance2 = nx * nx + ny * ny;
+            if (distance2 > 1.08F) {
+                continue;
+            }
+
+            const float distance = std::sqrt(distance2);
+            const float coverage = SmoothCoverage((1.0F - distance) * radius);
+            if (coverage <= 0.0F) {
+                continue;
+            }
+
+            const float nz = std::sqrt(std::max(0.0F, 1.0F - distance2));
+            const float diffuse = std::max(0.0F, (nx * lightX) + (ny * lightY) + (nz * lightZ));
+            const float lowerShade = 1.0F - std::max(0.0F, ny) * 0.30F;
+            const float rim = std::pow(std::clamp(1.0F - nz, 0.0F, 1.0F), 1.80F) * 0.20F;
+            const float specPower = 84.0F - roughness * 62.0F;
+            const float specular = std::pow(std::max(0.0F, (nx * halfX) + (ny * halfY) + (nz * halfZ)), specPower) * (0.42F + metal * 0.34F - roughness * 0.22F);
+            const float sheen = std::pow(std::max(0.0F, (-nx * 0.35F) + (-ny * 0.72F) + (nz * 0.60F)), 18.0F) * 0.10F;
+            const float shade = (0.34F + diffuse * 0.66F) * lowerShade;
+
+            float red = (baseR * shade) + emissiveR + (rim * 0.22F) + specular + sheen;
+            float green = (baseG * shade) + emissiveG + (rim * 0.22F) + specular + sheen;
+            float blue = (baseB * shade) + emissiveB + (rim * 0.24F) + specular + sheen;
+
+            const float edgeDarken = std::clamp((distance - 0.78F) / 0.22F, 0.0F, 1.0F) * 0.24F;
+            red *= 1.0F - edgeDarken;
+            green *= 1.0F - edgeDarken;
+            blue *= 1.0F - edgeDarken;
+
+            pixels[index] = CompositeOver(pixels[index], red, green, blue, coverage);
+        }
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    static_cast<void>(StretchDIBits(dc, frame.left, frame.top, width, height, 0, 0, width, height, pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY));
 }
 
 void DrawTelemetryRow(
@@ -1056,11 +1223,7 @@ void DrawTelemetryRow(
     y += kDividerHeight;
     const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
     DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
-    {
-        ScopedFont font(12, FW_NORMAL);
-        const ScopedGdiObject selectedFont(dc, font.handle);
-        Text(dc, frame, telemetry.materialLoaded ? "Material preview" : "Material fallback preview", Color(theme.textDisabled), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    }
+    DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(sceneContext.ReadMaterialDocumentAsset(metadata.id)));
     y = frame.bottom + kMaterialPreviewGap;
 
     DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
@@ -1236,13 +1399,13 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
         DrawHeader(dc, content, theme, HeroIconKind::Cube, metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name, metadata->type.empty() ? "Asset" : metadata->type);
         y += kHeaderHeight + kPanelPadTop;
         y = DrawTextureDetails(dc, content, y, theme, inspector, *metadata);
-        y = DrawMeshPreview(dc, content, y, theme, inspector, *metadata, deferMeshPreviewWork);
+        y = DrawMeshPreview(dc, content, y, theme, inspector, manager, *metadata, deferMeshPreviewWork);
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Asset, HeroIconKind::Cube, "Asset");
         if (!metadata->importCategory.empty()) {
             section.Field("Category", metadata->importCategory);
         }
         if (!deferMeshPreviewWork) {
-            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(*metadata)) {
+            if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, *metadata)) {
                 section.Field("Vertices", FormatUInt64(stats->vertexCount));
                 section.Field("Indices", FormatUInt64(stats->indexCount));
                 section.Field("Triangles", FormatUInt64(stats->triangleCount));
@@ -1250,7 +1413,7 @@ void PaintAsset(HDC dc, RECT content, const EditorTheme& theme, const EditorScen
                 section.Field("Bounds Center", FormatVec3(stats->boundsCenter));
                 section.Field("Bounds Radius", FormatFloat(stats->boundsRadius, 3));
             }
-            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(*metadata)) {
+            if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, *metadata)) {
                 const std::size_t shown = std::min<std::size_t>(validation->issues.size(), 6U);
                 for (std::size_t index = 0; index < shown; ++index) {
                     section.Field(index == 0U ? "Validation" : "", FormatValidationIssue(validation->issues[index]));
@@ -1305,6 +1468,62 @@ void PaintAudioListenerSection(
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] bool LightUsesRange(kb::scene::LightKind kind) noexcept {
+    return kind != kb::scene::LightKind::Directional;
+}
+
+[[nodiscard]] bool LightUsesSpotCone(kb::scene::LightKind kind) noexcept {
+    return kind == kb::scene::LightKind::Spot;
+}
+
+[[nodiscard]] bool LightUsesAreaSize(kb::scene::LightKind kind) noexcept {
+    return kind == kb::scene::LightKind::AreaRect || kind == kb::scene::LightKind::AreaDisk || kind == kb::scene::LightKind::Tube;
+}
+
+[[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
+    int rows = 8;
+    if (LightUsesRange(light.kind)) {
+        ++rows;
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        rows += 2;
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        rows += 2;
+    }
+    return rows;
+}
+
+void PaintLightSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::LightComponent& light) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
+    section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
+    section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
+    section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);
+    section.Float("Color B", FormatFloat(light.color.z, 2), InspectorPropertyId::LightColorB);
+    section.Float("Intensity", FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
+    if (LightUsesRange(light.kind)) {
+        section.Float("Range", FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        section.Float("Inner Cone", FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
+        section.Float("Outer Cone", FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        section.Float("Area Width", FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
+        section.Float("Area Height", FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
+    }
+    section.Float("Contact Shadow", FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
+    section.Float("Volumetric", FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
+    section.Bool("Casts Shadow", light.castsShadow, InspectorPropertyId::LightCastsShadow);
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintMeshRendererSection(
     HDC dc,
     RECT content,
@@ -1314,15 +1533,19 @@ void PaintMeshRendererSection(
     const EditorSceneContext& sceneContext,
     const kb::scene::MeshRendererComponent& renderer) {
     SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::MeshRenderer, HeroIconKind::Cube, "Mesh Renderer");
-    section.Field("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh);
-    section.Field("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial);
-    const int slotRows = MeshRendererMaterialSlotRows(sceneContext, renderer);
-    section.Field("Material Slots", std::to_string(slotRows));
+    section.AssetField("Mesh", AssetDisplayName(sceneContext, renderer.meshAssetId), InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker);
+    section.AssetField("Material", MaterialDisplayName(sceneContext, renderer.materialAssetId), InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker);
     const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer.meshAssetId);
-    for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
-        const std::uint64_t materialId = slotIndex < renderer.materialSlotOverrideCount ? renderer.materialSlotAssetIds[slotIndex] : 0U;
-        section.Field(MeshRendererMaterialSlotLabel(mesh, slotIndex), MaterialDisplayName(sceneContext, materialId), MeshRendererMaterialSlotProperty(slotIndex));
-    }
+    const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
+        renderer,
+        mesh,
+        [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
+    const InspectorMeshRendererMaterialSlotRow* primaryOverride = slotRows.empty() ? nullptr : &slotRows.front();
+    section.AssetField(
+        primaryOverride != nullptr ? primaryOverride->label : "Material Override",
+        primaryOverride != nullptr ? primaryOverride->value : "None",
+        primaryOverride != nullptr ? MeshRendererMaterialSlotProperty(primaryOverride->slotIndex) : InspectorPropertyId::MeshRendererMaterialSlot0,
+        InspectorPropertyId::MeshRendererMaterialOverridePicker);
     section.Bool("Casts Shadow", renderer.castsShadow);
     section.Bool("Receives Shadow", renderer.receivesShadow);
     y = section.Bottom() + kSectionGap;
@@ -1408,6 +1631,9 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
         y = section.Bottom() + kSectionGap;
     }
+    if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
+        PaintLightSection(dc, content, y, theme, inspector, *light);
+    }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
     }
@@ -1440,10 +1666,11 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     int rows = metadata.importCategory.empty() ? 0 : 1;
     const bool deferMeshPreviewWork = sceneContext.HasActiveViewportCameraNavigation();
     if (!deferMeshPreviewWork) {
-        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(metadata); stats != nullptr) {
+        const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+        if (const EditorMeshThumbnailStats* stats = EditorMeshPreviewCache().StatsFor(manager, metadata); stats != nullptr) {
             rows += 6;
         }
-        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(metadata); validation != nullptr) {
+        if (const EditorMeshValidationResult* validation = EditorMeshPreviewCache().ValidationFor(manager, metadata); validation != nullptr) {
             rows += static_cast<int>(std::min<std::size_t>(validation->issues.size(), 6U));
         }
     }
@@ -1477,7 +1704,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
             ? kSectionHeaderHeight + kSectionGap
             : kSectionHeaderHeight + kDividerHeight + imageHeight + 20 + kSectionGap;
     }
-    if (EditorMeshPreviewCache().StatsFor(metadata) != nullptr) {
+    if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), metadata) != nullptr) {
         height += MeshPreviewPanelHeight(content) + kSectionGap;
     }
     height += SectionHeight(inspector, InspectorSectionId::Asset, AssetSectionRows(sceneContext, metadata));
@@ -1493,8 +1720,11 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     if (sceneContext.HasEntityScript(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
     }
+    if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
+    }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
-        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5 + MeshRendererMaterialSlotRows(sceneContext, *renderer)) + kSectionGap;
+        height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5) + kSectionGap;
     }
     if (scene.Components().AudioSources().TryGet(selected) != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::AudioSource, 9) + kSectionGap;
@@ -1557,6 +1787,25 @@ void AdvanceRow(int& y) noexcept;
     RECT value = ValueRectForRow(row);
     if (Contains(value, x, y)) {
         return MakeHit(InspectorHitKind::TextField, section, property, value);
+    }
+    return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitAssetFieldRow(
+    RECT row,
+    InspectorSectionId section,
+    InspectorPropertyId property,
+    InspectorPropertyId buttonProperty,
+    int x,
+    int y) noexcept {
+    const RECT value = ValueRectForRow(row);
+    const RECT button = AssetPickerButtonRect(value);
+    if (Contains(button, x, y)) {
+        return MakeHit(InspectorHitKind::TextField, section, buttonProperty, button);
+    }
+    const RECT text = AssetPickerTextRect(value);
+    if (Contains(text, x, y)) {
+        return MakeHit(InspectorHitKind::TextField, section, property, text);
     }
     return Contains(row, x, y) ? MakeHit(InspectorHitKind::Row, section, property, row) : InspectorPanelRenderer::Hit{};
 }
@@ -1795,6 +2044,83 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitLightFloatRow(
+    const RECT& content,
+    int& y,
+    InspectorPropertyId property,
+    int x,
+    int yPoint) noexcept {
+    if (InspectorPanelRenderer::Hit hit = HitFloatRow(RowRect(content, y), InspectorSectionId::Light, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestLightSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    const kb::scene::LightComponent& light,
+    int x,
+    int yPoint,
+    int& y) noexcept {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Light, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::Light)) {
+        return {};
+    }
+
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightKind, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorR, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorG, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorB, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightIntensity, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (LightUsesRange(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightRange, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightInnerCone, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightOuterCone, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightAreaWidth, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightAreaHeight, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightContactShadowLength, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightVolumetricScattering, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightCastsShadow, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    return {};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestMultiSelection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) noexcept {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
@@ -1857,23 +2183,9 @@ int InspectorPanelRenderer::MaxScrollOffset(const RECT& content, const EditorSce
 }
 
 std::optional<RECT> InspectorPanelRenderer::MaterialPreviewRect(const RECT& content, const EditorSceneContext& sceneContext) noexcept {
-    const int maxScroll = MaxScrollOffset(content, sceneContext);
-    const bool scrollable = maxScroll > 0;
-    const int scroll = std::clamp(sceneContext.Inspector().ScrollOffset(), 0, maxScroll);
-    RECT inner = ContentViewportRect(content, scrollable);
-    OffsetRect(&inner, 0, -scroll);
-
-    const std::optional<RECT> preview = MaterialPreviewRectInContent(inner, sceneContext);
-    if (!preview.has_value()) {
-        return std::nullopt;
-    }
-
-    const RECT viewport = ContentViewportRect(content, scrollable);
-    RECT clipped{};
-    if (IntersectRect(&clipped, &*preview, &viewport) == 0 || RectWidth(clipped) <= 2 || RectHeight(clipped) <= 2) {
-        return std::nullopt;
-    }
-    return clipped;
+    static_cast<void>(content);
+    static_cast<void>(sceneContext);
+    return std::nullopt;
 }
 
 RECT InspectorPanelRenderer::ScrollbarTrackRect(const RECT& content) noexcept {
@@ -2025,7 +2337,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                     y += kSectionGap;
                 }
             }
-            if (EditorMeshPreviewCache().StatsFor(*metadata) != nullptr) {
+            if (EditorMeshPreviewCache().StatsFor(sceneContext.Scene().Assets().Manager(), *metadata) != nullptr) {
                 const RECT preview = MeshPreviewPanelRect(viewport, y);
                 const RECT toolbar = MeshPreviewToolbarRect(preview);
                 const std::array<InspectorPropertyId, 4> properties = MeshPreviewToolbarProperties();
@@ -2107,30 +2419,38 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
         y += kSectionGap;
     }
 
+    if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(selected); light != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitTestLightSection(viewport, state, *light, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        y += kSectionGap;
+    }
+
     if (const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::MeshRenderer, x, scrolledY); hit.kind != InspectorHitKind::None) {
             return hit;
         }
         if (!state.IsCollapsed(InspectorSectionId::MeshRenderer)) {
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMesh, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMesh, InspectorPropertyId::MeshRendererMeshPicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMaterial, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::MeshRendererMaterial, InspectorPropertyId::MeshRendererMaterialPicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
-            if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
+            const std::optional<kb::render::RenderMeshAssetData> mesh = LoadMeshAssetData(sceneContext, renderer->meshAssetId);
+            const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
+                *renderer,
+                mesh,
+                [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
+            const InspectorPropertyId overrideProperty = slotRows.empty()
+                ? InspectorPropertyId::MeshRendererMaterialSlot0
+                : MeshRendererMaterialSlotProperty(slotRows.front().slotIndex);
+            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, overrideProperty, InspectorPropertyId::MeshRendererMaterialOverridePicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             AdvanceRow(y);
-            const int slotRows = MeshRendererMaterialSlotRows(sceneContext, *renderer);
-            for (std::uint32_t slotIndex = 0U; slotIndex < static_cast<std::uint32_t>(slotRows); ++slotIndex) {
-                if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, MeshRendererMaterialSlotProperty(slotIndex), x, scrolledY); hit.kind != InspectorHitKind::None) {
-                    return hit;
-                }
-                AdvanceRow(y);
-            }
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }

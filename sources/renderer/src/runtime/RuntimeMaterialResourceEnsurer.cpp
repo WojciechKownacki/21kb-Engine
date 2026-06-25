@@ -11,8 +11,14 @@
 #include "kb/render/scene/RenderScene.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
+#include <optional>
+
 namespace kb::render {
 namespace {
+
+[[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
+    return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
 
 void EmitUnresolvedMaterialTexturePathDiagnostic(
     SceneRenderDiagnostics& diagnostics,
@@ -28,6 +34,82 @@ void EmitUnresolvedMaterialTexturePathDiagnostic(
         .materialAssetId = materialAssetId,
         .instanceCount = unresolvedTexturePathCount,
     });
+}
+
+[[nodiscard]] SceneRenderDiagnosticSeverity ConvertSeverity(RuntimeMaterialResolveDiagnosticSeverity severity) noexcept {
+    return severity == RuntimeMaterialResolveDiagnosticSeverity::Error
+        ? SceneRenderDiagnosticSeverity::Error
+        : SceneRenderDiagnosticSeverity::Warning;
+}
+
+[[nodiscard]] SceneRenderDiagnosticKind ConvertKind(RuntimeMaterialResolveDiagnosticKind kind) noexcept {
+    switch (kind) {
+    case RuntimeMaterialResolveDiagnosticKind::MissingMaterialAsset:
+        return SceneRenderDiagnosticKind::MissingMaterialAsset;
+    case RuntimeMaterialResolveDiagnosticKind::UnresolvedTexturePath:
+        return SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath;
+    case RuntimeMaterialResolveDiagnosticKind::UnsupportedAssetType:
+    case RuntimeMaterialResolveDiagnosticKind::MaterialLoadFailed:
+    case RuntimeMaterialResolveDiagnosticKind::MaterialInstanceLoadFailed:
+    case RuntimeMaterialResolveDiagnosticKind::MissingParentMaterial:
+    case RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed:
+        return SceneRenderDiagnosticKind::InvalidMaterialAsset;
+    }
+    return SceneRenderDiagnosticKind::InvalidMaterialAsset;
+}
+
+void EmitRuntimeMaterialResolverDiagnostics(
+    const RuntimeRenderResourceEnsureContext& context,
+    const ResolvedRuntimeMaterialAsset& resolved,
+    std::uint64_t materialAssetId) {
+    context.materialResolverDiagnosticCount += static_cast<std::uint32_t>(resolved.diagnostics.size());
+    for (const RuntimeMaterialResolveDiagnostic& diagnostic : resolved.diagnostics) {
+        context.diagnostics.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = ConvertSeverity(diagnostic.severity),
+            .kind = ConvertKind(diagnostic.kind),
+            .materialAssetId = diagnostic.assetId.IsValid() ? diagnostic.assetId.value : materialAssetId,
+            .instanceCount = 1U,
+        });
+    }
+}
+
+void EmitCachedRuntimeMaterialState(
+    const RuntimeRenderResourceEnsureContext& context,
+    const RuntimeMaterialResource& cached,
+    std::uint64_t materialAssetId) {
+    if (cached.status == RuntimeMaterialResolveStatus::DefaultMaterial) {
+        ++context.defaultMaterialFallbackCount;
+    } else if (cached.status == RuntimeMaterialResolveStatus::ErrorMaterial) {
+        ++context.errorMaterialFallbackCount;
+    }
+    ResolvedRuntimeMaterialAsset resolved{};
+    resolved.diagnostics = cached.diagnostics;
+    EmitRuntimeMaterialResolverDiagnostics(context, resolved, materialAssetId);
+}
+
+[[nodiscard]] std::optional<std::uint64_t> CachedRuntimeMaterialContentHash(
+    kb::assets::AssetManager& manager,
+    kb::assets::AssetId assetId) {
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
+    if (metadata == nullptr) {
+        return assetId.value;
+    }
+    if (metadata->type == "RenderMaterial") {
+        return metadata->contentHash;
+    }
+    if (metadata->type != "RenderMaterialInstance") {
+        return metadata->contentHash;
+    }
+
+    const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata->id);
+    if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
+        return metadata->contentHash;
+    }
+    const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
+    if (parentMetadata == nullptr || parentMetadata->type != "RenderMaterial") {
+        return metadata->contentHash;
+    }
+    return HashCombine(metadata->contentHash, parentMetadata->contentHash);
 }
 
 } // namespace
@@ -64,21 +146,20 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         }
 
         const kb::assets::AssetId assetId{ materialAssetId };
-        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
         auto cacheIt = materials.find(runtimeKey);
-        if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
-            if (cacheIt != materials.end()) {
-                context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
-                context.sceneRenderer.Resources().DestroyMaterial(cacheIt->second.handle);
-                static_cast<void>(manager.Unload(assetId));
-                materials.erase(cacheIt);
-            } else {
-                context.sceneRenderer.ResourceMap().UnbindMaterial(materialAssetId);
-            }
+        const std::optional<std::uint64_t> cachedContentHash = CachedRuntimeMaterialContentHash(manager, assetId);
+        if (cacheIt != materials.end() &&
+            cachedContentHash.has_value() &&
+            cacheIt->second.contentHash == *cachedContentHash &&
+            context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {
+            RuntimeMaterialResource& cached = cacheIt->second;
+            cached.lastReferencedFrame = context.currentFrame;
+            context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, cached.handle);
+            EmitCachedRuntimeMaterialState(context, cached, materialAssetId);
             return;
         }
 
-        const ResolvedRuntimeMaterialAsset resolvedAsset = context.materialResolver.ResolveAsset(manager, *metadata);
+        const ResolvedRuntimeMaterialAsset resolvedAsset = context.materialResolver.ResolveAsset(manager, assetId);
         if (!resolvedAsset.resolved) {
             if (cacheIt != materials.end()) {
                 context.sceneRenderer.ResourceMap().UnbindMaterialHandle(cacheIt->second.handle);
@@ -90,9 +171,18 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             return;
         }
 
+        if (resolvedAsset.status == RuntimeMaterialResolveStatus::DefaultMaterial) {
+            ++context.defaultMaterialFallbackCount;
+        } else if (resolvedAsset.status == RuntimeMaterialResolveStatus::ErrorMaterial) {
+            ++context.errorMaterialFallbackCount;
+        }
+        EmitRuntimeMaterialResolverDiagnostics(context, resolvedAsset, materialAssetId);
+
         if (cacheIt != materials.end() && cacheIt->second.contentHash == resolvedAsset.contentHash && context.sceneRenderer.Resources().ContainsMaterial(cacheIt->second.handle)) {
             RuntimeMaterialResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
+            cached.status = resolvedAsset.status;
+            cached.diagnostics = resolvedAsset.diagnostics;
             context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, cached.handle);
             return;
         }
@@ -118,6 +208,8 @@ void RuntimeMaterialResourceEnsurer::Ensure(
             .handle = handle,
             .contentHash = resolvedAsset.contentHash,
             .lastReferencedFrame = context.currentFrame,
+            .status = resolvedAsset.status,
+            .diagnostics = resolvedAsset.diagnostics,
         };
         context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, handle);
     };

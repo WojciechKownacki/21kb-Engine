@@ -2,6 +2,8 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
+#include "kb/render/overlay/EditorLightWireframe.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -149,11 +151,13 @@ struct RenderSceneSubmitDesc {
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
     std::optional<SceneRenderCamera> cameraOverride{};
+    std::optional<ScenePostProcessSettings> postProcessSettings{};
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
+    std::span<const EditorLightWireframeDesc> editorLightWireframes{};
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;

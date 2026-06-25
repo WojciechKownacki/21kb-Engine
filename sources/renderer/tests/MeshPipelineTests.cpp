@@ -9,6 +9,7 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/scene/batch/SceneMeshBatchBuilder.hpp"
+#include "../src/scene/pipeline/MeshPipelineResourceResolver.hpp"
 
 #include <array>
 #include <string_view>
@@ -358,6 +359,23 @@ void RunMeshPipelineReportsMissingMeshBindingPerInstanceTest() {
     Require(diagnostics.events[1].entityId == 2U, "MeshPipeline diagnostic did not preserve entity id");
 }
 
+void RunMeshPipelineReportsMissingOcclusionTextureBindingTest() {
+    RenderMaterialResource material{};
+    material.occlusionTextureAssetId = 909U;
+    RenderResourceRegistry registry;
+    SceneRenderResourceMap resourceMap;
+    SceneRenderSubmitStats stats;
+    SceneRenderDiagnostics diagnostics;
+    const SceneRenderMeshInstance instance{ .entityId = 1U, .meshAssetId = 42U, .materialAssetId = 7U };
+
+    MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, 7U, &material, registry, resourceMap, stats, &diagnostics);
+
+    Require(stats.missingTextureBindingCount == 1U, "MeshPipeline did not count missing occlusion texture binding");
+    Require(diagnostics.events.size() == 1U, "MeshPipeline did not emit missing occlusion texture diagnostic");
+    Require(diagnostics.events[0].kind == SceneRenderDiagnosticKind::MissingTextureBinding, "MeshPipeline emitted the wrong occlusion texture diagnostic kind");
+    Require(diagnostics.events[0].materialAssetId == 7U, "MeshPipeline occlusion diagnostic lost material asset id");
+}
+
 void RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
@@ -553,6 +571,7 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
+            .materialAssetId = 999U,
             .instances = {
                 SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
                 SceneRenderMeshInstance{ .entityId = 2U, .meshAssetId = 42U, .model = IdentityMatrix() },
@@ -568,11 +587,48 @@ void RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest() {
     });
 
     Require(result.commands.size() == 2U, "MeshPipeline did not emit one command per mesh section");
-    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not use section material slot 0 default material");
+    Require(result.commands[0].materialAssetId == 999U, "MeshPipeline did not prefer the Mesh Renderer main material over section slot 0 default material");
     Require(result.commands[0].indexStart == 0U && result.commands[0].indexCount == 6U, "MeshPipeline section 0 did not preserve index range");
-    Require(result.commands[1].materialAssetId == 102U, "MeshPipeline did not use section material slot 1 default material");
+    Require(result.commands[1].materialAssetId == 999U, "MeshPipeline did not prefer the Mesh Renderer main material over section slot 1 default material");
     Require(result.commands[1].indexStart == 6U && result.commands[1].indexCount == 12U, "MeshPipeline section 1 did not preserve index range");
     Require(result.commands[0].instances.size() == 2U && result.commands[1].instances.size() == 2U, "MeshPipeline section commands did not preserve instancing");
+}
+
+void RunMeshPipelineUsesMeshDefaultMaterialWhenMainMaterialIsEmptyTest() {
+    RenderMeshResource mesh{};
+    mesh.indexCount = 6U;
+    mesh.sections = {
+        RenderMeshSection{
+            .indexStart = 0U,
+            .indexCount = 6U,
+            .materialSlot = 0U,
+            .bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F },
+        },
+    };
+    mesh.materialSlots = {
+        RenderMaterialSlot{ .defaultMaterialAssetId = 101U },
+    };
+    mesh.bounds = mesh.sections[0].bounds;
+
+    const std::vector<SceneRenderDrawGroup> drawGroups{
+        SceneRenderDrawGroup{
+            .meshAssetId = 42U,
+            .materialAssetId = 0U,
+            .instances = {
+                SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
+            },
+        },
+    };
+
+    const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+
+    Require(result.commands.size() == 1U, "MeshPipeline did not emit a command for a mesh default material");
+    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not use the mesh default material when Mesh Renderer material is empty");
 }
 
 void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
@@ -602,6 +658,7 @@ void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
     const std::vector<SceneRenderDrawGroup> drawGroups{
         SceneRenderDrawGroup{
             .meshAssetId = 42U,
+            .materialAssetId = 999U,
             .instances = {
                 SceneRenderMeshInstance{ .entityId = 1U, .meshAssetId = 42U, .model = IdentityMatrix() },
                 overridden,
@@ -617,10 +674,19 @@ void RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest() {
     });
 
     Require(result.commands.size() == 2U, "MeshPipeline did not split section commands by material slot override");
-    Require(result.commands[0].materialAssetId == 101U, "MeshPipeline did not keep the default slot material command");
-    Require(result.commands[0].instances.size() == 1U && result.commands[0].instances[0].entityId == 1U, "MeshPipeline put the wrong instance in the default material command");
-    Require(result.commands[1].materialAssetId == 201U, "MeshPipeline did not use the instance material slot override");
-    Require(result.commands[1].instances.size() == 1U && result.commands[1].instances[0].entityId == 2U, "MeshPipeline put the wrong instance in the override material command");
+    const MeshDrawCommand* mainMaterialCommand = nullptr;
+    const MeshDrawCommand* overrideMaterialCommand = nullptr;
+    for (const MeshDrawCommand& command : result.commands) {
+        if (command.materialAssetId == 999U) {
+            mainMaterialCommand = &command;
+        } else if (command.materialAssetId == 201U) {
+            overrideMaterialCommand = &command;
+        }
+    }
+    Require(mainMaterialCommand != nullptr, "MeshPipeline did not use the Mesh Renderer main material when no slot override was present");
+    Require(mainMaterialCommand->instances.size() == 1U && mainMaterialCommand->instances[0].entityId == 1U, "MeshPipeline put the wrong instance in the main material command");
+    Require(overrideMaterialCommand != nullptr, "MeshPipeline did not use the instance material slot override");
+    Require(overrideMaterialCommand->instances.size() == 1U && overrideMaterialCommand->instances[0].entityId == 2U, "MeshPipeline put the wrong instance in the override material command");
     Require(result.stats.meshCommandLookupCapacity > 0U, "MeshPipeline did not expose command lookup scratch capacity");
 }
 
@@ -1366,6 +1432,7 @@ void RunMeshPipelineTests() {
     RunSceneMeshBatchBuilderCreatesStableViewsTest();
     RunMeshPipelineBuildsFromSceneMeshBatchesTest();
     RunMeshPipelineReportsMissingMeshBindingPerInstanceTest();
+    RunMeshPipelineReportsMissingOcclusionTextureBindingTest();
     RunMeshPipelineCanBuildPassCommandsWithoutResourceValidationTest();
     RunMeshPipelineBuildIntoReusesCommandInstanceCapacityTest();
     RunMeshPipelineFiltersShadowCastingInstancesTest();
@@ -1373,6 +1440,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineReportsShadowPassMissingResourcesOnlyForCastersTest();
     RunSceneRendererValidatesExplicitMeshPassTest();
     RunMeshPipelineBuildsCommandsPerSectionAndMaterialSlotTest();
+    RunMeshPipelineUsesMeshDefaultMaterialWhenMainMaterialIsEmptyTest();
     RunMeshPipelineSplitsSectionCommandsByMaterialSlotOverrideTest();
     RunMeshPipelineDrawBudgetDropsOverflowCommandsTest();
     RunMeshPipelineSortsCommandsBySortKeyTest();

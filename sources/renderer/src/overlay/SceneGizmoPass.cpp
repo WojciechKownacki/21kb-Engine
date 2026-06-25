@@ -28,6 +28,17 @@ constexpr std::uint32_t kRotateRingSegments = 96U;
 constexpr std::uint32_t kRotateRingTubeSegments = 8U;
 constexpr std::uint32_t kHubStacks = 16U;
 constexpr std::uint32_t kHubSlices = 32U;
+constexpr std::uint32_t kLightWireframeSegments = 64U;
+constexpr float kLightWireframeMinRange = 0.01F;
+constexpr float kLightWireframeThicknessScale = 0.018F;
+constexpr std::uint32_t kLightIconDiscSegments = 32U;
+constexpr std::uint32_t kLightIconRayCount = 8U;
+constexpr float kLightIconDiscRadius = 0.34F;
+constexpr float kLightIconRayInnerRadius = 0.54F;
+constexpr float kLightIconRayOuterRadius = 0.86F;
+constexpr float kLightIconRayHalfWidth = 0.055F;
+constexpr std::array<float, 3> kSelectedLightWireframeColor{0.96F, 0.96F, 0.92F};
+constexpr std::array<float, 3> kUnselectedLightWireframeColor{0.48F, 0.075F, 0.11F};
 
 using Vertex = SceneGizmoPass::GizmoVertex;
 using MeshRange = SceneGizmoPass::MeshRange;
@@ -52,6 +63,14 @@ struct PassDesc {
     float tintB = 1.0F;
     float tintA = 1.0F;
 };
+
+[[nodiscard]] std::array<float, 3> Add(std::array<float, 3> lhs, std::array<float, 3> rhs) noexcept {
+    return {lhs[0] + rhs[0], lhs[1] + rhs[1], lhs[2] + rhs[2]};
+}
+
+[[nodiscard]] std::array<float, 3> Mul(std::array<float, 3> value, float scale) noexcept {
+    return {value[0] * scale, value[1] * scale, value[2] * scale};
+}
 
 [[nodiscard]] std::uint16_t ClampToViewExtent(std::uint32_t value) noexcept {
     return static_cast<std::uint16_t>(value > UINT16_MAX ? UINT16_MAX : value);
@@ -344,6 +363,232 @@ void AppendDraw(
     }
 }
 
+void AppendLineVertex(std::vector<Vertex>& output, std::array<float, 3> position, std::array<float, 3> color, float alpha) {
+    output.push_back(Vertex{
+        .x = position[0],
+        .y = position[1],
+        .z = position[2],
+        .nx = 0.0F,
+        .ny = 0.0F,
+        .nz = 1.0F,
+        .r = color[0],
+        .g = color[1],
+        .b = color[2],
+        .alpha = alpha,
+    });
+}
+
+void AppendLine(std::vector<Vertex>& output, std::array<float, 3> a, std::array<float, 3> b, std::array<float, 3> color, float alpha) {
+    AppendLineVertex(output, a, color, alpha);
+    AppendLineVertex(output, b, color, alpha);
+}
+
+[[nodiscard]] std::array<float, 3> LightWireframeColor(const EditorLightWireframeDesc& light) noexcept {
+    return light.selected ? kSelectedLightWireframeColor : kUnselectedLightWireframeColor;
+}
+
+[[nodiscard]] float LightWireframeThickness(const EditorLightWireframeDesc& light) noexcept {
+    return std::max(0.006F, light.iconWorldScale * kLightWireframeThicknessScale);
+}
+
+void AppendThickLine(
+    std::vector<Vertex>& output,
+    std::array<float, 3> a,
+    std::array<float, 3> b,
+    std::array<float, 3> color,
+    float alpha,
+    std::array<float, 3> offsetA,
+    std::array<float, 3> offsetB,
+    float thickness) {
+    AppendLine(output, a, b, color, alpha);
+    const std::array<float, 3> positiveA = Mul(offsetA, thickness);
+    const std::array<float, 3> negativeA = Mul(offsetA, -thickness);
+    const std::array<float, 3> positiveB = Mul(offsetB, thickness);
+    const std::array<float, 3> negativeB = Mul(offsetB, -thickness);
+    AppendLine(output, Add(a, positiveA), Add(b, positiveA), color, alpha * 0.86F);
+    AppendLine(output, Add(a, negativeA), Add(b, negativeA), color, alpha * 0.86F);
+    AppendLine(output, Add(a, positiveB), Add(b, positiveB), color, alpha * 0.74F);
+    AppendLine(output, Add(a, negativeB), Add(b, negativeB), color, alpha * 0.74F);
+}
+
+void AppendIconVertex(
+    std::vector<Vertex>& output,
+    const EditorLightWireframeDesc& light,
+    float x,
+    float y,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    const std::array<float, 3> world = Add(light.position, Add(Mul(light.iconRight, x * scale), Mul(light.iconUp, y * scale)));
+    output.push_back(Vertex{
+        .x = world[0],
+        .y = world[1],
+        .z = world[2],
+        .nx = 0.0F,
+        .ny = 0.0F,
+        .nz = 1.0F,
+        .r = color[0],
+        .g = color[1],
+        .b = color[2],
+        .alpha = alpha,
+    });
+}
+
+void AppendIconTriangle(
+    std::vector<Vertex>& output,
+    const EditorLightWireframeDesc& light,
+    std::array<float, 2> a,
+    std::array<float, 2> b,
+    std::array<float, 2> c,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    AppendIconVertex(output, light, a[0], a[1], scale, color, alpha);
+    AppendIconVertex(output, light, b[0], b[1], scale, color, alpha);
+    AppendIconVertex(output, light, c[0], c[1], scale, color, alpha);
+}
+
+void AppendIconDisc(std::vector<Vertex>& output, const EditorLightWireframeDesc& light, float radius, float scale, std::array<float, 3> color, float alpha) {
+    for (std::uint32_t i = 0; i < kLightIconDiscSegments; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(kLightIconDiscSegments);
+        const float t1 = static_cast<float>(i + 1U) / static_cast<float>(kLightIconDiscSegments);
+        const float a0 = t0 * 2.0F * kPi;
+        const float a1 = t1 * 2.0F * kPi;
+        AppendIconTriangle(
+            output,
+            light,
+            {0.0F, 0.0F},
+            {std::cos(a0) * radius, std::sin(a0) * radius},
+            {std::cos(a1) * radius, std::sin(a1) * radius},
+            scale,
+            color,
+            alpha);
+    }
+}
+
+void AppendIconRay(
+    std::vector<Vertex>& output,
+    const EditorLightWireframeDesc& light,
+    float angle,
+    float innerRadius,
+    float outerRadius,
+    float halfWidth,
+    float scale,
+    std::array<float, 3> color,
+    float alpha) {
+    const float dx = std::cos(angle);
+    const float dy = std::sin(angle);
+    const float px = -dy;
+    const float py = dx;
+    const std::array<float, 2> a{dx * innerRadius + px * halfWidth, dy * innerRadius + py * halfWidth};
+    const std::array<float, 2> b{dx * outerRadius + px * halfWidth, dy * outerRadius + py * halfWidth};
+    const std::array<float, 2> c{dx * outerRadius - px * halfWidth, dy * outerRadius - py * halfWidth};
+    const std::array<float, 2> d{dx * innerRadius - px * halfWidth, dy * innerRadius - py * halfWidth};
+    AppendIconTriangle(output, light, a, b, c, scale, color, alpha);
+    AppendIconTriangle(output, light, a, c, d, scale, color, alpha);
+}
+
+// The scene light glyph is based on Heroicons sun.svg (MIT, Refactoring UI Inc.).
+// The copied SVG is kept under third_party/heroicons and shipped with its license under Content/EditorShell/Icons/SceneView.
+void AppendLightIconLayer(std::vector<Vertex>& output, const EditorLightWireframeDesc& light, float scale, std::array<float, 3> color, float alpha) {
+    AppendIconDisc(output, light, kLightIconDiscRadius, scale, color, alpha);
+    for (std::uint32_t i = 0; i < kLightIconRayCount; ++i) {
+        const float angle = static_cast<float>(i) * 2.0F * kPi / static_cast<float>(kLightIconRayCount);
+        AppendIconRay(output, light, angle, kLightIconRayInnerRadius, kLightIconRayOuterRadius, kLightIconRayHalfWidth, scale, color, alpha);
+    }
+}
+
+[[nodiscard]] std::array<float, 3> LightIconColor(const EditorLightWireframeDesc& light) noexcept {
+    std::array<float, 3> color{
+        std::clamp(light.color[0] * 1.16F, 0.0F, 1.0F),
+        std::clamp(light.color[1] * 1.10F, 0.0F, 1.0F),
+        std::clamp(light.color[2] * 0.92F, 0.0F, 1.0F),
+    };
+    if (light.kind == EditorLightWireframeKind::Directional) {
+        color = {1.0F, 0.86F, 0.28F};
+    }
+    const float brightest = std::max({color[0], color[1], color[2]});
+    if (brightest < 0.22F) {
+        color = {1.0F, 0.82F, 0.30F};
+    }
+    return color;
+}
+
+void AppendLightIcons(std::vector<Vertex>& output, std::span<const EditorLightWireframeDesc> lights) {
+    output.reserve(output.size() + lights.size() * static_cast<std::size_t>((kLightIconDiscSegments + kLightIconRayCount * 2U) * 6U));
+    for (const EditorLightWireframeDesc& light : lights) {
+        if (light.iconWorldScale <= 0.0F) {
+            continue;
+        }
+        AppendLightIconLayer(output, light, light.iconWorldScale * 1.18F, {0.0F, 0.0F, 0.0F}, 0.32F);
+        AppendLightIconLayer(output, light, light.iconWorldScale, LightIconColor(light), 0.96F);
+    }
+}
+
+void AppendCircle(
+    std::vector<Vertex>& output,
+    std::array<float, 3> center,
+    std::array<float, 3> axisA,
+    std::array<float, 3> axisB,
+    float radius,
+    std::array<float, 3> color,
+    float alpha,
+    float thickness) {
+    const float clampedRadius = std::max(kLightWireframeMinRange, radius);
+    for (std::uint32_t i = 0; i < kLightWireframeSegments; ++i) {
+        const float t0 = static_cast<float>(i) / static_cast<float>(kLightWireframeSegments);
+        const float t1 = static_cast<float>(i + 1U) / static_cast<float>(kLightWireframeSegments);
+        const float a0 = t0 * 2.0F * kPi;
+        const float a1 = t1 * 2.0F * kPi;
+        const std::array<float, 3> p0 = Add(center, Add(Mul(axisA, std::cos(a0) * clampedRadius), Mul(axisB, std::sin(a0) * clampedRadius)));
+        const std::array<float, 3> p1 = Add(center, Add(Mul(axisA, std::cos(a1) * clampedRadius), Mul(axisB, std::sin(a1) * clampedRadius)));
+        AppendThickLine(output, p0, p1, color, alpha, axisA, axisB, thickness);
+    }
+}
+
+void AppendPointLightWireframe(std::vector<Vertex>& output, const EditorLightWireframeDesc& light) {
+    constexpr std::array<float, 3> xAxis{1.0F, 0.0F, 0.0F};
+    constexpr std::array<float, 3> yAxis{0.0F, 1.0F, 0.0F};
+    constexpr std::array<float, 3> zAxis{0.0F, 0.0F, 1.0F};
+    const std::array<float, 3> color = LightWireframeColor(light);
+    const float thickness = LightWireframeThickness(light);
+    const float selectedBoost = light.selected ? 1.18F : 1.0F;
+    AppendCircle(output, light.position, xAxis, yAxis, light.range, color, 0.78F * selectedBoost, thickness);
+    AppendCircle(output, light.position, xAxis, zAxis, light.range, color, 0.50F * selectedBoost, thickness);
+    AppendCircle(output, light.position, yAxis, zAxis, light.range, color, 0.50F * selectedBoost, thickness);
+}
+
+void AppendSpotLightWireframe(std::vector<Vertex>& output, const EditorLightWireframeDesc& light) {
+    const float range = std::max(kLightWireframeMinRange, light.range);
+    const float coneRadians = std::clamp(light.outerConeDegrees, 0.0F, 179.0F) * 0.5F * kPi / 180.0F;
+    const float radius = std::tan(coneRadians) * range;
+    const std::array<float, 3> endCenter = Add(light.position, Mul(light.forward, range));
+    const std::array<float, 3> color = LightWireframeColor(light);
+    const float thickness = LightWireframeThickness(light);
+    const float selectedBoost = light.selected ? 1.18F : 1.0F;
+    AppendCircle(output, endCenter, light.right, light.up, radius, color, 0.78F * selectedBoost, thickness);
+
+    for (std::uint32_t i = 0; i < 4U; ++i) {
+        const float angle = static_cast<float>(i) * kPi * 0.5F + kPi * 0.25F;
+        const std::array<float, 3> rim = Add(endCenter, Add(Mul(light.right, std::cos(angle) * radius), Mul(light.up, std::sin(angle) * radius)));
+        AppendThickLine(output, light.position, rim, color, 0.82F * selectedBoost, light.right, light.up, thickness);
+    }
+}
+
+void AppendLightWireframes(std::vector<Vertex>& output, std::span<const EditorLightWireframeDesc> lights) {
+    output.reserve(output.size() + lights.size() * static_cast<std::size_t>(kLightWireframeSegments * 6U));
+    for (const EditorLightWireframeDesc& light : lights) {
+        if (light.kind == EditorLightWireframeKind::Directional || light.range <= 0.0F) {
+            continue;
+        }
+        if (light.kind == EditorLightWireframeKind::Spot) {
+            AppendSpotLightWireframe(output, light);
+        } else {
+            AppendPointLightWireframe(output, light);
+        }
+    }
+}
+
 [[nodiscard]] float AxisBoost(GizmoAxis axis, int hoveredAxis, int draggedAxis) noexcept {
     const int axisIndex = static_cast<int>(axis);
     if (axisIndex == draggedAxis) {
@@ -408,7 +653,7 @@ void SceneGizmoPass::Shutdown() noexcept {
 }
 
 bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
-    if (!IsInitialized() || !desc.IsValid() || !desc.visible || desc.worldScale <= 0.0F) {
+    if (!IsInitialized() || !desc.IsValid() || ((!desc.visible || desc.worldScale <= 0.0F) && desc.lightWireframes.empty())) {
         return false;
     }
 
@@ -417,46 +662,67 @@ bool SceneGizmoPass::Submit(const SceneGizmoPassDesc& desc) const {
         PassDesc{.scaleFactor = 1.000F, .tintR = 0.90F, .tintG = 0.90F, .tintB = 0.90F, .tintA = 1.00F},
     }};
 
-    std::vector<Vertex> drawVertices;
-    drawVertices.reserve(18000);
-    for (const PassDesc& pass : passes) {
-        for (const GizmoAxis axis : {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z}) {
-            const AxisBasis basis = AxisRotation(axis);
-            const float boost = AxisBoost(axis, desc.hoveredAxis, desc.draggedAxis);
-            if (desc.mode == 1U) {
-                AppendDraw(drawVertices, vertices_, indices_, rotateRing_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
-            } else {
-                AppendDraw(drawVertices, vertices_, indices_, shaft_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
-                AppendDraw(
-                    drawVertices,
-                    vertices_,
-                    indices_,
-                    desc.mode == 2U ? scaleTip_ : tip_,
-                    basis,
-                    desc.targetPosition,
-                    desc.worldScale,
-                    ConeColor(axis),
-                    pass,
-                    boost);
+    ConfigureOverlayView(desc);
+    bool submitted = false;
+    {
+        std::vector<Vertex> drawVertices;
+        drawVertices.reserve(18000 + desc.lightWireframes.size() * 288U);
+        for (const PassDesc& pass : passes) {
+            if (desc.visible && desc.worldScale > 0.0F) {
+                for (const GizmoAxis axis : {GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z}) {
+                    const AxisBasis basis = AxisRotation(axis);
+                    const float boost = AxisBoost(axis, desc.hoveredAxis, desc.draggedAxis);
+                    if (desc.mode == 1U) {
+                        AppendDraw(drawVertices, vertices_, indices_, rotateRing_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
+                    } else {
+                        AppendDraw(drawVertices, vertices_, indices_, shaft_, basis, desc.targetPosition, desc.worldScale, ShaftColor(axis), pass, boost);
+                        AppendDraw(
+                            drawVertices,
+                            vertices_,
+                            indices_,
+                            desc.mode == 2U ? scaleTip_ : tip_,
+                            basis,
+                            desc.targetPosition,
+                            desc.worldScale,
+                            ConeColor(axis),
+                            pass,
+                            boost);
+                    }
+                }
+                AppendDraw(drawVertices, vertices_, indices_, hub_, AxisRotation(GizmoAxis::None), desc.targetPosition, desc.worldScale, {1.0F, 0.957F, 0.941F}, pass, 1.0F);
             }
         }
-        AppendDraw(drawVertices, vertices_, indices_, hub_, AxisRotation(GizmoAxis::None), desc.targetPosition, desc.worldScale, {1.0F, 0.957F, 0.941F}, pass, 1.0F);
+        AppendLightIcons(drawVertices, desc.lightWireframes);
+
+        const std::uint32_t vertexCount = static_cast<std::uint32_t>(drawVertices.size());
+        if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
+            bgfx::TransientVertexBuffer buffer{};
+            bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout_);
+            std::memcpy(buffer.data, drawVertices.data(), sizeof(Vertex) * drawVertices.size());
+
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+            bgfx::setVertexBuffer(0, &buffer);
+            bgfx::submit(desc.viewId, program_);
+            submitted = true;
+        }
     }
 
-    const std::uint32_t vertexCount = static_cast<std::uint32_t>(drawVertices.size());
-    if (vertexCount == 0U || bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) < vertexCount) {
-        return false;
+    if (!desc.lightWireframes.empty()) {
+        std::vector<Vertex> lineVertices;
+        AppendLightWireframes(lineVertices, desc.lightWireframes);
+        const std::uint32_t vertexCount = static_cast<std::uint32_t>(lineVertices.size());
+        if (vertexCount != 0U && bgfx::getAvailTransientVertexBuffer(vertexCount, layout_) >= vertexCount) {
+            bgfx::TransientVertexBuffer buffer{};
+            bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout_);
+            std::memcpy(buffer.data, lineVertices.data(), sizeof(Vertex) * lineVertices.size());
+
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_PT_LINES);
+            bgfx::setVertexBuffer(0, &buffer);
+            bgfx::submit(desc.viewId, program_);
+            submitted = true;
+        }
     }
-
-    ConfigureOverlayView(desc);
-    bgfx::TransientVertexBuffer buffer{};
-    bgfx::allocTransientVertexBuffer(&buffer, vertexCount, layout_);
-    std::memcpy(buffer.data, drawVertices.data(), sizeof(Vertex) * drawVertices.size());
-
-    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
-    bgfx::setVertexBuffer(0, &buffer);
-    bgfx::submit(desc.viewId, program_);
-    return true;
+    return submitted;
 }
 
 bool SceneGizmoPass::IsInitialized() const noexcept {

@@ -6,8 +6,10 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
 #include "engine/scene/AudioSourceComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
@@ -117,6 +119,109 @@ namespace {
     case InspectorPropertyId::MaterialEmissiveColorB:
     case InspectorPropertyId::MaterialEmissiveStrength:
     case InspectorPropertyId::MaterialAlphaCutoff:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool IsLightFloatProperty(InspectorPropertyId property) noexcept {
+    switch (property) {
+    case InspectorPropertyId::LightColorR:
+    case InspectorPropertyId::LightColorG:
+    case InspectorPropertyId::LightColorB:
+    case InspectorPropertyId::LightIntensity:
+    case InspectorPropertyId::LightRange:
+    case InspectorPropertyId::LightInnerCone:
+    case InspectorPropertyId::LightOuterCone:
+    case InspectorPropertyId::LightAreaWidth:
+    case InspectorPropertyId::LightAreaHeight:
+    case InspectorPropertyId::LightContactShadowLength:
+    case InspectorPropertyId::LightVolumetricScattering:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool ReadLightFloat(const kb::scene::LightComponent& light, InspectorPropertyId property, float& value) noexcept {
+    switch (property) {
+    case InspectorPropertyId::LightColorR:
+        value = light.color.x;
+        return true;
+    case InspectorPropertyId::LightColorG:
+        value = light.color.y;
+        return true;
+    case InspectorPropertyId::LightColorB:
+        value = light.color.z;
+        return true;
+    case InspectorPropertyId::LightIntensity:
+        value = light.intensity;
+        return true;
+    case InspectorPropertyId::LightRange:
+        value = light.range;
+        return true;
+    case InspectorPropertyId::LightInnerCone:
+        value = light.innerConeDegrees;
+        return true;
+    case InspectorPropertyId::LightOuterCone:
+        value = light.outerConeDegrees;
+        return true;
+    case InspectorPropertyId::LightAreaWidth:
+        value = light.areaWidth;
+        return true;
+    case InspectorPropertyId::LightAreaHeight:
+        value = light.areaHeight;
+        return true;
+    case InspectorPropertyId::LightContactShadowLength:
+        value = light.contactShadowLength;
+        return true;
+    case InspectorPropertyId::LightVolumetricScattering:
+        value = light.volumetricScattering;
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] float ClampLightCone(float degrees) noexcept {
+    return std::clamp(degrees, 0.0F, 179.0F);
+}
+
+[[nodiscard]] bool WriteLightFloat(kb::scene::LightComponent& light, InspectorPropertyId property, float value) noexcept {
+    switch (property) {
+    case InspectorPropertyId::LightColorR:
+        light.color.x = std::clamp(value, 0.0F, 1.0F);
+        return true;
+    case InspectorPropertyId::LightColorG:
+        light.color.y = std::clamp(value, 0.0F, 1.0F);
+        return true;
+    case InspectorPropertyId::LightColorB:
+        light.color.z = std::clamp(value, 0.0F, 1.0F);
+        return true;
+    case InspectorPropertyId::LightIntensity:
+        light.intensity = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightRange:
+        light.range = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightInnerCone:
+        light.innerConeDegrees = std::min(ClampLightCone(value), ClampLightCone(light.outerConeDegrees));
+        return true;
+    case InspectorPropertyId::LightOuterCone:
+        light.outerConeDegrees = std::max(ClampLightCone(value), ClampLightCone(light.innerConeDegrees));
+        return true;
+    case InspectorPropertyId::LightAreaWidth:
+        light.areaWidth = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightAreaHeight:
+        light.areaHeight = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightContactShadowLength:
+        light.contactShadowLength = std::max(0.0F, value);
+        return true;
+    case InspectorPropertyId::LightVolumetricScattering:
+        light.volumetricScattering = std::max(0.0F, value);
         return true;
     default:
         return false;
@@ -242,17 +347,32 @@ namespace {
     }
 }
 
+void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        return;
+    }
+    if (sceneContext.AssetBrowser().SelectAsset(assetId, sceneContext.Scene().Assets().Manager())) {
+        sceneContext.AssetBrowser().FocusSelection(true);
+    }
+}
+
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     if (hit.kind != InspectorHitKind::TextField) {
         return true;
     }
     if (hit.property == InspectorPropertyId::MeshRendererMaterial) {
-        static_cast<void>(sceneContext.CycleMeshRendererMaterialAsset(entity));
+        const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr) {
+            SelectAssetInProjectFiles(sceneContext, kb::assets::AssetId{ renderer->materialAssetId });
+        }
         return true;
     }
     if (const std::optional<std::uint32_t> slot = MeshRendererMaterialSlotForProperty(hit.property)) {
-        static_cast<void>(sceneContext.CycleMeshRendererMaterialSlotAsset(entity, *slot));
+        const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr && *slot < renderer->materialSlotOverrideCount) {
+            SelectAssetInProjectFiles(sceneContext, kb::assets::AssetId{ renderer->materialSlotAssetIds[*slot] });
+        }
         return true;
     }
     return true;
@@ -400,6 +520,63 @@ namespace {
     }
 }
 
+[[nodiscard]] kb::scene::LightKind NextLightKind(kb::scene::LightKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::LightKind::Directional:
+        return kb::scene::LightKind::Point;
+    case kb::scene::LightKind::Point:
+        return kb::scene::LightKind::Spot;
+    case kb::scene::LightKind::Spot:
+    case kb::scene::LightKind::AreaRect:
+    case kb::scene::LightKind::AreaDisk:
+    case kb::scene::LightKind::Tube:
+        return kb::scene::LightKind::Directional;
+    }
+    return kb::scene::LightKind::Point;
+}
+
+template <typename Mutator>
+[[nodiscard]] bool MutateLightComponent(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, std::string label, Mutator mutator) {
+    if (!sceneContext.BeginSceneEditTransaction(label)) {
+        return true;
+    }
+    kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity);
+    if (light == nullptr) {
+        sceneContext.CancelSceneEditTransaction();
+        return true;
+    }
+    mutator(*light);
+    sceneContext.Scene().Components().Lights().MarkModified(entity);
+    static_cast<void>(sceneContext.CommitSceneEditTransaction());
+    return true;
+}
+
+[[nodiscard]] bool HandleLightClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
+    if (hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::LightKind) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Type", [](kb::scene::LightComponent& light) {
+            light.kind = NextLightKind(light.kind);
+        });
+    }
+    if (hit.kind == InspectorHitKind::BoolField && hit.property == InspectorPropertyId::LightCastsShadow) {
+        sceneContext.Inspector().EndTextEdit();
+        return MutateLightComponent(sceneContext, entity, "Edit Light Shadows", [](kb::scene::LightComponent& light) {
+            light.castsShadow = !light.castsShadow;
+        });
+    }
+    if (hit.kind == InspectorHitKind::FloatField && IsLightFloatProperty(hit.property)) {
+        if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(entity); light != nullptr) {
+            float value = 0.0F;
+            if (ReadLightFloat(*light, hit.property, value)) {
+                sceneContext.Inspector().BeginTextEdit(hit.property, FormatCompactFloat(value));
+            }
+        }
+        return true;
+    }
+    sceneContext.Inspector().EndTextEdit();
+    return true;
+}
+
 [[nodiscard]] bool ToggleAudioProperty(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, InspectorPropertyId property) {
     if (!sceneContext.BeginSceneEditTransaction("Edit Audio Component")) {
         return true;
@@ -491,6 +668,9 @@ bool InspectorPanelInteraction::HandlePointerDown(EditorSceneContext& sceneConte
     }
     if (hit.section == InspectorSectionId::MeshRenderer) {
         return HandleMeshRendererClick(sceneContext, entity, hit);
+    }
+    if (hit.section == InspectorSectionId::Light) {
+        return HandleLightClick(sceneContext, entity, hit);
     }
     if (hit.section == InspectorSectionId::AddComponent) {
         return HandleAddComponentClick(sceneContext, entity, hit);
@@ -681,6 +861,21 @@ bool InspectorPanelInteraction::HandleKeyDown(HWND owner, EditorSceneContext& sc
             return true;
         }
         const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (sceneContext.Scene().Entities().IsAlive(entity) && IsLightFloatProperty(inspector.EditedProperty())) {
+            const InspectorPropertyId property = inspector.EditedProperty();
+            const kb::scene::LightComponent* current = sceneContext.Scene().Components().Lights().TryGet(entity);
+            float currentValue = 0.0F;
+            float value = 0.0F;
+            if (current != nullptr &&
+                ReadLightFloat(*current, property, currentValue) &&
+                EvaluateMath(inspector.EditBuffer(), currentValue, value)) {
+                static_cast<void>(MutateLightComponent(sceneContext, entity, "Edit Light Component", [property, value](kb::scene::LightComponent& light) {
+                    static_cast<void>(WriteLightFloat(light, property, value));
+                }));
+            }
+            inspector.EndTextEdit();
+            return true;
+        }
         if (sceneContext.Scene().Entities().IsAlive(entity)) {
             const InspectorPropertyId property = inspector.EditedProperty();
             if (property == InspectorPropertyId::EntityName) {

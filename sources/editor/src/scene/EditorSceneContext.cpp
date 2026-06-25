@@ -51,6 +51,7 @@
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/EditorMaterialAssetEditCommand.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
+#include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
@@ -504,6 +505,14 @@ InspectorPanelState& EditorSceneContext::Inspector() noexcept {
 
 const InspectorPanelState& EditorSceneContext::Inspector() const noexcept {
     return inspector_;
+}
+
+MaterialEditorState& EditorSceneContext::MaterialEditor() noexcept {
+    return materialEditor_;
+}
+
+const MaterialEditorState& EditorSceneContext::MaterialEditor() const noexcept {
+    return materialEditor_;
 }
 
 EditorProjectSettingsState& EditorSceneContext::ProjectSettings() noexcept {
@@ -1323,6 +1332,17 @@ bool EditorSceneContext::AdoptCreatedHierarchyEntities(std::string label, std::s
 }
 
 bool EditorSceneContext::DeleteAssetBrowserItem(kb::assets::AssetId id) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    if (metadata != nullptr && EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+        const std::vector<std::string> references = EditorMaterialReferenceFinder::FindSceneReferences(*scene_, id);
+        if (!references.empty()) {
+            console_.Warning(
+                "Materials",
+                "Material delete blocked; " + std::to_string(references.size()) + " scene reference(s) found. First: " + references.front());
+            return false;
+        }
+    }
+
     const bool deleted = EditorSceneAssetBrowserCommands::DeleteAsset(*scene_, assetBrowser_, id);
     if (deleted) {
         console_.Info("Assets", "Asset deleted.");
@@ -1587,6 +1607,44 @@ bool EditorSceneContext::CreateMaterialInstanceAsset(kb::assets::AssetId parentM
     return MaterialAssetAuthoring().CreateInstance(parentMaterial);
 }
 
+bool EditorSceneContext::DuplicateMaterialAsset(kb::assets::AssetId materialAssetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialAssetId);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        console_.Error("Materials", "Only Material assets can be duplicated to .kbmat.");
+        return false;
+    }
+
+    EditorMaterialAssetGateway gateway{ *scene_, assetBrowser_ };
+    const std::optional<std::filesystem::path> duplicatePath = gateway.DuplicateMaterial(materialAssetId);
+    if (!duplicatePath.has_value()) {
+        console_.Error("Materials", "Material duplicate could not be written: " + metadata->virtualPath.generic_string());
+        return false;
+    }
+
+    console_.Info("Materials", "Material duplicated: " + duplicatePath->generic_string());
+    return true;
+}
+
+bool EditorSceneContext::FindMaterialReferences(kb::assets::AssetId materialAssetId) {
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialAssetId);
+    if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        console_.Error("Materials", "Find References requires a material asset.");
+        return false;
+    }
+
+    const std::vector<std::string> references = EditorMaterialReferenceFinder::FindSceneReferences(*scene_, materialAssetId);
+    if (references.empty()) {
+        console_.Info("Materials", "No scene references found for: " + metadata->virtualPath.generic_string());
+        return true;
+    }
+
+    console_.Info("Materials", "References for " + metadata->virtualPath.generic_string() + ": " + std::to_string(references.size()));
+    for (const std::string& reference : references) {
+        console_.Info("Materials", "  " + reference);
+    }
+    return true;
+}
+
 bool EditorSceneContext::ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId) {
     EditorEmbeddedMaterialExtractor extractor{ *scene_, assetBrowser_, console_ };
     return extractor.Extract(meshAssetId).Succeeded();
@@ -1618,22 +1676,44 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
     return true;
 }
 
+bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        console_.Error("Materials", "No material asset was provided for the Material Editor.");
+        return false;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+    if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        console_.Error("Materials", "Selected asset is not a material document.");
+        return false;
+    }
+    if (!PrepareMaterialAssetSelectionChange(id)) {
+        return false;
+    }
+    materialEditor_.Open(id, ReadMaterialDocumentAsset(id));
+    console_.Info("Materials", "Opened Material Editor: " + metadata->virtualPath.generic_string());
+    return true;
+}
+
+void EditorSceneContext::CloseMaterialEditorAsset() noexcept {
+    materialEditor_.Close();
+}
+
 bool EditorSceneContext::HasDirtyMaterialAssetEdit() const noexcept {
     if (HasActiveMaterialAssetEdit()) {
+        return true;
+    }
+    if (materialEditor_.Dirty()) {
         return true;
     }
     if (!inspector_.IsTextEditDirty() || !IsMaterialFloatProperty(inspector_.EditedProperty())) {
         return false;
     }
-    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetBrowser_.InspectorAsset());
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(materialEditor_.OpenAssetId());
     return metadata != nullptr && metadata->type == "RenderMaterial";
 }
 
 bool EditorSceneContext::PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset) {
-    if (!HasDirtyMaterialAssetEdit() || nextAsset == assetBrowser_.InspectorAsset()) {
-        if (nextAsset != assetBrowser_.InspectorAsset()) {
-            static_cast<void>(ClearMaterialGraphNodeSelection());
-        }
+    if (!HasDirtyMaterialAssetEdit() || nextAsset == materialEditor_.OpenAssetId()) {
         return true;
     }
     console_.Warning("Materials", "Unsaved material value edit. Press Enter to save it or Escape to discard it before selecting another asset.");
@@ -1711,23 +1791,15 @@ std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
 }
 
 std::uint32_t EditorSceneContext::SelectedMaterialGraphNodeId() const noexcept {
-    return selectedMaterialGraphNodeId_;
+    return materialEditor_.SelectedNodeId();
 }
 
 bool EditorSceneContext::SelectMaterialGraphNode(std::uint32_t nodeId) noexcept {
-    if (selectedMaterialGraphNodeId_ == nodeId) {
-        return false;
-    }
-    selectedMaterialGraphNodeId_ = nodeId;
-    return true;
+    return materialEditor_.SelectNode(nodeId);
 }
 
 bool EditorSceneContext::ClearMaterialGraphNodeSelection() noexcept {
-    if (selectedMaterialGraphNodeId_ == 0U) {
-        return false;
-    }
-    selectedMaterialGraphNodeId_ = 0U;
-    return true;
+    return materialEditor_.ClearNodeSelection();
 }
 
 float EditorSceneContext::MaterialGraphZoom() const noexcept {
@@ -1999,6 +2071,9 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     }
     if (inspector_.IsTextEditDirty() && IsMaterialFloatProperty(inspector_.EditedProperty())) {
         inspector_.EndTextEdit();
+        if (materialEditor_.OpenAssetId() == id) {
+            materialEditor_.RevertToCleanSnapshot();
+        }
         console_.Info("Materials", "Material value edit reverted.");
         return true;
     }
@@ -2037,16 +2112,23 @@ bool EditorSceneContext::ValidateMaterialEditorAsset(kb::assets::AssetId id) {
     }
 
     const kb::render::RenderMaterialAssetParseResult result = kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, id);
+    std::vector<std::string> diagnostics;
+    bool hasError = false;
     for (const kb::render::RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
         std::string message = std::string{ kb::render::RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) } + ": " + diagnostic.message;
         if (!diagnostic.field.empty()) {
             message += " [" + diagnostic.field + "]";
         }
+        diagnostics.push_back(message);
         if (diagnostic.severity == kb::render::RenderMaterialAssetParseDiagnosticSeverity::Warning) {
             console_.Warning("Materials", message);
         } else {
+            hasError = true;
             console_.Error("Materials", message);
         }
+    }
+    if (materialEditor_.OpenAssetId() == id) {
+        materialEditor_.SetDiagnostics(std::move(diagnostics), hasError);
     }
     if (result.Succeeded()) {
         console_.Info("Materials", "Material validated: " + metadata->virtualPath.generic_string());
@@ -2087,6 +2169,9 @@ bool EditorSceneContext::ApplyActiveMaterialAssetFloatEdit(float value) {
     if (!EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *current)) {
         return false;
     }
+    if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
+        materialEditor_.SetWorkingCopy(*current);
+    }
 
     MarkSceneRenderDirty();
     return true;
@@ -2097,7 +2182,8 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
         return false;
     }
 
-    std::optional<kb::render::RenderMaterialAssetData> after = ReadMaterialAsset(activeMaterialEditAsset_);
+    const kb::assets::AssetId editedAsset = activeMaterialEditAsset_;
+    std::optional<kb::render::RenderMaterialAssetData> after = ReadMaterialAsset(editedAsset);
     if (!after.has_value()) {
         CancelActiveMaterialAssetEdit();
         return false;
@@ -2105,7 +2191,7 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
 
     std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
         *scene_,
-        activeMaterialEditAsset_,
+        editedAsset,
         "Edit Material",
         std::move(*activeMaterialEditBefore_),
         std::move(*after));
@@ -2113,6 +2199,10 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
     activeMaterialEditProperty_ = InspectorPropertyId::None;
     activeMaterialEditBefore_.reset();
     commandStack_.PushExecuted(std::move(command));
+    if (materialEditor_.OpenAssetId() == editedAsset) {
+        materialEditor_.SetWorkingCopy(*after);
+        materialEditor_.MarkSaved();
+    }
     MarkSceneRenderDirty();
     return true;
 }
@@ -2120,6 +2210,10 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
 void EditorSceneContext::CancelActiveMaterialAssetEdit() noexcept {
     if (!HasActiveMaterialAssetEdit()) {
         return;
+    }
+    if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
+        materialEditor_.SetWorkingCopy(*activeMaterialEditBefore_);
+        materialEditor_.MarkSaved();
     }
     static_cast<void>(EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *activeMaterialEditBefore_));
     activeMaterialEditAsset_ = {};
@@ -2402,6 +2496,28 @@ bool EditorSceneContext::AddBehaviourAssetToEntity(kb::assets::AssetId assetId, 
     return true;
 }
 
+bool EditorSceneContext::SetMeshRendererMeshAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
+    if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
+        console_.Warning("Inspector", "Mesh assignment ignored for invalid entity.");
+        return false;
+    }
+    if (!scene_->Components().MeshRenderers().Has(entity)) {
+        console_.Warning("Inspector", "Selected entity does not have a Mesh Renderer component.");
+        return false;
+    }
+    if (assetId.IsValid()) {
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+        if (metadata == nullptr || !EditorSceneMeshAssetActions::IsMeshAsset(*metadata)) {
+            console_.Warning("Inspector", "Only mesh assets can be assigned to a Mesh Renderer.");
+            return false;
+        }
+    }
+
+    return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh" : "Clear Mesh", [this, entity, assetId]() {
+        return EditorSceneMeshAssetActions::AssignMesh(*scene_, entity, assetId);
+    });
+}
+
 bool EditorSceneContext::SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId) {
     if (!entity.IsValid() || !scene_->Entities().IsAlive(entity)) {
         console_.Warning("Inspector", "Material assignment ignored for invalid entity.");
@@ -2422,6 +2538,42 @@ bool EditorSceneContext::SetMeshRendererMaterialAsset(kb::scene::SceneEntity ent
     return ExecuteSceneCommand(assetId.IsValid() ? "Assign Mesh Material" : "Clear Mesh Material", [this, entity, assetId]() {
         return EditorSceneMaterialAssetActions::AssignMaterial(*scene_, entity, assetId);
     });
+}
+
+bool EditorSceneContext::ApplyMaterialToSelectedMeshRenderers(kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        console_.Warning("Material Editor", "Apply To Selection requires a material asset.");
+        return false;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(assetId);
+    if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+        console_.Warning("Material Editor", "Apply To Selection can only assign material assets.");
+        return false;
+    }
+
+    std::vector<kb::scene::SceneEntity> targets;
+    targets.reserve(SelectedHierarchyEntities().size());
+    for (const kb::scene::SceneEntity entity : SelectedHierarchyEntities()) {
+        if (scene_->Entities().IsAlive(entity) && scene_->Components().MeshRenderers().Has(entity)) {
+            targets.push_back(entity);
+        }
+    }
+    if (targets.empty()) {
+        console_.Warning("Material Editor", "Apply To Selection found no selected Mesh Renderer.");
+        return false;
+    }
+
+    const bool applied = ExecuteSceneCommand("Apply Material To Selection", [this, targets = std::move(targets), assetId]() {
+        bool assigned = false;
+        for (const kb::scene::SceneEntity entity : targets) {
+            assigned = EditorSceneMaterialAssetActions::AssignMaterial(*scene_, entity, assetId) || assigned;
+        }
+        return assigned;
+    });
+    if (applied) {
+        static_cast<void>(assetBrowser_.SelectAsset(assetId, scene_->Assets().Manager()));
+    }
+    return applied;
 }
 
 bool EditorSceneContext::CycleMeshRendererMaterialAsset(kb::scene::SceneEntity entity) {
@@ -2465,6 +2617,9 @@ bool EditorSceneContext::CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEnti
         return false;
     }
     const std::uint64_t current = slotIndex < renderer->materialSlotOverrideCount ? renderer->materialSlotAssetIds[slotIndex] : 0U;
+    if (current != 0U) {
+        return SetMeshRendererMaterialSlotAsset(entity, slotIndex, {});
+    }
     const std::vector<kb::assets::AssetId> materials = MaterialAssetIds(scene_->Assets().Manager());
     return SetMeshRendererMaterialSlotAsset(entity, slotIndex, NextMaterialAssetId(materials, current));
 }
@@ -2744,6 +2899,9 @@ EditorSceneCommandController EditorSceneContext::SceneCommands() noexcept {
         hierarchySearch_,
         pendingSceneTransactionLabel_,
         sceneRenderRevision_,
+        sceneRenderDirtyBaseRevision_,
+        sceneRenderDirtyEntityIds_,
+        sceneRenderFullDirty_,
         sceneDocumentDirty_,
         hierarchyRowsDirty_,
     };
@@ -2766,6 +2924,12 @@ bool EditorSceneContext::ExecuteMaterialAssetEdit(kb::assets::AssetId id, std::u
         return false;
     }
 
+    if (materialEditor_.OpenAssetId() == id) {
+        if (std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialAsset(id)) {
+            materialEditor_.SetWorkingCopy(std::move(*material));
+            materialEditor_.MarkSaved();
+        }
+    }
     MarkSceneRenderDirty();
     return true;
 }
