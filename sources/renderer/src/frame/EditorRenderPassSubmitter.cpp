@@ -171,6 +171,7 @@ void EditorRenderPassSubmitter::SubmitGizmoOverlay(const RenderViewportPlan& vie
             .hoveredAxis = desc.editorGizmo.hoveredAxis,
             .draggedAxis = desc.editorGizmo.draggedAxis,
             .mode = desc.editorGizmo.mode,
+            .lightWireframes = desc.editorLightWireframes,
             .visible = desc.editorGizmo.visible,
         }));
         return;

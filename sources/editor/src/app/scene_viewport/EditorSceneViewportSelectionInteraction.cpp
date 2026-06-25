@@ -60,7 +60,13 @@ bool EditorSceneViewportSelectionInteraction::SelectAt(
         return false;
     }
 
-    const EditorSceneViewportPickResult pick = EditorSceneViewportMeshPicker::PickNearest(sceneContext.Scene(), hit->ray);
+    const EditorSceneViewportPickResult pick = EditorSceneViewportMeshPicker::PickNearest(
+        sceneContext.Scene(),
+        sceneContext.ViewportCamera(hit->panelId),
+        hit->renderArea,
+        hit->localX,
+        hit->localY,
+        hit->ray);
     EditorSceneViewportSelectionController::ApplyClick(sceneContext, pick.entity, CurrentSelectionMode());
     return true;
 }

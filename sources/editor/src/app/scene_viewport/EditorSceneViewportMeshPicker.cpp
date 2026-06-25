@@ -1,6 +1,7 @@
 #include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 
 #if defined(_WIN32)
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/MeshRendererComponent.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneComponentVisitors.hpp"
@@ -16,10 +17,34 @@ namespace {
 
 constexpr float kDefaultPickHalfExtent = 1.0F;
 constexpr float kRayAabbParallelEpsilon = 0.00001F;
+constexpr float kLightWirePickThresholdPixels = 8.0F;
+constexpr float kLightWirePickTieEpsilon = 0.25F;
+constexpr float kPi = 3.14159265358979323846F;
+
+struct ScreenPoint {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+struct LightPickCandidate {
+    kb::scene::SceneEntity entity{};
+    float distance = 0.0F;
+    float score = 0.0F;
+    float radius = 0.0F;
+
+    [[nodiscard]] bool IsValid() const noexcept {
+        return entity.IsValid();
+    }
+};
 
 struct NearestPickContext {
     EditorSceneViewportRay ray{};
     EditorSceneViewportPickResult result{};
+    const kb::scene::Scene* scene = nullptr;
+    const EditorViewportCameraState* camera = nullptr;
+    RECT renderArea{};
+    ScreenPoint mouse{};
+    LightPickCandidate lightPick{};
 };
 
 struct RectPickContext {
@@ -46,6 +71,105 @@ struct RectPickContext {
         EditorSceneViewportMath::Add(
             EditorSceneViewportMath::Mul(uv, 2.0F * rotation.w),
             EditorSceneViewportMath::Mul(uuv, 2.0F)));
+}
+
+[[nodiscard]] kb::scene::Vec3 Rotate(kb::scene::Quat rotation, kb::scene::Vec3 value) noexcept {
+    const kb::scene::Vec3 q{rotation.x, rotation.y, rotation.z};
+    const kb::scene::Vec3 uv{
+        q.y * value.z - q.z * value.y,
+        q.z * value.x - q.x * value.z,
+        q.x * value.y - q.y * value.x,
+    };
+    const kb::scene::Vec3 uuv{
+        q.y * uv.z - q.z * uv.y,
+        q.z * uv.x - q.x * uv.z,
+        q.x * uv.y - q.y * uv.x,
+    };
+    return EditorSceneViewportMath::Add(
+        value,
+        EditorSceneViewportMath::Add(
+            EditorSceneViewportMath::Mul(uv, 2.0F * rotation.w),
+            EditorSceneViewportMath::Mul(uuv, 2.0F)));
+}
+
+[[nodiscard]] kb::scene::Quat Normalize(kb::scene::Quat rotation) noexcept {
+    const float lengthSquared = rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w;
+    if (lengthSquared <= 0.000001F) {
+        return {};
+    }
+    const float invLength = 1.0F / std::sqrt(lengthSquared);
+    return kb::scene::Quat{
+        rotation.x * invLength,
+        rotation.y * invLength,
+        rotation.z * invLength,
+        rotation.w * invLength,
+    };
+}
+
+[[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
+    const bool hasWorldPosition = transform.worldPosition.x != 0.0F || transform.worldPosition.y != 0.0F || transform.worldPosition.z != 0.0F;
+    return hasWorldPosition ? transform.worldPosition : transform.localPosition;
+}
+
+[[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
+    return Normalize(transform.worldRotation);
+}
+
+[[nodiscard]] float Distance(ScreenPoint lhs, ScreenPoint rhs) noexcept {
+    const float dx = lhs.x - rhs.x;
+    const float dy = lhs.y - rhs.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+[[nodiscard]] float SegmentDistance(ScreenPoint point, ScreenPoint a, ScreenPoint b) noexcept {
+    const float abX = b.x - a.x;
+    const float abY = b.y - a.y;
+    const float lengthSquared = abX * abX + abY * abY;
+    if (lengthSquared <= 0.000001F) {
+        return Distance(point, a);
+    }
+    const float t = std::clamp(((point.x - a.x) * abX + (point.y - a.y) * abY) / lengthSquared, 0.0F, 1.0F);
+    return Distance(point, ScreenPoint{a.x + abX * t, a.y + abY * t});
+}
+
+[[nodiscard]] bool Project(
+    const EditorViewportCameraState& camera,
+    const RECT& renderArea,
+    kb::scene::Vec3 position,
+    ScreenPoint& output) noexcept {
+    return EditorSceneViewportMath::WorldToScreen(camera, renderArea, position, output.x, output.y);
+}
+
+[[nodiscard]] bool BetterLightPick(const LightPickCandidate& candidate, const LightPickCandidate& current) noexcept {
+    if (!current.IsValid()) {
+        return true;
+    }
+    if (candidate.score + kLightWirePickTieEpsilon < current.score) {
+        return true;
+    }
+    if (std::abs(candidate.score - current.score) <= kLightWirePickTieEpsilon) {
+        if (candidate.radius + kLightWirePickTieEpsilon < current.radius) {
+            return true;
+        }
+        return candidate.distance < current.distance;
+    }
+    return false;
+}
+
+void ConsiderLightPick(NearestPickContext& pick, kb::scene::SceneEntity entity, float score, float radius, float distance) {
+    if (score > kLightWirePickThresholdPixels || radius <= 0.0F || distance <= 0.0F) {
+        return;
+    }
+
+    LightPickCandidate candidate{
+        .entity = entity,
+        .distance = distance,
+        .score = score,
+        .radius = radius,
+    };
+    if (BetterLightPick(candidate, pick.lightPick)) {
+        pick.lightPick = candidate;
+    }
 }
 
 [[nodiscard]] bool Slab(float origin, float direction, float min, float max, float& nearDistance, float& farDistance) noexcept {
@@ -119,6 +243,76 @@ void PickNearestVisitor(kb::scene::SceneEntity entity, const kb::scene::Transfor
     }
 }
 
+void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* context) {
+    auto& pick = *static_cast<NearestPickContext*>(context);
+    if (pick.scene == nullptr || pick.camera == nullptr || !pick.scene->Components().Visibility().Get(entity).visible) {
+        return;
+    }
+    if (light.kind == kb::scene::LightKind::Directional || light.range <= 0.0F) {
+        return;
+    }
+
+    const kb::scene::Vec3 position = ResolveWorldPosition(transform);
+    const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
+    const float cameraDistance = EditorSceneViewportMath::Dot(EditorSceneViewportMath::Sub(position, cameraAxes.position), cameraAxes.forward);
+    if (cameraDistance <= 0.0F) {
+        return;
+    }
+
+    ScreenPoint center{};
+    if (!Project(*pick.camera, pick.renderArea, position, center)) {
+        return;
+    }
+
+    if (light.kind == kb::scene::LightKind::Point) {
+        ScreenPoint right{};
+        ScreenPoint up{};
+        if (!Project(*pick.camera, pick.renderArea, EditorSceneViewportMath::Add(position, EditorSceneViewportMath::Mul(cameraAxes.right, light.range)), right) ||
+            !Project(*pick.camera, pick.renderArea, EditorSceneViewportMath::Add(position, EditorSceneViewportMath::Mul(cameraAxes.up, light.range)), up)) {
+            return;
+        }
+
+        const float screenRadius = std::max(Distance(center, right), Distance(center, up));
+        const float score = std::abs(Distance(pick.mouse, center) - screenRadius);
+        ConsiderLightPick(pick, entity, score, screenRadius, cameraDistance);
+        return;
+    }
+
+    const kb::scene::Quat rotation = ResolveWorldRotation(transform);
+    const kb::scene::Vec3 forward = Rotate(rotation, kb::scene::Vec3{0.0F, 0.0F, 1.0F});
+    const kb::scene::Vec3 rightAxis = Rotate(rotation, kb::scene::Vec3{1.0F, 0.0F, 0.0F});
+    const kb::scene::Vec3 upAxis = Rotate(rotation, kb::scene::Vec3{0.0F, 1.0F, 0.0F});
+    const float range = std::max(0.01F, light.range);
+    const float coneRadians = std::clamp(light.outerConeDegrees, 0.0F, 179.0F) * 0.5F * kPi / 180.0F;
+    const float coneRadius = std::tan(coneRadians) * range;
+    const kb::scene::Vec3 endCenter = EditorSceneViewportMath::Add(position, EditorSceneViewportMath::Mul(forward, range));
+
+    ScreenPoint ringCenter{};
+    ScreenPoint ringRight{};
+    ScreenPoint ringUp{};
+    if (!Project(*pick.camera, pick.renderArea, endCenter, ringCenter) ||
+        !Project(*pick.camera, pick.renderArea, EditorSceneViewportMath::Add(endCenter, EditorSceneViewportMath::Mul(rightAxis, coneRadius)), ringRight) ||
+        !Project(*pick.camera, pick.renderArea, EditorSceneViewportMath::Add(endCenter, EditorSceneViewportMath::Mul(upAxis, coneRadius)), ringUp)) {
+        return;
+    }
+
+    const float screenRadius = std::max(Distance(ringCenter, ringRight), Distance(ringCenter, ringUp));
+    float score = std::abs(Distance(pick.mouse, ringCenter) - screenRadius);
+    for (std::uint32_t i = 0; i < 4U; ++i) {
+        const float angle = static_cast<float>(i) * kPi * 0.5F + kPi * 0.25F;
+        const kb::scene::Vec3 rim = EditorSceneViewportMath::Add(
+            endCenter,
+            EditorSceneViewportMath::Add(
+                EditorSceneViewportMath::Mul(rightAxis, std::cos(angle) * coneRadius),
+                EditorSceneViewportMath::Mul(upAxis, std::sin(angle) * coneRadius)));
+        ScreenPoint rimScreen{};
+        if (Project(*pick.camera, pick.renderArea, rim, rimScreen)) {
+            score = std::min(score, SegmentDistance(pick.mouse, center, rimScreen));
+        }
+    }
+    ConsiderLightPick(pick, entity, score, screenRadius, cameraDistance);
+}
+
 void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
     static_cast<void>(renderer);
     auto& pick = *static_cast<RectPickContext*>(context);
@@ -138,6 +332,31 @@ void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformCo
 EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(const kb::scene::Scene& scene, const EditorSceneViewportRay& ray) {
     NearestPickContext context{.ray = ray};
     scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
+    return context.result;
+}
+
+EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
+    const kb::scene::Scene& scene,
+    const EditorViewportCameraState& camera,
+    const RECT& renderArea,
+    float screenX,
+    float screenY,
+    const EditorSceneViewportRay& ray) {
+    NearestPickContext context{
+        .ray = ray,
+        .scene = &scene,
+        .camera = &camera,
+        .renderArea = renderArea,
+        .mouse = ScreenPoint{screenX, screenY},
+    };
+    scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
+    scene.Components().Visitors().ForEachLight(&PickNearestLightVisitor, &context);
+    if (context.lightPick.IsValid()) {
+        return EditorSceneViewportPickResult{
+            .entity = context.lightPick.entity,
+            .distance = context.lightPick.distance,
+        };
+    }
     return context.result;
 }
 

@@ -82,6 +82,19 @@ enum class InspectorPropertyId : std::uint8_t {
     MeshRendererMaterialSlot5,
     MeshRendererMaterialSlot6,
     MeshRendererMaterialSlot7,
+    LightKind,
+    LightColorR,
+    LightColorG,
+    LightColorB,
+    LightIntensity,
+    LightRange,
+    LightInnerCone,
+    LightOuterCone,
+    LightAreaWidth,
+    LightAreaHeight,
+    LightContactShadowLength,
+    LightVolumetricScattering,
+    LightCastsShadow,
     MaterialBaseColorR,
     MaterialBaseColorG,
     MaterialBaseColorB,
@@ -204,6 +217,7 @@ private:
     bool audioSourceCollapsed_ = false;
     bool audioListenerCollapsed_ = false;
     bool meshRendererCollapsed_ = false;
+    bool lightCollapsed_ = false;
     bool folderCollapsed_ = false;
     bool inputActionCollapsed_ = false;
     bool inputMappingsCollapsed_ = false;

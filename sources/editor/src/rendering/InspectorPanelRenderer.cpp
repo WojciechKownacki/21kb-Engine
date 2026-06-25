@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/IAssetLoader.hpp"
 #include "engine/input/InputAssetIO.hpp"
+#include "engine/scene/LightComponent.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -1467,6 +1468,62 @@ void PaintAudioListenerSection(
     y = section.Bottom() + kSectionGap;
 }
 
+[[nodiscard]] bool LightUsesRange(kb::scene::LightKind kind) noexcept {
+    return kind != kb::scene::LightKind::Directional;
+}
+
+[[nodiscard]] bool LightUsesSpotCone(kb::scene::LightKind kind) noexcept {
+    return kind == kb::scene::LightKind::Spot;
+}
+
+[[nodiscard]] bool LightUsesAreaSize(kb::scene::LightKind kind) noexcept {
+    return kind == kb::scene::LightKind::AreaRect || kind == kb::scene::LightKind::AreaDisk || kind == kb::scene::LightKind::Tube;
+}
+
+[[nodiscard]] int LightSectionRows(const kb::scene::LightComponent& light) noexcept {
+    int rows = 8;
+    if (LightUsesRange(light.kind)) {
+        ++rows;
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        rows += 2;
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        rows += 2;
+    }
+    return rows;
+}
+
+void PaintLightSection(
+    HDC dc,
+    RECT content,
+    int& y,
+    const EditorTheme& theme,
+    const InspectorPanelState& inspector,
+    const kb::scene::LightComponent& light) {
+    SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Light, HeroIconKind::Bolt, "Light");
+    section.Field("Type", InspectorComponentLabelFormatter::LightKindName(light.kind), InspectorPropertyId::LightKind);
+    section.Float("Color R", FormatFloat(light.color.x, 2), InspectorPropertyId::LightColorR);
+    section.Float("Color G", FormatFloat(light.color.y, 2), InspectorPropertyId::LightColorG);
+    section.Float("Color B", FormatFloat(light.color.z, 2), InspectorPropertyId::LightColorB);
+    section.Float("Intensity", FormatFloat(light.intensity, 2), InspectorPropertyId::LightIntensity);
+    if (LightUsesRange(light.kind)) {
+        section.Float("Range", FormatFloat(light.range, 2), InspectorPropertyId::LightRange);
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        section.Float("Inner Cone", FormatFloat(light.innerConeDegrees, 2), InspectorPropertyId::LightInnerCone);
+        section.Float("Outer Cone", FormatFloat(light.outerConeDegrees, 2), InspectorPropertyId::LightOuterCone);
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        section.Float("Area Width", FormatFloat(light.areaWidth, 2), InspectorPropertyId::LightAreaWidth);
+        section.Float("Area Height", FormatFloat(light.areaHeight, 2), InspectorPropertyId::LightAreaHeight);
+    }
+    section.Float("Contact Shadow", FormatFloat(light.contactShadowLength, 2), InspectorPropertyId::LightContactShadowLength);
+    section.Float("Volumetric", FormatFloat(light.volumetricScattering, 2), InspectorPropertyId::LightVolumetricScattering);
+    section.Bool("Casts Shadow", light.castsShadow, InspectorPropertyId::LightCastsShadow);
+    y = section.Bottom() + kSectionGap;
+}
+
 void PaintMeshRendererSection(
     HDC dc,
     RECT content,
@@ -1574,6 +1631,9 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         section.Bool("Enabled", sceneContext.EntityScriptEnabled(selected), InspectorPropertyId::ScriptEnabled);
         y = section.Bottom() + kSectionGap;
     }
+    if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
+        PaintLightSection(dc, content, y, theme, inspector, *light);
+    }
     if (const kb::scene::MeshRendererComponent* meshRenderer = scene.Components().MeshRenderers().TryGet(selected); meshRenderer != nullptr) {
         PaintMeshRendererSection(dc, content, y, theme, inspector, sceneContext, *meshRenderer);
     }
@@ -1659,6 +1719,9 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
     height += SectionHeight(inspector, InspectorSectionId::Transform, 3) + kSectionGap;
     if (sceneContext.HasEntityScript(selected)) {
         height += SectionHeight(inspector, InspectorSectionId::Script, 2) + kSectionGap;
+    }
+    if (const kb::scene::LightComponent* light = scene.Components().Lights().TryGet(selected); light != nullptr) {
+        height += SectionHeight(inspector, InspectorSectionId::Light, LightSectionRows(*light)) + kSectionGap;
     }
     if (const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(selected); renderer != nullptr) {
         height += SectionHeight(inspector, InspectorSectionId::MeshRenderer, 5) + kSectionGap;
@@ -1981,6 +2044,83 @@ void AdvanceRow(int& y) noexcept {
     return {};
 }
 
+[[nodiscard]] InspectorPanelRenderer::Hit HitLightFloatRow(
+    const RECT& content,
+    int& y,
+    InspectorPropertyId property,
+    int x,
+    int yPoint) noexcept {
+    if (InspectorPanelRenderer::Hit hit = HitFloatRow(RowRect(content, y), InspectorSectionId::Light, property, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    return {};
+}
+
+[[nodiscard]] InspectorPanelRenderer::Hit HitTestLightSection(
+    const RECT& content,
+    const InspectorPanelState& state,
+    const kb::scene::LightComponent& light,
+    int x,
+    int yPoint,
+    int& y) noexcept {
+    if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::Light, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (state.IsCollapsed(InspectorSectionId::Light)) {
+        return {};
+    }
+
+    if (InspectorPanelRenderer::Hit hit = HitTextRow(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightKind, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorR, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorG, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightColorB, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightIntensity, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (LightUsesRange(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightRange, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (LightUsesSpotCone(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightInnerCone, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightOuterCone, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (LightUsesAreaSize(light.kind)) {
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightAreaWidth, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+        if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightAreaHeight, x, yPoint); hit.kind != InspectorHitKind::None) {
+            return hit;
+        }
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightContactShadowLength, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitLightFloatRow(content, y, InspectorPropertyId::LightVolumetricScattering, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(content, y), InspectorSectionId::Light, InspectorPropertyId::LightCastsShadow, x, yPoint); hit.kind != InspectorHitKind::None) {
+        return hit;
+    }
+    AdvanceRow(y);
+    return {};
+}
+
 [[nodiscard]] InspectorPanelRenderer::Hit HitTestMultiSelection(const RECT& content, const InspectorPanelState& state, int x, int yPoint, int& y) noexcept {
     if (InspectorPanelRenderer::Hit hit = HitSectionHeader(content, y, state, InspectorSectionId::General, x, yPoint); hit.kind != InspectorHitKind::None) {
         return hit;
@@ -2275,6 +2415,13 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             AdvanceRow(y);
+        }
+        y += kSectionGap;
+    }
+
+    if (const kb::scene::LightComponent* light = sceneContext.Scene().Components().Lights().TryGet(selected); light != nullptr) {
+        if (InspectorPanelRenderer::Hit hit = HitTestLightSection(viewport, state, *light, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            return hit;
         }
         y += kSectionGap;
     }

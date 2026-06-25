@@ -6,8 +6,12 @@
 
 #include "engine/ecs/SystemSchedulerTrace.hpp"
 #include "engine/scene/CameraComponent.hpp"
+#include "engine/scene/LightComponent.hpp"
+#include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneComponentVisitors.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneRuntime.hpp"
+#include "engine/scene/VisibilityComponent.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "scene/EditorSceneSelectionPivot.hpp"
 #include "scene/EditorViewportCameraState.hpp"
@@ -16,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 #include <vector>
 
@@ -192,6 +197,129 @@ struct SceneViewportRenderProfileDesc {
     return ids;
 }
 
+[[nodiscard]] bool IsSelectedEntity(const EditorSceneContext& sceneContext, kb::scene::SceneEntity entity) {
+    if (!entity.IsValid()) {
+        return false;
+    }
+
+    const std::vector<kb::scene::SceneEntity>& selected = sceneContext.SelectedHierarchyEntities();
+    return std::find(selected.begin(), selected.end(), entity) != selected.end();
+}
+
+struct LightWireframeBasis {
+    std::array<float, 3> right{1.0F, 0.0F, 0.0F};
+    std::array<float, 3> up{0.0F, 1.0F, 0.0F};
+    std::array<float, 3> forward{0.0F, 0.0F, 1.0F};
+};
+
+[[nodiscard]] LightWireframeBasis BasisFromQuat(kb::scene::Quat q) noexcept {
+    const float lengthSquared = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (lengthSquared > 0.000001F) {
+        const float invLength = 1.0F / std::sqrt(lengthSquared);
+        q.x *= invLength;
+        q.y *= invLength;
+        q.z *= invLength;
+        q.w *= invLength;
+    } else {
+        q = kb::scene::Quat{};
+    }
+
+    const float x2 = q.x + q.x;
+    const float y2 = q.y + q.y;
+    const float z2 = q.z + q.z;
+    const float xx = q.x * x2;
+    const float xy = q.x * y2;
+    const float xz = q.x * z2;
+    const float yy = q.y * y2;
+    const float yz = q.y * z2;
+    const float zz = q.z * z2;
+    const float wx = q.w * x2;
+    const float wy = q.w * y2;
+    const float wz = q.w * z2;
+
+    return LightWireframeBasis{
+        .right = {1.0F - (yy + zz), xy + wz, xz - wy},
+        .up = {xy - wz, 1.0F - (xx + zz), yz + wx},
+        .forward = {xz + wy, yz - wx, 1.0F - (xx + yy)},
+    };
+}
+
+[[nodiscard]] std::array<float, 3> LightWireframeColor(const kb::scene::LightComponent& light) noexcept {
+    std::array<float, 3> color{
+        std::clamp(light.color.x, 0.0F, 1.0F),
+        std::clamp(light.color.y, 0.0F, 1.0F),
+        std::clamp(light.color.z, 0.0F, 1.0F),
+    };
+    const float brightest = std::max({color[0], color[1], color[2]});
+    if (brightest < 0.18F) {
+        color = {1.0F, 0.86F, 0.32F};
+    }
+    return color;
+}
+
+[[nodiscard]] kb::render::EditorLightWireframeKind ToEditorLightWireframeKind(kb::scene::LightKind kind) noexcept {
+    switch (kind) {
+    case kb::scene::LightKind::Spot:
+        return kb::render::EditorLightWireframeKind::Spot;
+    case kb::scene::LightKind::Directional:
+        return kb::render::EditorLightWireframeKind::Directional;
+    case kb::scene::LightKind::Point:
+    default:
+        return kb::render::EditorLightWireframeKind::Point;
+    }
+}
+
+[[nodiscard]] std::array<float, 3> ToArray(kb::scene::Vec3 value) noexcept {
+    return {value.x, value.y, value.z};
+}
+
+[[nodiscard]] std::vector<kb::render::EditorLightWireframeDesc> BuildLightWireframes(
+    const EditorSceneContext& sceneContext,
+    const EditorViewportCameraState& viewportCamera,
+    const EditorViewportCameraAxes& viewportAxes,
+    std::uint32_t renderHeight) {
+    struct Context {
+        const EditorSceneContext* sceneContext = nullptr;
+        const EditorViewportCameraState* viewportCamera = nullptr;
+        const EditorViewportCameraAxes* viewportAxes = nullptr;
+        std::uint32_t renderHeight = 0U;
+        std::vector<kb::render::EditorLightWireframeDesc> wireframes;
+    } context{
+        .sceneContext = &sceneContext,
+        .viewportCamera = &viewportCamera,
+        .viewportAxes = &viewportAxes,
+        .renderHeight = renderHeight,
+    };
+
+    sceneContext.Scene().Components().Visitors().ForEachLight(
+        [](kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::LightComponent& light, void* opaque) {
+            auto& context = *static_cast<Context*>(opaque);
+            if (!context.sceneContext->Scene().Components().Visibility().Get(entity).visible) {
+                return;
+            }
+
+            const LightWireframeBasis basis = BasisFromQuat(transform.worldRotation);
+            const kb::scene::Vec3 position{transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z};
+            context.wireframes.push_back(kb::render::EditorLightWireframeDesc{
+                .kind = ToEditorLightWireframeKind(light.kind),
+                .position = {position.x, position.y, position.z},
+                .forward = basis.forward,
+                .right = basis.right,
+                .up = basis.up,
+                .iconRight = ToArray(context.viewportAxes->right),
+                .iconUp = ToArray(context.viewportAxes->up),
+                .color = LightWireframeColor(light),
+                .range = light.kind == kb::scene::LightKind::Directional ? 0.0F : std::max(0.0F, light.range),
+                .outerConeDegrees = light.outerConeDegrees,
+                .iconWorldScale = GizmoScreenSpaceScale(*context.viewportCamera, *context.viewportAxes, position, context.renderHeight) * 0.30F,
+                .selected = IsSelectedEntity(*context.sceneContext, entity),
+            });
+        },
+        &context);
+
+    return context.wireframes;
+}
+
 [[nodiscard]] SceneViewportToolbarEcsStats BuildEcsStats(const EditorSceneContext& sceneContext) {
     const kb::ecs::SystemSchedulerTrace& trace = sceneContext.Scene().Runtime().LastEcsProfilerTrace();
     SceneViewportToolbarEcsStats stats{
@@ -309,6 +437,7 @@ struct SceneViewportRenderProfileDesc {
             .visible = viewportState.GridVisible(),
         },
         .editorGizmo = gizmo,
+        .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
         .lightingConfig = BuildViewportLightingConfig(renderProfile),
