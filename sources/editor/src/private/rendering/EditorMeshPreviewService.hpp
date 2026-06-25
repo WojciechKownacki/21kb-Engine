@@ -8,6 +8,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace kb::assets {
+class AssetManager;
+}
+
 namespace kb::editor {
 
 class EditorMeshPreviewService {
@@ -15,8 +19,11 @@ public:
     [[nodiscard]] const EditorMeshThumbnailImage* ThumbnailFor(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshThumbnailImage* PreviewFor(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshThumbnailImage* PreviewFor(const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings);
+    [[nodiscard]] const EditorMeshThumbnailImage* PreviewFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings);
     [[nodiscard]] const EditorMeshThumbnailStats* StatsFor(const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] const EditorMeshThumbnailStats* StatsFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshValidationResult* ValidationFor(const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] const EditorMeshValidationResult* ValidationFor(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] const EditorMeshThumbnailImage* CachedPreviewFor(const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings) const noexcept;
     [[nodiscard]] const EditorMeshThumbnailStats* CachedStatsFor(const kb::assets::AssetMetadata& metadata) const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
@@ -35,6 +42,7 @@ private:
         };
 
         std::uint64_t contentHash = 0;
+        std::uint64_t materialContentHash = 0;
         EntryState state = EntryState::Failed;
         EditorMeshThumbnailImage thumbnail{};
         EditorMeshThumbnailImage preview{};
@@ -47,8 +55,14 @@ private:
 
     [[nodiscard]] static bool IsMeshAsset(const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] static std::optional<Entry> BuildEntry(const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] static std::optional<Entry> BuildEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] const EditorMeshThumbnailImage* PreviewFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, const EditorMeshPreviewSettings& settings);
+    [[nodiscard]] const EditorMeshThumbnailStats* StatsFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] const EditorMeshValidationResult* ValidationFor(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] Entry& EnsureEntry(const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] Entry& EnsureEntry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata);
     [[nodiscard]] bool EnsureGeometry(const kb::assets::AssetMetadata& metadata, Entry& entry);
+    [[nodiscard]] bool EnsureGeometry(const kb::assets::AssetManager* manager, const kb::assets::AssetMetadata& metadata, Entry& entry);
 
     std::unordered_map<std::uint64_t, Entry> entries_;
     std::uint64_t revision_ = 1;

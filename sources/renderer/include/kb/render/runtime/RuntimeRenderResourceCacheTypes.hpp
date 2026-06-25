@@ -1,9 +1,11 @@
 #pragma once
 
 #include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace kb::render {
 
@@ -31,6 +33,8 @@ struct RuntimeMaterialResource {
     RenderMaterialHandle handle{};
     std::uint64_t contentHash = 0;
     std::uint64_t lastReferencedFrame = 0;
+    RuntimeMaterialResolveStatus status = RuntimeMaterialResolveStatus::Resolved;
+    std::vector<RuntimeMaterialResolveDiagnostic> diagnostics{};
 };
 
 struct RuntimeTextureResource {

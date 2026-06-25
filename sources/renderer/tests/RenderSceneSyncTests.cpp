@@ -1091,6 +1091,23 @@ void RunRendererStoresDefaultSceneLightingConfigTest() {
     Require(renderer.RuntimeResourceStats().defaultEnvironmentLightingSampleCount == 2U, "Renderer runtime stats did not expose the configured scene environment sample count");
 }
 
+void RunSceneLightingPackerAddsEditorPreviewKeyLightTest() {
+    RenderScene scene;
+    SceneRenderer renderer;
+    renderer.SetDefaultLightingConfig(
+        SceneRenderLightingConfig{
+            .editorPreviewKeyLightEnabled = true,
+            .editorPreviewKeyLightDirection = { 0.35F, -0.62F, 0.70F },
+            .editorPreviewKeyLightColor = { 1.0F, 0.96F, 0.90F },
+            .editorPreviewKeyLightIntensity = 1.85F,
+        });
+    const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(scene);
+
+    Require(stats.sceneLightCount == 0U, "Editor preview key light should not be counted as a scene light");
+    Require(stats.submittedForwardLightCount == 1U, "SceneLightingPacker did not submit the editor preview key light");
+    Require(stats.skippedForwardLightCount == 0U, "Editor preview key light should not produce skipped scene light stats");
+}
+
 void RunRendererStoresDefaultPostProcessSettingsTest() {
     Renderer renderer;
     Require(renderer.ConfigurePostProcessChain(PostProcessChain::DefaultSceneChainDesc()), "Renderer rejected default post-process chain before setting bloom options");
@@ -1800,6 +1817,7 @@ void RunRenderSceneSyncTests() {
     RunSceneRendererStoresDefaultLightingConfigTest();
     RunRendererStoresDefaultSceneDrawBudgetTest();
     RunRendererStoresDefaultSceneLightingConfigTest();
+    RunSceneLightingPackerAddsEditorPreviewKeyLightTest();
     RunRendererStoresDefaultPostProcessSettingsTest();
     RunRendererSynchronizesTonemapPostProcessSettingsTest();
     RunSceneExposureMeterEstimatesLightingLuminanceTest();

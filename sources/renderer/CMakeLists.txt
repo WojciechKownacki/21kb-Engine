@@ -31,6 +31,7 @@ add_library(kb_renderer STATIC
     include/kb/render/post/PostProcessRenderTarget.hpp
     include/kb/render/post/SceneExposureMeter.hpp
     include/kb/render/post/SceneDisplayCompositeRenderer.hpp
+    include/kb/render/post/ScenePostProcessSettings.hpp
     include/kb/render/post/ScenePostProcessRenderer.hpp
     include/kb/render/post/ScenePostProcessTargets.hpp
     include/kb/render/resources/RenderHandles.hpp

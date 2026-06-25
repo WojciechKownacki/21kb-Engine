@@ -2,6 +2,7 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/frame/RenderViewportDesc.hpp"
+#include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
 
 #include <bgfx/bgfx.h>
@@ -149,6 +150,7 @@ struct RenderSceneSubmitDesc {
     RenderPostProcessTargetBinding postProcess{};
     RenderFinalCompositeTargetBinding finalComposite{};
     std::optional<SceneRenderCamera> cameraOverride{};
+    std::optional<ScenePostProcessSettings> postProcessSettings{};
     SceneRenderDrawBudget drawBudget{};
     SceneRenderLightingConfig lightingConfig{};
     SceneRenderMeshPassMode meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent;

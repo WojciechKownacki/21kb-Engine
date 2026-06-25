@@ -339,6 +339,9 @@ void RasterizeTriangle(
     const ProjectedVertex& b,
     const ProjectedVertex& c,
     const LightRig& lightRig,
+    const float (&materialBaseColor)[4],
+    const float (&materialEmissiveColor)[3],
+    float materialEmissiveStrength,
     bool normalDebug) {
     const float area = Edge(a, b, c.x, c.y);
     if (std::abs(area) <= 0.0001F) {
@@ -398,9 +401,13 @@ void RasterizeTriangle(
                 const float fill = std::max(0.0F, Dot(normal, lightRig.fillLight));
                 const float rim = std::pow(std::max(0.0F, 1.0F - std::max(0.0F, Dot(normal, viewDir))), 2.2F);
                 const float shade = std::clamp(lightRig.ambient + key * lightRig.keyStrength + fill * lightRig.fillStrength + rim * lightRig.rimStrength, 0.0F, 1.25F);
-                r = ClampByte(118.0F * shade + 42.0F);
-                g = ClampByte(142.0F * shade + 44.0F);
-                bColor = ClampByte(174.0F * shade + 50.0F);
+                const float emissiveStrength = std::clamp(materialEmissiveStrength, 0.0F, 64.0F);
+                const float emissiveR = std::clamp(materialEmissiveColor[0], 0.0F, 1.0F) * emissiveStrength;
+                const float emissiveG = std::clamp(materialEmissiveColor[1], 0.0F, 1.0F) * emissiveStrength;
+                const float emissiveB = std::clamp(materialEmissiveColor[2], 0.0F, 1.0F) * emissiveStrength;
+                r = ClampByte((std::clamp(materialBaseColor[0], 0.0F, 1.0F) * shade + emissiveR) * 188.0F + 36.0F);
+                g = ClampByte((std::clamp(materialBaseColor[1], 0.0F, 1.0F) * shade + emissiveG) * 188.0F + 38.0F);
+                bColor = ClampByte((std::clamp(materialBaseColor[2], 0.0F, 1.0F) * shade + emissiveB) * 188.0F + 42.0F);
             }
 
             depth[offset] = z;
@@ -534,6 +541,9 @@ void RasterizeGeometry(
     std::span<const Vec3> normals,
     std::span<const std::uint32_t> indices,
     const EditorMeshThumbnailStats& stats,
+    const float (&materialBaseColor)[4],
+    const float (&materialEmissiveColor)[3],
+    float materialEmissiveStrength,
     const EditorMeshPreviewSettings& settings) {
     if (positions.empty() || stats.boundsRadius <= 0.0F) {
         return;
@@ -560,7 +570,17 @@ void RasterizeGeometry(
             continue;
         }
         if (!wireOnly) {
-            RasterizeTriangle(image, depth, projected[ia], projected[ib], projected[ic], lightRig, normalDebug);
+            RasterizeTriangle(
+                image,
+                depth,
+                projected[ia],
+                projected[ib],
+                projected[ic],
+                lightRig,
+                materialBaseColor,
+                materialEmissiveColor,
+                materialEmissiveStrength,
+                normalDebug);
         }
     }
 
@@ -591,6 +611,11 @@ EditorMeshPreviewGeometry EditorMeshPreviewRasterizer::ExtractGeometry(const kb:
     geometry.normals = MeshNormals(mesh);
     geometry.indices = MeshIndices(mesh);
     geometry.stats = BuildStats(mesh, geometry.positions);
+    if (!mesh.embeddedMaterials.empty()) {
+        std::copy(std::begin(mesh.embeddedMaterials.front().desc.baseColor), std::end(mesh.embeddedMaterials.front().desc.baseColor), std::begin(geometry.materialBaseColor));
+        std::copy(std::begin(mesh.embeddedMaterials.front().desc.emissiveColor), std::end(mesh.embeddedMaterials.front().desc.emissiveColor), std::begin(geometry.materialEmissiveColor));
+        geometry.materialEmissiveStrength = mesh.embeddedMaterials.front().desc.emissiveStrength;
+    }
     return geometry;
 }
 
@@ -607,7 +632,16 @@ EditorMeshThumbnailImage EditorMeshPreviewRasterizer::Render(
     const EditorMeshPreviewSettings& settings) {
     EditorMeshThumbnailImage image;
     PaintBackground(image, size);
-    RasterizeGeometry(image, geometry.positions, geometry.normals, geometry.indices, geometry.stats, settings);
+    RasterizeGeometry(
+        image,
+        geometry.positions,
+        geometry.normals,
+        geometry.indices,
+        geometry.stats,
+        geometry.materialBaseColor,
+        geometry.materialEmissiveColor,
+        geometry.materialEmissiveStrength,
+        settings);
     return image;
 }
 

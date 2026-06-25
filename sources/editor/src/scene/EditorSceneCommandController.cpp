@@ -30,6 +30,9 @@ EditorSceneCommandController::EditorSceneCommandController(
     EditorHierarchySearchState& hierarchySearch,
     std::optional<std::string>& pendingTransactionLabel,
     std::uint64_t& sceneRenderRevision,
+    std::uint64_t& sceneRenderDirtyBaseRevision,
+    std::vector<std::uint64_t>& sceneRenderDirtyEntityIds,
+    bool& sceneRenderFullDirty,
     bool& sceneDocumentDirty,
     bool& hierarchyRowsDirty) noexcept
     : scene_(scene)
@@ -42,6 +45,9 @@ EditorSceneCommandController::EditorSceneCommandController(
     , hierarchySearch_(hierarchySearch)
     , pendingTransactionLabel_(pendingTransactionLabel)
     , sceneRenderRevision_(sceneRenderRevision)
+    , sceneRenderDirtyBaseRevision_(sceneRenderDirtyBaseRevision)
+    , sceneRenderDirtyEntityIds_(sceneRenderDirtyEntityIds)
+    , sceneRenderFullDirty_(sceneRenderFullDirty)
     , sceneDocumentDirty_(sceneDocumentDirty)
     , hierarchyRowsDirty_(hierarchyRowsDirty) {}
 
@@ -138,6 +144,9 @@ void EditorSceneCommandController::NotifySceneChanged(bool documentChanged) {
     if (sceneRenderRevision_ == 0U) {
         sceneRenderRevision_ = 1U;
     }
+    sceneRenderFullDirty_ = true;
+    sceneRenderDirtyBaseRevision_ = sceneRenderRevision_;
+    sceneRenderDirtyEntityIds_.clear();
     if (documentChanged) {
         sceneDocumentDirty_ = true;
     }

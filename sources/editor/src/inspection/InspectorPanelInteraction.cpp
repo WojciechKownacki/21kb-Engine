@@ -8,6 +8,7 @@
 #include "engine/scene/AudioSourceComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "engine/scene/VisibilityComponent.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorInputInteraction.hpp"
@@ -242,19 +243,31 @@ namespace {
     }
 }
 
+void SelectAssetInProjectFiles(EditorSceneContext& sceneContext, kb::assets::AssetId assetId) {
+    if (!assetId.IsValid()) {
+        return;
+    }
+    if (sceneContext.AssetBrowser().SelectAsset(assetId, sceneContext.Scene().Assets().Manager())) {
+        sceneContext.AssetBrowser().FocusSelection(true);
+    }
+}
+
 [[nodiscard]] bool HandleMeshRendererClick(EditorSceneContext& sceneContext, kb::scene::SceneEntity entity, const InspectorPanelRenderer::Hit& hit) {
     sceneContext.Inspector().EndTextEdit();
     if (hit.kind != InspectorHitKind::TextField) {
         return true;
     }
     if (hit.property == InspectorPropertyId::MeshRendererMaterial) {
-        static_cast<void>(sceneContext.CycleMeshRendererMaterialAsset(entity));
+        const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr) {
+            SelectAssetInProjectFiles(sceneContext, kb::assets::AssetId{ renderer->materialAssetId });
+        }
         return true;
     }
     if (const std::optional<std::uint32_t> slot = MeshRendererMaterialSlotForProperty(hit.property)) {
         const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
-        if (renderer != nullptr && *slot < renderer->materialSlotOverrideCount && renderer->materialSlotAssetIds[*slot] != 0U) {
-            static_cast<void>(sceneContext.SetMeshRendererMaterialSlotAsset(entity, *slot, {}));
+        if (renderer != nullptr && *slot < renderer->materialSlotOverrideCount) {
+            SelectAssetInProjectFiles(sceneContext, kb::assets::AssetId{ renderer->materialSlotAssetIds[*slot] });
         }
         return true;
     }

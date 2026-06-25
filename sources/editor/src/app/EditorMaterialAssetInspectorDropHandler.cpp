@@ -65,8 +65,11 @@ bool EditorMaterialAssetInspectorDropHandler::Drop(
     if (hit.section != InspectorSectionId::MeshRenderer) {
         return false;
     }
-    if (hit.property == InspectorPropertyId::MeshRendererMaterial) {
+    if (hit.property == InspectorPropertyId::MeshRendererMaterial || hit.property == InspectorPropertyId::MeshRendererMaterialPicker) {
         return sceneContext.SetMeshRendererMaterialAsset(entity, assetId);
+    }
+    if (hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker) {
+        return sceneContext.SetMeshRendererMaterialSlotAsset(entity, 0U, assetId);
     }
     if (const std::optional<std::uint32_t> slotIndex = SlotIndexForProperty(hit.property)) {
         return sceneContext.SetMeshRendererMaterialSlotAsset(entity, *slotIndex, assetId);

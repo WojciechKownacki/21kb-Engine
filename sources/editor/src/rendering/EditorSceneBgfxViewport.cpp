@@ -116,6 +116,10 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "missing texture resource";
     case render::SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath:
         return "unresolved material texture path";
+    case render::SceneRenderDiagnosticKind::MissingMaterialAsset:
+        return "missing material asset";
+    case render::SceneRenderDiagnosticKind::InvalidMaterialAsset:
+        return "invalid material asset";
     case render::SceneRenderDiagnosticKind::DroppedInstances:
         return "dropped instances";
     }

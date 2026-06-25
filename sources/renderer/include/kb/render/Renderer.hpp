@@ -67,6 +67,9 @@ public:
         std::uint32_t referencedMaterialAssetCount = 0;
         std::uint32_t referencedTextureAssetCount = 0;
         std::uint32_t unresolvedMaterialTexturePathCount = 0;
+        std::uint32_t defaultMaterialFallbackCount = 0;
+        std::uint32_t errorMaterialFallbackCount = 0;
+        std::uint32_t materialResolverDiagnosticCount = 0;
         std::uint32_t referencedMeshAssetCapacity = 0;
         std::uint32_t referencedMaterialAssetCapacity = 0;
         std::uint32_t referencedTextureAssetCapacity = 0;
@@ -241,6 +244,9 @@ private:
     ScenePostProcessSettings defaultPostProcessSettings_{};
     bool gpuDrivenRuntimeDispatchEnabled_ = true;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;
+    std::uint32_t lastDefaultMaterialFallbackCount_ = 0;
+    std::uint32_t lastErrorMaterialFallbackCount_ = 0;
+    std::uint32_t lastMaterialResolverDiagnosticCount_ = 0;
     std::uint32_t lastCompletedFrame_ = 0;
     std::vector<TemporalViewportState> temporalViewportStates_;
     DisplayConfig displayConfig_{};

@@ -181,7 +181,7 @@ void PaintProjectFilesBase(
 
     ProjectFilesToolbarRenderer::Paint(dc, layout, theme, state);
     ProjectFilesTreeRenderer::Paint(dc, layout, theme, state, treeFolders);
-    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, meshThumbnails, childFolders, assets);
+    ProjectFilesAssetViewRenderer::Paint(dc, layout, theme, state, manager, meshThumbnails, childFolders, assets);
     RECT splitterLine{ layout.tree.right, layout.tree.top, layout.tree.right + 1, layout.bottomBar.top };
     GdiDrawing::FillRectColor(
         dc,
