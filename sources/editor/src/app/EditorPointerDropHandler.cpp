@@ -10,6 +10,7 @@
 #include "app/EditorHierarchyEntityAssetDropHandler.hpp"
 #include "app/EditorHierarchyEntityHierarchyDropHandler.hpp"
 #include "app/EditorMaterialAssetInspectorDropHandler.hpp"
+#include "app/EditorMaterialAssetSceneDropHandler.hpp"
 #include "app/EditorMeshAssetSceneDropHandler.hpp"
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
@@ -42,17 +43,21 @@ namespace {
         return false;
     }
 
-    const std::optional<EditorMaterialTextureSlot> slot = MaterialEditorPanelRenderer::TextureSlotAt(*materialEditor, x, y);
-    if (!slot.has_value()) {
-        return false;
-    }
-
-    const kb::assets::AssetId materialId = sceneContext.AssetBrowser().InspectorAsset();
+    const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
     if (!materialId.IsValid()) {
         return false;
     }
     const kb::assets::AssetMetadata* material = sceneContext.Scene().Assets().Manager().Registry().Find(materialId);
     if (material == nullptr || material->type != "RenderMaterial") {
+        return false;
+    }
+    const std::optional<kb::render::RenderMaterialAssetData> materialAsset = sceneContext.ReadMaterialAsset(materialId);
+    if (!materialAsset.has_value()) {
+        return false;
+    }
+
+    const std::optional<EditorMaterialTextureSlot> slot = MaterialEditorPanelRenderer::TextureSlotAt(*materialEditor, materialAsset->graph, sceneContext, materialId, x, y);
+    if (!slot.has_value()) {
         return false;
     }
     return sceneContext.SetMaterialTextureAsset(materialId, *slot, textureId);
@@ -83,7 +88,8 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsAudioClip && EditorAudioAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsTexture && DropTextureOnMaterialEditor(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
-            || (drag.assetAssignsMaterial && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetId.IsValid() && EditorMaterialAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetId.IsValid() && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);

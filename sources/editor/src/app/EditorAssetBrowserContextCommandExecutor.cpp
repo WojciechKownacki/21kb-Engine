@@ -18,6 +18,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     const std::filesystem::path targetFolder = state.ContextMenuTargetFolder();
 
     switch (command) {
+    case EditorAssetContextCommand::Open:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.OpenMaterialEditorAsset(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::Import: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         const std::vector<std::filesystem::path> files = EditorAssetImportDialog::Open(GetActiveWindow());
@@ -36,6 +41,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::Duplicate:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.DuplicateMaterialAsset(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::CreateMaterialInstance:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.CreateMaterialInstanceAsset(targetAsset);
@@ -80,6 +90,11 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
             return sceneContext.DeleteAssetBrowserFolder(targetFolder);
         }
         return sceneContext.DeleteSelectedAssetBrowserItem();
+    case EditorAssetContextCommand::FindReferences:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.FindMaterialReferences(targetAsset);
+        }
+        return false;
     case EditorAssetContextCommand::Refresh:
         static_cast<void>(sceneContext.Scene().Assets().Discover());
         return true;

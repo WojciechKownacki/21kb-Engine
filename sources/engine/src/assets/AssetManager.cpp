@@ -112,12 +112,28 @@ bool AssetManager::DeleteFolder(const std::filesystem::path& virtualFolder) {
 
 bool AssetManager::RenameAsset(AssetId id, std::string newName) {
     lastError_.clear();
+    const AssetMetadata* existing = registry_.Find(id);
+    if (existing == nullptr) {
+        lastError_ = "Asset is not registered";
+        return false;
+    }
+
+    AssetMetadata renamed = *existing;
+    const std::filesystem::path renamedVirtualPath = renamed.virtualPath.parent_path() / (newName + renamed.virtualPath.extension().string());
     if (!AssetFileOperations::RenameAsset(registry_, mounts_, id, std::move(newName), lastError_)) {
         return false;
     }
 
     static_cast<void>(Unload(id));
-    static_cast<void>(DiscoverMountedAssets());
+    renamed.name = renamedVirtualPath.stem().string();
+    renamed.virtualPath = renamedVirtualPath;
+    renamed.physicalPath = mounts_.Resolve(renamedVirtualPath).value_or(std::filesystem::path{});
+    renamed.contentHash = renamed.physicalPath.empty() ? renamed.contentHash : HashFile(renamed.physicalPath);
+    if (!registry_.Upsert(std::move(renamed))) {
+        lastError_ = "Asset registry could not be updated after rename";
+        return false;
+    }
+    ++revision_;
     return true;
 }
 

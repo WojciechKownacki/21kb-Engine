@@ -35,7 +35,7 @@ namespace {
 }
 
 [[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) {
-    return metadata.type == "RenderMaterial";
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
 [[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) {

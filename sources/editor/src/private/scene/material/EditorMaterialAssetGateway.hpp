@@ -30,6 +30,7 @@ public:
     [[nodiscard]] static bool WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset);
     [[nodiscard]] bool WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset);
     [[nodiscard]] bool WriteNewMaterialInstance(const std::filesystem::path& path, const kb::render::RenderMaterialInstanceAssetData& asset);
+    [[nodiscard]] std::optional<std::filesystem::path> DuplicateMaterial(kb::assets::AssetId id);
     [[nodiscard]] bool Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate);
 
 private:

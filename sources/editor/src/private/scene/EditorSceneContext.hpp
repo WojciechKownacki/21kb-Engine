@@ -18,6 +18,7 @@
 #include "scene/EditorSceneObjectEditTypes.hpp"
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/MaterialEditorState.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -101,6 +102,8 @@ public:
     [[nodiscard]] bool CloseViewportToolbarDropdowns() noexcept;
     [[nodiscard]] InspectorPanelState& Inspector() noexcept;
     [[nodiscard]] const InspectorPanelState& Inspector() const noexcept;
+    [[nodiscard]] MaterialEditorState& MaterialEditor() noexcept;
+    [[nodiscard]] const MaterialEditorState& MaterialEditor() const noexcept;
     [[nodiscard]] EditorConsoleState& Console() noexcept;
     [[nodiscard]] const EditorConsoleState& Console() const noexcept;
     [[nodiscard]] EditorSceneGizmoState& Gizmo() noexcept;
@@ -220,9 +223,13 @@ public:
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialInstanceAsset(kb::assets::AssetId parentMaterial);
+    [[nodiscard]] bool DuplicateMaterialAsset(kb::assets::AssetId materialAssetId);
+    [[nodiscard]] bool FindMaterialReferences(kb::assets::AssetId materialAssetId);
     [[nodiscard]] bool ExtractEmbeddedMaterials(kb::assets::AssetId meshAssetId);
     [[nodiscard]] bool CreateLuaScriptAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool OpenLuaScript(kb::assets::AssetId id);
+    [[nodiscard]] bool OpenMaterialEditorAsset(kb::assets::AssetId id);
+    void CloseMaterialEditorAsset() noexcept;
     [[nodiscard]] bool HasDirtyMaterialAssetEdit() const noexcept;
     [[nodiscard]] bool PrepareMaterialAssetSelectionChange(kb::assets::AssetId nextAsset);
     [[nodiscard]] bool PrepareMaterialEditorClose(std::string_view reason);
@@ -301,6 +308,7 @@ public:
     [[nodiscard]] kb::scene::SceneEntity CreateMeshAssetEntity(kb::assets::AssetId assetId, kb::scene::Vec3 position, bool logCreation);
     [[nodiscard]] bool AddBehaviourAssetToEntity(kb::assets::AssetId assetId, kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialAsset(kb::scene::SceneEntity entity, kb::assets::AssetId assetId);
+    [[nodiscard]] bool ApplyMaterialToSelectedMeshRenderers(kb::assets::AssetId assetId);
     [[nodiscard]] bool CycleMeshRendererMaterialAsset(kb::scene::SceneEntity entity);
     [[nodiscard]] bool SetMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex, kb::assets::AssetId assetId);
     [[nodiscard]] bool CycleMeshRendererMaterialSlotAsset(kb::scene::SceneEntity entity, std::uint32_t slotIndex);
@@ -358,6 +366,7 @@ private:
     EditorConsoleState console_;
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
+    MaterialEditorState materialEditor_;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
@@ -377,7 +386,6 @@ private:
     kb::assets::AssetId activeMaterialEditAsset_{};
     InspectorPropertyId activeMaterialEditProperty_ = InspectorPropertyId::None;
     std::optional<kb::render::RenderMaterialAssetData> activeMaterialEditBefore_;
-    std::uint32_t selectedMaterialGraphNodeId_ = 0U;
     struct MaterialGraphNodeViewOffset {
         kb::assets::AssetId assetId{};
         std::uint32_t nodeId = 0U;

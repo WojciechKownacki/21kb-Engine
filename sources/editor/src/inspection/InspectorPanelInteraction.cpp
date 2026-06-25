@@ -252,7 +252,10 @@ namespace {
         return true;
     }
     if (const std::optional<std::uint32_t> slot = MeshRendererMaterialSlotForProperty(hit.property)) {
-        static_cast<void>(sceneContext.CycleMeshRendererMaterialSlotAsset(entity, *slot));
+        const kb::scene::MeshRendererComponent* renderer = sceneContext.Scene().Components().MeshRenderers().TryGet(entity);
+        if (renderer != nullptr && *slot < renderer->materialSlotOverrideCount && renderer->materialSlotAssetIds[*slot] != 0U) {
+            static_cast<void>(sceneContext.SetMeshRendererMaterialSlotAsset(entity, *slot, {}));
+        }
         return true;
     }
     return true;

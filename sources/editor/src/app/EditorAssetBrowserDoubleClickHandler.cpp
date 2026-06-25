@@ -69,8 +69,9 @@ EditorAssetBrowserDoubleClickResult EditorAssetBrowserDoubleClickHandler::Handle
                 : EditorAssetBrowserDoubleClickResult::None;
         }
         if (metadata->type == "RenderMaterial" || metadata->type == "RenderMaterialInstance") {
-            // Double-clicking a material document selects it for inspection so the
-            // Material Editor panel can show either the source material or an instance.
+            if (!sceneContext.OpenMaterialEditorAsset(metadata->id)) {
+                return EditorAssetBrowserDoubleClickResult::None;
+            }
             return HandleMaterialAssetDoubleClick(*metadata, state, manager);
         }
         if (!IsSceneDocumentAsset(*metadata)) {

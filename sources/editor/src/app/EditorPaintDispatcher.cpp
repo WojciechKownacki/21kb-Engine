@@ -103,8 +103,7 @@ namespace {
     };
 }
 
-[[nodiscard]] const kb::assets::AssetMetadata* SelectedMaterialMetadata(const EditorSceneContext& sceneContext) noexcept {
-    const kb::assets::AssetId assetId = sceneContext.AssetBrowser().InspectorAsset();
+[[nodiscard]] const kb::assets::AssetMetadata* MaterialMetadataForAsset(const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept {
     if (!assetId.IsValid()) {
         return nullptr;
     }
@@ -137,7 +136,9 @@ namespace {
     if (!preview.has_value() || (!forcePresent && sceneViewport.IsHostSurfaceVisible(host, viewportKey))) {
         return false;
     }
-    const kb::assets::AssetMetadata* metadata = SelectedMaterialMetadata(sceneContext);
+    const kb::assets::AssetMetadata* metadata = MaterialMetadataForAsset(
+        sceneContext,
+        viewportKey == kMaterialEditorPreviewViewportKey ? sceneContext.MaterialEditor().OpenAssetId() : sceneContext.AssetBrowser().InspectorAsset());
     if (metadata == nullptr) {
         return false;
     }

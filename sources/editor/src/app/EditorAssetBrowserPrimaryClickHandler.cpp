@@ -210,9 +210,6 @@ bool EditorAssetBrowserPrimaryClickHandler::HandlePointerDown(
     }
     case EditorAssetBrowserHitKind::Asset: {
         const std::optional<kb::assets::AssetMetadata> metadata = EditorAssetBrowserHitPayloadResolver::AssetMetadataAt(hit, state, manager);
-        if (metadata.has_value() && !sceneContext.PrepareMaterialAssetSelectionChange(metadata->id)) {
-            return true;
-        }
         PrepareBrowserAction(state);
         // Ctrl/Shift multi-select stays on press. A plain click defers selection
         // to pointer-up, so press-and-drag (e.g. dropping a script onto an object)

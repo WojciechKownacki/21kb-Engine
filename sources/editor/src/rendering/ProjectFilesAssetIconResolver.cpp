@@ -37,6 +37,10 @@ bool ProjectFilesAssetIconResolver::IsMesh(const kb::assets::AssetMetadata& meta
     return metadata.type == "RenderMesh" || metadata.importCategory == "Mesh";
 }
 
+bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+}
+
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
     if (IsPrefab(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(106, 177, 255) : RGB(68, 145, 236), .strokeWidth = 2 };
@@ -49,6 +53,9 @@ ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::A
     }
     if (IsInputMapping(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::RectangleGroup, .color = selected ? RGB(198, 240, 220) : RGB(108, 204, 164), .strokeWidth = 2 };
+    }
+    if (IsMaterial(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(242, 220, 176) : RGB(206, 172, 118), .strokeWidth = 2 };
     }
     return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = AssetNeutral(selected), .strokeWidth = 2 };
 }
