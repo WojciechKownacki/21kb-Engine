@@ -17,8 +17,9 @@ namespace {
 
 constexpr float kDefaultPickHalfExtent = 1.0F;
 constexpr float kRayAabbParallelEpsilon = 0.00001F;
-constexpr float kLightWirePickThresholdPixels = 8.0F;
+constexpr float kLightWirePickThresholdPixels = 16.0F;
 constexpr float kLightWirePickTieEpsilon = 0.25F;
+constexpr float kLightIconPickRadiusPixels = 30.0F;
 constexpr float kPi = 3.14159265358979323846F;
 
 struct ScreenPoint {
@@ -31,6 +32,7 @@ struct LightPickCandidate {
     float distance = 0.0F;
     float score = 0.0F;
     float radius = 0.0F;
+    bool blocksMesh = false;
 
     [[nodiscard]] bool IsValid() const noexcept {
         return entity.IsValid();
@@ -107,12 +109,11 @@ struct RectPickContext {
 }
 
 [[nodiscard]] kb::scene::Vec3 ResolveWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
-    const bool hasWorldPosition = transform.worldPosition.x != 0.0F || transform.worldPosition.y != 0.0F || transform.worldPosition.z != 0.0F;
-    return hasWorldPosition ? transform.worldPosition : transform.localPosition;
+    return transform.worldDirty ? transform.localPosition : transform.worldPosition;
 }
 
 [[nodiscard]] kb::scene::Quat ResolveWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
-    return Normalize(transform.worldRotation);
+    return Normalize(transform.worldDirty ? transform.localRotation : transform.worldRotation);
 }
 
 [[nodiscard]] float Distance(ScreenPoint lhs, ScreenPoint rhs) noexcept {
@@ -144,19 +145,22 @@ struct RectPickContext {
     if (!current.IsValid()) {
         return true;
     }
+    if (candidate.radius + kLightWirePickTieEpsilon < current.radius) {
+        return true;
+    }
+    if (current.radius + kLightWirePickTieEpsilon < candidate.radius) {
+        return false;
+    }
     if (candidate.score + kLightWirePickTieEpsilon < current.score) {
         return true;
     }
     if (std::abs(candidate.score - current.score) <= kLightWirePickTieEpsilon) {
-        if (candidate.radius + kLightWirePickTieEpsilon < current.radius) {
-            return true;
-        }
         return candidate.distance < current.distance;
     }
     return false;
 }
 
-void ConsiderLightPick(NearestPickContext& pick, kb::scene::SceneEntity entity, float score, float radius, float distance) {
+void ConsiderLightPick(NearestPickContext& pick, kb::scene::SceneEntity entity, float score, float radius, float distance, bool blocksMesh) {
     if (score > kLightWirePickThresholdPixels || radius <= 0.0F || distance <= 0.0F) {
         return;
     }
@@ -166,6 +170,42 @@ void ConsiderLightPick(NearestPickContext& pick, kb::scene::SceneEntity entity, 
         .distance = distance,
         .score = score,
         .radius = radius,
+        .blocksMesh = blocksMesh,
+    };
+    if (BetterLightPick(candidate, pick.lightPick)) {
+        pick.lightPick = candidate;
+    }
+}
+
+void ConsiderLightVolumePick(NearestPickContext& pick, kb::scene::SceneEntity entity, ScreenPoint center, float radius, float distance) {
+    if (Distance(pick.mouse, center) > radius || radius <= 0.0F || distance <= 0.0F) {
+        return;
+    }
+
+    LightPickCandidate candidate{
+        .entity = entity,
+        .distance = distance,
+        .score = 0.0F,
+        .radius = radius,
+        .blocksMesh = false,
+    };
+    if (BetterLightPick(candidate, pick.lightPick)) {
+        pick.lightPick = candidate;
+    }
+}
+
+void ConsiderLightIconPick(NearestPickContext& pick, kb::scene::SceneEntity entity, ScreenPoint center, float tieRadius, float distance) {
+    const float score = Distance(pick.mouse, center);
+    if (score > kLightIconPickRadiusPixels || distance <= 0.0F) {
+        return;
+    }
+
+    LightPickCandidate candidate{
+        .entity = entity,
+        .distance = distance,
+        .score = score,
+        .radius = std::max(1.0F, tieRadius),
+        .blocksMesh = true,
     };
     if (BetterLightPick(candidate, pick.lightPick)) {
         pick.lightPick = candidate;
@@ -248,9 +288,6 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
     if (pick.scene == nullptr || pick.camera == nullptr || !pick.scene->Components().Visibility().Get(entity).visible) {
         return;
     }
-    if (light.kind == kb::scene::LightKind::Directional || light.range <= 0.0F) {
-        return;
-    }
 
     const kb::scene::Vec3 position = ResolveWorldPosition(transform);
     const EditorViewportCameraAxes cameraAxes = pick.camera->Axes();
@@ -264,6 +301,11 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
         return;
     }
 
+    if (light.kind == kb::scene::LightKind::Directional || light.range <= 0.0F) {
+        ConsiderLightIconPick(pick, entity, center, kLightIconPickRadiusPixels, cameraDistance);
+        return;
+    }
+
     if (light.kind == kb::scene::LightKind::Point) {
         ScreenPoint right{};
         ScreenPoint up{};
@@ -273,8 +315,10 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
         }
 
         const float screenRadius = std::max(Distance(center, right), Distance(center, up));
-        const float score = std::abs(Distance(pick.mouse, center) - screenRadius);
-        ConsiderLightPick(pick, entity, score, screenRadius, cameraDistance);
+        ConsiderLightIconPick(pick, entity, center, screenRadius, cameraDistance);
+        const float wireScore = std::abs(Distance(pick.mouse, center) - screenRadius);
+        ConsiderLightPick(pick, entity, wireScore, screenRadius, cameraDistance, true);
+        ConsiderLightVolumePick(pick, entity, center, screenRadius, cameraDistance);
         return;
     }
 
@@ -297,6 +341,7 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
     }
 
     const float screenRadius = std::max(Distance(ringCenter, ringRight), Distance(ringCenter, ringUp));
+    ConsiderLightIconPick(pick, entity, center, screenRadius, cameraDistance);
     float score = std::abs(Distance(pick.mouse, ringCenter) - screenRadius);
     for (std::uint32_t i = 0; i < 4U; ++i) {
         const float angle = static_cast<float>(i) * kPi * 0.5F + kPi * 0.25F;
@@ -310,7 +355,7 @@ void PickNearestLightVisitor(kb::scene::SceneEntity entity, const kb::scene::Tra
             score = std::min(score, SegmentDistance(pick.mouse, center, rimScreen));
         }
     }
-    ConsiderLightPick(pick, entity, score, screenRadius, cameraDistance);
+    ConsiderLightPick(pick, entity, score, screenRadius, cameraDistance, true);
 }
 
 void PickRectVisitor(kb::scene::SceneEntity entity, const kb::scene::TransformComponent& transform, const kb::scene::MeshRendererComponent& renderer, void* context) {
@@ -351,7 +396,7 @@ EditorSceneViewportPickResult EditorSceneViewportMeshPicker::PickNearest(
     };
     scene.Components().Visitors().ForEachMeshRenderer(&PickNearestVisitor, &context);
     scene.Components().Visitors().ForEachLight(&PickNearestLightVisitor, &context);
-    if (context.lightPick.IsValid()) {
+    if (context.lightPick.IsValid() && (context.lightPick.blocksMesh || !context.result.IsValid())) {
         return EditorSceneViewportPickResult{
             .entity = context.lightPick.entity,
             .distance = context.lightPick.distance,
