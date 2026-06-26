@@ -185,5 +185,6 @@ void main()
         }
     }
     vec3 emissive = texture2D(s_emissive, v_texcoord0).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
-    gl_FragColor = vec4(lighting + emissive, albedo.a);
+    float outputAlpha = u_materialFlags.x < 0.5 ? 1.0 : albedo.a;
+    gl_FragColor = vec4(lighting + emissive, outputAlpha);
 }
