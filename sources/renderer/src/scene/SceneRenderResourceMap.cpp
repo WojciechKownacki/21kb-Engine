@@ -21,7 +21,28 @@ void EraseHandle(std::unordered_map<std::uint64_t, Handle>& bindings, Handle han
     }
 }
 
+void EraseTextureHandle(
+    std::unordered_map<SceneRenderResourceMap::TextureBindingKey, RenderTextureHandle, SceneRenderResourceMap::TextureBindingKeyHash>& bindings,
+    RenderTextureHandle handle) noexcept {
+    if (!handle.IsValid()) {
+        return;
+    }
+
+    for (auto it = bindings.begin(); it != bindings.end();) {
+        if (it->second == handle) {
+            it = bindings.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 } // namespace
+
+std::size_t SceneRenderResourceMap::TextureBindingKeyHash::operator()(TextureBindingKey key) const noexcept {
+    const std::uint64_t color = static_cast<std::uint64_t>(key.colorSpace);
+    return static_cast<std::size_t>(key.assetId ^ (color + 0x9e3779b97f4a7c15ULL + (key.assetId << 6U) + (key.assetId >> 2U)));
+}
 
 void SceneRenderResourceMap::Reserve(const SceneRenderResourceMapReserveDesc& desc) {
     if (desc.meshBindings > 0U) {
@@ -76,22 +97,34 @@ RenderMaterialHandle SceneRenderResourceMap::ResolveMaterial(std::uint64_t mater
 }
 
 void SceneRenderResourceMap::BindTexture(std::uint64_t textureAssetId, RenderTextureHandle handle) {
+    BindTexture(textureAssetId, RenderTextureColorSpace::Linear, handle);
+}
+
+void SceneRenderResourceMap::BindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace, RenderTextureHandle handle) {
     if (textureAssetId == 0U || !handle.IsValid()) {
         return;
     }
-    textures_[textureAssetId] = handle;
+    textures_[TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace}] = handle;
 }
 
 void SceneRenderResourceMap::UnbindTexture(std::uint64_t textureAssetId) noexcept {
-    textures_.erase(textureAssetId);
+    UnbindTexture(textureAssetId, RenderTextureColorSpace::Linear);
+}
+
+void SceneRenderResourceMap::UnbindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept {
+    textures_.erase(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace});
 }
 
 void SceneRenderResourceMap::UnbindTextureHandle(RenderTextureHandle handle) noexcept {
-    EraseHandle(textures_, handle);
+    EraseTextureHandle(textures_, handle);
 }
 
 RenderTextureHandle SceneRenderResourceMap::ResolveTexture(std::uint64_t textureAssetId) const noexcept {
-    const auto it = textures_.find(textureAssetId);
+    return ResolveTexture(textureAssetId, RenderTextureColorSpace::Linear);
+}
+
+RenderTextureHandle SceneRenderResourceMap::ResolveTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) const noexcept {
+    const auto it = textures_.find(TextureBindingKey{.assetId = textureAssetId, .colorSpace = colorSpace});
     return it == textures_.end() ? RenderTextureHandle{} : it->second;
 }
 

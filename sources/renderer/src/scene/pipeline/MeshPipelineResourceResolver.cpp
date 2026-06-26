@@ -155,7 +155,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         return;
     }
 
-    auto validateTexture = [&](RenderTextureHandle directHandle, std::uint64_t textureAssetId) {
+    auto validateTexture = [&](RenderTextureHandle directHandle, std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) {
         if (directHandle.IsValid()) {
             if (resources.FindTexture(directHandle) == nullptr) {
                 ++stats.missingTextureResourceCount;
@@ -168,7 +168,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
             return;
         }
 
-        const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId);
+        const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
         if (!textureHandle.IsValid()) {
             ++stats.missingTextureBindingCount;
             EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureBinding, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
@@ -181,11 +181,11 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         }
     };
 
-    validateTexture(material->albedoTexture, material->albedoTextureAssetId);
-    validateTexture(material->normalTexture, material->normalTextureAssetId);
-    validateTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId);
-    validateTexture(material->occlusionTexture, material->occlusionTextureAssetId);
-    validateTexture(material->emissiveTexture, material->emissiveTextureAssetId);
+    validateTexture(material->albedoTexture, material->albedoTextureAssetId, RenderTextureColorSpace::Srgb);
+    validateTexture(material->normalTexture, material->normalTextureAssetId, RenderTextureColorSpace::Linear);
+    validateTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear);
+    validateTexture(material->occlusionTexture, material->occlusionTextureAssetId, RenderTextureColorSpace::Linear);
+    validateTexture(material->emissiveTexture, material->emissiveTextureAssetId, RenderTextureColorSpace::Srgb);
 }
 
 std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
