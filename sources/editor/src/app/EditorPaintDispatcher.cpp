@@ -11,6 +11,7 @@
 #include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/MaterialPreviewViewportKeys.hpp"
+#include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "rendering/ScenePanelContentRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
@@ -67,16 +68,7 @@ namespace {
 }
 
 [[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig() noexcept {
-    kb::render::SceneRenderLightingConfig lighting{};
-    lighting.ambientColor = {0.30F, 0.31F, 0.33F};
-    lighting.ambientIntensity = 0.75F;
-    lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;
-    lighting.environmentZenithColor = {0.38F, 0.42F, 0.48F};
-    lighting.environmentGroundColor = {0.16F, 0.15F, 0.14F};
-    lighting.environmentDiffuseIntensity = 0.55F;
-    lighting.environmentSpecularIntensity = 0.04F;
-    lighting.shadowsEnabled = false;
-    return lighting;
+    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
 }
 
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
@@ -91,8 +83,9 @@ namespace {
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .lightingConfig = BuildMaterialPreviewLightingConfig(),
+        .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(),
         .shadowPassEnabled = false,
-        .postProcessEnabled = false,
+        .postProcessEnabled = true,
         .selectionMaskEnabled = false,
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,

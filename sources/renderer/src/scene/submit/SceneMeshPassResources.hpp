@@ -55,7 +55,6 @@ private:
     bgfx::UniformHandle shadowParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackWhiteTexture_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle fallbackBlackTexture_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

@@ -51,6 +51,25 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
+[[nodiscard]] bool PassReportsDisabledAlphaBlend(MeshPassType pass) noexcept {
+    return pass == MeshPassType::BaseOpaque;
+}
+
+[[nodiscard]] bool PassDisablesAlphaBlend(MeshPassType pass) noexcept {
+    switch (pass) {
+    case MeshPassType::Depth:
+    case MeshPassType::BaseOpaque:
+    case MeshPassType::BaseTransparent:
+    case MeshPassType::ShadowDepth:
+        return true;
+    case MeshPassType::SelectionId:
+    case MeshPassType::EditorSelection:
+    case MeshPassType::Gizmo:
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, MeshPipelineBuildResult& result) noexcept {
@@ -119,6 +138,12 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                 if (validateResources) {
                     materialResource = MeshPipelineResourceResolver::ResolveMaterialOrFallback(instance, materialAssetId, *desc.resources, *desc.resourceMap, materialHandle, result.stats, desc.diagnostics);
                     MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
+                }
+                if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
+                    if (PassReportsDisabledAlphaBlend(desc.pass)) {
+                        EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
+                    }
+                    continue;
                 }
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds)) {
                     continue;

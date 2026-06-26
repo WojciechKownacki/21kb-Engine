@@ -560,11 +560,30 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
 
     DrawGraphOverlay(dc, layout.detailsPanel, RGB(22, 25, 29), RGB(54, 61, 71));
     DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 8, layout.detailsPanel.right - 10, layout.detailsPanel.top + 30 }, rows.title.c_str(), RGB(235, 238, 243), 12, FW_SEMIBOLD);
-    DrawText(dc, RECT{ layout.detailsPanel.left + 10, layout.detailsPanel.top + 34, layout.detailsPanel.right - 10, layout.detailsPanel.top + 54 }, "Parameters", RGB(126, 201, 143), 10, FW_SEMIBOLD);
 
-    int y = layout.detailsPanel.top + 56;
+    int y = layout.detailsPanel.top + 34;
     const int rowHeight = 18;
     const int bottom = layout.detailsPanel.bottom - 10;
+    if (!rows.debugChannelRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Debug Channels", RGB(239, 203, 127), 10, FW_SEMIBOLD);
+        y += 22;
+        std::size_t debugCount = 0U;
+        for (const MaterialDebugChannelRow& row : rows.debugChannelRows) {
+            if (y + rowHeight > bottom || debugCount >= 6U) {
+                break;
+            }
+            const std::string text = row.label + "  " + row.value;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(224, 218, 203), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++debugCount;
+        }
+        y += 6;
+    }
+
+    if (y + 20 <= bottom) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parameters", RGB(126, 201, 143), 10, FW_SEMIBOLD);
+        y += 22;
+    }
     std::size_t parameterCount = 0U;
     for (const std::string& row : rows.parameterRows) {
         if (y + rowHeight > bottom || parameterCount >= 7U) {
@@ -612,10 +631,16 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     DrawAssetBadge(dc, layout, metadata, *document);
     DrawDiagnosticsPanel(dc, layout, *document);
     if (sceneContext.MaterialEditor().InfoPanelVisible()) {
+        MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRows(
+            kb::render::GetBuiltInPbrMaterialTypeSchema(),
+            sceneContext.MaterialEditor().SelectedNodeId());
+        if (document->material.has_value()) {
+            details.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(document->material->desc, metadata.id.value);
+        }
         DrawDetailsPanel(
             dc,
             layout,
-            MaterialEditorPanelRenderer::DetailsRows(kb::render::GetBuiltInPbrMaterialTypeSchema(), sceneContext.MaterialEditor().SelectedNodeId()));
+            details);
     }
 }
 

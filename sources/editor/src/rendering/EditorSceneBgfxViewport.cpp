@@ -120,6 +120,8 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "missing material asset";
     case render::SceneRenderDiagnosticKind::InvalidMaterialAsset:
         return "invalid material asset";
+    case render::SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend:
+        return "alpha blend material disabled until transparent pass is ready";
     case render::SceneRenderDiagnosticKind::DroppedInstances:
         return "dropped instances";
     }

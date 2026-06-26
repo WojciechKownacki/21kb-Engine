@@ -328,6 +328,7 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     UnresolvedMaterialTexturePath,
     MissingMaterialAsset,
     InvalidMaterialAsset,
+    UnsupportedMaterialAlphaBlend,
     DroppedInstances,
 };
 

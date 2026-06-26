@@ -68,7 +68,6 @@ bool SceneMeshPassResources::Initialize() {
     shadowParamsUniform_ = bgfx::createUniform("u_shadowParams", bgfx::UniformType::Vec4);
     fallbackWhiteTexture_ = CreateFallbackWhiteTexture();
     fallbackNormalTexture_ = CreateFallbackTexture(0xFFFF'8080U);
-    fallbackBlackTexture_ = CreateFallbackTexture(0xFF00'0000U);
     if (!IsInitialized()) {
         Shutdown();
         return false;
@@ -78,10 +77,6 @@ bool SceneMeshPassResources::Initialize() {
 }
 
 void SceneMeshPassResources::Shutdown() {
-    if (bgfx::isValid(fallbackBlackTexture_)) {
-        bgfx::destroy(fallbackBlackTexture_);
-        fallbackBlackTexture_ = BGFX_INVALID_HANDLE;
-    }
     if (bgfx::isValid(fallbackNormalTexture_)) {
         bgfx::destroy(fallbackNormalTexture_);
         fallbackNormalTexture_ = BGFX_INVALID_HANDLE;
@@ -214,8 +209,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(shadowViewProjUniform_) &&
         bgfx::isValid(shadowParamsUniform_) &&
         bgfx::isValid(fallbackWhiteTexture_) &&
-        bgfx::isValid(fallbackNormalTexture_) &&
-        bgfx::isValid(fallbackBlackTexture_);
+        bgfx::isValid(fallbackNormalTexture_);
 }
 
 bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& desc) const noexcept {
@@ -229,7 +223,6 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     const SceneMeshMaterialBindingFallbacks fallbacks{
         .whiteTexture = fallbackWhiteTexture_,
         .normalTexture = fallbackNormalTexture_,
-        .blackTexture = fallbackBlackTexture_,
     };
     if (desc.pass == MeshPassType::ShadowDepth) {
         const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(

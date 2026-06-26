@@ -27,7 +27,6 @@ struct SceneMeshShadowMaterialBinding {
 struct SceneMeshMaterialBindingFallbacks {
     bgfx::TextureHandle whiteTexture = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle normalTexture = BGFX_INVALID_HANDLE;
-    bgfx::TextureHandle blackTexture = BGFX_INVALID_HANDLE;
 };
 
 class SceneMeshMaterialBindingResolver {

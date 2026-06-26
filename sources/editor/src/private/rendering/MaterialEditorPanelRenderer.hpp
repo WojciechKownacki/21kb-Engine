@@ -4,6 +4,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
+#include "inspection/MaterialAssetFormatter.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #if defined(_WIN32)
@@ -40,6 +41,7 @@ struct MaterialEditorPanelDiagnosticRows {
 
 struct MaterialEditorPanelDetailsRows {
     std::string title;
+    std::vector<MaterialDebugChannelRow> debugChannelRows;
     std::vector<std::string> parameterRows;
     std::vector<std::string> textureSlotRows;
 };
