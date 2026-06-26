@@ -152,13 +152,14 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
 
 } // namespace
 
-RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory) const noexcept {
+RenderTextureDesc RenderTextureAssetData::MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace colorSpace) const noexcept {
     return RenderTextureDesc{
         .width = width,
         .height = height,
         .format = bgfx::TextureFormat::RGBA8,
-        .flags = BGFX_SAMPLER_NONE,
+        .flags = BGFX_SAMPLER_NONE | (colorSpace == RenderTextureColorSpace::Srgb ? BGFX_TEXTURE_SRGB : 0ULL),
         .memory = memory,
+        .colorSpace = colorSpace,
     };
 }
 

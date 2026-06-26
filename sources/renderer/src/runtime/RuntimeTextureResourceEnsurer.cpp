@@ -19,14 +19,15 @@ void RuntimeTextureResourceEnsurer::Ensure(
     RuntimeTextureResourceMap& textures) {
     kb::assets::AssetManager& manager = context.scene.Assets().Manager();
 
-    auto ensureTexture = [&](std::uint64_t textureAssetId) {
+    auto ensureTexture = [&](std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) {
         if (textureAssetId == 0U) {
             return;
         }
 
-        const RuntimeAssetKey runtimeKey{
+        const RuntimeTextureAssetKey runtimeKey{
             .sceneId = context.scene.Id(),
             .assetId = textureAssetId,
+            .colorSpace = colorSpace,
         };
         context.frameReferences.MarkTexture(runtimeKey);
 
@@ -40,7 +41,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 static_cast<void>(manager.Unload(assetId));
                 textures.erase(cacheIt);
             } else {
-                context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId);
+                context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             }
             return;
         }
@@ -48,7 +49,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
         if (cacheIt != textures.end() && cacheIt->second.contentHash == metadata->contentHash && context.sceneRenderer.Resources().ContainsTexture(cacheIt->second.handle)) {
             RuntimeTextureResource& cached = cacheIt->second;
             cached.lastReferencedFrame = context.currentFrame;
-            context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, cached.handle);
+            context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, cached.handle);
             return;
         }
 
@@ -61,14 +62,14 @@ void RuntimeTextureResourceEnsurer::Ensure(
 
         const kb::assets::AssetHandle<RenderTextureAssetData> asset = manager.Load<RenderTextureAssetData>(assetId);
         if (!asset.IsLoaded() || asset->rgba8.empty()) {
-            context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId);
+            context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
         }
 
         const bgfx::Memory* memory = bgfx::copy(asset->rgba8.data(), static_cast<std::uint32_t>(asset->rgba8.size()));
-        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture2D(asset->MakeDesc(memory));
+        const RenderTextureHandle handle = context.sceneRenderer.Resources().RegisterTexture2D(asset->MakeDesc(memory, colorSpace));
         if (!handle.IsValid()) {
-            context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId);
+            context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             static_cast<void>(manager.Unload(assetId));
             return;
         }
@@ -78,7 +79,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
             .contentHash = metadata->contentHash,
             .lastReferencedFrame = context.currentFrame,
         };
-        context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, handle);
+        context.sceneRenderer.ResourceMap().BindTexture(textureAssetId, colorSpace, handle);
     };
 
     for (const RuntimeAssetKey& materialKey : context.frameReferences.Materials()) {
@@ -97,11 +98,11 @@ void RuntimeTextureResourceEnsurer::Ensure(
         if (material == nullptr) {
             continue;
         }
-        ensureTexture(material->albedoTextureAssetId);
-        ensureTexture(material->normalTextureAssetId);
-        ensureTexture(material->metallicRoughnessTextureAssetId);
-        ensureTexture(material->occlusionTextureAssetId);
-        ensureTexture(material->emissiveTextureAssetId);
+        ensureTexture(material->albedoTextureAssetId, RenderTextureColorSpace::Srgb);
+        ensureTexture(material->normalTextureAssetId, RenderTextureColorSpace::Linear);
+        ensureTexture(material->metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear);
+        ensureTexture(material->occlusionTextureAssetId, RenderTextureColorSpace::Linear);
+        ensureTexture(material->emissiveTextureAssetId, RenderTextureColorSpace::Srgb);
     }
 }
 

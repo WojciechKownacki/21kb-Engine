@@ -29,11 +29,11 @@ public:
 
     void MarkMesh(RuntimeAssetKey key);
     void MarkMaterial(RuntimeAssetKey key);
-    void MarkTexture(RuntimeAssetKey key);
+    void MarkTexture(RuntimeTextureAssetKey key);
 
     [[nodiscard]] bool ContainsMesh(RuntimeAssetKey key) const;
     [[nodiscard]] bool ContainsMaterial(RuntimeAssetKey key) const;
-    [[nodiscard]] bool ContainsTexture(RuntimeAssetKey key) const;
+    [[nodiscard]] bool ContainsTexture(RuntimeTextureAssetKey key) const;
 
     [[nodiscard]] const std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash>& Materials() const noexcept;
     [[nodiscard]] RuntimeFrameResourceReferenceStats Stats() const noexcept;
@@ -41,7 +41,7 @@ public:
 private:
     std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash> meshes_;
     std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash> materials_;
-    std::unordered_set<RuntimeAssetKey, RuntimeAssetKeyHash> textures_;
+    std::unordered_set<RuntimeTextureAssetKey, RuntimeTextureAssetKeyHash> textures_;
 };
 
 } // namespace kb::render

@@ -28,7 +28,7 @@ void RuntimeFrameResourceReferences::MarkMaterial(RuntimeAssetKey key) {
     materials_.insert(key);
 }
 
-void RuntimeFrameResourceReferences::MarkTexture(RuntimeAssetKey key) {
+void RuntimeFrameResourceReferences::MarkTexture(RuntimeTextureAssetKey key) {
     textures_.insert(key);
 }
 
@@ -40,7 +40,7 @@ bool RuntimeFrameResourceReferences::ContainsMaterial(RuntimeAssetKey key) const
     return materials_.contains(key);
 }
 
-bool RuntimeFrameResourceReferences::ContainsTexture(RuntimeAssetKey key) const {
+bool RuntimeFrameResourceReferences::ContainsTexture(RuntimeTextureAssetKey key) const {
     return textures_.contains(key);
 }
 

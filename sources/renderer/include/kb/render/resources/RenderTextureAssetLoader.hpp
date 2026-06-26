@@ -17,7 +17,7 @@ struct RenderTextureAssetData {
     std::uint16_t height = 0;
     std::vector<std::uint8_t> rgba8;
 
-    [[nodiscard]] RenderTextureDesc MakeDesc(const bgfx::Memory* memory) const noexcept;
+    [[nodiscard]] RenderTextureDesc MakeDesc(const bgfx::Memory* memory, RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear) const noexcept;
 };
 
 class RenderTextureAssetLoader final : public kb::assets::IAssetLoader {

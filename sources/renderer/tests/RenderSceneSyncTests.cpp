@@ -363,6 +363,9 @@ void RunRenderResourceMapRequiresExplicitBindingsTest() {
     Require(resources.ResolveMesh(42U).IsValid(), "SceneRenderResourceMap did not resolve an explicitly bound mesh");
     Require(resources.ResolveMaterial(7U).IsValid(), "SceneRenderResourceMap did not resolve an explicitly bound material");
     Require(resources.ResolveTexture(9U).IsValid(), "SceneRenderResourceMap did not resolve an explicitly bound texture");
+    resources.BindTexture(9U, RenderTextureColorSpace::Srgb, RenderTextureHandle{ 0x0000'0001'0000'0005ULL });
+    Require(resources.ResolveTexture(9U, RenderTextureColorSpace::Linear).value == 0x0000'0001'0000'0004ULL, "SceneRenderResourceMap should keep linear texture bindings separate");
+    Require(resources.ResolveTexture(9U, RenderTextureColorSpace::Srgb).value == 0x0000'0001'0000'0005ULL, "SceneRenderResourceMap should resolve sRGB texture bindings separately for Base Color");
     SceneRenderResourceMapStats stats = resources.Stats();
     Require(stats.meshBindingCount == 1U, "SceneRenderResourceMap stats did not count mesh bindings");
     Require(stats.materialBindingCount == 1U, "SceneRenderResourceMap stats did not count material bindings");
@@ -374,6 +377,9 @@ void RunRenderResourceMapRequiresExplicitBindingsTest() {
     Require(!resources.ResolveMesh(42U).IsValid(), "SceneRenderResourceMap resolved an unbound mesh after removal");
     Require(!resources.ResolveMaterial(7U).IsValid(), "SceneRenderResourceMap resolved an unbound material after removal");
     Require(!resources.ResolveTexture(9U).IsValid(), "SceneRenderResourceMap resolved an unbound texture after removal");
+    Require(resources.ResolveTexture(9U, RenderTextureColorSpace::Srgb).IsValid(), "SceneRenderResourceMap should not remove sRGB binding when only linear binding is removed");
+    resources.UnbindTexture(9U, RenderTextureColorSpace::Srgb);
+    Require(!resources.ResolveTexture(9U, RenderTextureColorSpace::Srgb).IsValid(), "SceneRenderResourceMap did not remove the sRGB texture binding");
 
     resources.BindMesh(42U, RenderMeshHandle{ 0x0000'0001'0000'0002ULL });
     resources.BindMaterial(7U, RenderMaterialHandle{ 0x0000'0001'0000'0003ULL });

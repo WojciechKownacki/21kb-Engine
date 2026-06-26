@@ -12,6 +12,7 @@ RenderTextureResource RenderTextureResourceBuilder::Build(const RenderTextureDes
         .width = desc.width,
         .height = desc.height,
         .format = desc.format,
+        .colorSpace = desc.colorSpace,
     };
 }
 
