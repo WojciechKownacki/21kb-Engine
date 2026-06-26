@@ -36,6 +36,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -560,19 +561,27 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     kb::editor::tests::Require(groups[0].meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value, "Material preview scene did not use the preview mesh asset");
     kb::editor::tests::Require(groups[0].materialAssetId == materialId.value, "Material preview scene did not assign the inspected material");
     kb::editor::tests::Require(groups[0].instances.size() == 1U, "Material preview scene should render one mesh instance");
-    kb::editor::tests::Require(renderScene.LightProxyCount() >= 2U, "Material preview scene should provide studio lighting for a visible preview sphere");
+    kb::editor::tests::Require(renderScene.LightProxyCount() == 0U, "Material preview scene should rely on the neutral preview render policy instead of baked scene lights");
 
     kb::render::SceneRenderer renderer;
-    renderer.SetDefaultLightingConfig(kb::render::SceneRenderLightingConfig{
-        .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
-        .environmentDiffuseIntensity = 0.55F,
-        .environmentSpecularIntensity = 0.04F,
-    });
+    const kb::render::SceneRenderLightingConfig previewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
+    kb::editor::tests::Require(previewLighting.editorPreviewKeyLightEnabled, "KBMAT-0610: Material preview lighting must enable a neutral key light");
+    kb::editor::tests::Require(previewLighting.editorPreviewKeyLightIntensity > 0.0F, "KBMAT-0610: Material preview key light must have positive intensity");
+    kb::editor::tests::Require(previewLighting.environmentMode == kb::render::SceneRenderEnvironmentMode::Hemisphere, "KBMAT-0610: Material preview must use a neutral hemisphere/IBL fallback");
+    kb::editor::tests::Require(previewLighting.environmentDiffuseIntensity > 0.0F, "KBMAT-0610: Material preview diffuse environment fallback must be active");
+    kb::editor::tests::Require(previewLighting.environmentSpecularIntensity > 0.0F, "KBMAT-0610: Material preview specular environment fallback must be active");
+    kb::editor::tests::Require(!previewLighting.shadowsEnabled, "KBMAT-0610: Material preview lighting should avoid unstable preview shadows");
+    renderer.SetDefaultLightingConfig(previewLighting);
     const kb::render::SceneRenderSubmitStats lightingStats = renderer.ValidateSceneResources(renderScene);
-    kb::editor::tests::Require(lightingStats.sceneLightCount >= 2U, "Material preview renderer validation did not see preview lights");
-    kb::editor::tests::Require(lightingStats.submittedForwardLightCount >= 1U, "Material preview renderer validation did not select a forward light");
+    kb::editor::tests::Require(lightingStats.sceneLightCount == 0U, "KBMAT-0610: Material preview should not depend on scene-authored lights");
+    kb::editor::tests::Require(lightingStats.submittedForwardLightCount == 1U, "KBMAT-0610: Material preview renderer validation did not submit the neutral key light");
     kb::editor::tests::Require(lightingStats.submittedEnvironmentLightingCount == 1U, "Material preview renderer validation should keep environment lighting active");
     kb::editor::tests::Require(lightingStats.environmentLightingMode == static_cast<std::uint32_t>(kb::render::SceneRenderEnvironmentMode::Hemisphere) + 1U, "Material preview renderer validation should use hemisphere environment lighting");
+    const kb::render::ScenePostProcessSettings previewPostProcess = kb::editor::MaterialPreviewRenderPolicy::StableExposurePostProcessSettings();
+    kb::editor::tests::Require(previewPostProcess.autoExposureMetering == kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::Manual, "KBMAT-0610: Material preview exposure metering must be fixed");
+    kb::editor::tests::Require(!previewPostProcess.outputTransform.autoExposure.enabled, "KBMAT-0610: Material preview auto exposure must be disabled");
+    kb::editor::tests::Require(!previewPostProcess.outputTransform.autoExposure.temporalAdaptationEnabled, "KBMAT-0610: Material preview temporal exposure adaptation must be disabled");
+    kb::editor::tests::Require(previewPostProcess.outputTransform.exposureStops == 0.0F, "KBMAT-0610: Material preview fixed exposure should be neutral");
 
     MaterialPreviewHeadlessSurface surface;
     kb::render::DisplayConfig config{};
@@ -611,11 +620,7 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
                 .viewportIndex = 0U,
             },
         },
-        .lightingConfig = kb::render::SceneRenderLightingConfig{
-            .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
-            .environmentDiffuseIntensity = 0.55F,
-            .environmentSpecularIntensity = 0.04F,
-        },
+        .lightingConfig = previewLighting,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .shadowPassEnabled = false,
         .postProcessEnabled = false,
@@ -670,6 +675,30 @@ void RunMaterialValueFormatterTest() {
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Opaque) == "Opaque", "AlphaModeName should render Opaque");
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Mask) == "Mask", "AlphaModeName should render Mask");
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Blend) == "Blend", "AlphaModeName should render Blend");
+
+    kb::render::RenderMaterialDesc material{};
+    material.baseColor[0] = 0.25F;
+    material.baseColor[1] = 0.5F;
+    material.baseColor[2] = 0.75F;
+    material.baseColor[3] = 1.0F;
+    material.metallicFactor = 0.6F;
+    material.roughnessFactor = 0.35F;
+    material.normalScale = 0.8F;
+    material.emissiveColor[0] = 0.1F;
+    material.emissiveColor[1] = 0.2F;
+    material.emissiveColor[2] = 0.3F;
+    material.emissiveStrength = 2.0F;
+    material.albedoTextureAssetId = 101U;
+    material.normalTextureAssetId = 202U;
+    material.metallicRoughnessTextureAssetId = 303U;
+    const std::vector<kb::editor::MaterialDebugChannelRow> rows = MaterialAssetFormatter::DebugChannelRows(material, 5151U);
+    kb::editor::tests::Require(rows.size() == 6U, "KBMAT-0611: material debug inspector must expose exactly the required channel rows");
+    kb::editor::tests::Require(rows[0].label == "Material Id" && rows[0].value == "5151", "KBMAT-0611: material id debug channel is wrong");
+    kb::editor::tests::Require(rows[1].label == "Base Color" && rows[1].value.find("texture #101") != std::string::npos, "KBMAT-0611: base color debug channel is missing texture source");
+    kb::editor::tests::Require(rows[2].label == "Roughness" && rows[2].value.find("MR.g texture #303") != std::string::npos, "KBMAT-0611: roughness debug channel must report MR G source");
+    kb::editor::tests::Require(rows[3].label == "Metallic" && rows[3].value.find("MR.b texture #303") != std::string::npos, "KBMAT-0611: metallic debug channel must report MR B source");
+    kb::editor::tests::Require(rows[4].label == "Normal" && rows[4].value.find("texture #202") != std::string::npos, "KBMAT-0611: normal debug channel is missing texture source");
+    kb::editor::tests::Require(rows[5].label == "Emissive" && rows[5].value.find("white fallback") != std::string::npos, "KBMAT-0611: emissive debug channel must report fallback source");
 }
 
 #if defined(_WIN32)

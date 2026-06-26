@@ -144,7 +144,7 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
         .normalTexture = ResolveNormalTexture(material, resources, resourceMap, fallbacks.normalTexture),
         .metallicRoughnessTexture = ResolveMetallicRoughnessTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .occlusionTexture = ResolveOcclusionTexture(material, resources, resourceMap, fallbacks.whiteTexture),
-        .emissiveTexture = ResolveEmissiveTexture(material, resources, resourceMap, fallbacks.blackTexture),
+        .emissiveTexture = ResolveEmissiveTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .params = MaterialParams(material, normalTextureResolved),
         .emissive = MaterialEmissive(material),
         .flags = MaterialFlags(material),

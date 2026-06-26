@@ -1056,23 +1056,31 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
         true);
 }
 
-[[nodiscard]] int MaterialPreviewTelemetryRows(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
-    return 4 + static_cast<int>(std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows));
+[[nodiscard]] std::vector<MaterialDebugChannelRow> MaterialDebugChannelRowsFor(const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
+    return material.has_value()
+        ? MaterialAssetFormatter::DebugChannelRows(material->desc, metadata.id.value)
+        : std::vector<MaterialDebugChannelRow>{};
 }
 
-[[nodiscard]] int MaterialPreviewBodyHeight(const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+[[nodiscard]] int MaterialPreviewRowCount(const EditorMaterialPreviewTelemetry& telemetry, std::size_t debugChannelRowCount) noexcept {
+    const int debugRows = debugChannelRowCount == 0U ? 1 : static_cast<int>(debugChannelRowCount);
+    return debugRows + 3 + static_cast<int>(std::min<std::size_t>(telemetry.missingTextures.size(), kMaterialPreviewMaxMissingRows));
+}
+
+[[nodiscard]] int MaterialPreviewBodyHeight(const EditorMaterialPreviewTelemetry& telemetry, std::size_t debugChannelRowCount) noexcept {
     return kDividerHeight
         + kMaterialPreviewGap
         + kMaterialPreviewHeight
         + kMaterialPreviewGap
-        + MaterialPreviewTelemetryRows(telemetry) * (kFieldRowHeight + kDividerHeight);
+        + MaterialPreviewRowCount(telemetry, debugChannelRowCount) * (kFieldRowHeight + kDividerHeight);
 }
 
-[[nodiscard]] int MaterialPreviewSectionHeight(const InspectorPanelState& inspector, const EditorMaterialPreviewTelemetry& telemetry) noexcept {
+[[nodiscard]] int MaterialPreviewSectionHeight(const InspectorPanelState& inspector, const EditorMaterialPreviewTelemetry& telemetry, std::size_t debugChannelRowCount) noexcept {
     if (inspector.IsCollapsed(InspectorSectionId::MaterialPreview)) {
         return kSectionHeaderHeight;
     }
-    return kSectionHeaderHeight + MaterialPreviewBodyHeight(telemetry);
+    return kSectionHeaderHeight + MaterialPreviewBodyHeight(telemetry, debugChannelRowCount);
 }
 
 struct InspectorMaterialPreviewStyle {
@@ -1219,14 +1227,24 @@ void DrawTelemetryRow(
         return y + kSectionGap;
     }
 
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata.id);
+    const std::vector<MaterialDebugChannelRow> debugRows = material.has_value()
+        ? MaterialAssetFormatter::DebugChannelRows(material->desc, metadata.id.value)
+        : std::vector<MaterialDebugChannelRow>{};
     DrawDivider(dc, content.left, content.right, y);
     y += kDividerHeight;
     const RECT frame = Rect(content.left + kMaterialPreviewPadding, y + kMaterialPreviewGap, content.right - kMaterialPreviewPadding, y + kMaterialPreviewGap + kMaterialPreviewHeight);
     DrawFrame(dc, frame, Rgb(13, 15, 18), Color(theme.borderPanel));
-    DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(sceneContext.ReadMaterialDocumentAsset(metadata.id)));
+    DrawStaticMaterialPreview(dc, frame, MaterialPreviewStyleFor(material));
     y = frame.bottom + kMaterialPreviewGap;
 
-    DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
+    if (debugRows.empty()) {
+        DrawTelemetryRow(dc, content, y, theme, inspector, "Material Id", FormatUInt64(telemetry.materialAssetId.value));
+    } else {
+        for (const MaterialDebugChannelRow& row : debugRows) {
+            DrawTelemetryRow(dc, content, y, theme, inspector, row.label, row.value);
+        }
+    }
     DrawTelemetryRow(dc, content, y, theme, inspector, "Cache", telemetry.materialLoaded ? "Loaded" : "Missing");
     DrawTelemetryRow(dc, content, y, theme, inspector, "Preview Scene", telemetry.previewSceneReady ? "Ready" : "Fallback");
     DrawTelemetryRow(dc, content, y, theme, inspector, "Missing Textures", FormatUInt64(telemetry.missingTextureCount));
@@ -1691,7 +1709,7 @@ void PaintEntity(HDC dc, RECT content, const EditorTheme& theme, const EditorSce
         return height;
     }
     if (IsMaterialDocument(metadata)) {
-        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata)) + kSectionGap;
+        height += MaterialPreviewSectionHeight(inspector, MaterialPreviewTelemetryFor(sceneContext, metadata), MaterialDebugChannelRowsFor(sceneContext, metadata).size()) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Material, MaterialRows()) + kSectionGap;
         height += SectionHeight(inspector, InspectorSectionId::Asset, 2);
         return height;
@@ -1987,7 +2005,7 @@ void AdvanceRow(int& y) noexcept {
     }
     if (!state.IsCollapsed(InspectorSectionId::MaterialPreview)) {
         const EditorMaterialPreviewTelemetry telemetry = MaterialPreviewTelemetryFor(sceneContext, metadata);
-        y += MaterialPreviewBodyHeight(telemetry) - kDividerHeight;
+        y += MaterialPreviewBodyHeight(telemetry, MaterialDebugChannelRowsFor(sceneContext, metadata).size()) - kDividerHeight;
     }
     return {};
 }

@@ -159,7 +159,7 @@ void WriteEmbeddedMaterialTriangleGltf(const std::filesystem::path& root) {
         << "    \"occlusionTexture\": { \"index\": 3, \"strength\": 0.7 },\n"
         << "    \"emissiveFactor\": [0.05, 0.1, 0.2],\n"
         << "    \"emissiveTexture\": { \"index\": 4 },\n"
-        << "    \"alphaMode\": \"BLEND\"\n"
+        << "    \"alphaMode\": \"MASK\"\n"
         << "  }],\n"
         << "  \"textures\": [{ \"source\": 0 }, { \"source\": 1 }, { \"source\": 2 }, { \"source\": 3 }, { \"source\": 4 }],\n"
         << "  \"images\": [{ \"uri\": \"embedded_albedo.kbtex\" }, { \"uri\": \"embedded_mr.kbtex\" }, { \"uri\": \"embedded_normal.kbtex\" }, { \"uri\": \"embedded_ao.kbtex\" }, { \"uri\": \"embedded_emissive.kbtex\" }],\n"
@@ -497,9 +497,9 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(renderer.SubmitScene(scene, desc), "Renderer did not submit runtime mesh asset scene");
 
     const SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
-    Require(submitStats.visibleMeshCount == instanceCount * 2U + 1U, "Runtime submit did not keep shadow, opaque, and transparent mesh instances visible");
-    Require(submitStats.submittedMeshCount == instanceCount * 2U + 1U, "Runtime submit did not submit shadow, opaque, and transparent mesh instances");
-    Require(submitStats.submittedDrawCallCount == 3U, "Runtime submit did not split shadow, opaque, and transparent material passes");
+    Require(submitStats.visibleMeshCount == instanceCount * 2U, "Runtime submit did not keep shadow and opaque mesh instances visible while disabling blend");
+    Require(submitStats.submittedMeshCount == instanceCount * 2U, "Runtime submit did not submit shadow and opaque mesh instances while disabling blend");
+    Require(submitStats.submittedDrawCallCount == 2U, "Runtime submit should not draw disabled blend materials");
     Require(submitStats.shadowCasterCount == instanceCount, "Runtime submit did not count shadow casters");
     Require(submitStats.submittedShadowCasterCount == instanceCount, "Runtime submit did not submit shadow casters");
     Require(submitStats.submittedShadowDrawCallCount == 1U, "Runtime submit did not draw one shadow caster batch");
@@ -517,7 +517,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(passStats[0].stats.shadowLightEntityId == light.Id(), "Runtime submit shadow pass did not report selected shadow light entity");
     Require(passStats[0].stats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit shadow pass did not report shadow map allocation bytes");
     Require(passStats[1].pass == MeshPassType::BaseOpaque && passStats[1].stats.submittedMeshCount == instanceCount, "Runtime submit opaque pass stats are wrong");
-    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 1U, "Runtime submit transparent pass stats are wrong");
+    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 0U, "Runtime submit transparent pass should not submit disabled blend materials");
     Require(renderer.LastSceneExposureStats().empty(), "Runtime submit without post-process unexpectedly reported exposure stats");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
@@ -534,6 +534,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(runtimeStats.defaultEnvironmentLightingSampleCount == 1U, "Runtime submit did not expose default environment sample count");
     Require(runtimeStats.defaultShadowFilterSampleCount == 9U, "Runtime submit did not expose default shadow filter sample count");
     bool foundUnresolvedTexturePathDiagnostic = false;
+    bool foundDisabledBlendDiagnostic = false;
     for (const SceneRenderDiagnosticEvent& event : renderer.LastSceneDiagnostics().events) {
         if (event.severity == SceneRenderDiagnosticSeverity::Warning &&
             event.kind == SceneRenderDiagnosticKind::UnresolvedMaterialTexturePath &&
@@ -541,8 +542,15 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
             event.instanceCount == 1U) {
             foundUnresolvedTexturePathDiagnostic = true;
         }
+        if (event.severity == SceneRenderDiagnosticSeverity::Warning &&
+            event.kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend &&
+            event.materialAssetId == transparentMaterialMetadata->id.value &&
+            event.instanceCount == 1U) {
+            foundDisabledBlendDiagnostic = true;
+        }
     }
     Require(foundUnresolvedTexturePathDiagnostic, "Runtime submit did not emit unresolved material texture path diagnostic");
+    Require(foundDisabledBlendDiagnostic, "Runtime submit did not emit disabled blend material diagnostic");
     Require(runtimeStats.renderSceneMeshProxyCount == instanceCount + 1U, "Runtime submit did not keep scene mesh proxies");
     Require(runtimeStats.meshResourceSlotCapacity >= 4U, "Runtime submit did not apply mesh resource slot reserve");
     Require(runtimeStats.materialResourceSlotCapacity >= 4U, "Runtime submit did not apply material resource slot reserve");
@@ -1041,8 +1049,8 @@ void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     Require(!submitStats.HasMissingResources(), "Embedded material runtime test reported missing resources");
     const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
     Require(passStats.size() == 2U, "Embedded material runtime test did not report both scene passes");
-    Require(passStats[0].pass == MeshPassType::BaseOpaque && passStats[0].stats.submittedMeshCount == 0U, "Embedded material runtime opaque pass stats are wrong");
-    Require(passStats[1].pass == MeshPassType::BaseTransparent && passStats[1].stats.submittedMeshCount == 1U, "Embedded material runtime transparent pass stats are wrong");
+    Require(passStats[0].pass == MeshPassType::BaseOpaque && passStats[0].stats.submittedMeshCount == 1U, "Embedded material runtime opaque pass stats are wrong");
+    Require(passStats[1].pass == MeshPassType::BaseTransparent && passStats[1].stats.submittedMeshCount == 0U, "Embedded material runtime transparent pass stats are wrong");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
     Require(runtimeStats.cachedMeshCount == 1U, "Embedded material runtime test did not cache one mesh resource");
