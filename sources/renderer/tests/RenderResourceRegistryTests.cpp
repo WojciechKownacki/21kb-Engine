@@ -24,6 +24,21 @@
 namespace kb::render::tests {
 namespace {
 
+void RunRenderTextureColorSpaceDescTest() {
+    const bgfx::Memory memory{};
+    RenderTextureAssetData texture{};
+    texture.width = 2U;
+    texture.height = 2U;
+
+    const RenderTextureDesc linear = texture.MakeDesc(&memory, RenderTextureColorSpace::Linear);
+    const RenderTextureDesc srgb = texture.MakeDesc(&memory, RenderTextureColorSpace::Srgb);
+
+    Require(linear.colorSpace == RenderTextureColorSpace::Linear, "Linear texture desc did not preserve color-space metadata");
+    Require((linear.flags & BGFX_TEXTURE_SRGB) == 0U, "Linear texture desc should not request bgfx sRGB sampling");
+    Require(srgb.colorSpace == RenderTextureColorSpace::Srgb, "sRGB texture desc did not preserve color-space metadata");
+    Require((srgb.flags & BGFX_TEXTURE_SRGB) != 0U, "Base Color sRGB texture desc should request bgfx sRGB sampling");
+}
+
 void RunMaterialHandlesAreGenerationalTest() {
     RenderResourceRegistry registry;
     RenderMaterialDesc desc{};
@@ -1388,6 +1403,7 @@ void RunRenderResourceRegistryTests() {
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderMaterialAssetParserReportsReadableErrorsTest();
+    RunRenderTextureColorSpaceDescTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();

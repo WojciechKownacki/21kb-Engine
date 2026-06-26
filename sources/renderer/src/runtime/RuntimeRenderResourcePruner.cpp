@@ -18,6 +18,15 @@ void UnloadFromSubmittedScene(std::span<const kb::scene::Scene*> submittedScenes
     }
 }
 
+void UnloadTextureFromSubmittedScene(std::span<const kb::scene::Scene*> submittedScenes, RuntimeTextureAssetKey key) {
+    for (const kb::scene::Scene* scene : submittedScenes) {
+        if (scene != nullptr && scene->Id() == key.sceneId) {
+            static_cast<void>(const_cast<kb::scene::Scene*>(scene)->Assets().Manager().Unload(kb::assets::AssetId{ key.assetId }));
+            break;
+        }
+    }
+}
+
 [[nodiscard]] bool ShouldRetain(
     const RuntimeFrameResourceReferences& frameReferences,
     RuntimeAssetKey key,
@@ -81,7 +90,7 @@ void RuntimeRenderResourcePruner::PruneUnused(
         }
         sceneRenderer.ResourceMap().UnbindTextureHandle(it->second.handle);
         sceneRenderer.Resources().DestroyTexture(it->second.handle);
-        UnloadFromSubmittedScene(submittedScenes, it->first);
+        UnloadTextureFromSubmittedScene(submittedScenes, it->first);
         it = textures.erase(it);
     }
 }
