@@ -8,10 +8,6 @@
 namespace kb::render {
 namespace {
 
-[[nodiscard]] bool IsTransparent(const RenderMaterialResource* material) noexcept {
-    return material != nullptr && material->alphaMode == RenderMaterialAlphaMode::Blend;
-}
-
 [[nodiscard]] bool IsSelectedEntity(std::span<const std::uint64_t> selectedEntityIds, std::uint64_t entityId) noexcept {
     return std::ranges::find(selectedEntityIds, entityId) != selectedEntityIds.end();
 }
@@ -56,13 +52,13 @@ bool MeshPipelinePassPolicy::Accepts(
     std::span<const std::uint64_t> selectedEntityIds) noexcept {
     switch (pass) {
     case MeshPassType::Depth:
-        return !IsTransparent(material);
+        return !UsesDisabledAlphaBlend(material);
     case MeshPassType::BaseOpaque:
-        return !IsTransparent(material);
+        return !UsesDisabledAlphaBlend(material);
     case MeshPassType::BaseTransparent:
-        return IsTransparent(material);
+        return false;
     case MeshPassType::ShadowDepth:
-        return instance.castsShadow && !IsTransparent(material);
+        return instance.castsShadow && !UsesDisabledAlphaBlend(material);
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
         return IsSelectedEntity(selectedEntityIds, instance.entityId);
@@ -71,6 +67,10 @@ bool MeshPipelinePassPolicy::Accepts(
     }
 
     return false;
+}
+
+bool MeshPipelinePassPolicy::UsesDisabledAlphaBlend(const RenderMaterialResource* material) noexcept {
+    return material != nullptr && material->alphaMode == RenderMaterialAlphaMode::Blend;
 }
 
 std::uint64_t MeshPipelinePassPolicy::State(

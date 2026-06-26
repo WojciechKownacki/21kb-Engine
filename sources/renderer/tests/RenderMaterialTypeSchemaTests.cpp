@@ -3,10 +3,12 @@
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
+#include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
+#include <filesystem>
 #include <sstream>
 #include <string>
-#include <filesystem>
 
 namespace kb::render::tests {
 namespace {
@@ -96,6 +98,196 @@ void RunBuiltInPbrSchemaTextureSlotsHaveColorSpaceTest() {
     const RenderMaterialTextureSlotSchema* emissive = FindMaterialTextureSlotSchema(schema, "emissiveTextureAssetId");
     Require(emissive != nullptr, "Schema missing emissive texture slot");
     Require(emissive->expectedColorSpace == RenderMaterialTextureColorSpace::Srgb, "Emissive texture should be sRGB");
+}
+
+void RunKbmat0602To0605PbrTextureSchemaTest() {
+    const RenderMaterialTypeSchema& schema = GetBuiltInPbrMaterialTypeSchema();
+
+    const RenderMaterialTextureSlotSchema* normal = FindMaterialTextureSlotSchema(schema, "normalTextureAssetId");
+    Require(normal != nullptr, "KBMAT-0602: Normal texture slot is missing");
+    Require(normal->expectedColorSpace == RenderMaterialTextureColorSpace::Linear, "KBMAT-0602: Normal texture must be linear");
+    Require(normal->fallbackDescription.find("Flat normal") != std::string::npos, "KBMAT-0602: Normal texture must document flat-normal fallback");
+
+    const RenderMaterialTextureSlotSchema* metallicRoughness = FindMaterialTextureSlotSchema(schema, "metallicRoughnessTextureAssetId");
+    Require(metallicRoughness != nullptr, "KBMAT-0603: Metallic-Roughness texture slot is missing");
+    Require(metallicRoughness->expectedColorSpace == RenderMaterialTextureColorSpace::Linear, "KBMAT-0603: Metallic-Roughness texture must be linear");
+    Require(metallicRoughness->fallbackDescription.find("metallic=1, roughness=1") != std::string::npos, "KBMAT-0603: Metallic-Roughness texture must document white fallback");
+
+    const RenderMaterialTextureSlotSchema* occlusion = FindMaterialTextureSlotSchema(schema, "occlusionTextureAssetId");
+    Require(occlusion != nullptr, "KBMAT-0604: Occlusion texture slot is missing");
+    Require(occlusion->expectedColorSpace == RenderMaterialTextureColorSpace::Linear, "KBMAT-0604: Occlusion texture must be linear");
+    Require(occlusion->fallbackDescription.find("occlusion=1") != std::string::npos, "KBMAT-0604: Occlusion texture must document white fallback");
+
+    const RenderMaterialTextureSlotSchema* emissive = FindMaterialTextureSlotSchema(schema, "emissiveTextureAssetId");
+    Require(emissive != nullptr, "KBMAT-0605: Emissive texture slot is missing");
+    Require(emissive->expectedColorSpace == RenderMaterialTextureColorSpace::Srgb, "KBMAT-0605: Emissive texture must have explicit sRGB policy");
+    Require(emissive->fallbackDescription.find("emissiveColor * emissiveStrength") != std::string::npos, "KBMAT-0605: Emissive fallback must preserve color and strength");
+
+    const RenderMaterialParameterSchema* emissiveStrength = FindMaterialParameterSchema(schema, "emissiveStrength");
+    Require(emissiveStrength != nullptr && emissiveStrength->runtimeSupport == RenderMaterialFeatureSupport::Supported, "KBMAT-0605: emissiveStrength must be runtime-supported");
+}
+
+void RunKbmat0602To0605MaterialBindingRuntimeTest() {
+    RenderMaterialDesc desc{};
+    desc.albedoTextureAssetId = 101U;
+    desc.normalTextureAssetId = 102U;
+    desc.metallicRoughnessTextureAssetId = 103U;
+    desc.occlusionTextureAssetId = 104U;
+    desc.emissiveTextureAssetId = 105U;
+    desc.metallicFactor = 0.7F;
+    desc.roughnessFactor = 0.3F;
+    desc.normalScale = 2.0F;
+    desc.occlusionStrength = 0.45F;
+    desc.emissiveColor[0] = 0.2F;
+    desc.emissiveColor[1] = 0.4F;
+    desc.emissiveColor[2] = 0.6F;
+    desc.emissiveStrength = 2.0F;
+
+    RenderResourceRegistry registry;
+    const RenderMaterialHandle materialHandle = registry.RegisterMaterial(desc);
+    Require(materialHandle.IsValid(), "KBMAT-0602..0605: Material registration failed before binding");
+    const RenderMaterialResource* material = registry.FindMaterial(materialHandle);
+    Require(material != nullptr, "KBMAT-0602..0605: Registered material did not resolve before binding");
+
+    SceneRenderResourceMap resourceMap;
+    resourceMap.BindTexture(desc.albedoTextureAssetId, RenderTextureColorSpace::Srgb, RenderTextureHandle{ 0x0000'0001'0000'0011ULL });
+    resourceMap.BindTexture(desc.normalTextureAssetId, RenderTextureColorSpace::Linear, RenderTextureHandle{ 0x0000'0001'0000'0012ULL });
+    resourceMap.BindTexture(desc.metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear, RenderTextureHandle{ 0x0000'0001'0000'0013ULL });
+    resourceMap.BindTexture(desc.occlusionTextureAssetId, RenderTextureColorSpace::Linear, RenderTextureHandle{ 0x0000'0001'0000'0014ULL });
+    resourceMap.BindTexture(desc.emissiveTextureAssetId, RenderTextureColorSpace::Srgb, RenderTextureHandle{ 0x0000'0001'0000'0015ULL });
+
+    Require(resourceMap.ResolveTexture(desc.albedoTextureAssetId, RenderTextureColorSpace::Linear) !=
+                resourceMap.ResolveTexture(desc.albedoTextureAssetId, RenderTextureColorSpace::Srgb),
+            "KBMAT-0601: Base Color texture binding must be color-space specific");
+    Require(resourceMap.ResolveTexture(desc.normalTextureAssetId, RenderTextureColorSpace::Srgb) !=
+                resourceMap.ResolveTexture(desc.normalTextureAssetId, RenderTextureColorSpace::Linear),
+            "KBMAT-0602: Normal texture binding must be resolved as linear");
+    Require(resourceMap.ResolveTexture(desc.emissiveTextureAssetId, RenderTextureColorSpace::Linear) !=
+                resourceMap.ResolveTexture(desc.emissiveTextureAssetId, RenderTextureColorSpace::Srgb),
+            "KBMAT-0605: Emissive texture binding must be resolved through the explicit sRGB policy");
+
+    const bgfx::TextureHandle whiteFallback{ 11U };
+    const bgfx::TextureHandle normalFallback{ 12U };
+    const SceneMeshMaterialBinding binding = SceneMeshMaterialBindingResolver::Resolve(
+        material,
+        registry,
+        resourceMap,
+        SceneMeshMaterialBindingFallbacks{
+            .whiteTexture = whiteFallback,
+            .normalTexture = normalFallback,
+        });
+
+    Require(binding.albedoTexture.idx == whiteFallback.idx, "KBMAT-0601: Missing registered Base Color GPU texture must use white fallback");
+    Require(binding.normalTexture.idx == normalFallback.idx, "KBMAT-0602: Missing registered normal GPU texture must use flat-normal fallback");
+    Require(binding.metallicRoughnessTexture.idx == whiteFallback.idx, "KBMAT-0603: Missing registered metallic-roughness GPU texture must use white fallback");
+    Require(binding.occlusionTexture.idx == whiteFallback.idx, "KBMAT-0604: Missing registered occlusion GPU texture must use white fallback");
+    Require(binding.emissiveTexture.idx == whiteFallback.idx, "KBMAT-0605: Missing emissive texture must use white passthrough fallback");
+    Require(NearlyEqual(binding.params[0], desc.metallicFactor), "KBMAT-0603: Metallic factor was not preserved in runtime material params");
+    Require(NearlyEqual(binding.params[1], desc.roughnessFactor), "KBMAT-0603: Roughness factor was not preserved in runtime material params");
+    Require(NearlyEqual(binding.params[2], 0.0F), "KBMAT-0602: normalScale must be disabled when the normal texture does not resolve to a live GPU texture");
+    Require(NearlyEqual(binding.flags[1], desc.occlusionStrength), "KBMAT-0604: Occlusion strength was not preserved in runtime material flags");
+    Require(binding.emissive[0] == desc.emissiveColor[0], "KBMAT-0605: Emissive red factor was not preserved");
+    Require(binding.emissive[1] == desc.emissiveColor[1], "KBMAT-0605: Emissive green factor was not preserved");
+    Require(binding.emissive[2] == desc.emissiveColor[2], "KBMAT-0605: Emissive blue factor was not preserved");
+    Require(binding.emissive[3] == desc.emissiveStrength, "KBMAT-0605: Emissive strength was not preserved");
+}
+
+void RunKbmat0606OpaqueAlphaRuntimeTest() {
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Opaque;
+    material.alphaCutoff = 0.75F;
+    material.baseColor[3] = 0.2F;
+
+    const SceneMeshMaterialBinding binding = SceneMeshMaterialBindingResolver::Resolve(
+        &material,
+        RenderResourceRegistry{},
+        SceneRenderResourceMap{},
+        SceneMeshMaterialBindingFallbacks{});
+    Require(binding.flags[0] == 0.0F, "KBMAT-0606: Opaque alpha mode must be encoded as the non-discarding shader mode");
+    Require(NearlyEqual(binding.params[3], material.alphaCutoff), "KBMAT-0606: Opaque binding must still preserve authored alpha cutoff for stable material state");
+
+    const SceneRenderMeshInstance instance{ .castsShadow = true };
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the depth pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the base opaque pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}), "KBMAT-0606: Opaque material must remain accepted by the shadow pass");
+}
+
+void RunKbmat0607AlphaMaskCutoffRuntimeTest() {
+    RenderMaterialResource material{};
+    material.alphaMode = RenderMaterialAlphaMode::Mask;
+    material.alphaCutoff = 0.37F;
+
+    const SceneMeshMaterialBinding binding = SceneMeshMaterialBindingResolver::Resolve(
+        &material,
+        RenderResourceRegistry{},
+        SceneRenderResourceMap{},
+        SceneMeshMaterialBindingFallbacks{});
+    Require(binding.flags[0] == 1.0F, "KBMAT-0607: Mask alpha mode must be encoded for alpha-cutoff discard");
+    Require(NearlyEqual(binding.params[3], material.alphaCutoff), "KBMAT-0607: Base/depth binding must pass alpha cutoff to the shader");
+
+    const SceneMeshShadowMaterialBinding shadowBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
+        &material,
+        RenderResourceRegistry{},
+        SceneRenderResourceMap{},
+        SceneMeshMaterialBindingFallbacks{});
+    Require(shadowBinding.flags[0] == 1.0F, "KBMAT-0607: Shadow binding must preserve Mask alpha mode");
+    Require(NearlyEqual(shadowBinding.params[3], material.alphaCutoff), "KBMAT-0607: Shadow binding must pass alpha cutoff to the shader");
+
+    const SceneRenderMeshInstance instance{ .castsShadow = true };
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::Depth, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the depth pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::BaseOpaque, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the base opaque pass");
+    Require(MeshPipelinePassPolicy::Accepts(MeshPassType::ShadowDepth, instance, &material, {}), "KBMAT-0607: Mask material must remain accepted by the shadow pass");
+}
+
+void RunKbmat0608AlphaBlendSchemaReasonTest() {
+    const RenderMaterialTypeSchema& schema = GetBuiltInPbrMaterialTypeSchema();
+    const RenderMaterialParameterSchema* alphaMode = FindMaterialParameterSchema(schema, "alphaMode");
+    Require(alphaMode != nullptr, "KBMAT-0608: alphaMode schema parameter is missing");
+    Require(alphaMode->description.find("BLEND is parsed but disabled until the transparent pass is ready") != std::string_view::npos,
+            "KBMAT-0608: alphaMode schema must document why BLEND is disabled");
+}
+
+void RunKbmat0609DoubleSidedSchemaTest() {
+    const RenderMaterialTypeSchema& schema = GetBuiltInPbrMaterialTypeSchema();
+    const RenderMaterialParameterSchema* doubleSided = FindMaterialParameterSchema(schema, "doubleSided");
+    Require(doubleSided != nullptr, "KBMAT-0609: doubleSided schema parameter is missing");
+    Require(doubleSided->type == RenderMaterialParameterType::Bool, "KBMAT-0609: doubleSided must be a bool parameter");
+    Require(doubleSided->runtimeSupport == RenderMaterialFeatureSupport::Supported, "KBMAT-0609: doubleSided must be runtime-supported");
+    Require(doubleSided->description.find("front and back faces") != std::string_view::npos,
+            "KBMAT-0609: doubleSided schema must describe the cull policy");
+}
+
+void RunKbmat0609DoubleSidedRenderStateRuntimeTest() {
+    RenderMeshResource singleSidedMesh{};
+    singleSidedMesh.doubleSided = false;
+    RenderMeshResource doubleSidedMesh{};
+    doubleSidedMesh.doubleSided = true;
+    RenderMaterialResource singleSidedMaterial{};
+    singleSidedMaterial.doubleSided = false;
+    RenderMaterialResource doubleSidedMaterial{};
+    doubleSidedMaterial.doubleSided = true;
+
+    const MeshPassType renderPasses[]{
+        MeshPassType::Depth,
+        MeshPassType::BaseOpaque,
+        MeshPassType::ShadowDepth,
+        MeshPassType::SelectionId,
+        MeshPassType::EditorSelection,
+        MeshPassType::Gizmo,
+    };
+    for (const MeshPassType pass : renderPasses) {
+        const std::uint64_t singleSidedState = MeshPipelinePassPolicy::State(pass, &singleSidedMesh, &singleSidedMaterial);
+        Require((singleSidedState & BGFX_STATE_CULL_CCW) != 0U, "KBMAT-0609: Single-sided mesh/material must cull back faces");
+        Require((singleSidedState & BGFX_STATE_CULL_CW) == 0U, "KBMAT-0609: Single-sided mesh/material must not cull authored front faces");
+
+        const std::uint64_t materialDoubleSidedState = MeshPipelinePassPolicy::State(pass, &singleSidedMesh, &doubleSidedMaterial);
+        Require((materialDoubleSidedState & (BGFX_STATE_CULL_CW | BGFX_STATE_CULL_CCW)) == 0U,
+                "KBMAT-0609: Material doubleSided must disable face culling");
+
+        const std::uint64_t meshDoubleSidedState = MeshPipelinePassPolicy::State(pass, &doubleSidedMesh, &singleSidedMaterial);
+        Require((meshDoubleSidedState & (BGFX_STATE_CULL_CW | BGFX_STATE_CULL_CCW)) == 0U,
+                "KBMAT-0609: Mesh doubleSided must disable face culling");
+    }
 }
 
 void RunBuiltInPbrSchemaDistinguishesSupportedVsAdvancedTest() {
@@ -432,6 +624,13 @@ void RunRenderMaterialTypeSchemaTests() {
     RunBuiltInPbrSchemaCoversAllMaterialFieldsTest();
     RunBuiltInPbrSchemaHasCorrectRangesTest();
     RunBuiltInPbrSchemaTextureSlotsHaveColorSpaceTest();
+    RunKbmat0602To0605PbrTextureSchemaTest();
+    RunKbmat0602To0605MaterialBindingRuntimeTest();
+    RunKbmat0606OpaqueAlphaRuntimeTest();
+    RunKbmat0607AlphaMaskCutoffRuntimeTest();
+    RunKbmat0608AlphaBlendSchemaReasonTest();
+    RunKbmat0609DoubleSidedSchemaTest();
+    RunKbmat0609DoubleSidedRenderStateRuntimeTest();
     RunBuiltInPbrSchemaDistinguishesSupportedVsAdvancedTest();
     RunBuiltInPbrSchemaParserUsesSchemaForValidationTest();
     RunBuiltInPbrSchemaParserUsesSchemaForUnsupportedFieldsTest();
