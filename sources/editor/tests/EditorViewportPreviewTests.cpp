@@ -268,6 +268,124 @@ void RunViewportLightWireframePickerChoosesNestedInnerWireframeTest() {
 
     kb::editor::tests::Require(pick.IsValid(), "Viewport picker should hit a point light wireframe");
     kb::editor::tests::Require(pick.entity == innerLight, "Viewport picker should choose the nested inner light wireframe");
+
+    float insideScreenX = 0.0F;
+    float insideScreenY = 0.0F;
+    const bool insideProjected = kb::editor::EditorSceneViewportMath::WorldToScreen(
+        camera,
+        renderArea,
+        kb::editor::EditorSceneViewportMath::Add(position, kb::editor::EditorSceneViewportMath::Mul(axes.right, 0.5F)),
+        insideScreenX,
+        insideScreenY);
+    kb::editor::tests::Require(insideProjected, "Nested point light interior test point should project into the viewport");
+    const kb::editor::EditorSceneViewportPickResult insidePick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        insideScreenX,
+        insideScreenY,
+        BuildViewportRay(camera, renderArea, insideScreenX, insideScreenY));
+    kb::editor::tests::Require(insidePick.IsValid(), "Viewport picker should hit a point light interior without pixel-perfect aiming");
+    kb::editor::tests::Require(insidePick.entity == innerLight, "Viewport picker should prefer the nested inner light volume over the enclosing outer light");
+
+    const float forgivingScreenX = screenX + 12.0F;
+    const float forgivingScreenY = screenY;
+    const kb::editor::EditorSceneViewportPickResult forgivingPick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        forgivingScreenX,
+        forgivingScreenY,
+        BuildViewportRay(camera, renderArea, forgivingScreenX, forgivingScreenY));
+    kb::editor::tests::Require(forgivingPick.IsValid(), "Viewport picker should hit a point light wireframe with a forgiving pick radius");
+    kb::editor::tests::Require(forgivingPick.entity == innerLight, "Viewport picker should keep the nested inner light selectable near its wireframe edge");
+}
+
+void RunViewportLightIconPickerSelectsLightIconsTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity pointLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Point Light Icon" });
+    const kb::scene::SceneEntity directionalLight = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Directional Light Icon" });
+
+    scene.Components().Lights().Set(pointLight, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .range = 2.0F,
+    });
+    scene.Components().Lights().Set(directionalLight, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Directional,
+    });
+
+    const kb::scene::Vec3 pointPosition{-1.0F, 0.0F, 0.0F};
+    const kb::scene::Vec3 directionalPosition{1.0F, 0.0F, 0.0F};
+    scene.Transforms().Set(pointLight, kb::scene::TransformComponent{ .localPosition = pointPosition });
+    scene.Transforms().Set(directionalLight, kb::scene::TransformComponent{ .localPosition = directionalPosition });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const RECT renderArea{0, 0, 960, 540};
+    float pointScreenX = 0.0F;
+    float pointScreenY = 0.0F;
+    float directionalScreenX = 0.0F;
+    float directionalScreenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, pointPosition, pointScreenX, pointScreenY),
+        "Point light icon test point should project into the viewport");
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, directionalPosition, directionalScreenX, directionalScreenY),
+        "Directional light icon test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pointPick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        pointScreenX,
+        pointScreenY,
+        BuildViewportRay(camera, renderArea, pointScreenX, pointScreenY));
+    kb::editor::tests::Require(pointPick.IsValid(), "Viewport picker should hit a point light icon");
+    kb::editor::tests::Require(pointPick.entity == pointLight, "Viewport picker should select the point light icon under the cursor");
+
+    const kb::editor::EditorSceneViewportPickResult directionalPick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        directionalScreenX,
+        directionalScreenY,
+        BuildViewportRay(camera, renderArea, directionalScreenX, directionalScreenY));
+    kb::editor::tests::Require(directionalPick.IsValid(), "Viewport picker should hit a directional light icon");
+    kb::editor::tests::Require(directionalPick.entity == directionalLight, "Viewport picker should select the directional light icon under the cursor");
+}
+
+void RunViewportMeshPickerWinsInsideLightWireframeVolumeTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity light = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Enclosing Point Light" });
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh Inside Light" });
+
+    scene.Components().Lights().Set(light, kb::scene::LightComponent{
+        .kind = kb::scene::LightKind::Point,
+        .range = 4.0F,
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{ .meshAssetId = 404U });
+
+    const kb::scene::Vec3 lightPosition{0.0F, 0.0F, 0.0F};
+    const kb::scene::Vec3 meshPosition{1.5F, 0.0F, 0.0F};
+    scene.Transforms().Set(light, kb::scene::TransformComponent{ .localPosition = lightPosition });
+    scene.Transforms().Set(mesh, kb::scene::TransformComponent{ .localPosition = meshPosition });
+
+    const kb::editor::EditorViewportCameraState camera;
+    const RECT renderArea{0, 0, 960, 540};
+    float screenX = 0.0F;
+    float screenY = 0.0F;
+    kb::editor::tests::Require(
+        kb::editor::EditorSceneViewportMath::WorldToScreen(camera, renderArea, meshPosition, screenX, screenY),
+        "Mesh inside light wireframe test point should project into the viewport");
+
+    const kb::editor::EditorSceneViewportPickResult pick = kb::editor::EditorSceneViewportMeshPicker::PickNearest(
+        scene,
+        camera,
+        renderArea,
+        screenX,
+        screenY,
+        BuildViewportRay(camera, renderArea, screenX, screenY));
+    kb::editor::tests::Require(pick.IsValid(), "Viewport picker should hit a mesh inside a light wireframe");
+    kb::editor::tests::Require(pick.entity == mesh, "Viewport picker should prefer a mesh hit over a light wireframe volume hit");
 }
 
 void RunRenderBackendSettingsTest() {
@@ -336,6 +454,8 @@ void RunEditorViewportPreviewTests() {
     RunViewportCameraTrackDirectionTest();
     RunViewportMeshPickerNearestMeshRendererTest();
     RunViewportLightWireframePickerChoosesNestedInnerWireframeTest();
+    RunViewportLightIconPickerSelectsLightIconsTest();
+    RunViewportMeshPickerWinsInsideLightWireframeVolumeTest();
     RunRenderBackendSettingsTest();
     RunPlayModeStateTest();
 }

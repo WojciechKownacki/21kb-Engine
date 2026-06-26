@@ -273,6 +273,14 @@ struct LightWireframeBasis {
     return {value.x, value.y, value.z};
 }
 
+[[nodiscard]] kb::scene::Vec3 ResolveLightWorldPosition(const kb::scene::TransformComponent& transform) noexcept {
+    return transform.worldDirty ? transform.localPosition : transform.worldPosition;
+}
+
+[[nodiscard]] kb::scene::Quat ResolveLightWorldRotation(const kb::scene::TransformComponent& transform) noexcept {
+    return transform.worldDirty ? transform.localRotation : transform.worldRotation;
+}
+
 [[nodiscard]] std::vector<kb::render::EditorLightWireframeDesc> BuildLightWireframes(
     const EditorSceneContext& sceneContext,
     const EditorViewportCameraState& viewportCamera,
@@ -298,8 +306,8 @@ struct LightWireframeBasis {
                 return;
             }
 
-            const LightWireframeBasis basis = BasisFromQuat(transform.worldRotation);
-            const kb::scene::Vec3 position{transform.worldPosition.x, transform.worldPosition.y, transform.worldPosition.z};
+            const LightWireframeBasis basis = BasisFromQuat(ResolveLightWorldRotation(transform));
+            const kb::scene::Vec3 position = ResolveLightWorldPosition(transform);
             context.wireframes.push_back(kb::render::EditorLightWireframeDesc{
                 .kind = ToEditorLightWireframeKind(light.kind),
                 .position = {position.x, position.y, position.z},
