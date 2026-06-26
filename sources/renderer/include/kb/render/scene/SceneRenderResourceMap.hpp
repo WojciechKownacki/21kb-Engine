@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/resources/RenderHandles.hpp"
+#include "kb/render/resources/RenderResources.hpp"
 
 #include <cstdint>
 #include <unordered_map>
@@ -26,6 +27,17 @@ struct SceneRenderResourceMapReserveDesc {
 
 class SceneRenderResourceMap {
 public:
+    struct TextureBindingKey {
+        std::uint64_t assetId = 0;
+        RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
+
+        [[nodiscard]] friend constexpr bool operator==(TextureBindingKey lhs, TextureBindingKey rhs) noexcept = default;
+    };
+
+    struct TextureBindingKeyHash {
+        [[nodiscard]] std::size_t operator()(TextureBindingKey key) const noexcept;
+    };
+
     void Reserve(const SceneRenderResourceMapReserveDesc& desc);
 
     void BindMesh(std::uint64_t meshAssetId, RenderMeshHandle handle);
@@ -39,9 +51,12 @@ public:
     [[nodiscard]] RenderMaterialHandle ResolveMaterial(std::uint64_t materialAssetId) const noexcept;
 
     void BindTexture(std::uint64_t textureAssetId, RenderTextureHandle handle);
+    void BindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace, RenderTextureHandle handle);
     void UnbindTexture(std::uint64_t textureAssetId) noexcept;
+    void UnbindTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) noexcept;
     void UnbindTextureHandle(RenderTextureHandle handle) noexcept;
     [[nodiscard]] RenderTextureHandle ResolveTexture(std::uint64_t textureAssetId) const noexcept;
+    [[nodiscard]] RenderTextureHandle ResolveTexture(std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) const noexcept;
 
     void PruneInvalidBindings(const RenderResourceRegistry& registry) noexcept;
     void Clear() noexcept;
@@ -50,7 +65,7 @@ public:
 private:
     std::unordered_map<std::uint64_t, RenderMeshHandle> meshes_;
     std::unordered_map<std::uint64_t, RenderMaterialHandle> materials_;
-    std::unordered_map<std::uint64_t, RenderTextureHandle> textures_;
+    std::unordered_map<TextureBindingKey, RenderTextureHandle, TextureBindingKeyHash> textures_;
 };
 
 } // namespace kb::render

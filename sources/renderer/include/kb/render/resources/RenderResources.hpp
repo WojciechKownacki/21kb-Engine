@@ -331,12 +331,18 @@ struct RenderMaterialResource {
     std::uint64_t version = 0;
 };
 
+enum class RenderTextureColorSpace : std::uint8_t {
+    Linear,
+    Srgb,
+};
+
 struct RenderTextureDesc {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
     std::uint64_t flags = 0;
     const bgfx::Memory* memory = nullptr;
+    RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
 };
 
 struct RenderTextureResource {
@@ -344,6 +350,7 @@ struct RenderTextureResource {
     std::uint16_t width = 0;
     std::uint16_t height = 0;
     bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Count;
+    RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
     std::uint64_t version = 0;
 };
 

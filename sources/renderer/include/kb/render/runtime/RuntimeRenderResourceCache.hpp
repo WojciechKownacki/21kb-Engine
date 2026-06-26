@@ -51,7 +51,7 @@ struct RuntimeRenderResourceEnsureContext {
 
 using RuntimeMeshResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMeshResource, RuntimeAssetKeyHash>;
 using RuntimeMaterialResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMaterialResource, RuntimeAssetKeyHash>;
-using RuntimeTextureResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeTextureResource, RuntimeAssetKeyHash>;
+using RuntimeTextureResourceMap = std::unordered_map<RuntimeTextureAssetKey, RuntimeTextureResource, RuntimeTextureAssetKeyHash>;
 
 class RuntimeRenderResourceCache {
 public:
