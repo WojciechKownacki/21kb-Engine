@@ -420,6 +420,13 @@ void WriteGraphValidationMaterial(const std::filesystem::path& path, float red, 
             RenderMaterialGraphNodeKind::Add,
             3U,
             "a");
+        const RenderMaterialGraphLink addToOutput = MakeGraphLink(
+            RenderMaterialGraphNodeKind::Add,
+            3U,
+            "value",
+            RenderMaterialGraphNodeKind::MaterialOutput,
+            1U,
+            "baseColor");
         output
             << "graphNode 3 Add 300 80\n"
             << "graphNode 4 Multiply 460 80\n"
@@ -428,7 +435,10 @@ void WriteGraphValidationMaterial(const std::filesystem::path& path, float red, 
             << addToMultiply.toNodeId << ' ' << addToMultiply.toPinId << ' ' << addToMultiply.toPin << "\n"
             << "graphLink " << multiplyToAdd.id << ' '
             << multiplyToAdd.fromNodeId << ' ' << multiplyToAdd.fromPinId << ' ' << multiplyToAdd.fromPin << ' '
-            << multiplyToAdd.toNodeId << ' ' << multiplyToAdd.toPinId << ' ' << multiplyToAdd.toPin << "\n";
+            << multiplyToAdd.toNodeId << ' ' << multiplyToAdd.toPinId << ' ' << multiplyToAdd.toPin << "\n"
+            << "graphLink " << addToOutput.id << ' '
+            << addToOutput.fromNodeId << ' ' << addToOutput.fromPinId << ' ' << addToOutput.fromPin << ' '
+            << addToOutput.toNodeId << ' ' << addToOutput.toPinId << ' ' << addToOutput.toPin << "\n";
     }
 }
 

@@ -1219,6 +1219,8 @@ void RunMaterialGraphLastGoodArtifactPolicyRoundTripAndDecisionTest() {
 
 void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Scalar") == RenderMaterialGraphNodeKind::ConstantScalar, "Material graph MVP should parse Scalar alias");
+    Require(ParseRenderMaterialGraphNodeKind("Constant2Vector") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse UE Constant2Vector alias");
+    Require(ParseRenderMaterialGraphNodeKind("XY") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse XY alias");
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
     Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse TextureCoordinate as UV node");
@@ -1346,6 +1348,7 @@ void RunMaterialGraphRejectsInvalidLinksTest() {
 void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantScalar, "value", true) == RenderMaterialGraphPinType::Float, "KBMAT-GRAPH-0103: Scalar output should be float");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Uv, "uv", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: UV output should be float2");
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: Constant2Vector output should be float2");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector, "xyz", true) == RenderMaterialGraphPinType::Float3, "KBMAT-GRAPH-0103: Vector output should be float3");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantColor, "rgba", true) == RenderMaterialGraphPinType::Color, "KBMAT-GRAPH-0103: Color output should be color");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ParameterTexture, "texture", true) == RenderMaterialGraphPinType::Texture2D, "KBMAT-GRAPH-0103: Texture parameter output should be texture2D");
@@ -1353,6 +1356,10 @@ void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Sampler) == "sampler", "KBMAT-GRAPH-0103: Pin type enum should expose sampler");
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Bool) == "bool", "KBMAT-GRAPH-0103: Pin type enum should expose bool");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Color, RenderMaterialGraphPinType::Float4), "KBMAT-GRAPH-0103: Color should feed float4 operator inputs");
+    Require(AreRenderMaterialGraphPinsCompatible(
+                RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true),
+                RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSample, "uv", false)),
+        "KBMAT-GRAPH-0103: Constant2Vector should feed TextureSample UV input");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Normal, RenderMaterialGraphPinType::Float3), "KBMAT-GRAPH-0103: Normal should feed float3-compatible inputs");
     Require(!AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Texture2D, RenderMaterialGraphPinType::Color), "KBMAT-GRAPH-0103: Texture2D should not feed color inputs directly");
 
@@ -1686,6 +1693,34 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
         "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantColor values");
     Require(authoredConstantResult.shader.source.find("material.roughness = 0.42;") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantScalar values");
+
+    RenderMaterialGraphDocument authoredUvGraph = MakeDefaultRenderMaterialGraphDocument();
+    authoredUvGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector2,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "0.25 0.75",
+        },
+    });
+    authoredUvGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 320,
+        .positionY = 80,
+    });
+    authoredUvGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector2, 2U, "xy", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+    authoredUvGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult authoredUvResult = CompileRenderMaterialGraphToShaderSource(
+        authoredUvGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/AuthoredUvConstant.kbmat",
+        });
+    Require(authoredUvResult.Succeeded(), "KBMAT-GRAPH-0202: Constant2Vector UV graph should compile");
+    Require(authoredUvResult.shader.source.find("vec2(0.25, 0.75)") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit authored Constant2Vector values");
 
     RenderMaterialGraphDocument mathGraph = MakeDefaultRenderMaterialGraphDocument();
     mathGraph.nodes.push_back(RenderMaterialGraphNode{

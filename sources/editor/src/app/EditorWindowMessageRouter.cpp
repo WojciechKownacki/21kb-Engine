@@ -52,13 +52,53 @@ namespace {
 }
 
 [[nodiscard]] bool HandleMaterialGraphShortcut(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, WPARAM key) {
-    if (!sceneContext.IsMaterialGraphFocused() || key != VK_DELETE) {
+    if (!sceneContext.IsMaterialGraphFocused()) {
+        return false;
+    }
+
+    if (sceneContext.IsMaterialGraphConstantInlineEditing()) {
+        switch (key) {
+        case VK_BACK:
+            sceneContext.BackspaceMaterialGraphConstantInlineEdit();
+            break;
+        case VK_RETURN:
+            static_cast<void>(sceneContext.CommitMaterialGraphConstantInlineEdit());
+            break;
+        case VK_ESCAPE:
+            sceneContext.CancelMaterialGraphConstantInlineEdit();
+            break;
+        default:
+            return false;
+        }
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+
+    if (key != VK_DELETE) {
         return false;
     }
 
     if (sceneContext.SelectedMaterialGraphNodeId() != 0U) {
         static_cast<void>(sceneContext.DeleteSelectedMaterialGraphNode(sceneContext.MaterialEditor().OpenAssetId()));
     }
+    InvalidateRect(messageWindow, nullptr, FALSE);
+    if (messageWindow != mainWindow) {
+        InvalidateRect(mainWindow, nullptr, FALSE);
+    }
+    return true;
+}
+
+[[nodiscard]] bool HandleMaterialGraphChar(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, wchar_t character) {
+    if (!sceneContext.IsMaterialGraphFocused() || !sceneContext.IsMaterialGraphConstantInlineEditing()) {
+        return false;
+    }
+    if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
+        return false;
+    }
+    sceneContext.AppendMaterialGraphConstantInlineEditText(character);
     InvalidateRect(messageWindow, nullptr, FALSE);
     if (messageWindow != mainWindow) {
         InvalidateRect(mainWindow, nullptr, FALSE);
@@ -154,6 +194,9 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
         return 0;
     }
     case WM_CHAR:
+        if (HandleMaterialGraphChar(context_.mainWindow, messageWindow, context_.sceneContext, static_cast<wchar_t>(wparam))) {
+            return 0;
+        }
         if (InspectorPanelInteraction::HandleChar(context_.sceneContext, static_cast<wchar_t>(wparam))) {
             InvalidateRect(messageWindow, nullptr, FALSE);
             if (messageWindow != context_.mainWindow) {

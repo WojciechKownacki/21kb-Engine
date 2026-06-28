@@ -107,6 +107,21 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (sceneContext_.IsMaterialGraphConstantSliderDragging()) {
+        bool changed = false;
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.EndMaterialGraphConstantSliderDrag());
+            ReleaseCapture();
+            changed = true;
+        } else {
+            changed = sceneContext_.DragMaterialGraphConstantSlider(x);
+        }
+        if (changed) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
+        return;
+    }
+
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
         if (!leftButtonDown) {
             static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());

@@ -38,7 +38,6 @@ private:
     kb::assets::AssetId materialAssetId_{};
     std::filesystem::path workingCopyPath_;
     EditorMaterialPreviewPrimitivePolicy primitivePolicy_ = EditorMaterialPreviewPrimitivePolicy::Sphere();
-    std::uint64_t sourceAssetRevision_ = 0U;
     std::uint64_t materialContentHash_ = 0U;
     std::uint64_t revision_ = 1U;
 };

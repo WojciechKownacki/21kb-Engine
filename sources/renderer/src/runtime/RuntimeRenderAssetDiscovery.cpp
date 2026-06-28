@@ -63,6 +63,14 @@ std::uint64_t RuntimeRenderAssetDiscovery::DiscoveryIntervalFrames() const noexc
     return discoveryIntervalFrames_;
 }
 
+void RuntimeRenderAssetDiscovery::SetDiscoveryEnabled(bool enabled) noexcept {
+    discoveryEnabled_ = enabled;
+}
+
+bool RuntimeRenderAssetDiscovery::DiscoveryEnabled() const noexcept {
+    return discoveryEnabled_;
+}
+
 RuntimeRenderAssetDiscoveryStats RuntimeRenderAssetDiscovery::Stats() const noexcept {
     return RuntimeRenderAssetDiscoveryStats{
         .registeredSceneCount = static_cast<std::uint32_t>(registeredScenes_.size()),
@@ -75,6 +83,9 @@ void RuntimeRenderAssetDiscovery::Refresh(kb::scene::Scene& scene, std::uint64_t
     kb::assets::AssetManager& manager = scene.Assets().Manager();
     std::uint64_t& lastDiscoveryFrame = lastDiscoveryFrames_[scene.Id()];
     if (lastDiscoveryFrame != 0ULL) {
+        if (!discoveryEnabled_) {
+            return;
+        }
         if (lastDiscoveryFrame == currentFrame) {
             return;
         }

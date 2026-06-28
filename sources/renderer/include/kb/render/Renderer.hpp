@@ -203,6 +203,8 @@ public:
     [[nodiscard]] std::span<const PostProcessPass> PostProcessPasses() const noexcept;
     void SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept;
     [[nodiscard]] std::uint64_t RuntimeAssetDiscoveryIntervalFrames() const noexcept;
+    void SetRuntimeAssetDiscoveryEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool RuntimeAssetDiscoveryEnabled() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseAllScenes() noexcept;
 
