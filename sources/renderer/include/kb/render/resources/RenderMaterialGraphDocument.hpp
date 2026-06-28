@@ -55,6 +55,17 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     Step,
     SmoothStep,
     If,
+    Desaturate,
+    Fresnel,
+    Negate,
+    Sign,
+    Round,
+    Truncate,
+    Tangent,
+    ArcSine,
+    ArcCosine,
+    ArcTangent,
+    ArcTangent2,
 };
 
 enum class RenderMaterialGraphArtifactFailurePolicy : std::uint8_t {

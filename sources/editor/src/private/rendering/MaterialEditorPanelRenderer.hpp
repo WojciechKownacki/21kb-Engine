@@ -580,6 +580,21 @@ inline std::vector<std::string_view> MaterialEditorPanelInputPins(kb::render::Re
         return { "min", "max", "value" };
     case kb::render::RenderMaterialGraphNodeKind::If:
         return { "a", "b", "less", "equal", "greater" };
+    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        return { "color", "fraction" };
+    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+        return { "normal", "view", "exponent", "base" };
+    case kb::render::RenderMaterialGraphNodeKind::Negate:
+    case kb::render::RenderMaterialGraphNodeKind::Sign:
+    case kb::render::RenderMaterialGraphNodeKind::Round:
+    case kb::render::RenderMaterialGraphNodeKind::Truncate:
+    case kb::render::RenderMaterialGraphNodeKind::Tangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+        return { "value" };
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+        return { "y", "x" };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { "value", "min", "max" };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -629,9 +644,21 @@ inline std::vector<std::string_view> MaterialEditorPanelOutputPins(kb::render::R
     case kb::render::RenderMaterialGraphNodeKind::Step:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
     case kb::render::RenderMaterialGraphNodeKind::If:
+    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+    case kb::render::RenderMaterialGraphNodeKind::Negate:
+    case kb::render::RenderMaterialGraphNodeKind::Sign:
+    case kb::render::RenderMaterialGraphNodeKind::Round:
+    case kb::render::RenderMaterialGraphNodeKind::Truncate:
+    case kb::render::RenderMaterialGraphNodeKind::Tangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { "value" };
+    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        return { "color" };
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { "x", "y", "z", "w" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -1122,6 +1149,8 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateStep,
             MaterialEditorGraphMenuCommand::CreateSmoothStep,
             MaterialEditorGraphMenuCommand::CreateIf,
+            MaterialEditorGraphMenuCommand::CreateDesaturate,
+            MaterialEditorGraphMenuCommand::CreateFresnel,
             MaterialEditorGraphMenuCommand::CreateClamp,
             MaterialEditorGraphMenuCommand::CreateLerp,
         };
@@ -1135,6 +1164,15 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateSquareRoot,
             MaterialEditorGraphMenuCommand::CreateSine,
             MaterialEditorGraphMenuCommand::CreateCosine,
+            MaterialEditorGraphMenuCommand::CreateNegate,
+            MaterialEditorGraphMenuCommand::CreateSign,
+            MaterialEditorGraphMenuCommand::CreateRound,
+            MaterialEditorGraphMenuCommand::CreateTruncate,
+            MaterialEditorGraphMenuCommand::CreateTangent,
+            MaterialEditorGraphMenuCommand::CreateArcSine,
+            MaterialEditorGraphMenuCommand::CreateArcCosine,
+            MaterialEditorGraphMenuCommand::CreateArcTangent,
+            MaterialEditorGraphMenuCommand::CreateArcTangent2,
             MaterialEditorGraphMenuCommand::CreateNormalize,
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
         };
@@ -1182,6 +1220,17 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateStep: return "Step";
     case MaterialEditorGraphMenuCommand::CreateSmoothStep: return "Smooth Step";
     case MaterialEditorGraphMenuCommand::CreateIf: return "If";
+    case MaterialEditorGraphMenuCommand::CreateDesaturate: return "Desaturate";
+    case MaterialEditorGraphMenuCommand::CreateFresnel: return "Fresnel";
+    case MaterialEditorGraphMenuCommand::CreateNegate: return "Negate";
+    case MaterialEditorGraphMenuCommand::CreateSign: return "Sign";
+    case MaterialEditorGraphMenuCommand::CreateRound: return "Round";
+    case MaterialEditorGraphMenuCommand::CreateTruncate: return "Truncate";
+    case MaterialEditorGraphMenuCommand::CreateTangent: return "Tan";
+    case MaterialEditorGraphMenuCommand::CreateArcSine: return "Asin";
+    case MaterialEditorGraphMenuCommand::CreateArcCosine: return "Acos";
+    case MaterialEditorGraphMenuCommand::CreateArcTangent: return "Atan";
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2: return "Atan2";
     case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";

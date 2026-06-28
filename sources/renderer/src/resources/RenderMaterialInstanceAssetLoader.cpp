@@ -114,6 +114,17 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -168,6 +179,17 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
