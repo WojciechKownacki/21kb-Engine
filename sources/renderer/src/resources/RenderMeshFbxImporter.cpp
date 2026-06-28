@@ -29,6 +29,11 @@ struct Vec3 {
     float z = 0.0F;
 };
 
+struct Bounds3 {
+    Vec3 min{};
+    Vec3 max{};
+};
+
 struct FbxGeometryData {
     std::vector<double> vertices;
     std::vector<std::int32_t> polygonVertexIndices;
@@ -306,6 +311,32 @@ template <typename T>
     };
 }
 
+[[nodiscard]] Bounds3 ComputeControlPointBounds(const std::vector<double>& vertices) noexcept {
+    Bounds3 bounds{
+        .min = Vec3{
+            .x = std::numeric_limits<float>::max(),
+            .y = std::numeric_limits<float>::max(),
+            .z = std::numeric_limits<float>::max(),
+        },
+        .max = Vec3{
+            .x = std::numeric_limits<float>::lowest(),
+            .y = std::numeric_limits<float>::lowest(),
+            .z = std::numeric_limits<float>::lowest(),
+        },
+    };
+    const std::uint32_t controlPointCount = static_cast<std::uint32_t>(vertices.size() / 3U);
+    for (std::uint32_t index = 0U; index < controlPointCount; ++index) {
+        const Vec3 point = ControlPoint(vertices, index);
+        bounds.min.x = std::min(bounds.min.x, point.x);
+        bounds.min.y = std::min(bounds.min.y, point.y);
+        bounds.min.z = std::min(bounds.min.z, point.z);
+        bounds.max.x = std::max(bounds.max.x, point.x);
+        bounds.max.y = std::max(bounds.max.y, point.y);
+        bounds.max.z = std::max(bounds.max.z, point.z);
+    }
+    return bounds;
+}
+
 [[nodiscard]] Vec3 Subtract(Vec3 lhs, Vec3 rhs) noexcept {
     return Vec3{ .x = lhs.x - rhs.x, .y = lhs.y - rhs.y, .z = lhs.z - rhs.z };
 }
@@ -326,10 +357,39 @@ template <typename T>
     return Vec3{ .x = value.x / length, .y = value.y / length, .z = value.z / length };
 }
 
-void AppendTriangle(RenderMeshAssetData& asset, Vec3 a, Vec3 b, Vec3 c) {
+[[nodiscard]] float NormalizeAxis(float value, float min, float max) noexcept {
+    const float range = max - min;
+    return range > 0.000001F ? (value - min) / range : 0.0F;
+}
+
+[[nodiscard]] std::array<float, 2> GeneratePlanarUv(Vec3 position, Vec3 normal, Bounds3 bounds) noexcept {
+    const float ax = std::abs(normal.x);
+    const float ay = std::abs(normal.y);
+    const float az = std::abs(normal.z);
+
+    if (az >= ax && az >= ay) {
+        return {
+            NormalizeAxis(position.x, bounds.min.x, bounds.max.x),
+            NormalizeAxis(position.y, bounds.min.y, bounds.max.y),
+        };
+    }
+    if (ay >= ax && ay >= az) {
+        return {
+            NormalizeAxis(position.x, bounds.min.x, bounds.max.x),
+            NormalizeAxis(position.z, bounds.min.z, bounds.max.z),
+        };
+    }
+    return {
+        NormalizeAxis(position.z, bounds.min.z, bounds.max.z),
+        NormalizeAxis(position.y, bounds.min.y, bounds.max.y),
+    };
+}
+
+void AppendTriangle(RenderMeshAssetData& asset, Bounds3 bounds, Vec3 a, Vec3 b, Vec3 c) {
     const Vec3 normal = Normalize(Cross(Subtract(b, a), Subtract(c, a)));
     const std::uint32_t base = static_cast<std::uint32_t>(asset.vertices.size());
-    const auto vertex = [normal](Vec3 position) {
+    const auto vertex = [bounds, normal](Vec3 position) {
+        const std::array<float, 2> uv = GeneratePlanarUv(position, normal, bounds);
         return RenderStaticMeshVertexP3N3UV2{
             .x = position.x,
             .y = position.y,
@@ -337,8 +397,8 @@ void AppendTriangle(RenderMeshAssetData& asset, Vec3 a, Vec3 b, Vec3 c) {
             .nx = normal.x,
             .ny = normal.y,
             .nz = normal.z,
-            .u = 0.0F,
-            .v = 0.0F,
+            .u = uv[0],
+            .v = uv[1],
             .r = 1.0F,
             .g = 1.0F,
             .b = 1.0F,
@@ -359,6 +419,7 @@ void AppendTriangle(RenderMeshAssetData& asset, Vec3 a, Vec3 b, Vec3 c) {
     const std::uint32_t controlPointCount = static_cast<std::uint32_t>(geometry.vertices.size() / 3U);
 
     RenderMeshAssetData asset;
+    const Bounds3 bounds = ComputeControlPointBounds(geometry.vertices);
     std::vector<std::uint32_t> polygon;
     for (std::int32_t rawIndex : geometry.polygonVertexIndices) {
         const bool endsPolygon = rawIndex < 0;
@@ -376,6 +437,7 @@ void AppendTriangle(RenderMeshAssetData& asset, Vec3 a, Vec3 b, Vec3 c) {
             for (std::size_t index = 1U; index + 1U < polygon.size(); ++index) {
                 AppendTriangle(
                     asset,
+                    bounds,
                     first,
                     ControlPoint(geometry.vertices, polygon[index]),
                     ControlPoint(geometry.vertices, polygon[index + 1U]));

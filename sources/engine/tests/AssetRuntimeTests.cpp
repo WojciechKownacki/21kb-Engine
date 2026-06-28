@@ -131,6 +131,40 @@ void RunAssetManagerDiscoveryCacheAndManifestTest() {
     kb::tests::Require(restoredMetadata->importCategory == metadata->importCategory, "Restored asset manifest did not preserve import category");
 }
 
+void RunAssetDiscoveryPreservesEditorLiveOverrideTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "Project" / "Assets";
+    const std::filesystem::path sourcePath = assetsRoot / "Text" / "Greeting.txt";
+    const std::filesystem::path overridePath = TestRoot() / "WorkingGreeting.txt";
+    WriteTextFile(sourcePath, "source asset");
+    WriteTextFile(overridePath, "editor working copy");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<TextAssetLoader>()), "Text asset loader registration failed for editor live override test");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed for editor live override test");
+    kb::tests::Require(manager.DiscoverMountedAssets() == 1, "Editor live override test did not discover the source asset");
+
+    const kb::assets::AssetMetadata* sourceMetadata = manager.Registry().FindByPath("/Game/Text/Greeting.txt");
+    kb::tests::Require(sourceMetadata != nullptr, "Editor live override test source metadata is missing");
+    const kb::assets::AssetId assetId = sourceMetadata->id;
+
+    kb::assets::AssetMetadata overrideMetadata = *sourceMetadata;
+    overrideMetadata.importCategory = "EditorLiveOverride";
+    overrideMetadata.physicalPath = overridePath;
+    overrideMetadata.contentHash = 0x21B0602ULL;
+    kb::tests::Require(manager.RegisterAsset(overrideMetadata), "Editor live override metadata was not accepted");
+
+    WriteTextFile(sourcePath, "source changed behind editor");
+    static_cast<void>(manager.DiscoverMountedAssets());
+
+    const kb::assets::AssetMetadata* rediscovered = manager.Registry().Find(assetId);
+    kb::tests::Require(rediscovered != nullptr, "Editor live override was removed by rediscovery");
+    kb::tests::Require(rediscovered->physicalPath == overridePath, "Editor live override physical path was replaced by source rediscovery");
+    kb::tests::Require(rediscovered->contentHash == 0x21B0602ULL, "Editor live override content hash was replaced by source rediscovery");
+    kb::tests::Require(rediscovered->importCategory == "EditorLiveOverride", "Editor live override category was not preserved");
+}
+
 void RunAssetManagerFolderAndRenameOperationsTest() {
     ResetTestRoot();
 
@@ -408,6 +442,7 @@ namespace kb::tests {
 
 void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
+    RunAssetDiscoveryPreservesEditorLiveOverrideTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
     RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
