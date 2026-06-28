@@ -47,7 +47,11 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateVectorParameter,
     CreateColorParameter,
     CreateAdd,
+    CreateSubtract,
     CreateMultiply,
+    CreateDivide,
+    CreatePower,
+    CreateOneMinus,
     CreateClamp,
     CreateLerp,
     CreateNormalUnpack,
@@ -162,6 +166,39 @@ public:
         }
         node->positionX = positionX;
         node->positionY = positionY;
+        return true;
+    }
+
+    [[nodiscard]] bool SetGraphConstantValue(std::uint32_t nodeId, std::string_view valueText) {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
+        if (node == nullptr || !IsGraphConstantNode(node->kind)) {
+            return false;
+        }
+
+        const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(node->kind, valueText);
+        if (!parsed.has_value()) {
+            return false;
+        }
+
+        node->parameter.defaultValueHint = ConstantDefaultValueHint(node->kind, *parsed);
+        node->parameter.overrideSupported = false;
+        if (node->parameter.displayName.empty()) {
+            node->parameter.displayName = ConstantDisplayName(node->kind);
+        }
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+            node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
+            node->parameter.hasRange = true;
+            node->parameter.rangeMin = 0.0F;
+            node->parameter.rangeMax = 1.0F;
+        }
+
+        SetWorkingCopy(std::move(document));
+        SelectNode(nodeId);
         return true;
     }
 
@@ -474,6 +511,77 @@ private:
             values.push_back(value);
         }
         return values;
+    }
+
+    [[nodiscard]] static bool IsGraphConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
+    }
+
+    [[nodiscard]] static std::string_view ConstantDisplayName(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        switch (kind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            return "Scalar";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return "Vector";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return "Color";
+        default:
+            return "Constant";
+        }
+    }
+
+    [[nodiscard]] static std::optional<std::array<float, 4U>> ParseConstantValue(
+        kb::render::RenderMaterialGraphNodeKind kind,
+        std::string_view text) {
+        std::string normalized{ text };
+        std::replace(normalized.begin(), normalized.end(), ',', ' ');
+        std::istringstream input{ normalized };
+        std::array<float, 4U> value{ 0.0F, 0.0F, 0.0F, 1.0F };
+        switch (kind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            if (input >> value[0]) {
+                return value;
+            }
+            return std::nullopt;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            if (input >> value[0] >> value[1] >> value[2]) {
+                return value;
+            }
+            return std::nullopt;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            if (input >> value[0] >> value[1] >> value[2]) {
+                if (!(input >> value[3])) {
+                    value[3] = 1.0F;
+                }
+                return value;
+            }
+            return std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] static std::string FloatText(float value) {
+        std::ostringstream output;
+        output << value;
+        return output.str();
+    }
+
+    [[nodiscard]] static std::string ConstantDefaultValueHint(
+        kb::render::RenderMaterialGraphNodeKind kind,
+        const std::array<float, 4U>& value) {
+        switch (kind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            return FloatText(value[0]);
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return FloatText(value[0]) + " " + FloatText(value[1]) + " " + FloatText(value[2]);
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return FloatText(value[0]) + " " + FloatText(value[1]) + " " + FloatText(value[2]) + " " + FloatText(value[3]);
+        default:
+            return {};
+        }
     }
 
     [[nodiscard]] static MaterialEditorParameterValue DefaultValueForSchema(
@@ -845,7 +953,11 @@ private:
             };
         case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         case kb::render::RenderMaterialGraphNodeKind::Add:
+        case kb::render::RenderMaterialGraphNodeKind::Subtract:
         case kb::render::RenderMaterialGraphNodeKind::Multiply:
+        case kb::render::RenderMaterialGraphNodeKind::Divide:
+        case kb::render::RenderMaterialGraphNodeKind::Power:
+        case kb::render::RenderMaterialGraphNodeKind::OneMinus:
         case kb::render::RenderMaterialGraphNodeKind::Clamp:
         case kb::render::RenderMaterialGraphNodeKind::Lerp:
         case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:

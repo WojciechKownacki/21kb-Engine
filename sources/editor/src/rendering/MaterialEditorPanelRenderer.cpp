@@ -172,6 +172,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     if (pin == "value") return 0;
     if (pin == "a") return 0;
     if (pin == "b") return 1;
+    if (pin == "base") return 0;
+    if (pin == "exponent") return 1;
     if (pin == "min") return 1;
     if (pin == "max") return 2;
     if (pin == "t") return 2;
@@ -220,8 +222,14 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { { "texture", "Texture" }, { "uv", "UV" } };
     case kb::render::RenderMaterialGraphNodeKind::Add:
+    case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
+    case kb::render::RenderMaterialGraphNodeKind::Divide:
         return { { "a", "A" }, { "b", "B" } };
+    case kb::render::RenderMaterialGraphNodeKind::Power:
+        return { { "base", "Base" }, { "exponent", "Exponent" } };
+    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+        return { { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { { "value", "Value" }, { "min", "Min" }, { "max", "Max" } };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -247,24 +255,28 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
     case kb::render::RenderMaterialGraphNodeKind::Add:
+    case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
+    case kb::render::RenderMaterialGraphNodeKind::Divide:
+    case kb::render::RenderMaterialGraphNodeKind::Power:
+    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
-        return { { "value", "out" } };
+        return { { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
-        return { { "xyz", "xyz" } };
+        return { { "xyz", "XYZ" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { { "rgba", "rgba" } };
+        return { { "rgba", "RGBA" } };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { { "color", "Color" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return { { "texture", "texture" } };
+        return { { "texture", "Texture" } };
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        return { { "normal", "normal" } };
+        return { { "normal", "Normal" } };
     case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return { { "uv", "uv" } };
+        return { { "uv", "UV" } };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return {};
     }
@@ -293,8 +305,16 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Texture Parameter";
     case kb::render::RenderMaterialGraphNodeKind::Add:
         return "Add";
+    case kb::render::RenderMaterialGraphNodeKind::Subtract:
+        return "Subtract";
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
         return "Multiply";
+    case kb::render::RenderMaterialGraphNodeKind::Divide:
+        return "Divide";
+    case kb::render::RenderMaterialGraphNodeKind::Power:
+        return "Power";
+    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+        return "One Minus";
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -554,14 +574,45 @@ void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body) {
 }
 
 [[nodiscard]] std::string TextureSampleStableId(const kb::render::RenderMaterialGraphNode& node) {
-    return node.parameter.stableId.empty() ? "textureSample" + std::to_string(node.id) : node.parameter.stableId;
+    if (!node.parameter.stableId.empty()) {
+        return node.parameter.stableId;
+    }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return "texture" + std::to_string(node.id);
+    }
+    return "textureSample" + std::to_string(node.id);
 }
 
-[[nodiscard]] kb::assets::AssetId TextureSampleAssetId(const kb::render::RenderMaterialAssetData* material, const kb::render::RenderMaterialGraphNode& node) {
-    if (material == nullptr || node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+[[nodiscard]] const kb::render::RenderMaterialGraphNode* TextureValueNodeForDisplay(
+    const kb::render::RenderMaterialAssetData& material,
+    const kb::render::RenderMaterialGraphNode& node) noexcept {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return &node;
+    }
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return nullptr;
+    }
+    for (const kb::render::RenderMaterialGraphLink& link : material.graph.links) {
+        if (link.toNodeId != node.id || link.toPin != "texture") {
+            continue;
+        }
+        const kb::render::RenderMaterialGraphNode* source = kb::render::FindRenderMaterialGraphNode(material.graph, link.fromNodeId);
+        if (source != nullptr && source->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture && link.fromPin == "texture") {
+            return source;
+        }
+    }
+    return &node;
+}
+
+[[nodiscard]] kb::assets::AssetId TextureNodeAssetId(const kb::render::RenderMaterialAssetData* material, const kb::render::RenderMaterialGraphNode& node) {
+    if (material == nullptr) {
         return {};
     }
-    const std::string stableId = TextureSampleStableId(node);
+    const kb::render::RenderMaterialGraphNode* textureNode = TextureValueNodeForDisplay(*material, node);
+    if (textureNode == nullptr) {
+        return {};
+    }
+    const std::string stableId = TextureSampleStableId(*textureNode);
     for (const kb::render::RenderMaterialGraphParameterValue& value : material->graphParameterValues) {
         if (value.stableId == stableId && value.type == kb::render::RenderMaterialParameterType::Texture) {
             return kb::assets::AssetId{ value.assetId };
@@ -570,14 +621,16 @@ void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body) {
     return {};
 }
 
-void DrawTextureSamplePreview(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
-    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
-        return;
-    }
-
-    const RECT preview = MaterialEditorPanelTextureSamplePreviewRect(nodeRect);
+void DrawTexturePreviewBlock(
+    HDC dc,
+    const RECT& nodeRect,
+    const RECT& preview,
+    const kb::render::RenderMaterialGraphNode& node,
+    const kb::render::RenderMaterialAssetData* material,
+    const EditorSceneContext& sceneContext,
+    const char* emptyLabel) {
     GdiDrawing::FillRectColor(dc, preview, RGB(11, 13, 16));
-    const kb::assets::AssetId assetId = TextureSampleAssetId(material, node);
+    const kb::assets::AssetId assetId = TextureNodeAssetId(material, node);
     const kb::assets::AssetMetadata* metadata = assetId.IsValid()
         ? sceneContext.Scene().Assets().Manager().Registry().Find(assetId)
         : nullptr;
@@ -591,8 +644,87 @@ void DrawTextureSamplePreview(HDC dc, const RECT& nodeRect, const kb::render::Re
         DrawText(dc, RECT{ preview.left, preview.bottom + 6, preview.right, preview.bottom + ScaleMetric(24, NodeScale(nodeRect)) }, label.c_str(), RGB(218, 226, 238), std::max(10, ScaleMetric(10, NodeScale(nodeRect))), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
         GdiDrawing::DrawSharpFrame(dc, preview, RGB(17, 20, 24), RGB(54, 62, 72));
-        DrawText(dc, preview, "Select Texture", RGB(172, 184, 198), 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawText(dc, preview, emptyLabel, RGB(172, 184, 198), 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
+}
+
+void DrawTextureSamplePreview(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return;
+    }
+
+    DrawTexturePreviewBlock(dc, nodeRect, MaterialEditorPanelTextureSamplePreviewRect(nodeRect), node, material, sceneContext, "Select Texture");
+}
+
+void DrawTextureParameterValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return;
+    }
+
+    const float scale = NodeScale(nodeRect);
+    const RECT valueRect = MaterialEditorPanelTextureParameterRect(nodeRect);
+    GdiDrawing::DrawSharpFrame(dc, valueRect, RGB(16, 18, 23), RGB(54, 63, 74));
+    DrawText(
+        dc,
+        RECT{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(4, scale), valueRect.right - ScaleMetric(10, scale), valueRect.top + ScaleMetric(24, scale) },
+        node.parameter.displayName.empty() ? "Texture" : node.parameter.displayName.c_str(),
+        RGB(178, 189, 202),
+        std::max(9, ScaleMetric(10, scale)),
+        FW_NORMAL,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const RECT preview{
+        valueRect.left + ScaleMetric(10, scale),
+        valueRect.top + ScaleMetric(28, scale),
+        valueRect.right - ScaleMetric(10, scale),
+        valueRect.bottom - ScaleMetric(8, scale),
+    };
+    DrawTexturePreviewBlock(dc, nodeRect, preview, node, material, sceneContext, "Select Texture");
+}
+
+void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node) {
+    if (!MaterialEditorPanelIsConstantNode(node.kind)) {
+        return;
+    }
+
+    const float scale = NodeScale(nodeRect);
+    const RECT valueRect = MaterialEditorPanelConstantValueRect(nodeRect);
+    GdiDrawing::DrawSharpFrame(dc, valueRect, RGB(16, 18, 23), RGB(54, 63, 74));
+
+    const MaterialEditorParameterValue value = MaterialEditorPanelConstantParameterValue(node.kind, node.parameter.defaultValueHint);
+    const std::string valueText = MaterialEditorPanelParameterValueText(value);
+    const std::string displayName = node.parameter.displayName.empty() ? std::string{ "Value" } : node.parameter.displayName;
+    DrawText(
+        dc,
+        RECT{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(4, scale), valueRect.right - ScaleMetric(10, scale), valueRect.top + ScaleMetric(24, scale) },
+        displayName.c_str(),
+        RGB(178, 189, 202),
+        std::max(9, ScaleMetric(10, scale)),
+        FW_NORMAL,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    RECT textRect{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(26, scale), valueRect.right - ScaleMetric(10, scale), valueRect.bottom - ScaleMetric(4, scale) };
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
+        const RECT swatch{
+            valueRect.left + ScaleMetric(10, scale),
+            valueRect.top + ScaleMetric(29, scale),
+            valueRect.left + ScaleMetric(42, scale),
+            valueRect.bottom - ScaleMetric(8, scale),
+        };
+        const COLORREF color = RGB(
+            std::clamp(static_cast<int>(value.numbers[0] * 255.0F), 0, 255),
+            std::clamp(static_cast<int>(value.numbers[1] * 255.0F), 0, 255),
+            std::clamp(static_cast<int>(value.numbers[2] * 255.0F), 0, 255));
+        GdiDrawing::DrawSharpFrame(dc, swatch, color, RGB(83, 91, 103));
+        textRect.left = swatch.right + ScaleMetric(8, scale);
+    }
+    DrawText(
+        dc,
+        textRect,
+        valueText.c_str(),
+        RGB(235, 240, 248),
+        std::max(10, ScaleMetric(13, scale)),
+        FW_SEMIBOLD,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render::RenderMaterialGraphNode& node, bool selected, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
@@ -622,6 +754,8 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
         DrawText(dc, RECT{ rect.left + ScaleMetric(18, scale), rect.top + headerHeight + ScaleMetric(5, scale), rect.right - ScaleMetric(12, scale), rect.top + headerHeight + ScaleMetric(18, scale) }, subtitle.c_str(), RGB(129, 140, 150), std::max(7, ScaleMetric(8, scale)));
     }
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
+    DrawTextureParameterValue(dc, rect, node, material, sceneContext);
+    DrawConstantValue(dc, rect, node);
 
     const std::vector<std::pair<std::string_view, std::string_view>> inputPins = GraphInputPins(node.kind);
     if (!inputPins.empty()) {

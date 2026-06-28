@@ -2451,14 +2451,20 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
             break;
         }
     }
-    if (node == nullptr || node->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+    if (node == nullptr ||
+        (node->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
+            node->kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture)) {
         return false;
     }
     if (node->parameter.stableId.empty()) {
-        node->parameter.stableId = "textureSample" + std::to_string(node->id);
+        node->parameter.stableId = node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture
+            ? "texture" + std::to_string(node->id)
+            : "textureSample" + std::to_string(node->id);
     }
     if (node->parameter.displayName.empty()) {
-        node->parameter.displayName = "Texture Sample " + std::to_string(node->id);
+        node->parameter.displayName = node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture
+            ? "Texture " + std::to_string(node->id)
+            : "Texture Sample " + std::to_string(node->id);
     }
     if (node->parameter.textureRole.empty()) {
         node->parameter.textureRole = "baseColor";
@@ -2487,6 +2493,28 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
         return false;
     }
     console_.Info("Materials", textureId.IsValid() ? "Texture Sample asset assigned." : "Texture Sample asset cleared.");
+    return true;
+}
+
+bool EditorSceneContext::SetMaterialGraphConstantValue(
+    kb::assets::AssetId id,
+    std::uint32_t nodeId,
+    std::string_view valueText) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        console_.Error("Materials", "Open the material in Material Editor before editing graph constants.");
+        return false;
+    }
+
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    if (!materialEditor_.SetGraphConstantValue(nodeId, valueText)) {
+        console_.Error("Materials", "Material graph constant value is invalid.");
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Edit Material Graph Constant", std::move(before), beforeSelectedNodeId)) {
+        return false;
+    }
+    console_.Info("Materials", "Edited material graph constant #" + std::to_string(nodeId) + ".");
     return true;
 }
 
@@ -2812,8 +2840,16 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ParameterColor, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateAdd:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Add, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSubtract:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Subtract, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateMultiply:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Multiply, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDivide:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Divide, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePower:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Power, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateOneMinus:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::OneMinus, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateClamp:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Clamp, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateLerp:

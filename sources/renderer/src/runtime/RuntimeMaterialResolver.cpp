@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
@@ -318,7 +319,11 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Power:
+    case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -558,6 +563,19 @@ struct MaterialGraphRuntimeValue {
         result.authored = lhs.authored || rhs.authored;
         break;
     }
+    case RenderMaterialGraphNodeKind::Subtract: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            lhs.value[0] - rhs.value[0],
+            lhs.value[1] - rhs.value[1],
+            lhs.value[2] - rhs.value[2],
+            lhs.value[3] - rhs.value[3],
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
     case RenderMaterialGraphNodeKind::Multiply: {
         const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(1.0F, false), stack);
         const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(1.0F, false), stack);
@@ -569,6 +587,51 @@ struct MaterialGraphRuntimeValue {
             RenderMaterialGraphPinType::Float4);
         result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
         result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Divide: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(1.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(1.0F, false), stack);
+        const auto safeDivide = [](float numerator, float denominator) noexcept {
+            const float safe = std::max(std::abs(denominator), 0.0001F);
+            return numerator / safe;
+        };
+        result = RuntimeValue(
+            safeDivide(lhs.value[0], rhs.value[0]),
+            safeDivide(lhs.value[1], rhs.value[1]),
+            safeDivide(lhs.value[2], rhs.value[2]),
+            safeDivide(lhs.value[3], rhs.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Power: {
+        const MaterialGraphRuntimeValue base = EvaluateGraphInput(materialAsset, node, "base", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue exponent = EvaluateGraphInput(materialAsset, node, "exponent", RuntimeValue(1.0F, false), stack);
+        const auto power = [](float baseValue, float exponentValue) noexcept {
+            return static_cast<float>(std::pow(std::max(baseValue, 0.0F), exponentValue));
+        };
+        result = RuntimeValue(
+            power(base.value[0], exponent.value[0]),
+            power(base.value[1], exponent.value[1]),
+            power(base.value[2], exponent.value[2]),
+            power(base.value[3], exponent.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(base.textureAssetId, exponent.textureAssetId);
+        result.authored = base.authored || exponent.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::OneMinus: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            1.0F - input.value[0],
+            1.0F - input.value[1],
+            1.0F - input.value[2],
+            1.0F - input.value[3],
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
         break;
     }
     case RenderMaterialGraphNodeKind::Clamp: {
