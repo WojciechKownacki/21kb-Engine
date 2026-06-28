@@ -23,6 +23,7 @@ public:
     [[nodiscard]] std::size_t RedoCount() const noexcept;
     [[nodiscard]] bool LastCompletedCommandAffectsSceneDocument() const noexcept;
     [[nodiscard]] bool LastCompletedCommandAffectsHierarchySelection() const noexcept;
+    [[nodiscard]] bool LastCompletedCommandAffectsOpenMaterialSource() const noexcept;
 
 private:
     void CaptureCompletedCommandMetadata(const IEditorCommand& command) noexcept;
@@ -31,6 +32,7 @@ private:
     std::vector<std::unique_ptr<IEditorCommand>> redoStack_;
     bool lastCompletedCommandAffectsSceneDocument_ = true;
     bool lastCompletedCommandAffectsHierarchySelection_ = true;
+    bool lastCompletedCommandAffectsOpenMaterialSource_ = false;
 };
 
 } // namespace kb::editor

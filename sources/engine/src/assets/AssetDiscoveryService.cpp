@@ -85,6 +85,24 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
         }
     }
 
+    std::vector<AssetId> dependencyRefreshIds;
+    dependencyRefreshIds.reserve(registry.All().size());
+    for (const AssetMetadata& metadata : registry.All()) {
+        dependencyRefreshIds.push_back(metadata.id);
+    }
+    for (const AssetId id : dependencyRefreshIds) {
+        AssetMetadata* metadata = registry.FindMutable(id);
+        if (metadata == nullptr || metadata->physicalPath.empty()) {
+            continue;
+        }
+        IAssetLoader* loader = AssetLoaderRegistry::FindByExtension(loaders, metadata->physicalPath.extension());
+        if (loader == nullptr) {
+            metadata->dependencies.clear();
+            continue;
+        }
+        metadata->dependencies = loader->DiscoverDependencies(*metadata, registry);
+    }
+
     for (const AssetMetadata& metadata : previousAssets) {
         const std::string normalizedVirtualPath = NormalizeAssetPath(metadata.virtualPath);
         if (!AssetPathUtilities::IsMountedVirtualPath(mounts, metadata.virtualPath) || discoveredIds.contains(metadata.id.value)) {

@@ -63,7 +63,7 @@ public:
     static constexpr int AssetHeaderHeight = 34;
     static constexpr int BaseTileWidth = 96;
     static constexpr int BaseTileHeight = 110;
-    static constexpr int ContextMenuWidth = 168;
+    static constexpr int ContextMenuWidth = 244;
     static constexpr int ContextMenuRowHeight = 26;
     static constexpr int ContextMenuPadding = 4;
     static constexpr int ContextMenuSeparatorHeight = 7;

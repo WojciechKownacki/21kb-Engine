@@ -6,12 +6,21 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "app/EditorAssetBrowserDoubleClickHandler.hpp"
 #include "engine/assets/AssetManager.hpp"
+#include "engine/scene/Scene.hpp"
+#include "engine/scene/SceneAssets.hpp"
+#include "scene/EditorSceneAssetBrowserCommands.hpp"
 #if defined(_WIN32)
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "rendering/ProjectFilesAssetIconResolver.hpp"
+#include "rendering/ProjectFilesMaterialPreviewThumbnailModel.hpp"
+#include "rendering/ProjectFilesMaterialPreviewThumbnailPolicy.hpp"
 #endif
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -20,6 +29,22 @@
 #include <vector>
 
 namespace {
+
+[[nodiscard]] std::filesystem::path TempRoot() {
+    return std::filesystem::temp_directory_path() / "21kb_editor_asset_browser_tests";
+}
+
+void ResetTempRoot() {
+    std::error_code error;
+    std::filesystem::remove_all(TempRoot(), error);
+}
+
+void WriteTextFile(const std::filesystem::path& path, std::string_view text) {
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    std::ofstream output{ path, std::ios::binary | std::ios::trunc };
+    output << text;
+}
 
 [[nodiscard]] kb::assets::AssetMetadata Metadata(std::string name, std::string type, std::filesystem::path path) {
     return kb::assets::AssetMetadata{
@@ -88,6 +113,8 @@ void RunMaterialSearchAndFilterTest() {
     kb::assets::AssetManager manager;
     static_cast<void>(manager.RegisterAsset(Metadata("BrassCoat", "RenderMaterial", "/Game/Props/BrassCoat.kbmat")));
     static_cast<void>(manager.RegisterAsset(Metadata("HeroCoatOverride", "RenderMaterialInstance", "/Game/Characters/HeroCoatOverride.kbmatinst")));
+    static_cast<void>(manager.RegisterAsset(Metadata("LayeredSurface", "RenderMaterialGraph", "/Game/Materials/LayeredSurface.kbmaterialgraph")));
+    static_cast<void>(manager.RegisterAsset(Metadata("LayeredSurfaceType", "RenderMaterialType", "/Game/Materials/LayeredSurfaceType.kbmaterialtype")));
     static_cast<void>(manager.RegisterAsset(Metadata("HeroMesh", "RenderMesh", "/Game/Characters/HeroMesh.gltf")));
     static_cast<void>(manager.RegisterAsset(Metadata("BrushTexture", "RenderTexture", "/Game/Props/BrushTexture.ktx")));
 
@@ -96,9 +123,11 @@ void RunMaterialSearchAndFilterTest() {
     state.SetRecursive(true);
     state.SetSearchQuery("materialy");
     std::vector<kb::editor::EditorAssetItemRow> assets = state.AssetRows(manager);
-    kb::editor::tests::Require(assets.size() == 2, "Asset browser material search should find every material asset type");
+    kb::editor::tests::Require(assets.size() == 4, "Asset browser material search should find every material asset type");
     kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterial"; }), "Asset browser material search missed RenderMaterial");
     kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterialInstance"; }), "Asset browser material search missed RenderMaterialInstance");
+    kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterialGraph"; }), "Asset browser material search missed RenderMaterialGraph");
+    kb::editor::tests::Require(std::ranges::any_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMaterialType"; }), "Asset browser material search missed RenderMaterialType");
     kb::editor::tests::Require(std::ranges::none_of(assets, [](const kb::editor::EditorAssetItemRow& row) { return row.metadata.type == "RenderMesh" || row.metadata.type == "RenderTexture"; }), "Asset browser material search should not include non-material assets");
 
     const std::vector<std::string> types = state.AssetTypes(manager);
@@ -109,10 +138,13 @@ void RunMaterialSearchAndFilterTest() {
     kb::editor::tests::Require(state.TypeFilter() == "Materials", "Asset browser type cycling should reach the combined Materials filter");
     state.ClearSearch();
     assets = state.AssetRows(manager);
-    kb::editor::tests::Require(assets.size() == 2, "Asset browser Materials filter should include both material asset types");
+    kb::editor::tests::Require(assets.size() == 4, "Asset browser Materials filter should include material documents, graph assets and type assets");
     kb::editor::tests::Require(std::ranges::all_of(assets, [](const kb::editor::EditorAssetItemRow& row) {
-        return row.metadata.type == "RenderMaterial" || row.metadata.type == "RenderMaterialInstance";
-    }), "Asset browser Materials filter should exclude non-material assets");
+        return row.metadata.type == "RenderMaterial" ||
+            row.metadata.type == "RenderMaterialInstance" ||
+            row.metadata.type == "RenderMaterialGraph" ||
+            row.metadata.type == "RenderMaterialType";
+    }), "Asset browser Materials filter should exclude non-material-family assets");
 }
 
 void RunSelectionAndTypeCycleTest() {
@@ -259,6 +291,33 @@ void RunTextEditStateTest() {
     kb::editor::tests::Require(state.TextEditMode() == kb::editor::EditorAssetTextEditMode::RenameAsset, "Asset browser rename mode did not target selected asset");
 }
 
+void RunDependencySafetyBlocksRenameAndDeleteTest() {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    static_cast<void>(manager.RegisterAsset(Metadata("GraphSurface", "RenderMaterialType", "/Game/MaterialTypes/GraphSurface.kbmaterialtype")));
+    const kb::assets::AssetMetadata* type = manager.Registry().FindByPath("/Game/MaterialTypes/GraphSurface.kbmaterialtype");
+    kb::editor::tests::Require(type != nullptr, "KBMAT-GRAPH-0005: Dependency safety test did not register Material Type asset");
+    const kb::assets::AssetId typeId = type->id;
+
+    kb::assets::AssetMetadata material = Metadata("GraphBacked", "RenderMaterial", "/Game/Materials/GraphBacked.kbmat");
+    material.dependencies.push_back(typeId);
+    static_cast<void>(manager.RegisterAsset(std::move(material)));
+
+    kb::editor::EditorAssetBrowserState state;
+    static_cast<void>(state.SelectFolder("/Game/MaterialTypes", manager));
+    kb::editor::tests::Require(state.BeginRenameAsset(typeId, manager), "KBMAT-GRAPH-0005: Dependency safety test could not enter rename mode");
+    state.SetTextEditValue("RenamedGraphSurface");
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::CommitTextEdit(scene, state),
+        "KBMAT-GRAPH-0005: Project Files should block renaming an asset referenced by another asset dependency");
+    kb::editor::tests::Require(manager.LastError().find("depends on it") != std::string::npos,
+        "KBMAT-GRAPH-0005: Rename dependency safety should report the dependent asset");
+
+    kb::editor::tests::Require(!kb::editor::EditorSceneAssetBrowserCommands::DeleteAsset(scene, state, typeId),
+        "KBMAT-GRAPH-0005: Project Files should block deleting an asset referenced by another asset dependency");
+    kb::editor::tests::Require(manager.Registry().Find(typeId) != nullptr,
+        "KBMAT-GRAPH-0005: Blocked dependency delete should keep the target asset registered");
+}
+
 void RunSearchTextShortcutStateTest() {
     kb::editor::EditorAssetBrowserState state;
     state.FocusSearch(true);
@@ -274,7 +333,97 @@ void RunSearchTextShortcutStateTest() {
     kb::editor::tests::Require(state.SearchQuery() == "Light", "Asset browser search insert should accept pasted ASCII input");
 }
 
+void RunImportCommandReturnsMaterialTextureReportTest() {
+    ResetTempRoot();
+
+    const std::filesystem::path projectRoot = TempRoot() / "Project";
+    const std::filesystem::path sourceRoot = TempRoot() / "Sources";
+    WriteTextFile(sourceRoot / "Albedo.png", "texture bytes");
+    WriteTextFile(sourceRoot / "Paint.mtl", "material bytes");
+    WriteTextFile(sourceRoot / "Unsupported.assetx", "unsupported bytes");
+
+    kb::scene::Scene scene;
+    kb::editor::EditorAssetBrowserState browser;
+    kb::editor::tests::Require(scene.Assets().MountProject(projectRoot), "Import command report test could not mount project assets");
+
+    const std::array<std::filesystem::path, 2U> firstFiles{
+        sourceRoot / "Albedo.png",
+        sourceRoot / "Paint.mtl",
+    };
+    const kb::assets::AssetImportResult first =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(scene, browser, firstFiles, "/Game/Imports");
+    kb::editor::tests::Require(first.Succeeded(), "Import command report test could not import initial material and texture");
+    kb::editor::tests::Require(first.CreatedCount() == 2U && first.ReusedCount() == 0U, "Import command did not report created material and texture assets");
+
+    const std::array<std::filesystem::path, 4U> mixedFiles{
+        sourceRoot / "Albedo.png",
+        sourceRoot / "Paint.mtl",
+        sourceRoot / "Missing.png",
+        sourceRoot / "Unsupported.assetx",
+    };
+    const kb::assets::AssetImportResult report =
+        kb::editor::EditorSceneAssetBrowserCommands::ImportFilesWithReport(scene, browser, mixedFiles, "/Game/Imports");
+    kb::editor::tests::Require(report.ImportedCount() == 2U, "Import command report should treat reused material and texture assets as imported");
+    kb::editor::tests::Require(report.CreatedCount() == 0U, "Import command report should not create duplicate material or texture assets");
+    kb::editor::tests::Require(report.ReusedCount() == 2U, "Import command report did not expose reused material and texture assets");
+    kb::editor::tests::Require(report.MissingCount() == 1U, "Import command report did not expose missing texture source");
+    kb::editor::tests::Require(report.UnsupportedCount() == 1U, "Import command report did not expose unsupported source");
+    kb::editor::tests::Require(report.items[0].category == kb::assets::AssetImportCategory::Texture && report.items[0].status == kb::assets::AssetImportItemStatus::Reused, "Import command report did not preserve reused texture info");
+    kb::editor::tests::Require(report.items[1].category == kb::assets::AssetImportCategory::Material && report.items[1].status == kb::assets::AssetImportItemStatus::Reused, "Import command report did not preserve reused material info");
+    kb::editor::tests::Require(report.items[2].category == kb::assets::AssetImportCategory::Texture && report.items[2].status == kb::assets::AssetImportItemStatus::Missing, "Import command report did not preserve missing texture info");
+    kb::editor::tests::Require(report.items[3].category == kb::assets::AssetImportCategory::Unknown && report.items[3].status == kb::assets::AssetImportItemStatus::Unsupported, "Import command report did not preserve unsupported info");
+    kb::editor::tests::Require(browser.SelectedAsset() == first.items.front().id, "Import command should select the first imported or reused asset");
+
+    ResetTempRoot();
+}
+
 #if defined(_WIN32)
+[[nodiscard]] kb::assets::AssetMetadata MaterialMetadata(std::string name, const std::filesystem::path& path, std::uint64_t contentHash) {
+    kb::assets::AssetMetadata metadata = Metadata(std::move(name), "RenderMaterial", "/Game/Materials/ThumbnailProbe.kbmat");
+    metadata.id.value = 0x2100BEEF + contentHash;
+    metadata.physicalPath = path;
+    metadata.contentHash = contentHash;
+    return metadata;
+}
+
+void WritePreviewMaterial(const std::filesystem::path& path, float red, float green, float blue) {
+    kb::render::RenderMaterialAssetData material{};
+    material.desc.baseColor[0] = red;
+    material.desc.baseColor[1] = green;
+    material.desc.baseColor[2] = blue;
+    material.desc.baseColor[3] = 1.0F;
+    material.desc.roughnessFactor = 0.42F;
+    material.desc.emissiveStrength = 0.0F;
+    kb::editor::tests::Require(kb::render::RenderMaterialAssetWriter::Save(path, material), "KBMAT-UE-0015: Could not write material thumbnail fixture");
+}
+
+[[nodiscard]] bool HasVisiblePreviewPixels(const kb::editor::ProjectFilesMaterialPreviewImage& image) {
+    if (image.width <= 0 || image.height <= 0 || image.bgra.empty()) {
+        return false;
+    }
+    const std::uint32_t first = image.bgra.front();
+    std::size_t differentPixels = 0U;
+    for (const std::uint32_t pixel : image.bgra) {
+        if (pixel != first && ++differentPixels >= 32U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::size_t CountErrorTintPixels(const kb::editor::ProjectFilesMaterialPreviewImage& image) {
+    std::size_t count = 0U;
+    for (const std::uint32_t pixel : image.bgra) {
+        const int blue = static_cast<int>(pixel & 0xFFU);
+        const int green = static_cast<int>((pixel >> 8U) & 0xFFU);
+        const int red = static_cast<int>((pixel >> 16U) & 0xFFU);
+        if (red > green + 32 && red > blue + 12) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void RunProjectFilesEdgeToEdgeLayoutTest() {
     const RECT content{ 0, 0, 960, 260 };
     const kb::editor::EditorAssetBrowserLayoutRects layout = kb::editor::EditorAssetBrowserLayout::Build(content);
@@ -429,6 +578,13 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
     kb::editor::tests::Require(backgroundHasMaterial, "Asset browser background context menu should expose New Material");
+    const bool backgroundHasMaterialGraph = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+        return item.command == kb::editor::EditorAssetContextCommand::NewMaterialGraph;
+    });
+    const bool backgroundHasMaterialType = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+        return item.command == kb::editor::EditorAssetContextCommand::NewMaterialType;
+    });
+    kb::editor::tests::Require(backgroundHasMaterialGraph && backgroundHasMaterialType, "Asset browser background context menu should expose Material Graph and Material Type creation");
 
     kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/Game/Environment", manager), "Asset browser should open a folder context menu for registered virtual folders");
     const std::vector<kb::editor::EditorAssetContextMenuItem> folderItems = state.ContextMenuItems(manager);
@@ -436,6 +592,12 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
     kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material");
+    kb::editor::tests::Require(std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::NewMaterialGraph;
+        }) && std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::NewMaterialType;
+        }),
+        "Asset browser folder context menu should expose Material Graph and Material Type creation");
 
     static_cast<void>(manager.RegisterAsset(Metadata("Paint", "RenderMaterial", "/Game/Environment/Paint.kbmat")));
     const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Environment/Paint.kbmat");
@@ -455,6 +617,28 @@ void RunMaterialContextMenuCommandTest() {
     for (std::size_t index = 0; index < expectedMaterialCommands.size(); ++index) {
         kb::editor::tests::Require(materialItems[index].command == expectedMaterialCommands[index], "Material asset context menu command order is incorrect");
     }
+
+    static_cast<void>(manager.RegisterAsset(Metadata("PaintGraph", "RenderMaterialGraph", "/Game/Environment/PaintGraph.kbmaterialgraph")));
+    static_cast<void>(manager.RegisterAsset(Metadata("PaintType", "RenderMaterialType", "/Game/Environment/PaintType.kbmaterialtype")));
+    const kb::assets::AssetMetadata* graph = manager.Registry().FindByPath("/Game/Environment/PaintGraph.kbmaterialgraph");
+    const kb::assets::AssetMetadata* type = manager.Registry().FindByPath("/Game/Environment/PaintType.kbmaterialtype");
+    kb::editor::tests::Require(graph != nullptr && type != nullptr, "Asset browser material command test did not register graph/type assets");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, graph->id, manager), "Asset browser should open a Material Graph context menu");
+    const std::vector<kb::editor::EditorAssetContextMenuItem> graphItems = state.ContextMenuItems(manager);
+    kb::editor::tests::Require(!graphItems.empty() && graphItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialFromGraph,
+        "Material Graph context menu should expose Create Material From Graph first");
+    kb::editor::tests::Require(std::ranges::none_of(graphItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::Open;
+        }),
+        "Material Graph context menu should not expose Material Editor Open");
+    kb::editor::tests::Require(state.OpenContextMenuForAsset(220, 70, type->id, manager), "Asset browser should open a Material Type context menu");
+    const std::vector<kb::editor::EditorAssetContextMenuItem> typeItems = state.ContextMenuItems(manager);
+    kb::editor::tests::Require(!typeItems.empty() && typeItems.front().command == kb::editor::EditorAssetContextCommand::CreateMaterialFromMaterialType,
+        "Material Type context menu should expose Create Material From Material Type first");
+    kb::editor::tests::Require(std::ranges::none_of(typeItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+            return item.command == kb::editor::EditorAssetContextCommand::Open;
+        }),
+        "Material Type context menu should not expose Material Editor Open");
 
     const kb::assets::AssetMetadata* mesh = manager.Registry().FindByPath("/Game/Environment/Character.gltf");
     kb::editor::tests::Require(mesh != nullptr, "Asset browser material command test did not register mesh asset");
@@ -489,11 +673,74 @@ void RunMaterialAssetDoubleClickOpensMaterialEditorTest() {
 void RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest() {
     const kb::assets::AssetMetadata material = Metadata("StudioPaint", "RenderMaterial", "/Game/Materials/StudioPaint.kbmat");
     const kb::assets::AssetMetadata instance = Metadata("StudioPaint_Inst", "RenderMaterialInstance", "/Game/Materials/StudioPaint_Inst.kbmatinst");
+    const kb::assets::AssetMetadata graph = Metadata("StudioGraph", "RenderMaterialGraph", "/Game/Materials/StudioGraph.kbmaterialgraph");
+    const kb::assets::AssetMetadata type = Metadata("StudioType", "RenderMaterialType", "/Game/Materials/StudioType.kbmaterialtype");
     const kb::assets::AssetMetadata mesh = Metadata("StudioMesh", "RenderMesh", "/Game/Meshes/StudioMesh.gltf");
 
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(material), "Project Files should classify material assets for the preview thumbnail path");
     kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterial(instance), "Project Files should classify material instances for the preview thumbnail path");
+    kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(graph), "Project Files should not treat raw Material Graph assets as assignable material previews");
+    kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(type), "Project Files should not treat Material Type assets as assignable material previews");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialGraph(graph), "Project Files should classify Material Graph assets");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::IsMaterialType(type), "Project Files should classify Material Type assets");
     kb::editor::tests::Require(!kb::editor::ProjectFilesAssetIconResolver::IsMaterial(mesh), "Project Files should keep mesh assets on the mesh thumbnail path");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(graph, false).kind == kb::editor::HeroIconKind::RectangleGroup,
+        "KBMAT-GRAPH-0005: Material Graph should use a graph/document icon instead of the material preview sphere");
+    kb::editor::tests::Require(kb::editor::ProjectFilesAssetIconResolver::Resolve(type, false).kind == kb::editor::HeroIconKind::DocumentText,
+        "KBMAT-GRAPH-0005: Material Type should use a schema/document icon instead of the material preview sphere");
+
+    const kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy materialPolicy =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(material);
+    const kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy instancePolicy =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(instance);
+    const kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy meshPolicy =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(mesh);
+    const kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy graphPolicy =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(graph);
+    const kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy typePolicy =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailPolicy::Resolve(type);
+    kb::editor::tests::Require(materialPolicy.usesPreviewScenePrimitive && materialPolicy.primitiveName == "sphere" &&
+            materialPolicy.vertexCount > 0U && materialPolicy.triangleCount > 0U && materialPolicy.boundsRadius > 0.0F,
+        "KBMAT-UE-0007: Material thumbnails should use the real preview sphere primitive policy");
+    kb::editor::tests::Require(instancePolicy.usesPreviewScenePrimitive && instancePolicy.primitiveName == "sphere",
+        "KBMAT-UE-0007: Material instance thumbnails should use the material preview primitive policy");
+    kb::editor::tests::Require(!meshPolicy.usesPreviewScenePrimitive,
+        "KBMAT-UE-0007: Non-material assets should not use the material preview primitive thumbnail policy");
+    kb::editor::tests::Require(!graphPolicy.usesPreviewScenePrimitive && !typePolicy.usesPreviewScenePrimitive,
+        "KBMAT-GRAPH-0005: Raw Material Graph and Material Type assets should use metadata icons, not material preview thumbnails");
+}
+
+void RunMaterialThumbnailPreviewRuntimeModelTest() {
+    ResetTempRoot();
+    const std::filesystem::path materialPath = TempRoot() / "ThumbnailProbe.kbmat";
+
+    WritePreviewMaterial(materialPath, 0.10F, 0.62F, 0.90F);
+    const kb::assets::AssetMetadata blueMaterial = MaterialMetadata("ThumbnailProbe", materialPath, 1U);
+    const kb::editor::ProjectFilesMaterialPreviewStyle blueStyle =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(blueMaterial);
+    kb::editor::tests::Require(blueStyle.loadedFromAsset && !blueStyle.errorFallback, "KBMAT-UE-0015: Valid material thumbnail style should load from the .kbmat document");
+    const kb::editor::ProjectFilesMaterialPreviewImage blueImage =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, blueStyle, false);
+    kb::editor::tests::Require(HasVisiblePreviewPixels(blueImage), "KBMAT-UE-0015: Material thumbnail should render non-empty preview pixels");
+
+    WritePreviewMaterial(materialPath, 0.88F, 0.20F, 0.12F);
+    const kb::assets::AssetMetadata redMaterial = MaterialMetadata("ThumbnailProbe", materialPath, 2U);
+    const kb::editor::ProjectFilesMaterialPreviewStyle redStyle =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(redMaterial);
+    kb::editor::tests::Require(redStyle.loadedFromAsset && !redStyle.errorFallback, "KBMAT-UE-0015: Material thumbnail should reload after the saved asset changes");
+    const kb::editor::ProjectFilesMaterialPreviewImage redImage =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, redStyle, false);
+    kb::editor::tests::Require(redImage.bgra != blueImage.bgra, "KBMAT-UE-0015: Material thumbnail pixels should update after save/content hash change");
+
+    WriteTextFile(materialPath, "materialType builtin.pbr\nbaseColor nope\n");
+    const kb::assets::AssetMetadata invalidMaterial = MaterialMetadata("BrokenThumbnailProbe", materialPath, 3U);
+    const kb::editor::ProjectFilesMaterialPreviewStyle errorStyle =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::StyleFromAsset(invalidMaterial);
+    kb::editor::tests::Require(errorStyle.errorFallback && !errorStyle.loadedFromAsset, "KBMAT-UE-0015: Invalid material thumbnail should use the visible error material policy");
+    const kb::editor::ProjectFilesMaterialPreviewImage errorImage =
+        kb::editor::ProjectFilesMaterialPreviewThumbnailModel::RenderImage(64, 64, errorStyle, false);
+    kb::editor::tests::Require(HasVisiblePreviewPixels(errorImage), "KBMAT-UE-0015: Error material thumbnail should still render visible preview pixels");
+    kb::editor::tests::Require(CountErrorTintPixels(errorImage) >= 48U, "KBMAT-UE-0015: Error material thumbnail should expose a visible magenta/red diagnostic tint");
 }
 #endif
 
@@ -508,7 +755,9 @@ void RunEditorAssetBrowserTests() {
     RunSelectionAndTypeCycleTest();
     RunMultiSelectionStateTest();
     RunTextEditStateTest();
+    RunDependencySafetyBlocksRenameAndDeleteTest();
     RunSearchTextShortcutStateTest();
+    RunImportCommandReturnsMaterialTextureReportTest();
 #if defined(_WIN32)
     RunProjectFilesEdgeToEdgeLayoutTest();
     RunTileHitTestUsesExactGridGeometryTest();
@@ -521,6 +770,7 @@ void RunEditorAssetBrowserTests() {
     RunMaterialContextMenuCommandTest();
     RunMaterialAssetDoubleClickOpensMaterialEditorTest();
     RunMaterialAssetIconResolverRecognizesPreviewMaterialsTest();
+    RunMaterialThumbnailPreviewRuntimeModelTest();
 #endif
 }
 

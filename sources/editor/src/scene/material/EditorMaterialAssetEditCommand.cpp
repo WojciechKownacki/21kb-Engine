@@ -2,6 +2,7 @@
 
 #include "engine/scene/Scene.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
+#include "scene/material/MaterialEditorState.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -228,6 +229,10 @@ bool EditorMaterialAssetEditCommand::AffectsHierarchySelection() const noexcept 
     return false;
 }
 
+bool EditorMaterialAssetEditCommand::AffectsOpenMaterialSource() const noexcept {
+    return true;
+}
+
 bool EditorMaterialAssetEditCommand::Execute() {
     return Write(after_);
 }
@@ -242,6 +247,79 @@ bool EditorMaterialAssetEditCommand::Redo() {
 
 bool EditorMaterialAssetEditCommand::Write(const kb::render::RenderMaterialAssetData& asset) {
     return EditorMaterialAssetGateway::WriteExisting(scene_, materialId_, asset);
+}
+
+std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyEditCommand::Create(
+    MaterialEditorState& editor,
+    kb::assets::AssetId materialId,
+    std::string label,
+    kb::render::RenderMaterialAssetData before,
+    kb::render::RenderMaterialAssetData after,
+    std::uint32_t beforeSelectedNodeId,
+    std::uint32_t afterSelectedNodeId) {
+    return std::unique_ptr<EditorMaterialWorkingCopyEditCommand>{ new EditorMaterialWorkingCopyEditCommand{
+        editor,
+        materialId,
+        std::move(label),
+        std::move(before),
+        std::move(after),
+        beforeSelectedNodeId,
+        afterSelectedNodeId,
+    } };
+}
+
+EditorMaterialWorkingCopyEditCommand::EditorMaterialWorkingCopyEditCommand(
+    MaterialEditorState& editor,
+    kb::assets::AssetId materialId,
+    std::string label,
+    kb::render::RenderMaterialAssetData before,
+    kb::render::RenderMaterialAssetData after,
+    std::uint32_t beforeSelectedNodeId,
+    std::uint32_t afterSelectedNodeId)
+    : editor_(editor)
+    , materialId_(materialId)
+    , label_(std::move(label))
+    , before_(std::move(before))
+    , after_(std::move(after))
+    , beforeSelectedNodeId_(beforeSelectedNodeId)
+    , afterSelectedNodeId_(afterSelectedNodeId) {}
+
+std::string_view EditorMaterialWorkingCopyEditCommand::Label() const noexcept {
+    return label_;
+}
+
+bool EditorMaterialWorkingCopyEditCommand::AffectsSceneDocument() const noexcept {
+    return false;
+}
+
+bool EditorMaterialWorkingCopyEditCommand::AffectsHierarchySelection() const noexcept {
+    return false;
+}
+
+bool EditorMaterialWorkingCopyEditCommand::Execute() {
+    return Apply(after_, afterSelectedNodeId_);
+}
+
+bool EditorMaterialWorkingCopyEditCommand::Undo() {
+    return Apply(before_, beforeSelectedNodeId_);
+}
+
+bool EditorMaterialWorkingCopyEditCommand::Redo() {
+    return Apply(after_, afterSelectedNodeId_);
+}
+
+bool EditorMaterialWorkingCopyEditCommand::Apply(const kb::render::RenderMaterialAssetData& asset, std::uint32_t selectedNodeId) {
+    if (editor_.OpenAssetId() != materialId_ || !editor_.WorkingCopy().has_value()) {
+        return false;
+    }
+
+    editor_.SetWorkingCopy(asset);
+    if (selectedNodeId != 0U && kb::render::FindRenderMaterialGraphNode(asset.graph, selectedNodeId) != nullptr) {
+        static_cast<void>(editor_.SelectNode(selectedNodeId));
+    } else {
+        static_cast<void>(editor_.ClearNodeSelection());
+    }
+    return true;
 }
 
 } // namespace kb::editor

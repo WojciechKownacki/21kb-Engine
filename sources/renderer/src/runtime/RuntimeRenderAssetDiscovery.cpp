@@ -4,7 +4,9 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
@@ -27,7 +29,9 @@ void RuntimeRenderAssetDiscovery::Ensure(kb::scene::Scene& scene, std::uint64_t 
         kb::assets::AssetManager& manager = scene.Assets().Manager();
         RegisterLoaderIfMissing<RenderMeshAssetLoader>(manager, "RenderMesh");
         RegisterLoaderIfMissing<RenderMaterialAssetLoader>(manager, "RenderMaterial");
+        RegisterLoaderIfMissing<RenderMaterialGraphAssetLoader>(manager, kRenderMaterialGraphAssetType);
         RegisterLoaderIfMissing<RenderMaterialInstanceAssetLoader>(manager, "RenderMaterialInstance");
+        RegisterLoaderIfMissing<RenderMaterialTypeAssetLoader>(manager, kRenderMaterialTypeAssetType);
         RegisterLoaderIfMissing<RenderTextureAssetLoader>(manager, "RenderTexture");
     }
 

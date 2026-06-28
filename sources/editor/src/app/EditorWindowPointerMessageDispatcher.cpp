@@ -40,7 +40,7 @@ LRESULT EditorWindowPointerMessageDispatcher::Dispatch(HWND messageWindow, UINT 
     case WM_LBUTTONUP:
         return pointerHandler.HandleLeftButtonUp(messageWindow, lparam);
     case WM_RBUTTONUP:
-        return pointerHandler.HandleRightButtonUp(messageWindow);
+        return pointerHandler.HandleRightButtonUp(messageWindow, lparam);
     case WM_MBUTTONUP:
         return pointerHandler.HandleMiddleButtonUp(messageWindow);
     case WM_SETCURSOR:

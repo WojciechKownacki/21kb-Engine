@@ -84,6 +84,32 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     if (materialEditorContent.has_value() && Contains(*materialEditorContent, x, y)) {
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (Contains(layout.graphCanvas, x, y)) {
+            const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+                ? sceneContext_.MaterialEditor().WorkingCopy()
+                : sceneContext_.ReadMaterialDocumentAsset(materialId);
+            if (material.has_value()) {
+                if (const std::optional<MaterialEditorGraphLinkHit> link = MaterialEditorPanelRenderer::GraphLinkAt(
+                        *materialEditorContent,
+                        material->graph,
+                        sceneContext_,
+                        materialId,
+                        x,
+                        y)) {
+                    if (sceneContext_.DisconnectMaterialGraphLink(
+                            materialId,
+                            link->fromNodeId,
+                            link->fromPin,
+                            link->toNodeId,
+                            link->toPin)) {
+                        InvalidateRect(messageWindow_, nullptr, FALSE);
+                        if (messageWindow_ != mainWindow_) {
+                            InvalidateRect(mainWindow_, nullptr, FALSE);
+                        }
+                        return true;
+                    }
+                }
+            }
             return sceneContext_.ZoomMaterialGraph(wheelDelta, x - layout.graphCanvas.left, y - layout.graphCanvas.top);
         }
     }

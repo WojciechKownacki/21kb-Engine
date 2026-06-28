@@ -378,6 +378,7 @@ add_executable(kb_editor WIN32
     src/private/platform/win32/EditorMainWindow.hpp
     src/private/platform/win32/EditorAssetImportDialog.hpp
     src/private/platform/win32/EditorMaterialAssetPickerDialog.hpp
+    src/private/platform/win32/EditorMaterialParameterValueDialog.hpp
     src/private/platform/win32/EditorMeshAssetPickerDialog.hpp
     src/private/platform/win32/EditorSceneDirtyPrompt.hpp
     src/private/platform/win32/EditorSceneFileDialog.hpp
@@ -570,6 +571,7 @@ add_executable(kb_editor WIN32
     src/private/windowing/FloatingWindowHitTestResolver.hpp
     src/platform/win32/EditorMainWindow.cpp
     src/platform/win32/EditorAssetImportDialog.cpp
+    src/platform/win32/EditorMaterialParameterValueDialog.cpp
     src/platform/win32/EditorMeshAssetPickerDialog.cpp
     src/platform/win32/EditorSceneDirtyPrompt.cpp
     src/platform/win32/EditorSceneFileDialog.cpp
@@ -645,6 +647,7 @@ add_executable(kb_editor WIN32
     src/rendering/ProjectFilesAssetTileFrameRenderer.cpp
     src/rendering/ProjectFilesAssetTileMetrics.cpp
     src/rendering/ProjectFilesAssetTileRenderer.cpp
+    src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
     src/rendering/ProjectFilesAssetViewRenderer.cpp
     src/rendering/ProjectFilesBottomBarRenderer.cpp
     src/rendering/ProjectFilesDeleteConfirmOverlayWindow.cpp
@@ -971,6 +974,7 @@ if(BUILD_TESTING)
         src/scene/EditorHierarchySelectionNormalizer.cpp
         src/scene/EditorHierarchySelectionState.cpp
         src/scene/EditorPluginCatalog.cpp
+        src/scene/EditorSceneAssetBrowserCommands.cpp
         src/scene/EditorSceneSelectionPivot.cpp
         src/scene/EditorSceneAudioAssetActions.cpp
           src/scene/EditorSceneMaterialAssetActions.cpp
@@ -999,6 +1003,7 @@ if(BUILD_TESTING)
         src/rendering/EditorRenderBackendSettings.cpp
         src/rendering/EditorToolbarLayout.cpp
         src/rendering/ProjectFilesAssetIconResolver.cpp
+        src/rendering/ProjectFilesMaterialPreviewThumbnailModel.cpp
         src/inspection/InspectorAudioTextBuilder.cpp
         src/inspection/InspectorComponentCatalog.cpp
         src/inspection/InspectorComponentLabelFormatter.cpp

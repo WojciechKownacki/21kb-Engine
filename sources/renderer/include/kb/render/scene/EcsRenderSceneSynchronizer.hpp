@@ -56,6 +56,7 @@ public:
     void Sync(const kb::scene::Scene& scene, RenderScene& renderScene) const;
     void SyncEntities(const kb::scene::Scene& scene, RenderScene& renderScene, std::span<const std::uint64_t> entityIds) const;
     void SyncTransformUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
+    void SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const;
 
     // H2 - columnar transform-only sync. Consumes the world affine matrices the
     // batched transform system already produced for changed entities and pushes

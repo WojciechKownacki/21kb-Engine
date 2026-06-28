@@ -25,6 +25,8 @@ public:
 
     [[nodiscard]] static ProjectFilesAssetIcon Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept;
     [[nodiscard]] static bool IsMaterial(const kb::assets::AssetMetadata& metadata) noexcept;
+    [[nodiscard]] static bool IsMaterialGraph(const kb::assets::AssetMetadata& metadata) noexcept;
+    [[nodiscard]] static bool IsMaterialType(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static bool IsTexture(const kb::assets::AssetMetadata& metadata) noexcept;
     [[nodiscard]] static bool IsMesh(const kb::assets::AssetMetadata& metadata) noexcept;
 };
