@@ -94,6 +94,26 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -128,6 +148,26 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:

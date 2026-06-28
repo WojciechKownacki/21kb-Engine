@@ -52,6 +52,26 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateDivide,
     CreatePower,
     CreateOneMinus,
+    CreateAbsolute,
+    CreateMinimum,
+    CreateMaximum,
+    CreateSaturate,
+    CreateFloor,
+    CreateCeil,
+    CreateFraction,
+    CreateSquareRoot,
+    CreateSine,
+    CreateCosine,
+    CreateDotProduct,
+    CreateCrossProduct,
+    CreateNormalize,
+    CreateLength,
+    CreateDistance,
+    CreateBreakVector,
+    CreateMakeVector,
+    CreateStep,
+    CreateSmoothStep,
+    CreateIf,
     CreateClamp,
     CreateLerp,
     CreateNormalUnpack,
@@ -958,6 +978,26 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::Divide:
         case kb::render::RenderMaterialGraphNodeKind::Power:
         case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+        case kb::render::RenderMaterialGraphNodeKind::Absolute:
+        case kb::render::RenderMaterialGraphNodeKind::Minimum:
+        case kb::render::RenderMaterialGraphNodeKind::Maximum:
+        case kb::render::RenderMaterialGraphNodeKind::Saturate:
+        case kb::render::RenderMaterialGraphNodeKind::Floor:
+        case kb::render::RenderMaterialGraphNodeKind::Ceil:
+        case kb::render::RenderMaterialGraphNodeKind::Fraction:
+        case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+        case kb::render::RenderMaterialGraphNodeKind::Sine:
+        case kb::render::RenderMaterialGraphNodeKind::Cosine:
+        case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+        case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+        case kb::render::RenderMaterialGraphNodeKind::Normalize:
+        case kb::render::RenderMaterialGraphNodeKind::Length:
+        case kb::render::RenderMaterialGraphNodeKind::Distance:
+        case kb::render::RenderMaterialGraphNodeKind::BreakVector:
+        case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+        case kb::render::RenderMaterialGraphNodeKind::Step:
+        case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+        case kb::render::RenderMaterialGraphNodeKind::If:
         case kb::render::RenderMaterialGraphNodeKind::Clamp:
         case kb::render::RenderMaterialGraphNodeKind::Lerp:
         case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:

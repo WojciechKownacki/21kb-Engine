@@ -324,6 +324,26 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -428,6 +448,14 @@ struct MaterialGraphRuntimeValue {
         return lhs;
     }
     return 0U;
+}
+
+[[nodiscard]] float Dot3(const MaterialGraphRuntimeValue& lhs, const MaterialGraphRuntimeValue& rhs) noexcept {
+    return (lhs.value[0] * rhs.value[0]) + (lhs.value[1] * rhs.value[1]) + (lhs.value[2] * rhs.value[2]);
+}
+
+[[nodiscard]] float Length3(const MaterialGraphRuntimeValue& value) noexcept {
+    return std::sqrt(Dot3(value, value));
 }
 
 [[nodiscard]] MaterialGraphRuntimeValue GraphParameterRuntimeValue(const RenderMaterialGraphNode& node, const RenderMaterialAssetData& materialAsset) {
@@ -632,6 +660,265 @@ struct MaterialGraphRuntimeValue {
             RenderMaterialGraphPinType::Float4);
         result.textureAssetId = input.textureAssetId;
         result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Absolute: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::abs(input.value[0]),
+            std::abs(input.value[1]),
+            std::abs(input.value[2]),
+            std::abs(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Minimum: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::min(lhs.value[0], rhs.value[0]),
+            std::min(lhs.value[1], rhs.value[1]),
+            std::min(lhs.value[2], rhs.value[2]),
+            std::min(lhs.value[3], rhs.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Maximum: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::max(lhs.value[0], rhs.value[0]),
+            std::max(lhs.value[1], rhs.value[1]),
+            std::max(lhs.value[2], rhs.value[2]),
+            std::max(lhs.value[3], rhs.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Saturate: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            Clamp01(input.value[0]),
+            Clamp01(input.value[1]),
+            Clamp01(input.value[2]),
+            Clamp01(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Floor: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::floor(input.value[0]),
+            std::floor(input.value[1]),
+            std::floor(input.value[2]),
+            std::floor(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Ceil: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::ceil(input.value[0]),
+            std::ceil(input.value[1]),
+            std::ceil(input.value[2]),
+            std::ceil(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Fraction: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        const auto fraction = [](float value) noexcept {
+            return value - std::floor(value);
+        };
+        result = RuntimeValue(
+            fraction(input.value[0]),
+            fraction(input.value[1]),
+            fraction(input.value[2]),
+            fraction(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::SquareRoot: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        const auto squareRoot = [](float value) noexcept {
+            return static_cast<float>(std::sqrt(std::max(value, 0.0F)));
+        };
+        result = RuntimeValue(
+            squareRoot(input.value[0]),
+            squareRoot(input.value[1]),
+            squareRoot(input.value[2]),
+            squareRoot(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Sine: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::sin(input.value[0]),
+            std::sin(input.value[1]),
+            std::sin(input.value[2]),
+            std::sin(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Cosine: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            std::cos(input.value[0]),
+            std::cos(input.value[1]),
+            std::cos(input.value[2]),
+            std::cos(input.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::DotProduct: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, 0.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        result = RuntimeValue(Dot3(lhs, rhs));
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::CrossProduct: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(1.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, 1.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        result = RuntimeValue(
+            (lhs.value[1] * rhs.value[2]) - (lhs.value[2] * rhs.value[1]),
+            (lhs.value[2] * rhs.value[0]) - (lhs.value[0] * rhs.value[2]),
+            (lhs.value[0] * rhs.value[1]) - (lhs.value[1] * rhs.value[0]),
+            1.0F,
+            RenderMaterialGraphPinType::Float3);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Normalize: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, 0.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        const float length = Length3(input);
+        if (length > 0.0001F) {
+            result = RuntimeValue(input.value[0] / length, input.value[1] / length, input.value[2] / length, 1.0F, RenderMaterialGraphPinType::Float3);
+        } else {
+            result = RuntimeValue(0.0F, 0.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Float3, false);
+        }
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Length: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        result = RuntimeValue(Length3(input));
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Distance: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false), stack);
+        const MaterialGraphRuntimeValue delta = RuntimeValue(
+            lhs.value[0] - rhs.value[0],
+            lhs.value[1] - rhs.value[1],
+            lhs.value[2] - rhs.value[2],
+            1.0F,
+            RenderMaterialGraphPinType::Float3);
+        result = RuntimeValue(Length3(delta));
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::BreakVector: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float4, false), stack);
+        float channel = 0.0F;
+        if (outputPin == "x") {
+            channel = input.value[0];
+        } else if (outputPin == "y") {
+            channel = input.value[1];
+        } else if (outputPin == "z") {
+            channel = input.value[2];
+        } else if (outputPin == "w") {
+            channel = input.value[3];
+        }
+        result = RuntimeValue(channel);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::MakeVector: {
+        const MaterialGraphRuntimeValue x = EvaluateGraphInput(materialAsset, node, "x", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue y = EvaluateGraphInput(materialAsset, node, "y", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue z = EvaluateGraphInput(materialAsset, node, "z", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue w = EvaluateGraphInput(materialAsset, node, "w", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(x.value[0], y.value[0], z.value[0], w.value[0], RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(MergeTextureProvenance(x.textureAssetId, y.textureAssetId), MergeTextureProvenance(z.textureAssetId, w.textureAssetId));
+        result.authored = x.authored || y.authored || z.authored || w.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Step: {
+        const MaterialGraphRuntimeValue edge = EvaluateGraphInput(materialAsset, node, "edge", RuntimeValue(0.5F, false), stack);
+        const MaterialGraphRuntimeValue value = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        const auto step = [](float edgeValue, float inputValue) noexcept {
+            return inputValue < edgeValue ? 0.0F : 1.0F;
+        };
+        result = RuntimeValue(
+            step(edge.value[0], value.value[0]),
+            step(edge.value[1], value.value[1]),
+            step(edge.value[2], value.value[2]),
+            step(edge.value[3], value.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(edge.textureAssetId, value.textureAssetId);
+        result.authored = edge.authored || value.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::SmoothStep: {
+        const MaterialGraphRuntimeValue minValue = EvaluateGraphInput(materialAsset, node, "min", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue maxValue = EvaluateGraphInput(materialAsset, node, "max", RuntimeValue(1.0F, false), stack);
+        const MaterialGraphRuntimeValue value = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        const auto smoothStep = [](float minInput, float maxInput, float inputValue) noexcept {
+            const float range = maxInput - minInput;
+            const float safeRange = std::abs(range) > 0.0001F ? range : 0.0001F;
+            const float t = Clamp01((inputValue - minInput) / safeRange);
+            return t * t * (3.0F - (2.0F * t));
+        };
+        result = RuntimeValue(
+            smoothStep(minValue.value[0], maxValue.value[0], value.value[0]),
+            smoothStep(minValue.value[1], maxValue.value[1], value.value[1]),
+            smoothStep(minValue.value[2], maxValue.value[2], value.value[2]),
+            smoothStep(minValue.value[3], maxValue.value[3], value.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(MergeTextureProvenance(minValue.textureAssetId, maxValue.textureAssetId), value.textureAssetId);
+        result.authored = minValue.authored || maxValue.authored || value.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::If: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue less = EvaluateGraphInput(materialAsset, node, "less", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue equal = EvaluateGraphInput(materialAsset, node, "equal", RuntimeValue(0.5F, false), stack);
+        const MaterialGraphRuntimeValue greater = EvaluateGraphInput(materialAsset, node, "greater", RuntimeValue(1.0F, false), stack);
+        const MaterialGraphRuntimeValue& selected =
+            lhs.value[0] > rhs.value[0] ? greater :
+            (std::abs(lhs.value[0] - rhs.value[0]) <= 0.0001F ? equal : less);
+        result = RuntimeValue(selected.value[0], selected.value[1], selected.value[2], selected.value[3], RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = selected.textureAssetId;
+        result.authored = lhs.authored || rhs.authored || selected.authored;
         break;
     }
     case RenderMaterialGraphNodeKind::Clamp: {
