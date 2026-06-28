@@ -6,11 +6,13 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -351,7 +353,285 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     return GraphTextureValueAssetId(materialAsset.graphParameterValues, StableGraphParameterIdForRuntime(textureSample));
 }
 
-void ApplyMaterialOutputTextureLinksToPbrDesc(RenderMaterialDesc& desc, const RenderMaterialAssetData& materialAsset) {
+struct MaterialGraphRuntimeValue {
+    std::array<float, 4U> value{ 0.0F, 0.0F, 0.0F, 1.0F };
+    std::uint64_t textureAssetId = 0U;
+    RenderMaterialGraphPinType type = RenderMaterialGraphPinType::Unknown;
+    bool authored = false;
+};
+
+[[nodiscard]] MaterialGraphRuntimeValue RuntimeValue(float value, bool authored = true) noexcept {
+    return MaterialGraphRuntimeValue{
+        .value = { value, value, value, value },
+        .type = RenderMaterialGraphPinType::Float,
+        .authored = authored,
+    };
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue RuntimeValue(float x, float y, float z, float w, RenderMaterialGraphPinType type, bool authored = true) noexcept {
+    return MaterialGraphRuntimeValue{
+        .value = { x, y, z, w },
+        .type = type,
+        .authored = authored,
+    };
+}
+
+[[nodiscard]] float Clamp01(float value) noexcept {
+    return std::clamp(value, 0.0F, 1.0F);
+}
+
+[[nodiscard]] std::vector<float> ParseGraphDefaultNumbers(std::string_view text) {
+    std::vector<float> values;
+    if (text.empty() || text == "_") {
+        return values;
+    }
+    std::istringstream input{ std::string{ text } };
+    float value = 0.0F;
+    while (input >> value) {
+        values.push_back(value);
+    }
+    return values;
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue ConstantScalarRuntimeValue(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+    return RuntimeValue(values.empty() ? 1.0F : values[0], !values.empty());
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue ConstantVectorRuntimeValue(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+    const float x = values.size() > 0U ? values[0] : 1.0F;
+    const float y = values.size() > 1U ? values[1] : x;
+    const float z = values.size() > 2U ? values[2] : y;
+    return RuntimeValue(x, y, z, 1.0F, RenderMaterialGraphPinType::Float3, !values.empty());
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue ConstantColorRuntimeValue(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+    const float r = values.size() > 0U ? values[0] : 1.0F;
+    const float g = values.size() > 1U ? values[1] : r;
+    const float b = values.size() > 2U ? values[2] : g;
+    const float a = values.size() > 3U ? values[3] : 1.0F;
+    return RuntimeValue(r, g, b, a, RenderMaterialGraphPinType::Color, !values.empty());
+}
+
+[[nodiscard]] std::uint64_t MergeTextureProvenance(std::uint64_t lhs, std::uint64_t rhs) noexcept {
+    if (lhs == 0U) {
+        return rhs;
+    }
+    if (rhs == 0U || lhs == rhs) {
+        return lhs;
+    }
+    return 0U;
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue GraphParameterRuntimeValue(const RenderMaterialGraphNode& node, const RenderMaterialAssetData& materialAsset) {
+    const std::string stableId = StableGraphParameterIdForRuntime(node);
+    for (const RenderMaterialGraphParameterValue& value : materialAsset.graphParameterValues) {
+        if (value.stableId != stableId) {
+            continue;
+        }
+        switch (value.type) {
+        case RenderMaterialParameterType::Scalar:
+            return RuntimeValue(value.numbers[0]);
+        case RenderMaterialParameterType::Vec3:
+            return RuntimeValue(value.numbers[0], value.numbers[1], value.numbers[2], 1.0F, RenderMaterialGraphPinType::Float3);
+        case RenderMaterialParameterType::Vec4:
+            return RuntimeValue(value.numbers[0], value.numbers[1], value.numbers[2], value.numbers[3], RenderMaterialGraphPinType::Float4);
+        case RenderMaterialParameterType::Color:
+            return RuntimeValue(value.numbers[0], value.numbers[1], value.numbers[2], value.numbers[3], RenderMaterialGraphPinType::Color);
+        case RenderMaterialParameterType::Texture:
+            return MaterialGraphRuntimeValue{
+                .value = { 1.0F, 1.0F, 1.0F, 1.0F },
+                .textureAssetId = value.assetId,
+                .type = RenderMaterialGraphPinType::Texture2D,
+                .authored = value.assetId != 0U,
+            };
+        case RenderMaterialParameterType::Bool:
+            return RuntimeValue(value.boolValue ? 1.0F : 0.0F);
+        case RenderMaterialParameterType::Enum:
+            break;
+        }
+    }
+
+    switch (node.kind) {
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+        return RuntimeValue(0.0F, false);
+    case RenderMaterialGraphNodeKind::ParameterVector:
+        return RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float3, false);
+    case RenderMaterialGraphNodeKind::ParameterColor:
+        return RuntimeValue(1.0F, 1.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Color, false);
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+        return MaterialGraphRuntimeValue{ .type = RenderMaterialGraphPinType::Texture2D };
+    default:
+        break;
+    }
+    return {};
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue EvaluateGraphNodeOutput(
+    const RenderMaterialAssetData& materialAsset,
+    const RenderMaterialGraphNode& node,
+    std::string_view outputPin,
+    std::vector<std::uint32_t>& stack);
+
+[[nodiscard]] MaterialGraphRuntimeValue EvaluateGraphInput(
+    const RenderMaterialAssetData& materialAsset,
+    const RenderMaterialGraphNode& node,
+    std::string_view inputPin,
+    MaterialGraphRuntimeValue fallback,
+    std::vector<std::uint32_t>& stack) {
+    const RenderMaterialGraphLink* link = FindGraphInputLink(materialAsset.graph, node.id, inputPin);
+    if (link == nullptr) {
+        return fallback;
+    }
+    const RenderMaterialGraphNode* source = FindRenderMaterialGraphNode(materialAsset.graph, link->fromNodeId);
+    if (source == nullptr) {
+        return fallback;
+    }
+    return EvaluateGraphNodeOutput(materialAsset, *source, link->fromPin, stack);
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue EvaluateTextureSampleOutput(
+    const RenderMaterialAssetData& materialAsset,
+    const RenderMaterialGraphNode& node,
+    std::string_view outputPin) {
+    const std::uint64_t textureAssetId = TextureAssetIdForTextureSampleNode(materialAsset, node).value_or(0U);
+    MaterialGraphRuntimeValue value{
+        .value = { 1.0F, 1.0F, 1.0F, 1.0F },
+        .textureAssetId = textureAssetId,
+        .type = outputPin == "color" ? RenderMaterialGraphPinType::Color : RenderMaterialGraphPinType::Float,
+        .authored = textureAssetId != 0U,
+    };
+    if (outputPin == "r") {
+        value.value = { 1.0F, 1.0F, 1.0F, 1.0F };
+    } else if (outputPin == "g") {
+        value.value = { 1.0F, 1.0F, 1.0F, 1.0F };
+    } else if (outputPin == "b") {
+        value.value = { 1.0F, 1.0F, 1.0F, 1.0F };
+    } else if (outputPin == "a") {
+        value.value = { 1.0F, 1.0F, 1.0F, 1.0F };
+    }
+    return value;
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue EvaluateGraphNodeOutput(
+    const RenderMaterialAssetData& materialAsset,
+    const RenderMaterialGraphNode& node,
+    std::string_view outputPin,
+    std::vector<std::uint32_t>& stack) {
+    if (std::find(stack.begin(), stack.end(), node.id) != stack.end()) {
+        return {};
+    }
+    stack.push_back(node.id);
+
+    MaterialGraphRuntimeValue result{};
+    switch (node.kind) {
+    case RenderMaterialGraphNodeKind::ConstantScalar:
+        result = ConstantScalarRuntimeValue(node);
+        break;
+    case RenderMaterialGraphNodeKind::ConstantVector:
+        result = ConstantVectorRuntimeValue(node);
+        break;
+    case RenderMaterialGraphNodeKind::ConstantColor:
+        result = ConstantColorRuntimeValue(node);
+        break;
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+    case RenderMaterialGraphNodeKind::ParameterVector:
+    case RenderMaterialGraphNodeKind::ParameterColor:
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+        result = GraphParameterRuntimeValue(node, materialAsset);
+        break;
+    case RenderMaterialGraphNodeKind::TextureSample:
+        result = EvaluateTextureSampleOutput(materialAsset, node, outputPin);
+        break;
+    case RenderMaterialGraphNodeKind::Add: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(
+            lhs.value[0] + rhs.value[0],
+            lhs.value[1] + rhs.value[1],
+            lhs.value[2] + rhs.value[2],
+            lhs.value[3] + rhs.value[3],
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Multiply: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(1.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(
+            lhs.value[0] * rhs.value[0],
+            lhs.value[1] * rhs.value[1],
+            lhs.value[2] * rhs.value[2],
+            lhs.value[3] * rhs.value[3],
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Clamp: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue minValue = EvaluateGraphInput(materialAsset, node, "min", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue maxValue = EvaluateGraphInput(materialAsset, node, "max", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(
+            std::clamp(input.value[0], minValue.value[0], maxValue.value[0]),
+            std::clamp(input.value[1], minValue.value[1], maxValue.value[1]),
+            std::clamp(input.value[2], minValue.value[2], maxValue.value[2]),
+            std::clamp(input.value[3], minValue.value[3], maxValue.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored || minValue.authored || maxValue.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Lerp: {
+        const MaterialGraphRuntimeValue lhs = EvaluateGraphInput(materialAsset, node, "a", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue rhs = EvaluateGraphInput(materialAsset, node, "b", RuntimeValue(1.0F, false), stack);
+        const MaterialGraphRuntimeValue t = EvaluateGraphInput(materialAsset, node, "t", RuntimeValue(0.0F, false), stack);
+        const float amount = Clamp01(t.value[0]);
+        result = RuntimeValue(
+            lhs.value[0] + ((rhs.value[0] - lhs.value[0]) * amount),
+            lhs.value[1] + ((rhs.value[1] - lhs.value[1]) * amount),
+            lhs.value[2] + ((rhs.value[2] - lhs.value[2]) * amount),
+            lhs.value[3] + ((rhs.value[3] - lhs.value[3]) * amount),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
+        result.authored = lhs.authored || rhs.authored || t.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::NormalUnpack:
+        result = EvaluateGraphInput(materialAsset, node, "color", RuntimeValue(0.5F, 0.5F, 1.0F, 1.0F, RenderMaterialGraphPinType::Color, false), stack);
+        result.type = RenderMaterialGraphPinType::Normal;
+        break;
+    case RenderMaterialGraphNodeKind::Uv:
+        result = RuntimeValue(0.0F, 0.0F, 0.0F, 0.0F, RenderMaterialGraphPinType::Float2, false);
+        break;
+    case RenderMaterialGraphNodeKind::MaterialOutput:
+        break;
+    }
+
+    stack.pop_back();
+    return result;
+}
+
+[[nodiscard]] std::optional<MaterialGraphRuntimeValue> EvaluateMaterialOutputInput(
+    const RenderMaterialAssetData& materialAsset,
+    const RenderMaterialGraphNode& output,
+    std::string_view pin) {
+    const RenderMaterialGraphLink* link = FindGraphInputLink(materialAsset.graph, output.id, pin);
+    if (link == nullptr) {
+        return std::nullopt;
+    }
+    const RenderMaterialGraphNode* source = FindRenderMaterialGraphNode(materialAsset.graph, link->fromNodeId);
+    if (source == nullptr) {
+        return std::nullopt;
+    }
+    std::vector<std::uint32_t> stack;
+    return EvaluateGraphNodeOutput(materialAsset, *source, link->fromPin, stack);
+}
+
+void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMaterialAssetData& materialAsset) {
     if (!HasGraphAuthoringData(materialAsset.graph)) {
         return;
     }
@@ -367,8 +647,8 @@ void ApplyMaterialOutputTextureLinksToPbrDesc(RenderMaterialDesc& desc, const Re
         return;
     }
 
-    const RenderMaterialGraphLink* baseColor = FindGraphInputLink(materialAsset.graph, output->id, "baseColor");
-    if (baseColor == nullptr) {
+    const std::optional<MaterialGraphRuntimeValue> baseColor = EvaluateMaterialOutputInput(materialAsset, *output, "baseColor");
+    if (!baseColor.has_value()) {
         desc.baseColor[0] = 0.0F;
         desc.baseColor[1] = 0.0F;
         desc.baseColor[2] = 0.0F;
@@ -377,18 +657,51 @@ void ApplyMaterialOutputTextureLinksToPbrDesc(RenderMaterialDesc& desc, const Re
         return;
     }
 
-    if (baseColor->fromPin == "color") {
-        const RenderMaterialGraphNode* source = FindRenderMaterialGraphNode(materialAsset.graph, baseColor->fromNodeId);
-        if (source != nullptr && source->kind == RenderMaterialGraphNodeKind::TextureSample) {
-            if (const std::optional<std::uint64_t> textureAssetId = TextureAssetIdForTextureSampleNode(materialAsset, *source);
-                textureAssetId.has_value()) {
-                desc.baseColor[0] = 1.0F;
-                desc.baseColor[1] = 1.0F;
-                desc.baseColor[2] = 1.0F;
-                desc.baseColor[3] = 1.0F;
-                desc.albedoTextureAssetId = *textureAssetId;
-            }
+    if (baseColor->authored) {
+        desc.baseColor[0] = Clamp01(baseColor->value[0]);
+        desc.baseColor[1] = Clamp01(baseColor->value[1]);
+        desc.baseColor[2] = Clamp01(baseColor->value[2]);
+        desc.baseColor[3] = Clamp01(baseColor->value[3]);
+        desc.albedoTextureAssetId = baseColor->textureAssetId;
+    }
+
+    if (const std::optional<MaterialGraphRuntimeValue> normal = EvaluateMaterialOutputInput(materialAsset, *output, "normal");
+        normal.has_value() && normal->authored && normal->textureAssetId != 0U) {
+        desc.normalTextureAssetId = normal->textureAssetId;
+    }
+    if (const std::optional<MaterialGraphRuntimeValue> roughness = EvaluateMaterialOutputInput(materialAsset, *output, "roughness");
+        roughness.has_value() && roughness->authored) {
+        desc.roughnessFactor = Clamp01(roughness->value[0]);
+        if (roughness->textureAssetId != 0U) {
+            desc.metallicRoughnessTextureAssetId = roughness->textureAssetId;
         }
+    }
+    if (const std::optional<MaterialGraphRuntimeValue> metallic = EvaluateMaterialOutputInput(materialAsset, *output, "metallic");
+        metallic.has_value() && metallic->authored) {
+        desc.metallicFactor = Clamp01(metallic->value[0]);
+        if (metallic->textureAssetId != 0U) {
+            desc.metallicRoughnessTextureAssetId = metallic->textureAssetId;
+        }
+    }
+    if (const std::optional<MaterialGraphRuntimeValue> occlusion = EvaluateMaterialOutputInput(materialAsset, *output, "occlusion");
+        occlusion.has_value() && occlusion->authored) {
+        desc.occlusionStrength = Clamp01(occlusion->value[0]);
+        if (occlusion->textureAssetId != 0U) {
+            desc.occlusionTextureAssetId = occlusion->textureAssetId;
+        }
+    }
+    if (const std::optional<MaterialGraphRuntimeValue> emissive = EvaluateMaterialOutputInput(materialAsset, *output, "emissive");
+        emissive.has_value() && emissive->authored) {
+        desc.emissiveColor[0] = std::max(emissive->value[0], 0.0F);
+        desc.emissiveColor[1] = std::max(emissive->value[1], 0.0F);
+        desc.emissiveColor[2] = std::max(emissive->value[2], 0.0F);
+        if (emissive->textureAssetId != 0U) {
+            desc.emissiveTextureAssetId = emissive->textureAssetId;
+        }
+    }
+    if (const std::optional<MaterialGraphRuntimeValue> alpha = EvaluateMaterialOutputInput(materialAsset, *output, "alpha");
+        alpha.has_value() && alpha->authored) {
+        desc.baseColor[3] = Clamp01(alpha->value[0]);
     }
 }
 
@@ -640,7 +953,7 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     }
     ApplyGraphParameterValuesToPbrDesc(resolved.desc, materialAsset.graphParameterValues);
     ApplyGraphTextureSlotValuesToPbrDesc(resolved.desc, materialAsset);
-    ApplyMaterialOutputTextureLinksToPbrDesc(resolved.desc, materialAsset);
+    ApplyMaterialOutputGraphToPbrDesc(resolved.desc, materialAsset);
     return resolved;
 }
 

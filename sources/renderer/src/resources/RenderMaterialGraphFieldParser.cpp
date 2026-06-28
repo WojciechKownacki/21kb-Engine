@@ -334,8 +334,14 @@ void AddDiagnostic(
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
-    if (node == nullptr || (!IsRenderMaterialGraphParameterNode(node->kind) && node->kind != RenderMaterialGraphNodeKind::TextureSample)) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph parameter metadata must reference an existing parameter or texture sample node.", nodeIdText);
+    const bool supportsMetadata = node != nullptr &&
+        (IsRenderMaterialGraphParameterNode(node->kind) ||
+            node->kind == RenderMaterialGraphNodeKind::TextureSample ||
+            node->kind == RenderMaterialGraphNodeKind::ConstantScalar ||
+            node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
+            node->kind == RenderMaterialGraphNodeKind::ConstantColor);
+    if (!supportsMetadata) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph parameter metadata must reference an existing parameter, constant or texture sample node.", nodeIdText);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
 
