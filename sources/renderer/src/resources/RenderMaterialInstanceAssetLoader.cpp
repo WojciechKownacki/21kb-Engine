@@ -89,7 +89,11 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Power:
+    case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -119,7 +123,11 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Power:
+    case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:

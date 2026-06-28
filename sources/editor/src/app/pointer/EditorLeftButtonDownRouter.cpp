@@ -144,14 +144,41 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     }
 }
 
-[[nodiscard]] kb::assets::AssetId TextureSampleAssetId(const kb::render::RenderMaterialAssetData& material, std::uint32_t nodeId) {
+[[nodiscard]] const kb::render::RenderMaterialGraphNode* TextureValueNode(
+    const kb::render::RenderMaterialAssetData& material,
+    const kb::render::RenderMaterialGraphNode& node) noexcept {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return &node;
+    }
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return nullptr;
+    }
+    for (const kb::render::RenderMaterialGraphLink& link : material.graph.links) {
+        if (link.toNodeId != node.id || link.toPin != "texture") {
+            continue;
+        }
+        const kb::render::RenderMaterialGraphNode* source = kb::render::FindRenderMaterialGraphNode(material.graph, link.fromNodeId);
+        if (source != nullptr && source->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture && link.fromPin == "texture") {
+            return source;
+        }
+    }
+    return &node;
+}
+
+[[nodiscard]] kb::assets::AssetId TextureGraphAssetId(const kb::render::RenderMaterialAssetData& material, std::uint32_t nodeId) {
     const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(material.graph, nodeId);
-    if (node == nullptr || node->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+    if (node == nullptr) {
         return {};
     }
-    const std::string stableId = node->parameter.stableId.empty()
-        ? "textureSample" + std::to_string(node->id)
-        : node->parameter.stableId;
+    const kb::render::RenderMaterialGraphNode* textureNode = TextureValueNode(material, *node);
+    if (textureNode == nullptr) {
+        return {};
+    }
+    const std::string stableId = !textureNode->parameter.stableId.empty()
+        ? textureNode->parameter.stableId
+        : (textureNode->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture
+                ? "texture" + std::to_string(textureNode->id)
+                : "textureSample" + std::to_string(textureNode->id));
     for (const kb::render::RenderMaterialGraphParameterValue& value : material.graphParameterValues) {
         if (value.stableId == stableId && value.type == kb::render::RenderMaterialParameterType::Texture) {
             return kb::assets::AssetId{ value.assetId };
@@ -318,9 +345,21 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         mainWindow_,
                         MakeEditorDarkTheme(),
                         sceneContext_,
-                        TextureSampleAssetId(*material, *textureSampleNodeId));
+                        TextureGraphAssetId(*material, *textureSampleNodeId));
                     if (result.accepted) {
                         static_cast<void>(sceneContext_.SetMaterialGraphTextureSampleAsset(materialId, *textureSampleNodeId, result.assetId));
+                    }
+                    EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+                    return;
+                }
+                if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
+                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                        mainWindow_,
+                        constant->displayName,
+                        MaterialEditorPanelParameterValueText(constant->value));
+                    if (value.has_value()) {
+                        static_cast<void>(sceneContext_.SetMaterialGraphConstantValue(materialId, constant->nodeId, *value));
                     }
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
