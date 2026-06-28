@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
@@ -424,6 +425,8 @@ private:
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> MaterialSourceForEdit(kb::assets::AssetId id) const;
     [[nodiscard]] bool ApplyPatchToMaterialEditorWorkingCopy(kb::assets::AssetId id, IEditorMaterialAssetPropertyEdit& edit);
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
+    void SyncMaterialEditorWorkingCopyRuntimePreview();
+    void ClearMaterialEditorWorkingCopyRuntimePreview();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
@@ -454,6 +457,10 @@ private:
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
+    kb::assets::AssetId materialRuntimePreviewAssetId_{};
+    std::optional<kb::assets::AssetMetadata> materialRuntimePreviewSourceMetadata_;
+    std::filesystem::path materialRuntimePreviewPath_;
+    std::uint64_t materialRuntimePreviewContentHash_ = 0U;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;

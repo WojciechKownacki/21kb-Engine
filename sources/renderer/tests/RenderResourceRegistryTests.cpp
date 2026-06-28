@@ -19,6 +19,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -431,6 +432,17 @@ void RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest() {
     const kb::assets::AssetHandle<RenderMeshAssetData> loaded = manager.Load<RenderMeshAssetData>(metadata->id);
     Require(loaded.IsLoaded(), "Workspace Cube.21kb FBX payload did not load as RenderMeshAssetData");
     Require(loaded->desc.vertexCount > 0U && loaded->desc.indexCount > 0U, "Workspace Cube.21kb loaded an empty mesh");
+    Require(!loaded->tangentVertices.empty(), "Workspace Cube.21kb did not produce tangent vertex storage for material rendering");
+    bool hasReadableUv = false;
+    const float firstU = loaded->tangentVertices.front().u;
+    const float firstV = loaded->tangentVertices.front().v;
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : loaded->tangentVertices) {
+        if (std::abs(vertex.u - firstU) > 0.0001F || std::abs(vertex.v - firstV) > 0.0001F) {
+            hasReadableUv = true;
+            break;
+        }
+    }
+    Require(hasReadableUv, "Workspace Cube.21kb FBX fallback UVs collapsed to a single texture sample");
 }
 
 void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
