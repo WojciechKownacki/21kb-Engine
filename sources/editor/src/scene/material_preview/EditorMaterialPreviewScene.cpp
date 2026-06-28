@@ -11,14 +11,20 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 #include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "scene/material/EditorMaterialAssetGateway.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
+#include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
+#include <sstream>
+#include <string>
+#include <system_error>
 
 namespace kb::editor {
 namespace {
@@ -30,6 +36,30 @@ namespace {
 
 [[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
     return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
+}
+
+[[nodiscard]] std::uint64_t HashBytes(std::string_view text) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char ch : text) {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 1099511628211ULL;
+    }
+    return hash == 0U ? 1U : hash;
+}
+
+[[nodiscard]] std::uint64_t WorkingCopyContentHash(const kb::render::RenderMaterialAssetData& material) {
+    kb::render::RenderMaterialAssetData runtimeRelevant = material;
+    for (kb::render::RenderMaterialGraphNode& node : runtimeRelevant.graph.nodes) {
+        node.positionX = 0;
+        node.positionY = 0;
+    }
+    std::ostringstream output;
+    kb::render::RenderMaterialAssetWriter::Write(output, runtimeRelevant);
+    return HashBytes(output.str());
+}
+
+[[nodiscard]] std::filesystem::path WorkingCopyPreviewPath(kb::assets::AssetId materialAssetId) {
+    return std::filesystem::temp_directory_path() / ("21kb_material_preview_working_" + std::to_string(materialAssetId.value) + ".kbmat");
 }
 
 [[nodiscard]] std::filesystem::path ResolveAssetPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
@@ -60,6 +90,16 @@ namespace {
     return HashCombine(metadata->contentHash, MaterialContentHash(scene, instance->parentMaterialAssetId));
 }
 
+[[nodiscard]] std::uint64_t MaterialPreviewContentHash(
+    const kb::scene::Scene& scene,
+    kb::assets::AssetId materialAssetId,
+    const kb::render::RenderMaterialAssetData* workingCopy) {
+    if (workingCopy != nullptr) {
+        return HashCombine(WorkingCopyContentHash(*workingCopy), 0xA11CE21FULL);
+    }
+    return MaterialDocumentContentHash(scene, materialAssetId);
+}
+
 void RegisterPreviewLoaders(kb::assets::AssetManager& manager) {
     static_cast<void>(manager.RegisterLoader(std::make_unique<EditorMaterialPreviewMeshLoader>()));
     static_cast<void>(manager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
@@ -73,21 +113,53 @@ void CopyAssetRegistry(const kb::assets::AssetManager& source, kb::assets::Asset
     }
 }
 
-void RegisterPreviewMesh(kb::assets::AssetManager& manager) {
+void RegisterPreviewMesh(kb::assets::AssetManager& manager, const EditorMaterialPreviewPrimitivePolicy& policy) {
+    if (policy.kind == EditorMaterialPreviewPrimitiveKind::CustomMesh && policy.meshAssetId.IsValid()) {
+        return;
+    }
     static_cast<void>(manager.RegisterAsset(kb::assets::AssetMetadata{
-        .id = EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(),
+        .id = policy.meshAssetId.IsValid() ? policy.meshAssetId : EditorMaterialPreviewPrimitivePolicy::Fallback().meshAssetId,
         .type = "RenderMesh",
-        .name = "Material Preview Sphere",
-        .virtualPath = "/Editor/Preview/MaterialSphere",
-        .physicalPath = "__editor_material_preview_sphere__",
+        .name = "Material Preview " + std::string{ EditorMaterialPreviewPrimitiveName(policy.kind) },
+        .virtualPath = std::filesystem::path{ "/Editor/Preview" } / ("Material" + std::string{ EditorMaterialPreviewPrimitiveName(policy.kind) }),
+        .physicalPath = "__editor_material_preview_" + std::string{ EditorMaterialPreviewPrimitiveName(policy.kind) } + "__",
         .runtimeLoadable = true,
     }));
 }
 
-void AddPreviewMesh(kb::scene::Scene& scene, kb::assets::AssetId materialAssetId, bool materialLoaded) {
+void RegisterWorkingCopyMaterial(
+    const kb::assets::AssetManager& sourceManager,
+    kb::assets::AssetManager& targetManager,
+    kb::assets::AssetId materialAssetId,
+    const kb::render::RenderMaterialAssetData& workingCopy,
+    const std::filesystem::path& path,
+    std::uint64_t contentHash) {
+    if (!kb::render::RenderMaterialAssetWriter::Save(path, workingCopy)) {
+        return;
+    }
+
+    kb::assets::AssetMetadata metadata{};
+    if (const kb::assets::AssetMetadata* sourceMetadata = sourceManager.Registry().Find(materialAssetId)) {
+        metadata = *sourceMetadata;
+    }
+    metadata.id = materialAssetId;
+    metadata.type = "RenderMaterial";
+    metadata.physicalPath = path;
+    metadata.contentHash = contentHash;
+    metadata.runtimeLoadable = true;
+    if (metadata.name.empty()) {
+        metadata.name = "Material Preview Working Copy";
+    }
+    if (metadata.virtualPath.empty()) {
+        metadata.virtualPath = std::filesystem::path{ "/Editor/Preview" } / ("WorkingMaterial" + std::to_string(materialAssetId.value) + ".kbmat");
+    }
+    static_cast<void>(targetManager.RegisterAsset(metadata));
+}
+
+void AddPreviewMesh(kb::scene::Scene& scene, kb::assets::AssetId materialAssetId, bool materialLoaded, const EditorMaterialPreviewPrimitivePolicy& policy) {
     const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{.name = "Material Preview Mesh"});
     scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
-        .meshAssetId = EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value,
+        .meshAssetId = policy.meshAssetId.value,
         .materialAssetId = materialLoaded ? materialAssetId.value : 0U,
     });
 }
@@ -105,50 +177,43 @@ void AddPreviewCamera(kb::scene::Scene& scene) {
 }
 
 void AddPreviewLighting(kb::scene::Scene& scene) {
-    kb::scene::SceneObjectDesc directionalDesc{.name = "Material Preview Directional Key"};
-    directionalDesc.transform.localRotation = kb::scene::Quat{ -0.28F, 0.20F, 0.06F, 0.94F };
-    const kb::scene::SceneEntity directionalLight = scene.Entities().CreateEntity(directionalDesc);
-    scene.Components().Lights().Set(directionalLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Directional,
-        .color = kb::scene::Vec3{1.0F, 0.96F, 0.90F},
-        .intensity = 0.45F,
-        .castsShadow = false,
-    });
-
-    kb::scene::SceneObjectDesc keyLightDesc{.name = "Material Preview Key Light"};
-    keyLightDesc.transform.localPosition = kb::scene::Vec3{-2.0F, 2.0F, -3.0F};
-    const kb::scene::SceneEntity keyLight = scene.Entities().CreateEntity(keyLightDesc);
-    scene.Components().Lights().Set(keyLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point,
-        .color = kb::scene::Vec3{1.0F, 0.96F, 0.90F},
-        .intensity = 1.35F,
-        .range = 10.0F,
-        .castsShadow = false,
-    });
-
-    kb::scene::SceneObjectDesc fillLightDesc{.name = "Material Preview Fill Light"};
-    fillLightDesc.transform.localPosition = kb::scene::Vec3{2.0F, 1.0F, -2.0F};
-    const kb::scene::SceneEntity fillLight = scene.Entities().CreateEntity(fillLightDesc);
-    scene.Components().Lights().Set(fillLight, kb::scene::LightComponent{
-        .kind = kb::scene::LightKind::Point,
-        .color = kb::scene::Vec3{0.72F, 0.82F, 1.0F},
-        .intensity = 0.35F,
-        .range = 8.0F,
-        .castsShadow = false,
-    });
-
     kb::scene::SceneLightingAccess::SetBasicLightingEnabled(scene, true);
 }
 
 } // namespace
 
-const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(const kb::scene::Scene& sourceScene, kb::assets::AssetId materialAssetId) {
+EditorMaterialPreviewScene::~EditorMaterialPreviewScene() {
+    Clear();
+}
+
+const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(
+    const kb::scene::Scene& sourceScene,
+    kb::assets::AssetId materialAssetId,
+    const kb::render::RenderMaterialAssetData* workingCopy) {
     const std::uint64_t sourceRevision = sourceScene.Assets().Manager().Revision();
-    const std::uint64_t contentHash = MaterialDocumentContentHash(sourceScene, materialAssetId);
+    const std::uint64_t contentHash = MaterialPreviewContentHash(sourceScene, materialAssetId, workingCopy);
     if (scene_ == nullptr || materialAssetId_.value != materialAssetId.value || sourceAssetRevision_ != sourceRevision || materialContentHash_ != contentHash) {
-        Rebuild(sourceScene, materialAssetId);
+        Rebuild(sourceScene, materialAssetId, workingCopy, contentHash);
     }
     return *scene_;
+}
+
+const EditorMaterialPreviewPrimitivePolicy& EditorMaterialPreviewScene::PrimitivePolicy() const noexcept {
+    return primitivePolicy_;
+}
+
+bool EditorMaterialPreviewScene::SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) noexcept {
+    if (!policy.meshAssetId.IsValid()) {
+        policy = EditorMaterialPreviewPrimitivePolicy::Fallback();
+    }
+    if (primitivePolicy_.kind == policy.kind &&
+        primitivePolicy_.meshAssetId.value == policy.meshAssetId.value &&
+        primitivePolicy_.customMeshAssetId.value == policy.customMeshAssetId.value) {
+        return false;
+    }
+    primitivePolicy_ = policy;
+    Clear();
+    return true;
 }
 
 const EditorMaterialPreviewTelemetry& EditorMaterialPreviewScene::Telemetry() const noexcept {
@@ -161,6 +226,11 @@ std::uint64_t EditorMaterialPreviewScene::Revision() const noexcept {
 
 void EditorMaterialPreviewScene::Clear() noexcept {
     scene_.reset();
+    if (!workingCopyPath_.empty()) {
+        std::error_code error;
+        std::filesystem::remove(workingCopyPath_, error);
+        workingCopyPath_.clear();
+    }
     telemetry_ = {};
     materialAssetId_ = {};
     sourceAssetRevision_ = 0U;
@@ -168,12 +238,30 @@ void EditorMaterialPreviewScene::Clear() noexcept {
     ++revision_;
 }
 
-void EditorMaterialPreviewScene::Rebuild(const kb::scene::Scene& sourceScene, kb::assets::AssetId materialAssetId) {
+void EditorMaterialPreviewScene::Rebuild(
+    const kb::scene::Scene& sourceScene,
+    kb::assets::AssetId materialAssetId,
+    const kb::render::RenderMaterialAssetData* workingCopy,
+    std::uint64_t contentHash) {
     scene_ = std::make_unique<kb::scene::Scene>(kb::scene::SceneMode::Runtime);
     kb::assets::AssetManager& targetManager = scene_->Assets().Manager();
     RegisterPreviewLoaders(targetManager);
     CopyAssetRegistry(sourceScene.Assets().Manager(), targetManager);
-    RegisterPreviewMesh(targetManager);
+    if (!workingCopyPath_.empty()) {
+        std::error_code error;
+        std::filesystem::remove(workingCopyPath_, error);
+        workingCopyPath_.clear();
+    }
+    if (workingCopy != nullptr) {
+        workingCopyPath_ = WorkingCopyPreviewPath(materialAssetId);
+        RegisterWorkingCopyMaterial(sourceScene.Assets().Manager(), targetManager, materialAssetId, *workingCopy, workingCopyPath_, contentHash);
+    }
+    EditorMaterialPreviewPrimitivePolicy effectivePolicy = primitivePolicy_;
+    if (effectivePolicy.kind == EditorMaterialPreviewPrimitiveKind::CustomMesh &&
+        targetManager.Registry().Find(effectivePolicy.meshAssetId) == nullptr) {
+        effectivePolicy = EditorMaterialPreviewPrimitivePolicy::Fallback();
+    }
+    RegisterPreviewMesh(targetManager, effectivePolicy);
 
     const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(targetManager, materialAssetId);
     kb::render::RenderMaterialAssetData telemetryMaterial{};
@@ -181,7 +269,7 @@ void EditorMaterialPreviewScene::Rebuild(const kb::scene::Scene& sourceScene, kb
         telemetryMaterial.desc = resolved.material.desc;
     }
 
-    AddPreviewMesh(*scene_, materialAssetId, resolved.resolved);
+    AddPreviewMesh(*scene_, materialAssetId, resolved.resolved, effectivePolicy);
     AddPreviewCamera(*scene_);
     AddPreviewLighting(*scene_);
     scene_->Runtime().SynchronizeTransforms();
@@ -189,7 +277,7 @@ void EditorMaterialPreviewScene::Rebuild(const kb::scene::Scene& sourceScene, kb
     telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(targetManager, materialAssetId, resolved.resolved ? &telemetryMaterial : nullptr, true);
     materialAssetId_ = materialAssetId;
     sourceAssetRevision_ = sourceScene.Assets().Manager().Revision();
-    materialContentHash_ = MaterialDocumentContentHash(sourceScene, materialAssetId);
+    materialContentHash_ = contentHash;
     ++revision_;
 }
 

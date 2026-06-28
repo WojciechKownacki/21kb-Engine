@@ -6,8 +6,10 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
 #include <memory>
 #include <optional>
@@ -85,13 +87,23 @@ void EditorMaterialAssetGateway::EnsureMaterialLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
 }
 
+void EditorMaterialAssetGateway::EnsureMaterialGraphLoader() {
+    static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialGraphAssetLoader>()));
+}
+
 void EditorMaterialAssetGateway::EnsureMaterialInstanceLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
 }
 
+void EditorMaterialAssetGateway::EnsureMaterialTypeLoader() {
+    static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
+}
+
 void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& path) {
     EnsureMaterialLoader();
+    EnsureMaterialGraphLoader();
     EnsureMaterialInstanceLoader();
+    EnsureMaterialTypeLoader();
     kb::assets::AssetManager& manager = scene_.Assets().Manager();
     static_cast<void>(scene_.Assets().Discover());
     if (const std::optional<std::filesystem::path> created = manager.Mounts().ToVirtual(path)) {
@@ -109,8 +121,24 @@ bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& p
     return true;
 }
 
+bool EditorMaterialAssetGateway::WriteNewMaterialGraph(const std::filesystem::path& path, const kb::render::RenderMaterialGraphDocument& graph) {
+    if (!kb::render::RenderMaterialGraphAssetLoader::SaveGraph(path, graph)) {
+        return false;
+    }
+    DiscoverAndSelect(path);
+    return true;
+}
+
 bool EditorMaterialAssetGateway::WriteNewMaterialInstance(const std::filesystem::path& path, const kb::render::RenderMaterialInstanceAssetData& asset) {
     if (!kb::render::RenderMaterialInstanceAssetWriter::Save(path, asset)) {
+        return false;
+    }
+    DiscoverAndSelect(path);
+    return true;
+}
+
+bool EditorMaterialAssetGateway::WriteNewMaterialType(const std::filesystem::path& path, const kb::render::RenderMaterialTypeDocument& document) {
+    if (!kb::render::RenderMaterialTypeAssetLoader::SaveType(path, document)) {
         return false;
     }
     DiscoverAndSelect(path);

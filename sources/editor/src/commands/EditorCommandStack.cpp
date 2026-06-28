@@ -86,9 +86,14 @@ bool EditorCommandStack::LastCompletedCommandAffectsHierarchySelection() const n
     return lastCompletedCommandAffectsHierarchySelection_;
 }
 
+bool EditorCommandStack::LastCompletedCommandAffectsOpenMaterialSource() const noexcept {
+    return lastCompletedCommandAffectsOpenMaterialSource_;
+}
+
 void EditorCommandStack::CaptureCompletedCommandMetadata(const IEditorCommand& command) noexcept {
     lastCompletedCommandAffectsSceneDocument_ = command.AffectsSceneDocument();
     lastCompletedCommandAffectsHierarchySelection_ = command.AffectsHierarchySelection();
+    lastCompletedCommandAffectsOpenMaterialSource_ = command.AffectsOpenMaterialSource();
 }
 
 } // namespace kb::editor

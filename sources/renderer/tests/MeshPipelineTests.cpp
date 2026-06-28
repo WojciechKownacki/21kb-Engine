@@ -188,6 +188,22 @@ void RunMeshPipelineBuildsFromSceneMeshBatchesTest() {
     Require(reusableResult.stats.meshDrawCommandCacheMissCount == 1U, "MeshPipeline did not build a versioned cached draw command");
     Require(reusableResult.stats.meshDrawCommandCacheBuildCount == 1U, "MeshPipeline did not report versioned cached draw command build");
 
+    RenderMeshResource relocatedMesh{};
+    relocatedMesh.indexCount = 3U;
+    relocatedMesh.version = 1U;
+    RenderMaterialResource relocatedMaterial{};
+    relocatedMaterial.version = 1U;
+    MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
+        .pass = MeshPassType::BaseOpaque,
+        .meshBatches = &batches,
+        .resolvedMeshResource = &relocatedMesh,
+        .resolvedMaterialResource = &relocatedMaterial,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    }, reusableResult);
+    Require(reusableResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse versioned cached draw command after registry storage moved");
+    Require(!reusableResult.commands.empty() && reusableResult.commands[0].meshResource == &relocatedMesh, "MeshPipeline cache hit kept a stale mesh resource pointer");
+    Require(!reusableResult.commands.empty() && reusableResult.commands[0].materialResource == &relocatedMaterial, "MeshPipeline cache hit kept a stale material resource pointer");
+
     versionedMaterial.version = 2U;
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseOpaque,
@@ -241,7 +257,7 @@ void RunMeshPipelineBuildsFromSceneMeshBatchesTest() {
     SceneRenderResourceMap textureResourceMap;
     versionedMaterial.albedoTexture = {};
     versionedMaterial.albedoTextureAssetId = 512U;
-    textureResourceMap.BindTexture(512U, RenderTextureHandle{ 0x0000'0001'0000'0010ULL });
+    textureResourceMap.BindTexture(512U, RenderTextureColorSpace::Srgb, RenderTextureHandle{ 0x0000'0001'0000'0010ULL });
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseOpaque,
         .meshBatches = &batches,
@@ -263,7 +279,7 @@ void RunMeshPipelineBuildsFromSceneMeshBatchesTest() {
     Require(textureBindingDependencyResult.stats.meshDrawCommandCacheHitCount == 1U, "MeshPipeline did not reuse an unchanged texture-binding-dependent cached draw command");
     Require(textureBindingDependencyResult.stats.meshDrawCommandCacheMissCount == 0U, "MeshPipeline rebuilt an unchanged texture-binding-dependent cached draw command");
 
-    textureResourceMap.BindTexture(512U, RenderTextureHandle{ 0x0000'0001'0000'0011ULL });
+    textureResourceMap.BindTexture(512U, RenderTextureColorSpace::Srgb, RenderTextureHandle{ 0x0000'0001'0000'0011ULL });
     MeshPipelineProcessor::BuildInto(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseOpaque,
         .meshBatches = &batches,
@@ -791,14 +807,20 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
     });
     Require(maskedOpaque.commands.size() == 1U, "MeshPipeline did not keep masked materials in the opaque pass");
 
+    SceneRenderDiagnostics blendedDiagnostics;
     const MeshPipelineBuildResult blendedOpaque = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseOpaque,
         .drawGroups = &drawGroups,
         .resolvedMeshResource = &mesh,
         .resolvedMaterialResource = &blended,
+        .diagnostics = &blendedDiagnostics,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
-    Require(blendedOpaque.commands.empty(), "MeshPipeline kept blend materials in the opaque pass");
+    Require(blendedOpaque.commands.empty(), "KBMAT-UE-0014: MeshPipeline kept disabled alpha blend materials in the opaque pass");
+    Require(blendedDiagnostics.events.size() == 1U, "KBMAT-UE-0014: Disabled alpha blend material did not emit a diagnostic");
+    Require(blendedDiagnostics.events[0].kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend, "KBMAT-UE-0014: Disabled alpha blend diagnostic used the wrong kind");
+    Require(blendedDiagnostics.events[0].severity == SceneRenderDiagnosticSeverity::Warning, "KBMAT-UE-0014: Disabled alpha blend diagnostic must be a warning");
+    Require(blendedDiagnostics.events[0].materialAssetId == 7U, "KBMAT-UE-0014: Disabled alpha blend diagnostic lost the material asset id");
 
     const MeshPipelineBuildResult blendedTransparent = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseTransparent,
@@ -807,7 +829,7 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
         .resolvedMaterialResource = &blended,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
-    Require(blendedTransparent.commands.size() == 1U, "MeshPipeline did not route blend materials to the transparent pass");
+    Require(blendedTransparent.commands.empty(), "KBMAT-UE-0014: MeshPipeline routed disabled alpha blend materials to the transparent pass");
 }
 
 void RunMeshPipelineUsesMaterialDoubleSidedStateTest() {
@@ -879,7 +901,7 @@ void RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest() {
     Require((result.commands[0].state & BGFX_STATE_CULL_CW) == 0U, "MeshPipeline culls the authored front faces");
 }
 
-void RunMeshPipelineSortsTransparentCommandsBackToFrontTest() {
+void RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest() {
     RenderMeshResource mesh{};
     mesh.indexCount = 3U;
     mesh.bounds = RenderBoundsSphere{ .center = { 0.0F, 0.0F, 0.0F }, .radius = 1.0F };
@@ -909,18 +931,19 @@ void RunMeshPipelineSortsTransparentCommandsBackToFrontTest() {
         .projection = IdentityMatrix(),
     };
 
+    SceneRenderDiagnostics diagnostics;
     const MeshPipelineBuildResult result = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseTransparent,
         .drawGroups = &drawGroups,
         .resolvedMeshResource = &mesh,
         .resolvedMaterialResource = &material,
         .camera = &camera,
+        .diagnostics = &diagnostics,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
 
-    Require(result.commands.size() == 2U, "MeshPipeline transparent sort test did not emit two commands");
-    Require(result.commands[0].instances[0].entityId == 2U, "MeshPipeline did not sort transparent commands back to front");
-    Require(result.commands[0].sortKey < result.commands[1].sortKey, "MeshPipeline transparent sort keys are not monotonic");
+    Require(result.commands.empty(), "KBMAT-0608: Transparent pass emitted commands for disabled blend materials");
+    Require(diagnostics.events.empty(), "KBMAT-0608: Transparent pass should not duplicate the BaseOpaque disabled-blend diagnostic");
 }
 
 void RunMeshPipelineCpuCullsByFrustumBoundsTest() {
@@ -1447,7 +1470,7 @@ void RunMeshPipelineTests() {
     RunMeshPipelineRoutesMaterialAlphaModesToPassesTest();
     RunMeshPipelineUsesMaterialDoubleSidedStateTest();
     RunMeshPipelineCullsBackFacesForSingleSidedMeshesTest();
-    RunMeshPipelineSortsTransparentCommandsBackToFrontTest();
+    RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest();
     RunMeshPipelineCpuCullsByFrustumBoundsTest();
     RunMeshPipelineSelectsLodAndCarriesMeshletRangesTest();
     RunGpuDrivenFeatureClassifierGatesByCapabilitiesTest();

@@ -1,12 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace kb::render {
+
+inline constexpr std::uint32_t kRenderMaterialTypeDocumentVersion = 1U;
 
 enum class RenderMaterialParameterType : std::uint8_t {
     Scalar,
@@ -36,39 +39,154 @@ enum class RenderMaterialFeatureSupport : std::uint8_t {
     NotApplicable,
 };
 
+enum class RenderMaterialTypeMigrationOperationKind : std::uint8_t {
+    RenameParameter,
+    SetDefault,
+    RemoveUnsupported,
+};
+
+enum class RenderMaterialDomain : std::uint8_t {
+    Surface,
+};
+
+enum class RenderMaterialShaderModel : std::uint8_t {
+    MetallicRoughnessPbr,
+};
+
+enum class RenderMaterialBlendMode : std::uint8_t {
+    Opaque,
+    Masked,
+    TransparentDisabled,
+};
+
+enum class RenderMaterialCullMode : std::uint8_t {
+    BackFace,
+    None,
+};
+
 struct RenderMaterialParameterRange {
     float min = 0.0F;
     float max = 1.0F;
 };
 
 struct RenderMaterialParameterSchema {
-    std::string_view name;
+    std::string name;
+    std::string displayName;
     RenderMaterialParameterType type = RenderMaterialParameterType::Scalar;
     RenderMaterialParameterGroup group = RenderMaterialParameterGroup::Core;
     RenderMaterialFeatureSupport runtimeSupport = RenderMaterialFeatureSupport::Supported;
     std::optional<RenderMaterialParameterRange> range;
-    std::string_view defaultValueHint;
-    std::string_view description;
+    std::string defaultValueHint;
+    std::string description;
+    bool overrideSupported = true;
+    std::uint32_t editorOrder = 0U;
 };
 
 struct RenderMaterialTextureSlotSchema {
-    std::string_view name;
-    std::string_view assetIdFieldName;
-    std::string_view pathFieldName;
+    std::string name;
+    std::string role;
+    std::string assetIdFieldName;
+    std::string pathFieldName;
     RenderMaterialTextureColorSpace expectedColorSpace = RenderMaterialTextureColorSpace::Unknown;
     RenderMaterialFeatureSupport runtimeSupport = RenderMaterialFeatureSupport::Supported;
-    std::string_view description;
-    std::string_view fallbackDescription;
+    std::string description;
+    std::string fallbackDescription;
+    bool overrideSupported = true;
+    std::uint32_t editorOrder = 0U;
+};
+
+struct RenderMaterialTypeMigrationOperation {
+    RenderMaterialTypeMigrationOperationKind kind = RenderMaterialTypeMigrationOperationKind::RenameParameter;
+    std::uint32_t fromVersion = 0U;
+    std::uint32_t toVersion = 0U;
+    std::string field;
+    std::string targetField;
+    std::string defaultValue;
+    std::string reason;
+};
+
+struct RenderMaterialTypeRenderPass {
+    std::string name;
+    RenderMaterialFeatureSupport support = RenderMaterialFeatureSupport::Supported;
+    std::string vertexShader;
+    std::string fragmentShader;
+};
+
+struct RenderMaterialTypePermutationKey {
+    std::string name;
+    std::string defaultValue;
+    std::vector<std::string> allowedValues;
+};
+
+struct RenderMaterialTypeRequiredResource {
+    std::string name;
+    std::string kind;
+    bool required = true;
 };
 
 struct RenderMaterialTypeSchema {
-    std::string_view typeName;
+    std::string typeName;
     std::uint32_t typeVersion = 0;
     std::vector<RenderMaterialParameterSchema> parameters;
     std::vector<RenderMaterialTextureSlotSchema> textureSlots;
-    std::vector<std::string_view> alphaModes;
-    std::vector<std::string_view> unsupportedAdvancedFeatures;
+    std::vector<std::string> alphaModes;
+    std::vector<std::string> unsupportedAdvancedFeatures;
+    std::vector<RenderMaterialTypeMigrationOperation> migrations;
 };
+
+struct RenderMaterialTypeDocument {
+    std::uint32_t documentVersion = kRenderMaterialTypeDocumentVersion;
+    std::string stableTypeId;
+    std::uint32_t version = 0;
+    std::string displayName;
+    std::string description;
+    RenderMaterialDomain domain = RenderMaterialDomain::Surface;
+    RenderMaterialShaderModel shaderModel = RenderMaterialShaderModel::MetallicRoughnessPbr;
+    RenderMaterialBlendMode defaultBlendMode = RenderMaterialBlendMode::Opaque;
+    RenderMaterialCullMode defaultCullMode = RenderMaterialCullMode::BackFace;
+    std::vector<RenderMaterialTypeRenderPass> renderPasses;
+    std::vector<RenderMaterialTypePermutationKey> permutationKeys;
+    std::vector<RenderMaterialTypeRequiredResource> requiredResources;
+    RenderMaterialTypeSchema schema;
+};
+
+enum class RenderMaterialTypeDocumentDiagnosticCode : std::uint8_t {
+    FileOpenFailed,
+    InvalidDocumentVersion,
+    UnsupportedDocumentVersion,
+    MissingStableTypeId,
+    InvalidTypeVersion,
+    UnknownField,
+    InvalidFieldValue,
+};
+
+struct RenderMaterialTypeDocumentDiagnostic {
+    RenderMaterialTypeDocumentDiagnosticCode code = RenderMaterialTypeDocumentDiagnosticCode::InvalidDocumentVersion;
+    std::size_t line = 0U;
+    std::string field;
+    std::string message;
+    std::string text;
+};
+
+struct RenderMaterialTypeDocumentValidationResult {
+    std::vector<RenderMaterialTypeDocumentDiagnostic> diagnostics;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
+};
+
+struct RenderMaterialTypeDocumentParseResult {
+    std::optional<RenderMaterialTypeDocument> document;
+    std::vector<RenderMaterialTypeDocumentDiagnostic> diagnostics;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
+};
+
+/// Returns the built-in PBR material type document (version 1).
+[[nodiscard]] const RenderMaterialTypeDocument& GetBuiltInPbrMaterialTypeDocument() noexcept;
+[[nodiscard]] std::string_view RenderMaterialTypeDocumentDiagnosticCodeName(RenderMaterialTypeDocumentDiagnosticCode code) noexcept;
+[[nodiscard]] RenderMaterialTypeDocumentValidationResult ValidateRenderMaterialTypeDocument(const RenderMaterialTypeDocument& document);
+[[nodiscard]] RenderMaterialTypeDocumentParseResult ParseRenderMaterialTypeDocument(std::istream& input);
+void WriteRenderMaterialTypeDocument(std::ostream& output, const RenderMaterialTypeDocument& document);
 
 /// Returns the built-in PBR material type schema (version 1).
 [[nodiscard]] const RenderMaterialTypeSchema& GetBuiltInPbrMaterialTypeSchema() noexcept;
@@ -84,5 +202,10 @@ struct RenderMaterialTypeSchema {
 /// Checks if a field name corresponds to a texture path field in the schema.
 [[nodiscard]] bool IsMaterialTexturePathField(
     const RenderMaterialTypeSchema& schema, std::string_view name) noexcept;
+
+[[nodiscard]] const RenderMaterialTypeMigrationOperation* FindMaterialTypeMigration(
+    const RenderMaterialTypeSchema& schema,
+    RenderMaterialTypeMigrationOperationKind kind,
+    std::string_view field) noexcept;
 
 } // namespace kb::render

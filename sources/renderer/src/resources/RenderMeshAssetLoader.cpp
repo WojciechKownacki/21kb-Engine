@@ -3,6 +3,7 @@
 #include "engine/assets/ImportedAsset.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
+#include "resources/RenderMeshAssetFinalizer.hpp"
 
 #include <memory>
 #include <algorithm>
@@ -134,6 +135,8 @@ kb::assets::AssetLoadResult RenderMeshAssetLoader::Load(const kb::assets::AssetL
             .error = "Render mesh import failed: " + request.resolvedPath.string(),
         };
     }
+    RenderMeshAssetFinalizer::EnsureTangentVertexStorage(*mesh);
+    mesh->RefreshDesc();
 
     return kb::assets::AssetLoadResult{
         .asset = std::make_shared<RenderMeshAssetData>(std::move(*mesh)),

@@ -45,13 +45,17 @@ struct RuntimeRenderResourceEnsureContext {
     std::uint32_t& unresolvedMaterialTexturePathCount;
     std::uint32_t& defaultMaterialFallbackCount;
     std::uint32_t& errorMaterialFallbackCount;
+    std::uint32_t& materialLoadedCount;
+    std::uint32_t& materialFallbackCount;
+    std::uint32_t& materialErrorCount;
+    std::uint32_t& materialReloadCount;
     std::uint32_t& materialResolverDiagnosticCount;
     std::uint64_t currentFrame = 0;
 };
 
 using RuntimeMeshResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMeshResource, RuntimeAssetKeyHash>;
 using RuntimeMaterialResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeMaterialResource, RuntimeAssetKeyHash>;
-using RuntimeTextureResourceMap = std::unordered_map<RuntimeAssetKey, RuntimeTextureResource, RuntimeAssetKeyHash>;
+using RuntimeTextureResourceMap = std::unordered_map<RuntimeTextureAssetKey, RuntimeTextureResource, RuntimeTextureAssetKeyHash>;
 
 class RuntimeRenderResourceCache {
 public:

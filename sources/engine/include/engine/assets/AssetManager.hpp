@@ -67,6 +67,7 @@ public:
     [[nodiscard]] std::size_t LoadedCount() const noexcept;
     [[nodiscard]] bool HasLoaderForType(std::string_view type) const noexcept;
     [[nodiscard]] std::string LastError() const;
+    void SetError(std::string error) const;
     void ClearRuntimeCache() noexcept;
     void Clear() noexcept;
 
@@ -95,8 +96,6 @@ private:
     [[nodiscard]] std::filesystem::path ResolvePhysicalPath(const AssetMetadata& metadata) const;
     [[nodiscard]] bool IsMountedVirtualPath(const std::filesystem::path& virtualPath) const;
     [[nodiscard]] static std::uint64_t HashFile(const std::filesystem::path& path) noexcept;
-    void SetError(std::string error) const;
-
     AssetMountTable mounts_;
     AssetRegistry registry_;
     std::vector<std::unique_ptr<IAssetLoader>> loaders_;

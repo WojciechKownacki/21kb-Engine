@@ -13,6 +13,7 @@
 #include "engine/scene/SceneDocumentService.hpp"
 #include "engine/scene/SceneHistory.hpp"
 #include "engine/scene/SceneHierarchyAccess.hpp"
+#include "engine/scene/SceneRuntime.hpp"
 #include "inspection/InspectorAudioTextBuilder.hpp"
 #include "inspection/InspectorComponentCatalog.hpp"
 #include "inspection/InspectorComponentLabelFormatter.hpp"
@@ -23,6 +24,7 @@
 #include "inspection/InspectorPanelState.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/scene/EcsRenderSceneSynchronizer.hpp"
@@ -34,8 +36,10 @@
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
+#include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "rendering/MaterialPreviewRenderPolicy.hpp"
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/SceneEntities.hpp"
@@ -52,6 +56,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -76,22 +81,49 @@ public:
 };
 
 [[nodiscard]] float TriangleOutwardDot(const kb::render::RenderMeshAssetData& mesh, std::size_t indexOffset) {
-    const auto& a = mesh.vertices[mesh.indices32[indexOffset]];
-    const auto& b = mesh.vertices[mesh.indices32[indexOffset + 1U]];
-    const auto& c = mesh.vertices[mesh.indices32[indexOffset + 2U]];
-    const std::array<float, 3U> ab{ b.x - a.x, b.y - a.y, b.z - a.z };
-    const std::array<float, 3U> ac{ c.x - a.x, c.y - a.y, c.z - a.z };
+    const auto vertexAt = [&mesh](std::uint32_t index) {
+        if (!mesh.tangentVertices.empty()) {
+            const auto& vertex = mesh.tangentVertices[index];
+            return std::array<float, 3U>{ vertex.x, vertex.y, vertex.z };
+        }
+        const auto& vertex = mesh.vertices[index];
+        return std::array<float, 3U>{ vertex.x, vertex.y, vertex.z };
+    };
+    const std::array<float, 3U> a = vertexAt(mesh.indices32[indexOffset]);
+    const std::array<float, 3U> b = vertexAt(mesh.indices32[indexOffset + 1U]);
+    const std::array<float, 3U> c = vertexAt(mesh.indices32[indexOffset + 2U]);
+    const std::array<float, 3U> ab{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    const std::array<float, 3U> ac{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
     const std::array<float, 3U> normal{
         (ab[1] * ac[2]) - (ab[2] * ac[1]),
         (ab[2] * ac[0]) - (ab[0] * ac[2]),
         (ab[0] * ac[1]) - (ab[1] * ac[0]),
     };
     const std::array<float, 3U> center{
-        (a.x + b.x + c.x) / 3.0F,
-        (a.y + b.y + c.y) / 3.0F,
-        (a.z + b.z + c.z) / 3.0F,
+        (a[0] + b[0] + c[0]) / 3.0F,
+        (a[1] + b[1] + c[1]) / 3.0F,
+        (a[2] + b[2] + c[2]) / 3.0F,
     };
     return (normal[0] * center[0]) + (normal[1] * center[1]) + (normal[2] * center[2]);
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphLink MakeInspectorMaterialGraphLink(
+    kb::render::RenderMaterialGraphNodeKind fromKind,
+    std::uint32_t fromNodeId,
+    std::string fromPin,
+    kb::render::RenderMaterialGraphNodeKind toKind,
+    std::uint32_t toNodeId,
+    std::string toPin) {
+    kb::render::RenderMaterialGraphLink link{
+        .fromNodeId = fromNodeId,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(fromKind, fromPin, true),
+        .fromPin = std::move(fromPin),
+        .toNodeId = toNodeId,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(toKind, toPin, false),
+        .toPin = std::move(toPin),
+    };
+    link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+    return link;
 }
 
 void RunInspectorTextEditDirtyStateTest() {
@@ -160,9 +192,9 @@ void RunMaterialTextureSlotDiagnosticTest() {
     kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 0U) == "None", "Material texture formatter should show empty slots as None");
     kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, textureId.value) == "Albedo", "Material texture formatter should resolve texture asset names");
     kb::editor::tests::Require(!kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, textureId.value), "Material texture formatter reported a registered texture as missing");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, 999U), "Material texture formatter should diagnose unresolved texture asset ids");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 999U).find("Missing texture asset 999") != std::string::npos, "Material texture formatter should display missing texture ids");
-    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::Diagnostic("Normal", 999U).find("Normal texture references missing asset 999") != std::string::npos, "Material texture formatter should create a slot-specific missing texture diagnostic");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::IsMissing(manager, 999U), "KBMAT-UE-0014: Material texture formatter should diagnose unresolved texture asset ids");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::DisplayName(manager, 999U).find("Missing texture asset 999") != std::string::npos, "KBMAT-UE-0014: Material texture formatter should display missing texture ids");
+    kb::editor::tests::Require(kb::editor::InspectorMaterialTextureSlotFormatter::Diagnostic("Normal", 999U).find("Normal texture references missing asset 999") != std::string::npos, "KBMAT-UE-0014: Material texture formatter should create a slot-specific missing texture diagnostic");
 }
 
 void RunAudioAssetAssignmentTest() {
@@ -218,6 +250,22 @@ void RunMaterialAssetAssignmentSavesInSceneTest() {
     kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(source, entity, 1U, {}), "Material asset action did not clear a slot override");
     const kb::scene::MeshRendererComponent* cleared = source.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(cleared != nullptr && cleared->materialSlotOverrideCount == 0U, "Material asset action did not trim cleared trailing slot overrides");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(source, entity, 1U, kb::assets::AssetId{ 202U }), "Material asset action did not restore slot override before all-slots assignment");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(source, entity, kb::assets::AssetId{ 303U }), "KBMAT-UE-0009: Material all-slots action did not assign material");
+    const kb::scene::MeshRendererComponent* allSlots = source.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(allSlots != nullptr && allSlots->materialAssetId == 303U && allSlots->materialSlotOverrideCount == 0U && allSlots->materialSlotAssetIds[1] == 0U,
+        "KBMAT-UE-0009: Material all-slots action should clear previous slot overrides");
+    kb::scene::MeshRendererComponent staleOverrides{};
+    staleOverrides.materialSlotOverrideCount = 5U;
+    staleOverrides.materialSlotAssetIds[0] = 101U;
+    staleOverrides.materialSlotAssetIds[2] = 202U;
+    staleOverrides.materialSlotAssetIds[4] = 404U;
+    kb::editor::EditorSceneMaterialAssetActions::CleanupMaterialSlotOverrides(staleOverrides, 2U);
+    kb::editor::tests::Require(staleOverrides.materialSlotOverrideCount == 1U &&
+            staleOverrides.materialSlotAssetIds[0] == 101U &&
+            staleOverrides.materialSlotAssetIds[2] == 0U &&
+            staleOverrides.materialSlotAssetIds[4] == 0U,
+        "KBMAT-UE-0010: Material slot cleanup should remove overrides outside the mesh material slot count and trim trailing empty slots");
 
     std::filesystem::remove(sceneFile, cleanupError);
     std::filesystem::remove(sceneFile.string() + ".meta", cleanupError);
@@ -227,7 +275,12 @@ void RunMeshRendererMeshAssignmentActionTest() {
     kb::scene::Scene scene;
     const kb::assets::AssetId meshId{ 0x4D455348A5510001ULL };
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh Target" });
-    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{});
+    kb::scene::MeshRendererComponent renderer{};
+    renderer.materialAssetId = 0x4D41544C00000001ULL;
+    renderer.materialSlotOverrideCount = 3U;
+    renderer.materialSlotAssetIds[0] = 0x4D41544C00000002ULL;
+    renderer.materialSlotAssetIds[2] = 0x4D41544C00000003ULL;
+    scene.Components().MeshRenderers().Set(entity, renderer);
 
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh", .importCategory = "Model" }), "RenderMesh model asset should be accepted as mesh");
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::IsMeshAsset(kb::assets::AssetMetadata{ .type = "RenderMesh" }), "RenderMesh asset should be accepted as mesh without import category");
@@ -236,9 +289,15 @@ void RunMeshRendererMeshAssignmentActionTest() {
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::AssignMesh(scene, entity, meshId), "Mesh Renderer mesh action did not assign a mesh asset");
     const kb::scene::MeshRendererComponent* assigned = scene.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(assigned != nullptr && assigned->meshAssetId == meshId.value, "Mesh Renderer mesh action did not store meshAssetId");
+    kb::editor::tests::Require(assigned->materialAssetId == renderer.materialAssetId, "Mesh Renderer mesh action cleared the primary material override");
+    kb::editor::tests::Require(assigned->materialSlotOverrideCount == renderer.materialSlotOverrideCount, "Mesh Renderer mesh action changed material slot override count");
+    kb::editor::tests::Require(assigned->materialSlotAssetIds[0] == renderer.materialSlotAssetIds[0] && assigned->materialSlotAssetIds[2] == renderer.materialSlotAssetIds[2],
+        "Mesh Renderer mesh action cleared manual material slot overrides");
     kb::editor::tests::Require(kb::editor::EditorSceneMeshAssetActions::AssignMesh(scene, entity, {}), "Mesh Renderer mesh action did not clear meshAssetId");
     const kb::scene::MeshRendererComponent* cleared = scene.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(cleared != nullptr && cleared->meshAssetId == 0U, "Mesh Renderer mesh action did not clear meshAssetId");
+    kb::editor::tests::Require(cleared->materialAssetId == renderer.materialAssetId && cleared->materialSlotAssetIds[2] == renderer.materialSlotAssetIds[2],
+        "Mesh Renderer mesh clear action should preserve manual material overrides");
 }
 
 void RunMeshRendererMaterialSlotModelTest() {
@@ -247,6 +306,11 @@ void RunMeshRendererMaterialSlotModelTest() {
     mesh.materialSlots = {
         kb::render::RenderMaterialSlotDesc{ .defaultMaterialAssetId = 201U },
         kb::render::RenderMaterialSlotDesc{ .defaultMaterialAssetId = 202U },
+    };
+    mesh.sections = {
+        kb::render::RenderMeshSectionDesc{ .materialSlot = 0U },
+        kb::render::RenderMeshSectionDesc{ .materialSlot = 1U },
+        kb::render::RenderMeshSectionDesc{ .materialSlot = 0U },
     };
 
     kb::scene::MeshRendererComponent renderer{ .meshAssetId = 77U, .materialAssetId = 100U };
@@ -265,19 +329,42 @@ void RunMeshRendererMaterialSlotModelTest() {
             return std::string{ "None" };
         }
     };
+    const auto materialStatus = [](std::uint64_t id) {
+        switch (id) {
+        case 201U:
+            return std::string{ "Built-in PBR | runtime ready" };
+        case 202U:
+            return std::string{ "Graph-backed | type reference ok | diagnostics ok | artifact ready #9001" };
+        case 303U:
+            return std::string{ "Graph-backed | type reference ok | diagnostics error x1 | artifact pending" };
+        default:
+            return std::string{ "None" };
+        }
+    };
 
     const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> rows =
-        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(renderer, mesh, materialName);
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(renderer, mesh, materialName, materialStatus);
     kb::editor::tests::Require(rows.size() == 2U, "Mesh Renderer material slot model should expose mesh material slots");
-    kb::editor::tests::Require(rows[0].label == "Material Override", "Mesh Renderer material slot model should show the primary override as a simple material field");
+    kb::editor::tests::Require(rows[0].slotName == "Body" && rows[0].importedSourceName == "Body", "KBMAT-UE-0011: Mesh Renderer material slot model should expose the slot name and imported source name");
+    kb::editor::tests::Require(rows[0].defaultMaterialName == "BodyDefault", "KBMAT-UE-0011: Mesh Renderer material slot model should expose the default material name");
+    kb::editor::tests::Require(rows[0].activeMaterialAssetId == 201U && rows[0].activeMaterialName == "BodyDefault", "KBMAT-GRAPH-0404: slot model should expose the active default material");
+    kb::editor::tests::Require(rows[0].activeMaterialStatus == "Built-in PBR | runtime ready", "KBMAT-GRAPH-0404: slot model should expose built-in PBR material runtime status");
+    kb::editor::tests::Require(rows[0].sectionsUsingSlot == "0, 2" && rows[0].sectionIndices.size() == 2U, "KBMAT-UE-0011: Mesh Renderer material slot model should expose sections using a slot");
+    kb::editor::tests::Require(rows[0].label == "Slot 1 Override (Body)", "KBMAT-UE-0011: Mesh Renderer material slot model should label the primary slot override with its imported source name");
     kb::editor::tests::Require(rows[0].value == "None", "Mesh Renderer material slot model should show empty overrides as None");
     kb::editor::tests::Require(rows[1].hasOverride, "Mesh Renderer material slot model should mark explicit slot overrides");
-    kb::editor::tests::Require(rows[1].label.find("Material Override 2") != std::string::npos, "Mesh Renderer material slot model should keep extra material overrides readable");
+    kb::editor::tests::Require(rows[1].slotName == "Trim" && rows[1].defaultMaterialName == "TrimDefault", "KBMAT-UE-0011: Mesh Renderer material slot model should expose extra slot names and defaults");
+    kb::editor::tests::Require(rows[1].activeMaterialAssetId == 303U && rows[1].activeMaterialName == "TrimOverride", "KBMAT-GRAPH-0404: slot model should expose the active override material");
+    kb::editor::tests::Require(
+        rows[1].activeMaterialStatus.find("Graph-backed") != std::string::npos && rows[1].activeMaterialStatus.find("diagnostics error") != std::string::npos,
+        "KBMAT-GRAPH-0404: slot model should expose graph-backed diagnostic status for active overrides");
+    kb::editor::tests::Require(rows[1].sectionsUsingSlot == "1", "KBMAT-UE-0011: Mesh Renderer material slot model should list the section using an extra slot");
+    kb::editor::tests::Require(rows[1].label.find("Slot 2 Override") != std::string::npos, "Mesh Renderer material slot model should keep extra material overrides readable");
     kb::editor::tests::Require(rows[1].value == "TrimOverride", "Mesh Renderer material slot model should show only the assigned override material");
 
     kb::scene::MeshRendererComponent noSlotRenderer{ .meshAssetId = 88U, .materialAssetId = 400U };
     const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> emptyRows =
-        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(noSlotRenderer, kb::render::RenderMeshAssetData{}, materialName);
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(noSlotRenderer, kb::render::RenderMeshAssetData{}, materialName, materialStatus);
     kb::editor::tests::Require(emptyRows.empty(), "Mesh Renderer material slot model should not invent slots when mesh has none");
 
     kb::scene::Scene scene;
@@ -289,10 +376,13 @@ void RunMeshRendererMaterialSlotModelTest() {
     const kb::scene::MeshRendererComponent* cleared = scene.Components().MeshRenderers().TryGet(entity);
     kb::editor::tests::Require(cleared != nullptr && cleared->materialSlotOverrideCount == 0U, "Mesh Renderer material slot clear should trim cleared overrides");
     const std::vector<kb::editor::InspectorMeshRendererMaterialSlotRow> clearedRows =
-        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(*cleared, mesh, materialName);
+        kb::editor::InspectorMeshRendererMaterialSlotModel::Build(*cleared, mesh, materialName, materialStatus);
     kb::editor::tests::Require(
         clearedRows.size() == 2U && !clearedRows[1].hasOverride && clearedRows[1].value == "None",
         "Mesh Renderer material slot clear should show the override as empty in the UI model");
+    kb::editor::tests::Require(
+        clearedRows[1].activeMaterialAssetId == 202U && clearedRows[1].activeMaterialStatus.find("artifact ready") != std::string::npos,
+        "KBMAT-GRAPH-0404: clearing an override should expose the default slot material status");
 }
 
 void RunMaterialCreateAssignSaveReloadE2ETest() {
@@ -437,6 +527,34 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
     kb::editor::tests::Require(materialEditor.WorkingCopy().has_value(), "Material Editor state did not capture a material working copy");
     kb::editor::tests::Require(materialEditor.CleanSnapshot().has_value(), "Material Editor state did not capture a clean snapshot");
     kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should open with a clean snapshot");
+    const auto findEditorParameter = [&materialEditor](std::string_view stableId) -> const kb::editor::MaterialEditorParameter* {
+        const auto found = std::ranges::find_if(materialEditor.Parameters(), [stableId](const kb::editor::MaterialEditorParameter& parameter) {
+            return parameter.stableId == stableId;
+        });
+        return found == materialEditor.Parameters().end() ? nullptr : &*found;
+    };
+    const kb::editor::MaterialEditorParameter* roughnessParameter = findEditorParameter("roughnessFactor");
+    kb::editor::tests::Require(roughnessParameter != nullptr, "KBMAT-UE-0003: Material Editor parameter model should include roughnessFactor");
+    kb::editor::tests::Require(roughnessParameter->type == kb::render::RenderMaterialParameterType::Scalar &&
+            roughnessParameter->group == kb::editor::MaterialEditorParameterGroup::Core &&
+            roughnessParameter->value.kind == kb::editor::MaterialEditorParameterValueKind::Scalar &&
+            roughnessParameter->defaultValue.kind == kb::editor::MaterialEditorParameterValueKind::Scalar,
+        "KBMAT-UE-0003: roughnessFactor parameter should expose type, group, value and default value");
+    kb::editor::tests::Require(roughnessParameter->range.has_value() && roughnessParameter->range->min == 0.0F && roughnessParameter->range->max == 1.0F,
+        "KBMAT-UE-0003: roughnessFactor parameter should expose schema range");
+    kb::editor::tests::Require(roughnessParameter->enabled && roughnessParameter->overrideEnabled,
+        "KBMAT-UE-0003: supported source material parameters should be enabled and overrideable in the working model");
+    const kb::editor::MaterialEditorParameter* normalTextureParameter = findEditorParameter("normalTextureAssetId");
+    kb::editor::tests::Require(normalTextureParameter != nullptr &&
+            normalTextureParameter->type == kb::render::RenderMaterialParameterType::Texture &&
+            normalTextureParameter->group == kb::editor::MaterialEditorParameterGroup::Texture &&
+            normalTextureParameter->value.kind == kb::editor::MaterialEditorParameterValueKind::TextureAsset &&
+            normalTextureParameter->expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Linear &&
+            normalTextureParameter->enabled,
+        "KBMAT-UE-0003: Material Editor parameter model should expose supported texture slots");
+    const kb::editor::MaterialEditorParameter* clearcoatParameter = findEditorParameter("clearcoatFactor");
+    kb::editor::tests::Require(clearcoatParameter != nullptr && !clearcoatParameter->enabled,
+        "KBMAT-UE-0003: unsupported advanced parameters should remain visible but disabled");
     kb::editor::tests::Require(!materialEditor.InfoPanelVisible(), "Material Editor info panel should be hidden by default");
     kb::editor::tests::Require(materialEditor.ToggleInfoPanel(), "Material Editor info panel toggle should report a state change");
     kb::editor::tests::Require(materialEditor.InfoPanelVisible(), "Material Editor info panel toggle should show schema details");
@@ -463,8 +581,168 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
     kb::editor::tests::Require(materialEditor.Dirty(), "Material Editor state should mark mutated working copy dirty");
     materialEditor.SetDiagnostics({ "Warning test: state diagnostic" }, false);
     kb::editor::tests::Require(!materialEditor.Diagnostics().empty() && !materialEditor.DiagnosticsHaveError(), "Material Editor state should store diagnostics snapshot");
+    materialEditor.RevertToCleanSnapshot();
+    kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should clear dirty after reverting to the clean snapshot");
+    kb::editor::tests::Require(materialEditor.WorkingCopy().has_value() && !kb::editor::tests::NearlyEqual(materialEditor.WorkingCopy()->desc.roughnessFactor, 0.375F),
+        "Material Editor state should restore the clean working copy on revert");
+    materialEditor.SetWorkingCopy(*materialEditor.CleanSnapshot());
+    kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should not mark a clean-equivalent working copy dirty");
+    material.desc.roughnessFactor = 0.5F;
+    material.desc.normalTextureAssetId = 777U;
+    materialEditor.SetWorkingCopy(material);
+    roughnessParameter = findEditorParameter("roughnessFactor");
+    normalTextureParameter = findEditorParameter("normalTextureAssetId");
+    kb::editor::tests::Require(roughnessParameter != nullptr && kb::editor::tests::NearlyEqual(roughnessParameter->value.numbers[0], 0.5F),
+        "KBMAT-UE-0003: Material Editor parameter model should refresh scalar values from the working copy");
+    kb::editor::tests::Require(normalTextureParameter != nullptr && normalTextureParameter->value.assetId == 777U,
+        "KBMAT-UE-0003: Material Editor parameter model should refresh texture asset ids from the working copy");
     materialEditor.MarkSaved();
     kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should clear dirty after saving snapshot");
+    kb::editor::tests::Require(materialEditor.CleanSnapshot().has_value() && kb::editor::tests::NearlyEqual(materialEditor.CleanSnapshot()->desc.roughnessFactor, 0.5F),
+        "Material Editor state should promote the saved working copy to the clean snapshot");
+}
+
+void RunMaterialEditorGraphBackedSchemaParameterModelTest() {
+    kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = -260,
+        .positionY = 32,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "tintColor",
+            .displayName = "Tint Color",
+            .group = kb::render::RenderMaterialParameterGroup::Surface,
+            .defaultValueHint = "0.25 0.5 0.75 1",
+            .overrideSupported = false,
+            .editorOrder = 10U,
+        },
+    });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = -260,
+        .positionY = 150,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "roughnessFactor",
+            .displayName = "Roughness",
+            .group = kb::render::RenderMaterialParameterGroup::Surface,
+            .defaultValueHint = "0.42",
+            .hasRange = true,
+            .rangeMin = 0.0F,
+            .rangeMax = 1.0F,
+            .overrideSupported = true,
+            .editorOrder = 20U,
+        },
+    });
+    graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ParameterTexture,
+        .positionX = -260,
+        .positionY = 268,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "albedo",
+            .displayName = "Albedo",
+            .group = kb::render::RenderMaterialParameterGroup::Surface,
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+            .editorOrder = 30U,
+        },
+    });
+    graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ParameterColor,
+        2U,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ParameterScalar,
+        3U,
+        "value",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "roughness"));
+
+    const kb::render::RenderMaterialGraphMaterialTypeBuildResult typeResult =
+        kb::render::BuildRenderMaterialGraphMaterialTypeDocument(
+            graph,
+            "graph.editor.tint",
+            1U,
+            kb::render::RenderMaterialGraphBuildContext{
+                .assetId = 0x0302U,
+                .sourcePath = "/Game/Materials/TintGraph.kbmaterialgraph",
+            });
+    kb::editor::tests::Require(typeResult.Succeeded() && typeResult.document.has_value(),
+        "KBMAT-GRAPH-0302: Graph-backed Material Type schema fixture should generate");
+
+    kb::render::RenderMaterialAssetData material{};
+    material.materialType = typeResult.document->stableTypeId;
+    material.materialTypeVersion = typeResult.document->version;
+    material.hasExplicitMaterialType = true;
+    material.hasExplicitMaterialTypeVersion = true;
+    material.desc.roughnessFactor = 0.42F;
+    material.desc.albedoTextureAssetId = 0xA11BEDU;
+    material.graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "tintColor",
+        .type = kb::render::RenderMaterialParameterType::Color,
+        .numbers = { 0.8F, 0.7F, 0.6F, 1.0F },
+    });
+    material.graph = graph;
+    material.graph.storageModel = "inline-kbmat";
+
+    kb::editor::MaterialEditorState materialEditor;
+    materialEditor.Open(kb::assets::AssetId{ 0x0302U }, material, typeResult.document->schema);
+
+    const auto findEditorParameter = [&materialEditor](std::string_view stableId) -> const kb::editor::MaterialEditorParameter* {
+        const auto found = std::ranges::find_if(materialEditor.Parameters(), [stableId](const kb::editor::MaterialEditorParameter& parameter) {
+            return parameter.stableId == stableId;
+        });
+        return found == materialEditor.Parameters().end() ? nullptr : &*found;
+    };
+    const kb::editor::MaterialEditorParameter* tint = findEditorParameter("tintColor");
+    kb::editor::tests::Require(tint != nullptr &&
+            tint->type == kb::render::RenderMaterialParameterType::Color &&
+            tint->group == kb::editor::MaterialEditorParameterGroup::Surface &&
+            tint->value.kind == kb::editor::MaterialEditorParameterValueKind::Color &&
+            tint->defaultValue.kind == kb::editor::MaterialEditorParameterValueKind::Color &&
+            kb::editor::tests::NearlyEqual(tint->value.numbers[0], 0.8F) &&
+            kb::editor::tests::NearlyEqual(tint->defaultValue.numbers[2], 0.75F) &&
+            !tint->overrideEnabled &&
+            tint->enabled,
+        "KBMAT-GRAPH-0302: Material Editor should expose graph color parameters with schema defaults and override flags");
+    const kb::editor::MaterialEditorParameter* roughness = findEditorParameter("roughnessFactor");
+    kb::editor::tests::Require(roughness != nullptr &&
+            roughness->group == kb::editor::MaterialEditorParameterGroup::Surface &&
+            roughness->value.kind == kb::editor::MaterialEditorParameterValueKind::Scalar &&
+            kb::editor::tests::NearlyEqual(roughness->value.numbers[0], 0.42F) &&
+            kb::editor::tests::NearlyEqual(roughness->defaultValue.numbers[0], 0.42F) &&
+            roughness->range.has_value() &&
+            roughness->overrideEnabled,
+        "KBMAT-GRAPH-0302: Material Editor should expose graph scalar parameters from active Material Type schema");
+    const kb::editor::MaterialEditorParameter* albedo = findEditorParameter("albedoTextureAssetId");
+    kb::editor::tests::Require(albedo != nullptr &&
+            albedo->type == kb::render::RenderMaterialParameterType::Texture &&
+            albedo->group == kb::editor::MaterialEditorParameterGroup::Texture &&
+            albedo->value.assetId == 0xA11BEDU &&
+            albedo->expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Srgb &&
+            albedo->overrideEnabled,
+        "KBMAT-GRAPH-0302: Material Editor should expose graph texture role/color policy");
+
+    const kb::editor::MaterialEditorPanelDetailsRows rows = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 0U);
+    kb::editor::tests::Require(std::ranges::any_of(rows.parameterRows, [](const std::string& row) {
+            return row.find("Surface  Color  Tint Color") != std::string::npos &&
+                row.find("default 0.25, 0.5, 0.75") != std::string::npos &&
+                row.find("override disabled") != std::string::npos;
+        }),
+        "KBMAT-GRAPH-0302: Material Editor details should render graph parameter group, default and override flag");
+    kb::editor::tests::Require(std::ranges::any_of(rows.textureSlotRows, [](const std::string& row) {
+            return row.find("Texture  Albedo  sRGB") != std::string::npos &&
+                row.find("albedoTextureAssetId") != std::string::npos &&
+                row.find("override on") != std::string::npos;
+        }),
+        "KBMAT-GRAPH-0302: Material Editor details should render graph texture role/color policy and override flag");
 }
 
 void RunEditorMaterialSlotOverrideSyncTest() {
@@ -483,16 +761,141 @@ void RunEditorMaterialSlotOverrideSyncTest() {
     kb::editor::tests::Require(groups[0].instances[0].materialSlotAssetIds[1] == 303U, "Editor material slot override sync did not propagate override asset id");
 }
 
+void RunMaterialAssignmentPathRenderSyncTest() {
+    kb::scene::Scene scene;
+    const kb::assets::AssetId builtInPbrMaterialId{ 101U };
+    const kb::assets::AssetId previousSlotMaterialId{ 202U };
+    const kb::assets::AssetId graphBackedMaterialId{ 303U };
+    const kb::assets::AssetId graphBackedSlotMaterialId{ 404U };
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "AssignmentPathMesh" });
+    const auto currentEntity = [&scene]() -> kb::scene::SceneEntity {
+        const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
+        kb::editor::tests::Require(roots.size() == 1U, "KBMAT-UE-0013: Assignment path test expected one root entity");
+        return roots.front();
+    };
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = 42U,
+        .materialAssetId = builtInPbrMaterialId.value,
+    });
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(kb::assets::AssetMetadata{
+            .id = graphBackedMaterialId,
+            .type = "RenderMaterial",
+            .virtualPath = "/Game/Materials/GraphBacked.kbmat",
+        }),
+        "KBMAT-GRAPH-0401: Graph-backed .kbmat must be accepted by the Mesh Renderer material assignment path");
+    const kb::assets::AssetMetadata rawGraphMetadata{
+        .id = kb::assets::AssetId{ 0x4752415048ULL },
+        .type = "RenderMaterialGraph",
+        .virtualPath = "/Game/Materials/RawGraph.kbmaterialgraph",
+    };
+    const kb::assets::AssetMetadata rawGraphAliasMetadata{
+        .id = kb::assets::AssetId{ 0x4752415049ULL },
+        .type = "MaterialGraph",
+        .importCategory = "MaterialGraph",
+        .virtualPath = "/Game/Materials/RawGraphAlias.kbmaterialgraph",
+    };
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(rawGraphMetadata));
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(rawGraphAliasMetadata));
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(rawGraphMetadata) &&
+            kb::editor::EditorSceneMaterialAssetActions::IsMaterialGraphAsset(rawGraphMetadata),
+        "KBMAT-GRAPH-0402: Raw Material Graph assets must not be accepted as Mesh Renderer materials");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(rawGraphAliasMetadata) &&
+            kb::editor::EditorSceneMaterialAssetActions::IsMaterialGraphAsset(rawGraphAliasMetadata),
+        "KBMAT-GRAPH-0402: Raw Material Graph aliases must not be accepted as Mesh Renderer materials");
+    const std::string graphDropMessage{ kb::editor::EditorSceneMaterialAssetActions::MaterialGraphAssignmentRejectionMessage() };
+    kb::editor::tests::Require(graphDropMessage.find("Create Material From Graph") != std::string::npos &&
+            graphDropMessage.find(".kbmat") != std::string::npos,
+        "KBMAT-GRAPH-0402: Raw Material Graph rejection should tell the user to create a .kbmat first");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::IsMaterialAsset(kb::assets::AssetMetadata{ .type = "RenderTexture" }),
+        "KBMAT-UE-0013: Material assignment path should reject non-material asset metadata");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(scene, entity, rawGraphMetadata.id),
+        "KBMAT-GRAPH-0506: Raw Material Graph asset id must not be saved as the primary Mesh Renderer material");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, rawGraphMetadata.id),
+        "KBMAT-GRAPH-0506: Raw Material Graph asset id must not be saved as a Mesh Renderer slot override");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterial(scene, entity, rawGraphAliasMetadata.id),
+        "KBMAT-GRAPH-0506: Raw MaterialGraph alias asset id must not be saved as the primary Mesh Renderer material");
+    kb::editor::tests::Require(!kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, rawGraphAliasMetadata.id),
+        "KBMAT-GRAPH-0506: Raw MaterialGraph alias asset id must not be saved as a Mesh Renderer slot override");
+    const kb::scene::MeshRendererComponent* rejectedGraphAssignment = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(rejectedGraphAssignment != nullptr &&
+            rejectedGraphAssignment->materialAssetId == builtInPbrMaterialId.value &&
+            rejectedGraphAssignment->materialSlotOverrideCount == 0U &&
+            rejectedGraphAssignment->materialSlotAssetIds[1] == 0U,
+        "KBMAT-GRAPH-0506: Raw Material Graph rejection should leave Mesh Renderer material state unchanged");
+
+    kb::render::RenderScene renderScene;
+    kb::render::EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    renderScene.ClearDirty();
+    static_cast<void>(scene.Runtime().Update(0.016F));
+
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, entity, 1U, previousSlotMaterialId),
+        "KBMAT-UE-0013: Could not seed a slot override before all-slots assignment");
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::editor::tests::Require(scene.History().Record("Drop Material To All Slots"), "KBMAT-UE-0013: Could not record all-slots material assignment");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialToAllSlots(scene, entity, graphBackedMaterialId),
+        "KBMAT-GRAPH-0401: Graph-backed .kbmat should assign as the primary Mesh Renderer material");
+    const kb::scene::MeshRendererComponent* allSlots = scene.Components().MeshRenderers().TryGet(entity);
+    kb::editor::tests::Require(allSlots != nullptr && allSlots->materialAssetId == graphBackedMaterialId.value && allSlots->materialSlotOverrideCount == 0U,
+        "KBMAT-GRAPH-0401: Graph-backed all-slots assignment should clear previous slot overrides");
+    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    const kb::render::MeshRenderProxy* allSlotsProxy = renderScene.FindMeshByEntity(entity.Id());
+    kb::editor::tests::Require(allSlotsProxy != nullptr && kb::render::HasDirtyFlag(allSlotsProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
+        "KBMAT-UE-0013: All-slots assignment should dirty the render material proxy");
+    std::vector<kb::render::SceneRenderDrawGroup> groups;
+    renderScene.BuildDrawGroups(groups);
+    kb::editor::tests::Require(groups.size() == 1U && groups[0].materialAssetId == graphBackedMaterialId.value,
+        "KBMAT-GRAPH-0401: All-slots assignment should rebuild draw groups with the graph-backed material");
+
+    kb::editor::tests::Require(scene.History().Undo(), "KBMAT-UE-0013: Could not undo all-slots material assignment");
+    const kb::scene::MeshRendererComponent* allSlotsUndo = scene.Components().MeshRenderers().TryGet(currentEntity());
+    kb::editor::tests::Require(allSlotsUndo != nullptr && allSlotsUndo->materialAssetId == builtInPbrMaterialId.value &&
+            allSlotsUndo->materialSlotOverrideCount == 2U &&
+            allSlotsUndo->materialSlotAssetIds[1] == previousSlotMaterialId.value,
+        "KBMAT-UE-0013: Undo should restore the previous primary material and slot override");
+    kb::editor::tests::Require(scene.History().Redo(), "KBMAT-UE-0013: Could not redo all-slots material assignment");
+    const kb::scene::MeshRendererComponent* allSlotsRedo = scene.Components().MeshRenderers().TryGet(currentEntity());
+    kb::editor::tests::Require(allSlotsRedo != nullptr && allSlotsRedo->materialAssetId == graphBackedMaterialId.value && allSlotsRedo->materialSlotOverrideCount == 0U,
+        "KBMAT-GRAPH-0401: Redo should reapply graph-backed all-slots assignment");
+
+    synchronizer.Sync(scene, renderScene);
+    renderScene.ClearDirty();
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    const kb::scene::SceneEntity slotEntity = currentEntity();
+    kb::editor::tests::Require(scene.History().Record("Drop Material To Slot"), "KBMAT-UE-0013: Could not record slot material assignment");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, slotEntity, 1U, graphBackedSlotMaterialId),
+        "KBMAT-GRAPH-0401: Graph-backed .kbmat should assign as a Mesh Renderer slot override");
+    const kb::scene::MeshRendererComponent* slotAssigned = scene.Components().MeshRenderers().TryGet(slotEntity);
+    kb::editor::tests::Require(slotAssigned != nullptr && slotAssigned->materialSlotOverrideCount == 2U && slotAssigned->materialSlotAssetIds[1] == graphBackedSlotMaterialId.value,
+        "KBMAT-GRAPH-0401: Graph-backed slot assignment should store the slot override");
+    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    const kb::render::MeshRenderProxy* slotProxy = renderScene.FindMeshByEntity(slotEntity.Id());
+    kb::editor::tests::Require(slotProxy != nullptr && kb::render::HasDirtyFlag(slotProxy->dirty, kb::render::RenderProxyDirtyFlag::Material),
+        "KBMAT-UE-0013: Slot assignment should dirty the render material proxy");
+    groups.clear();
+    renderScene.BuildDrawGroups(groups);
+    kb::editor::tests::Require(groups.size() == 1U && groups[0].instances.size() == 1U &&
+            groups[0].instances[0].materialSlotOverrideCount == 2U &&
+            groups[0].instances[0].materialSlotAssetIds[1] == graphBackedSlotMaterialId.value,
+        "KBMAT-GRAPH-0401: Slot assignment should rebuild draw groups with the graph-backed slot override");
+}
+
 void RunMaterialAssignmentUndoRedoTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "Mesh" });
     scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{ .meshAssetId = 42U });
-    const auto currentMaterialId = [&scene]() -> std::uint64_t {
+    const auto currentEntity = [&scene]() -> kb::scene::SceneEntity {
         const std::vector<kb::scene::SceneEntity> roots = scene.Hierarchy().RootEntities();
         kb::editor::tests::Require(roots.size() == 1U, "Material assignment undo test expected one root entity");
-        const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(roots.front());
+        return roots.front();
+    };
+    const auto currentRenderer = [&scene, &currentEntity]() -> const kb::scene::MeshRendererComponent& {
+        const kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(currentEntity());
         kb::editor::tests::Require(renderer != nullptr, "Material assignment undo test lost the Mesh Renderer component");
-        return renderer->materialAssetId;
+        return *renderer;
+    };
+    const auto currentMaterialId = [&currentRenderer]() -> std::uint64_t {
+        return currentRenderer().materialAssetId;
     };
 
     kb::editor::tests::Require(scene.History().Record("Assign Mesh Material"), "Material assignment undo test could not record scene history");
@@ -504,11 +907,40 @@ void RunMaterialAssignmentUndoRedoTest() {
 
     kb::editor::tests::Require(scene.History().Redo(), "Material assignment undo test could not redo scene history");
     kb::editor::tests::Require(currentMaterialId() == 404U, "Material assignment redo did not restore the assigned material id");
+
+    kb::editor::tests::Require(scene.History().Record("Assign Mesh Material Slot"), "Material assignment undo test could not record slot scene history");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, currentEntity(), 2U, kb::assets::AssetId{ 505U }), "Material assignment undo test could not assign material slot override");
+    const kb::scene::MeshRendererComponent& slotAssigned = currentRenderer();
+    kb::editor::tests::Require(slotAssigned.materialSlotOverrideCount == 3U && slotAssigned.materialSlotAssetIds[2] == 505U, "Material assignment undo test did not assign the slot material id");
+
+    kb::editor::tests::Require(scene.History().Undo(), "Material assignment undo test could not undo slot scene history");
+    const kb::scene::MeshRendererComponent& slotUndone = currentRenderer();
+    kb::editor::tests::Require(slotUndone.materialAssetId == 404U, "Material assignment slot undo should preserve the primary material assignment");
+    kb::editor::tests::Require(slotUndone.materialSlotOverrideCount == 0U && slotUndone.materialSlotAssetIds[2] == 0U, "Material assignment slot undo did not restore the previous slot override state");
+
+    kb::editor::tests::Require(scene.History().Redo(), "Material assignment undo test could not redo slot scene history");
+    const kb::scene::MeshRendererComponent& slotRedone = currentRenderer();
+    kb::editor::tests::Require(slotRedone.materialSlotOverrideCount == 3U && slotRedone.materialSlotAssetIds[2] == 505U, "Material assignment slot redo did not restore the slot material id");
+
+    kb::editor::tests::Require(scene.History().Record("Clear Mesh Material Slot"), "Material assignment undo test could not record slot clear scene history");
+    kb::editor::tests::Require(kb::editor::EditorSceneMaterialAssetActions::AssignMaterialSlotOverride(scene, currentEntity(), 2U, {}), "Material assignment undo test could not clear material slot override");
+    const kb::scene::MeshRendererComponent& slotCleared = currentRenderer();
+    kb::editor::tests::Require(slotCleared.materialSlotOverrideCount == 0U && slotCleared.materialSlotAssetIds[2] == 0U, "Material assignment slot clear did not trim cleared trailing overrides");
+
+    kb::editor::tests::Require(scene.History().Undo(), "Material assignment undo test could not undo slot clear scene history");
+    const kb::scene::MeshRendererComponent& slotClearUndone = currentRenderer();
+    kb::editor::tests::Require(slotClearUndone.materialSlotOverrideCount == 3U && slotClearUndone.materialSlotAssetIds[2] == 505U, "Material assignment slot clear undo did not restore the slot override");
+
+    kb::editor::tests::Require(scene.History().Redo(), "Material assignment undo test could not redo slot clear scene history");
+    const kb::scene::MeshRendererComponent& slotClearRedone = currentRenderer();
+    kb::editor::tests::Require(slotClearRedone.materialAssetId == 404U, "Material assignment slot clear redo should preserve the primary material assignment");
+    kb::editor::tests::Require(slotClearRedone.materialSlotOverrideCount == 0U && slotClearRedone.materialSlotAssetIds[2] == 0U, "Material assignment slot clear redo did not restore the cleared slot state");
 }
 
 void RunMaterialPreviewMeshFactoryTest() {
     const kb::render::RenderMeshAssetData sphere = kb::editor::EditorMaterialPreviewMeshFactory::BuildSphere();
     kb::editor::tests::Require(sphere.desc.vertexCount > 0U, "Material preview sphere did not generate vertices");
+    kb::editor::tests::Require(sphere.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !sphere.tangentVertices.empty(), "Material preview sphere must provide tangents for the PBR shader");
     kb::editor::tests::Require(sphere.desc.indexCount > 0U, "Material preview sphere did not generate indices");
     kb::editor::tests::Require(sphere.desc.materialSlotCount == 1U, "Material preview sphere should expose one material slot");
     kb::editor::tests::Require(sphere.bounds.radius > 0.0F, "Material preview sphere did not produce bounds");
@@ -518,8 +950,25 @@ void RunMaterialPreviewMeshFactoryTest() {
 
     const kb::render::RenderMeshAssetData cube = kb::editor::EditorMaterialPreviewMeshFactory::BuildCube();
     kb::editor::tests::Require(cube.desc.vertexCount == 24U, "Material preview cube should generate one quad per face");
+    kb::editor::tests::Require(cube.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !cube.tangentVertices.empty(), "Material preview cube must provide tangents for the PBR shader");
     kb::editor::tests::Require(cube.desc.indexCount == 36U, "Material preview cube should generate two triangles per face");
     kb::editor::tests::Require(cube.desc.materialSlotCount == 1U, "Material preview cube should expose one material slot");
+
+    const kb::render::RenderMeshAssetData plane = kb::editor::EditorMaterialPreviewMeshFactory::BuildPlane();
+    kb::editor::tests::Require(plane.desc.vertexCount == 4U && plane.desc.indexCount == 6U, "KBMAT-UE-0008: Material preview plane should generate one quad");
+    kb::editor::tests::Require(plane.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !plane.tangentVertices.empty(), "Material preview plane must provide tangents for the PBR shader");
+    kb::editor::tests::Require(plane.desc.materialSlotCount == 1U && plane.bounds.radius > 0.0F, "KBMAT-UE-0008: Material preview plane should expose a slot and bounds");
+
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy spherePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Sphere();
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy cubePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cube();
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy planePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Plane();
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy customPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh(kb::assets::AssetId{ 0xC0570B1EC0570B1EULL });
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy fallbackPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh({});
+    kb::editor::tests::Require(spherePolicy.meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(), "KBMAT-UE-0008: Sphere policy should keep the legacy preview mesh id");
+    kb::editor::tests::Require(cubePolicy.meshAssetId.IsValid() && cubePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Cube policy should use a distinct generated mesh id");
+    kb::editor::tests::Require(planePolicy.meshAssetId.IsValid() && planePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Plane policy should use a distinct generated mesh id");
+    kb::editor::tests::Require(customPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::CustomMesh && customPolicy.meshAssetId == customPolicy.customMeshAssetId, "KBMAT-UE-0008: Custom policy should preserve the selected mesh id");
+    kb::editor::tests::Require(fallbackPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::Fallback && fallbackPolicy.meshAssetId.IsValid(), "KBMAT-UE-0008: Invalid custom policy should fall back to a generated mesh");
 }
 
 void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
@@ -552,6 +1001,30 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     kb::editor::tests::Require(telemetry.previewSceneReady, "Material preview telemetry did not report a ready scene");
     kb::editor::tests::Require(telemetry.missingTextureCount == 1U, "Material preview telemetry did not diagnose the missing texture");
 
+    kb::render::RenderMaterialAssetData workingCopyMaterial = material;
+    workingCopyMaterial.desc.baseColor[0] = 0.21F;
+    workingCopyMaterial.desc.baseColor[1] = 0.42F;
+    workingCopyMaterial.desc.baseColor[2] = 0.84F;
+    kb::editor::EditorMaterialPreviewScene graphPreview;
+    const kb::scene::Scene& graphPreviewScene = graphPreview.SceneFor(source, materialId, &workingCopyMaterial);
+    const kb::render::ResolvedRuntimeMaterialAsset graphPreviewMaterial =
+        kb::render::RuntimeMaterialResolver{}.ResolveAsset(graphPreviewScene.Assets().Manager(), materialId);
+    kb::editor::tests::Require(graphPreviewMaterial.resolved, "KBMAT-GRAPH-0107: Graph preview should resolve the working-copy material through the runtime resolver");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(graphPreviewMaterial.material.desc.baseColor[0], 0.21F) &&
+            kb::editor::tests::NearlyEqual(graphPreviewMaterial.material.desc.baseColor[1], 0.42F) &&
+            kb::editor::tests::NearlyEqual(graphPreviewMaterial.material.desc.baseColor[2], 0.84F),
+        "KBMAT-GRAPH-0107: Graph preview should use the Material Editor working copy instead of the saved material file");
+    const std::uint64_t graphPreviewRevision = graphPreview.Revision();
+    workingCopyMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 100,
+        .positionY = 100,
+    });
+    static_cast<void>(graphPreview.SceneFor(source, materialId, &workingCopyMaterial));
+    kb::editor::tests::Require(graphPreview.Revision() > graphPreviewRevision,
+        "KBMAT-GRAPH-0107: Graph preview should rebuild when the working-copy graph changes");
+
     kb::render::RenderScene renderScene;
     kb::render::EcsRenderSceneSynchronizer{}.Sync(previewScene, renderScene);
     std::vector<kb::render::SceneRenderDrawGroup> groups;
@@ -560,19 +1033,37 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     kb::editor::tests::Require(groups[0].meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value, "Material preview scene did not use the preview mesh asset");
     kb::editor::tests::Require(groups[0].materialAssetId == materialId.value, "Material preview scene did not assign the inspected material");
     kb::editor::tests::Require(groups[0].instances.size() == 1U, "Material preview scene should render one mesh instance");
-    kb::editor::tests::Require(renderScene.LightProxyCount() >= 2U, "Material preview scene should provide studio lighting for a visible preview sphere");
+    kb::editor::tests::Require(renderScene.LightProxyCount() == 0U, "Material preview scene should rely on the neutral preview render policy instead of baked scene lights");
+
+    kb::editor::EditorMaterialPreviewScene cubePreview;
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy cubePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cube();
+    kb::editor::tests::Require(cubePreview.SetPrimitivePolicy(cubePolicy), "KBMAT-UE-0008: Material preview scene should accept cube primitive policy");
+    const kb::scene::Scene& cubePreviewScene = cubePreview.SceneFor(source, materialId);
+    kb::render::RenderScene cubeRenderScene;
+    kb::render::EcsRenderSceneSynchronizer{}.Sync(cubePreviewScene, cubeRenderScene);
+    std::vector<kb::render::SceneRenderDrawGroup> cubeGroups;
+    cubeRenderScene.BuildDrawGroups(cubeGroups);
+    kb::editor::tests::Require(cubeGroups.size() == 1U && cubeGroups[0].meshAssetId == cubePolicy.meshAssetId.value, "KBMAT-UE-0008: Material preview scene should use the selected primitive mesh id");
 
     kb::render::SceneRenderer renderer;
-    renderer.SetDefaultLightingConfig(kb::render::SceneRenderLightingConfig{
-        .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
-        .environmentDiffuseIntensity = 0.55F,
-        .environmentSpecularIntensity = 0.04F,
-    });
+    const kb::render::SceneRenderLightingConfig previewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
+    kb::editor::tests::Require(previewLighting.editorPreviewKeyLightEnabled, "KBMAT-0610: Material preview lighting must enable a neutral key light");
+    kb::editor::tests::Require(previewLighting.editorPreviewKeyLightIntensity > 0.0F, "KBMAT-0610: Material preview key light must have positive intensity");
+    kb::editor::tests::Require(previewLighting.environmentMode == kb::render::SceneRenderEnvironmentMode::Hemisphere, "KBMAT-0610: Material preview must use a neutral hemisphere/IBL fallback");
+    kb::editor::tests::Require(previewLighting.environmentDiffuseIntensity > 0.0F, "KBMAT-0610: Material preview diffuse environment fallback must be active");
+    kb::editor::tests::Require(previewLighting.environmentSpecularIntensity > 0.0F, "KBMAT-0610: Material preview specular environment fallback must be active");
+    kb::editor::tests::Require(!previewLighting.shadowsEnabled, "KBMAT-0610: Material preview lighting should avoid unstable preview shadows");
+    renderer.SetDefaultLightingConfig(previewLighting);
     const kb::render::SceneRenderSubmitStats lightingStats = renderer.ValidateSceneResources(renderScene);
-    kb::editor::tests::Require(lightingStats.sceneLightCount >= 2U, "Material preview renderer validation did not see preview lights");
-    kb::editor::tests::Require(lightingStats.submittedForwardLightCount >= 1U, "Material preview renderer validation did not select a forward light");
+    kb::editor::tests::Require(lightingStats.sceneLightCount == 0U, "KBMAT-0610: Material preview should not depend on scene-authored lights");
+    kb::editor::tests::Require(lightingStats.submittedForwardLightCount == 1U, "KBMAT-0610: Material preview renderer validation did not submit the neutral key light");
     kb::editor::tests::Require(lightingStats.submittedEnvironmentLightingCount == 1U, "Material preview renderer validation should keep environment lighting active");
     kb::editor::tests::Require(lightingStats.environmentLightingMode == static_cast<std::uint32_t>(kb::render::SceneRenderEnvironmentMode::Hemisphere) + 1U, "Material preview renderer validation should use hemisphere environment lighting");
+    const kb::render::ScenePostProcessSettings previewPostProcess = kb::editor::MaterialPreviewRenderPolicy::StableExposurePostProcessSettings();
+    kb::editor::tests::Require(previewPostProcess.autoExposureMetering == kb::render::ScenePostProcessSettings::AutoExposureMeteringMode::Manual, "KBMAT-0610: Material preview exposure metering must be fixed");
+    kb::editor::tests::Require(!previewPostProcess.outputTransform.autoExposure.enabled, "KBMAT-0610: Material preview auto exposure must be disabled");
+    kb::editor::tests::Require(!previewPostProcess.outputTransform.autoExposure.temporalAdaptationEnabled, "KBMAT-0610: Material preview temporal exposure adaptation must be disabled");
+    kb::editor::tests::Require(previewPostProcess.outputTransform.exposureStops == 0.0F, "KBMAT-0610: Material preview fixed exposure should be neutral");
 
     MaterialPreviewHeadlessSurface surface;
     kb::render::DisplayConfig config{};
@@ -611,11 +1102,7 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
                 .viewportIndex = 0U,
             },
         },
-        .lightingConfig = kb::render::SceneRenderLightingConfig{
-            .environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere,
-            .environmentDiffuseIntensity = 0.55F,
-            .environmentSpecularIntensity = 0.04F,
-        },
+        .lightingConfig = previewLighting,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
         .shadowPassEnabled = false,
         .postProcessEnabled = false,
@@ -633,8 +1120,87 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     kb::editor::tests::Require(submitStats.missingMaterialResourceCount == 0U, "Material preview headless submit is missing the preview material resource");
     kb::editor::tests::Require(submitStats.submittedMeshCount >= 1U, "Material preview headless submit did not submit the sphere");
     kb::editor::tests::Require(submitStats.submittedDrawCallCount >= 1U, "Material preview headless submit did not issue a draw call");
+    const kb::render::SceneRenderResourceMap* previewResourceMap = submitRenderer.SceneResourceMap();
+    const kb::render::RenderResourceRegistry* previewResources = submitRenderer.SceneResources();
+    kb::editor::tests::Require(previewResourceMap != nullptr && previewResources != nullptr, "KBMAT-1007: Material preview renderer did not expose runtime resources");
+    const kb::render::RenderMaterialHandle previewMaterialHandle = previewResourceMap->ResolveMaterial(materialId.value);
+    const kb::render::RenderMaterialResource* previewMaterialResource = previewResources->FindMaterial(previewMaterialHandle);
+    kb::editor::tests::Require(previewMaterialHandle.IsValid() && previewMaterialResource != nullptr, "KBMAT-1007: Material preview renderer did not bind the inspected material resource");
+    const kb::render::RenderMaterialResource previewMaterialSnapshot = *previewMaterialResource;
     submitRenderer.EndFrame();
     submitRenderer.Shutdown();
+
+    kb::scene::Scene runtimeScene;
+    kb::assets::AssetManager& runtimeManager = runtimeScene.Assets().Manager();
+    static_cast<void>(runtimeManager.RegisterLoader(std::make_unique<kb::editor::EditorMaterialPreviewMeshLoader>()));
+    static_cast<void>(runtimeManager.RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+    static_cast<void>(runtimeManager.RegisterAsset(kb::assets::AssetMetadata{
+        .id = materialId,
+        .type = "RenderMaterial",
+        .name = "PreviewMaterial",
+        .virtualPath = "/Game/Materials/PreviewMaterial.kbmat",
+        .physicalPath = materialFile,
+        .contentHash = 1U,
+        .runtimeLoadable = true,
+    }));
+    static_cast<void>(runtimeManager.RegisterAsset(kb::assets::AssetMetadata{
+        .id = kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(),
+        .type = "RenderMesh",
+        .name = "Material Preview Sphere",
+        .virtualPath = "/Editor/Preview/MaterialSphere",
+        .physicalPath = "__editor_material_preview_sphere__",
+        .runtimeLoadable = true,
+    }));
+    const kb::scene::SceneEntity runtimeMesh = runtimeScene.Entities().CreateEntity(kb::scene::SceneObjectDesc{ .name = "KBMAT-1007 Runtime Mesh" });
+    runtimeScene.Components().MeshRenderers().Set(runtimeMesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId().value,
+        .materialAssetId = materialId.value,
+    });
+    runtimeScene.Runtime().SynchronizeTransforms();
+
+    kb::render::Renderer runtimeRenderer;
+    runtimeRenderer.ReserveRuntimeSceneResources(kb::render::Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .scenePassSubmitStats = 1U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 4U,
+        .syncTransformResolvingEntries = 4U,
+    });
+    kb::editor::tests::Require(runtimeRenderer.Initialize(surface, &config), "KBMAT-1007: Runtime parity renderer did not initialize");
+    kb::editor::tests::Require(runtimeRenderer.BeginFrame(), "KBMAT-1007: Runtime parity renderer did not begin a frame");
+    kb::editor::tests::Require(runtimeRenderer.SubmitScene(runtimeScene, submitDesc), "KBMAT-1007: Runtime parity renderer rejected the same material params");
+    const kb::render::SceneRenderSubmitStats runtimeSubmitStats = runtimeRenderer.LastSceneSubmitStats();
+    kb::editor::tests::Require(runtimeSubmitStats.missingMaterialBindingCount == 0U && runtimeSubmitStats.missingMaterialResourceCount == 0U, "KBMAT-1007: Runtime parity submit is missing the material resource");
+    const kb::render::SceneRenderResourceMap* runtimeResourceMap = runtimeRenderer.SceneResourceMap();
+    const kb::render::RenderResourceRegistry* runtimeResources = runtimeRenderer.SceneResources();
+    kb::editor::tests::Require(runtimeResourceMap != nullptr && runtimeResources != nullptr, "KBMAT-1007: Runtime parity renderer did not expose resources");
+    const kb::render::RenderMaterialHandle runtimeMaterialHandle = runtimeResourceMap->ResolveMaterial(materialId.value);
+    const kb::render::RenderMaterialResource* runtimeMaterialResource = runtimeResources->FindMaterial(runtimeMaterialHandle);
+    kb::editor::tests::Require(runtimeMaterialHandle.IsValid() && runtimeMaterialResource != nullptr, "KBMAT-1007: Runtime parity renderer did not bind the material resource");
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(previewMaterialSnapshot.baseColor[0], runtimeMaterialResource->baseColor[0]) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.baseColor[1], runtimeMaterialResource->baseColor[1]) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.baseColor[2], runtimeMaterialResource->baseColor[2]) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.baseColor[3], runtimeMaterialResource->baseColor[3]) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.metallicFactor, runtimeMaterialResource->metallicFactor) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.roughnessFactor, runtimeMaterialResource->roughnessFactor) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.normalScale, runtimeMaterialResource->normalScale) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.occlusionStrength, runtimeMaterialResource->occlusionStrength) &&
+            kb::editor::tests::NearlyEqual(previewMaterialSnapshot.emissiveStrength, runtimeMaterialResource->emissiveStrength) &&
+            previewMaterialSnapshot.albedoTextureAssetId == runtimeMaterialResource->albedoTextureAssetId &&
+            previewMaterialSnapshot.alphaMode == runtimeMaterialResource->alphaMode,
+        "KBMAT-1007: Material preview and runtime material resources diverged for the same material params");
+    runtimeRenderer.EndFrame();
+    runtimeRenderer.Shutdown();
 
     const std::uint64_t firstRevision = preview.Revision();
     kb::render::RenderMaterialAssetData updatedMaterial{};
@@ -670,6 +1236,30 @@ void RunMaterialValueFormatterTest() {
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Opaque) == "Opaque", "AlphaModeName should render Opaque");
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Mask) == "Mask", "AlphaModeName should render Mask");
     kb::editor::tests::Require(MaterialAssetFormatter::AlphaModeName(kb::render::RenderMaterialAlphaMode::Blend) == "Blend", "AlphaModeName should render Blend");
+
+    kb::render::RenderMaterialDesc material{};
+    material.baseColor[0] = 0.25F;
+    material.baseColor[1] = 0.5F;
+    material.baseColor[2] = 0.75F;
+    material.baseColor[3] = 1.0F;
+    material.metallicFactor = 0.6F;
+    material.roughnessFactor = 0.35F;
+    material.normalScale = 0.8F;
+    material.emissiveColor[0] = 0.1F;
+    material.emissiveColor[1] = 0.2F;
+    material.emissiveColor[2] = 0.3F;
+    material.emissiveStrength = 2.0F;
+    material.albedoTextureAssetId = 101U;
+    material.normalTextureAssetId = 202U;
+    material.metallicRoughnessTextureAssetId = 303U;
+    const std::vector<kb::editor::MaterialDebugChannelRow> rows = MaterialAssetFormatter::DebugChannelRows(material, 5151U);
+    kb::editor::tests::Require(rows.size() == 6U, "KBMAT-0611: material debug inspector must expose exactly the required channel rows");
+    kb::editor::tests::Require(rows[0].label == "Material Id" && rows[0].value == "5151", "KBMAT-0611: material id debug channel is wrong");
+    kb::editor::tests::Require(rows[1].label == "Base Color" && rows[1].value.find("texture #101") != std::string::npos, "KBMAT-0611: base color debug channel is missing texture source");
+    kb::editor::tests::Require(rows[2].label == "Roughness" && rows[2].value.find("MR.g texture #303") != std::string::npos, "KBMAT-0611: roughness debug channel must report MR G source");
+    kb::editor::tests::Require(rows[3].label == "Metallic" && rows[3].value.find("MR.b texture #303") != std::string::npos, "KBMAT-0611: metallic debug channel must report MR B source");
+    kb::editor::tests::Require(rows[4].label == "Normal" && rows[4].value.find("texture #202") != std::string::npos, "KBMAT-0611: normal debug channel is missing texture source");
+    kb::editor::tests::Require(rows[5].label == "Emissive" && rows[5].value.find("white fallback") != std::string::npos, "KBMAT-0611: emissive debug channel must report fallback source");
 }
 
 #if defined(_WIN32)
@@ -681,13 +1271,23 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(layout.graphCanvas.top == content.top + kb::editor::MaterialEditorPanelMetrics::HeaderHeight, "Material Editor graph should start directly below the toolbar");
     kb::editor::tests::Require(layout.graphCanvas.bottom == content.bottom, "Material Editor graph should fill the tab height");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.previewFrame.left + 2, layout.previewFrame.top + 2), "Material preview should be an overlay inside the graph workspace");
-    kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.assetBadge.left + 2, layout.assetBadge.top + 2), "Material identity should be an overlay inside the graph workspace");
+    kb::editor::tests::Require(layout.diagnosticsPanel.left >= layout.previewFrame.right, "Material diagnostics should not overlap the preview overlay");
     kb::editor::tests::Require(layout.infoButton.right <= layout.applyButton.left, "Material Editor Info command should sit directly before Apply To Selection");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.applyButton.left + 2, layout.applyButton.top + 2) == kb::editor::MaterialEditorPanelCommand::ApplyToSelection, "Material Editor should hit-test the Apply To Selection command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.revertButton.left + 2, layout.revertButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Revert, "Material Editor should hit-test the Revert command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewFrame.left + 2, layout.previewFrame.bottom + 14) == kb::editor::MaterialEditorPanelCommand::None,
+        "Material Editor should not keep dead asset badge/link hitboxes under the preview overlay");
+    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 5U, "KBMAT-0808: Material Editor toolbar must not expose a fake shader creation command");
+    for (const kb::editor::MaterialEditorPanelCommand command : kb::editor::kMaterialEditorPanelToolbarCommands) {
+        const std::string name{ kb::editor::MaterialEditorPanelCommandName(command) };
+        kb::editor::tests::Require(!name.empty() && name != "None", "KBMAT-1002: every Material Editor toolbar button must expose a real command label");
+        kb::editor::tests::Require(kb::editor::MaterialEditorPanelCommandHasBackendAction(command), "KBMAT-1002: every Material Editor toolbar button must route to a backend action");
+        kb::editor::tests::Require(name != "Create Shader From Material", "KBMAT-0808: Create Shader From Material cannot exist before a real graph backend");
+    }
+    kb::editor::tests::Require(!kb::editor::MaterialEditorPanelCommandHasBackendAction(kb::editor::MaterialEditorPanelCommand::None), "KBMAT-1002: empty Material Editor hit-test space must not route to a backend action");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
@@ -715,11 +1315,14 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
         "Material Editor should map Metallic/Roughness output pins to the metallic-roughness texture slot");
     kb::editor::tests::Require(!kb::editor::MaterialEditorPanelRenderer::TextureSlotAt(content, layout.graphCanvas.left + 24, layout.graphCanvas.top + 80).has_value(), "Material Editor graph workspace should ignore empty canvas texture drops");
 
-    const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(kb::render::GetBuiltInPbrMaterialTypeSchema(), 1U);
+    kb::editor::MaterialEditorState materialEditor;
+    materialEditor.Open(kb::assets::AssetId{ 0x4D4154455249414CULL }, kb::render::RenderMaterialAssetData{});
+    const kb::editor::MaterialEditorPanelDetailsRows details = kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), 1U);
     kb::editor::tests::Require(details.title.find("Selected Node #1") != std::string::npos, "Material Editor details should describe selected graph node context");
-    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos; }), "Material Editor details should expose schema-driven baseColor parameter");
-    kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose schema-driven Base Color texture slot");
-    kb::editor::tests::Require(std::ranges::none_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos; }), "Material Editor details should not show unsupported advanced schema rows in MVP details");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("baseColor") != std::string::npos && row.find("default") != std::string::npos; }), "Material Editor details should expose metadata-driven baseColor parameter with default value");
+    kb::editor::tests::Require(std::ranges::any_of(details.parameterRows, [](const std::string& row) { return row.find("clearcoatFactor") != std::string::npos && row.find("disabled") != std::string::npos; }), "Material Editor details should expose unsupported advanced rows as disabled");
+    kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Base Color") != std::string::npos && row.find("sRGB") != std::string::npos; }), "Material Editor details should expose metadata-driven Base Color texture slot");
+    kb::editor::tests::Require(std::ranges::any_of(details.textureSlotRows, [](const std::string& row) { return row.find("Normal") != std::string::npos && row.find("Linear") != std::string::npos; }), "Material Editor details should expose metadata-driven texture color policy");
 }
 
 void RunMaterialEditorParserDiagnosticRowsTest() {
@@ -736,6 +1339,43 @@ void RunMaterialEditorParserDiagnosticRowsTest() {
     kb::editor::tests::Require(rows.rows[0].find("unknown_field") != std::string::npos, "Material Editor diagnostic rows should include parser diagnostic code");
     kb::editor::tests::Require(rows.rows[0].find("line 4") != std::string::npos, "Material Editor diagnostic rows should include parser line numbers");
     kb::editor::tests::Require(rows.rows[0].find("unknownMaterialField") != std::string::npos, "Material Editor diagnostic rows should include parser field names");
+}
+
+void RunMaterialEditorGraphDiagnosticsRefreshTest() {
+    kb::render::RenderMaterialAssetData material{};
+    material.documentVersion = kb::render::kRenderMaterialAssetDocumentVersion;
+    material.hasExplicitDocumentVersion = true;
+    material.materialType = kb::render::kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.hasExplicitMaterialType = true;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 120,
+    });
+
+    kb::editor::MaterialEditorState materialEditor;
+    materialEditor.Open(kb::assets::AssetId{ 0x47444147ULL }, material);
+    kb::editor::tests::Require(!materialEditor.DiagnosticsHaveError(), "KBMAT-GRAPH-0106: Disconnected BaseColor should use the black runtime fallback without a graph error");
+    kb::editor::tests::Require(!std::ranges::any_of(materialEditor.Diagnostics(), [](const std::string& diagnostic) {
+        return diagnostic.find("graph.disconnected_required_output") != std::string::npos;
+    }), "KBMAT-GRAPH-0106: Material Editor diagnostics should not report disconnected BaseColor as an error");
+
+    kb::editor::tests::Require(materialEditor.ConnectGraphPins(2U, "rgba", 1U, "baseColor"),
+        "KBMAT-GRAPH-0106: Material Editor test should connect BaseColor");
+    kb::editor::tests::Require(!std::ranges::any_of(materialEditor.Diagnostics(), [](const std::string& diagnostic) {
+        return diagnostic.find("graph.disconnected_required_output") != std::string::npos;
+    }), "KBMAT-GRAPH-0106: Material Editor graph diagnostics should refresh after fixing BaseColor");
+
+    kb::render::RenderMaterialAssetData blendMaterial = *materialEditor.WorkingCopy();
+    blendMaterial.desc.alphaMode = kb::render::RenderMaterialAlphaMode::Blend;
+    materialEditor.SetWorkingCopy(std::move(blendMaterial));
+    kb::editor::tests::Require(!materialEditor.DiagnosticsHaveError(), "KBMAT-GRAPH-0106: Unsupported blend mode should remain a warning in the diagnostics panel");
+    kb::editor::tests::Require(std::ranges::any_of(materialEditor.Diagnostics(), [](const std::string& diagnostic) {
+        return diagnostic.find("graph.unsupported_blend_mode") != std::string::npos;
+    }), "KBMAT-GRAPH-0106: Material Editor diagnostics should include unsupported blend mode");
 }
 #endif
 
@@ -756,7 +1396,9 @@ void RunEditorInspectorTests() {
     RunMaterialRenamePreservesMeshRendererAssignmentTest();
     RunMaterialReferenceFinderReportsMeshRendererUsageTest();
     RunMaterialEditorStateIndependentFromInspectorSelectionTest();
+    RunMaterialEditorGraphBackedSchemaParameterModelTest();
     RunEditorMaterialSlotOverrideSyncTest();
+    RunMaterialAssignmentPathRenderSyncTest();
     RunMaterialAssignmentUndoRedoTest();
     RunMaterialPreviewMeshFactoryTest();
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
@@ -764,6 +1406,7 @@ void RunEditorInspectorTests() {
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();
     RunMaterialEditorParserDiagnosticRowsTest();
+    RunMaterialEditorGraphDiagnosticsRefreshTest();
 #endif
 }
 

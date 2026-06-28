@@ -1,5 +1,6 @@
 #include "scene/pipeline/MeshPipelineResourceResolver.hpp"
 
+#include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 
 namespace kb::render {
@@ -106,6 +107,13 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
         EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
         return {};
     }
+    if (!bgfx::isValid(meshResource->vertexBuffer) || !bgfx::isValid(meshResource->indexBuffer)) {
+        stats.visibleMeshCount += passInstanceCount;
+        ++stats.visibleDrawGroupCount;
+        stats.missingMeshResourceCount += passInstanceCount;
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        return {};
+    }
 
     return MeshPipelineResolvedMesh{
         .handle = meshHandle,
@@ -155,7 +163,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         return;
     }
 
-    auto validateTexture = [&](RenderTextureHandle directHandle, std::uint64_t textureAssetId) {
+    auto validateTexture = [&](RenderTextureHandle directHandle, std::uint64_t textureAssetId, RenderTextureColorSpace colorSpace) {
         if (directHandle.IsValid()) {
             if (resources.FindTexture(directHandle) == nullptr) {
                 ++stats.missingTextureResourceCount;
@@ -168,7 +176,7 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
             return;
         }
 
-        const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId);
+        const RenderTextureHandle textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
         if (!textureHandle.IsValid()) {
             ++stats.missingTextureBindingCount;
             EmitInstanceDiagnostic(diagnostics, SceneRenderDiagnosticKind::MissingTextureBinding, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
@@ -181,11 +189,11 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         }
     };
 
-    validateTexture(material->albedoTexture, material->albedoTextureAssetId);
-    validateTexture(material->normalTexture, material->normalTextureAssetId);
-    validateTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId);
-    validateTexture(material->occlusionTexture, material->occlusionTextureAssetId);
-    validateTexture(material->emissiveTexture, material->emissiveTextureAssetId);
+    for (const RenderMaterialTextureSlotBinding slot : RenderMaterialTextureSlots(*material)) {
+        if (slot.policy.runtimeSupport == RenderMaterialFeatureSupport::Supported) {
+            validateTexture(slot.directHandle, slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
+        }
+    }
 }
 
 std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(
