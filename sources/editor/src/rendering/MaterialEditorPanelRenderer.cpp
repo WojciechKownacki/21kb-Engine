@@ -24,6 +24,7 @@
 #pragma warning(pop)
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -41,8 +42,31 @@ constexpr int kPadding = MaterialEditorPanelMetrics::Padding;
 constexpr int kGraphNodeHeaderHeight = MaterialEditorPanelMetrics::GraphNodeHeaderHeight;
 constexpr int kGraphNodeBodyTopPadding = MaterialEditorPanelMetrics::GraphNodeBodyTopPadding;
 constexpr int kGraphNodePinRowHeight = MaterialEditorPanelMetrics::GraphNodePinRowHeight;
-constexpr int kGraphNodePinRadius = 8;
-constexpr int kGraphNodeCornerDiameter = 18;
+constexpr int kGraphNodePinRadius = 6;
+constexpr int kGraphNodeCornerDiameter = 10;
+constexpr int kGraphTitleFontSize = 11;
+constexpr int kGraphPinFontSize = 10;
+constexpr int kGraphMinTextPointSize = 9;
+
+namespace BlenderGraphTheme {
+constexpr COLORREF Canvas = RGB(32, 32, 32);
+constexpr COLORREF GridDot = RGB(48, 48, 48);
+constexpr COLORREF GridDotMajor = RGB(66, 66, 66);
+constexpr COLORREF NodeBody = RGB(39, 39, 39);
+constexpr COLORREF NodeBodyBottom = RGB(34, 34, 34);
+constexpr COLORREF NodeOutline = RGB(16, 16, 16);
+constexpr COLORREF NodeOutlineSelected = RGB(245, 156, 36);
+constexpr COLORREF NodeShadow = RGB(2, 2, 2);
+constexpr COLORREF Text = RGB(224, 224, 224);
+constexpr COLORREF TextMuted = RGB(176, 176, 176);
+constexpr COLORREF Field = RGB(28, 28, 28);
+constexpr COLORREF FieldBorder = RGB(18, 18, 18);
+constexpr COLORREF FieldFocus = RGB(69, 120, 184);
+constexpr COLORREF SliderFill = RGB(58, 91, 126);
+constexpr COLORREF SliderFillFocus = RGB(67, 119, 176);
+constexpr COLORREF LinkShadow = RGB(0, 0, 0);
+constexpr COLORREF LinkFallback = RGB(168, 168, 168);
+} // namespace BlenderGraphTheme
 
 void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize = 12, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
     ScopedFont font{ pointSize, weight };
@@ -50,6 +74,53 @@ void DrawText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, color);
     DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+}
+
+void EnsureMaterialGraphFontRegistered() {
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+    registered = true;
+
+    std::array<wchar_t, 32768> modulePath{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (length == 0 || length >= modulePath.size()) {
+        return;
+    }
+    const std::filesystem::path fontPath = std::filesystem::path{ modulePath.data() }.parent_path() / L"Content" / L"EditorShell" / L"Fonts" / L"DejaVuSans.ttf";
+    static_cast<void>(AddFontResourceExW(fontPath.c_str(), FR_PRIVATE, nullptr));
+}
+
+[[nodiscard]] int GraphTextLogicalHeight(HDC dc, int pointSize) noexcept {
+    const int clampedPointSize = std::clamp(pointSize, kGraphMinTextPointSize, 18);
+    return -MulDiv(clampedPointSize, GetDeviceCaps(dc, LOGPIXELSY), 72);
+}
+
+void DrawGraphText(HDC dc, RECT rect, const char* text, COLORREF color, int pointSize, int weight = FW_NORMAL, UINT flags = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS) {
+    EnsureMaterialGraphFontRegistered();
+    HFONT font = CreateFontW(
+        GraphTextLogicalHeight(dc, pointSize),
+        0,
+        0,
+        0,
+        weight,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_NATURAL_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        L"Segoe UI");
+    {
+        const ScopedGdiObject selectedFont(dc, font);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, color);
+        DrawTextA(dc, text, -1, &rect, static_cast<int>(flags | DT_NOPREFIX));
+    }
+    DeleteObject(font);
 }
 
 void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasized) {
@@ -93,6 +164,11 @@ void DrawHeader(HDC dc, const RECT& content, bool dirty, bool infoVisible) {
 
 [[nodiscard]] float NodeScale(const RECT& rect) noexcept {
     return static_cast<float>(RectWidth(rect)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+}
+
+[[nodiscard]] float NodeUiScale(const RECT& rect, kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    const SIZE graphNodeSize = MaterialEditorPanelGraphNodeSize(kind);
+    return static_cast<float>(RectWidth(rect)) / static_cast<float>(std::max<LONG>(1, graphNodeSize.cx));
 }
 
 [[nodiscard]] BYTE ColorChannel(COLORREF color, int shift) noexcept {
@@ -150,6 +226,37 @@ void StrokeRoundedRect(HDC dc, const RECT& rect, COLORREF color, int cornerDiame
     DeleteObject(pen);
 }
 
+void AddRoundedRectPath(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
+    const float diameter = std::min(std::min(rect.Width, rect.Height), radius * 2.0F);
+    if (diameter <= 1.0F) {
+        path.AddRectangle(rect);
+        return;
+    }
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0F, 90.0F);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y, diameter, diameter, 270.0F, 90.0F);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y + rect.Height - diameter, diameter, diameter, 0.0F, 90.0F);
+    path.AddArc(rect.X, rect.Y + rect.Height - diameter, diameter, diameter, 90.0F, 90.0F);
+    path.CloseFigure();
+}
+
+void FillRoundedRectAlpha(HDC dc, const RECT& rect, COLORREF color, BYTE alpha, int cornerDiameter) {
+    HeroIconGdiplusRuntime::EnsureStarted();
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::GraphicsPath path;
+    AddRoundedRectPath(
+        path,
+        Gdiplus::RectF{
+            static_cast<Gdiplus::REAL>(rect.left),
+            static_cast<Gdiplus::REAL>(rect.top),
+            static_cast<Gdiplus::REAL>(std::max(0, static_cast<int>(rect.right - rect.left))),
+            static_cast<Gdiplus::REAL>(std::max(0, static_cast<int>(rect.bottom - rect.top))),
+        },
+        static_cast<float>(cornerDiameter) * 0.5F);
+    Gdiplus::SolidBrush brush(ToGdiplusColor(color, alpha));
+    graphics.FillPath(&brush, &path);
+}
+
 void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& clip, COLORREF top, COLORREF bottom, int cornerDiameter) {
     const int savedDc = SaveDC(dc);
     HRGN region = CreateRoundRectRgn(clip.left, clip.top, clip.right + 1, clip.bottom + 1, cornerDiameter, cornerDiameter);
@@ -172,26 +279,61 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     if (pin == "value") return 0;
     if (pin == "a") return 0;
     if (pin == "b") return 1;
+    if (pin == "x") return 0;
+    if (pin == "y") return 1;
+    if (pin == "z") return 2;
+    if (pin == "w") return 3;
+    if (pin == "edge") return 0;
     if (pin == "base") return 0;
     if (pin == "exponent") return 1;
     if (pin == "min") return 1;
     if (pin == "max") return 2;
     if (pin == "t") return 2;
     if (pin == "color") return 0;
+    if (pin == "fraction") return 1;
+    if (pin == "view") return 1;
+    if (pin == "less") return 2;
+    if (pin == "equal") return 3;
+    if (pin == "greater") return 4;
     return 0;
 }
+
+[[nodiscard]] std::vector<std::pair<std::string_view, std::string_view>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind);
 
 [[nodiscard]] POINT InputPinPoint(const RECT& node, std::string_view pin) noexcept {
     const int index = GraphInputPinIndex(pin);
     const float scale = NodeScale(node);
+    const int pinInset = ScaleMetric(6, scale);
     return POINT{
-        node.left,
+        node.left + pinInset,
         node.top + ScaleMetric(kGraphNodeHeaderHeight, scale) + ScaleMetric(kGraphNodeBodyTopPadding, scale) + (index * ScaleMetric(kGraphNodePinRowHeight, scale)) + (ScaleMetric(kGraphNodePinRowHeight, scale) / 2),
     };
 }
 
 [[nodiscard]] POINT OutputPinPoint(const RECT& node) noexcept {
-    return POINT{ node.right, node.top + (RectHeight(node) / 2) };
+    const float scale = NodeScale(node);
+    const int pinInset = ScaleMetric(6, scale);
+    const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+    return POINT{ node.right - pinInset, node.top + headerHeight + ((RectHeight(node) - headerHeight) / 2) };
+}
+
+[[nodiscard]] POINT InputPinPoint(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
+    const int index = GraphInputPinIndex(pin);
+    const float scale = NodeUiScale(node, kind);
+    const int pinInset = ScaleMetric(6, scale);
+    const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+    const int count = static_cast<int>(std::max<std::size_t>(1U, GraphInputPins(kind).size()));
+    const int bodyTop = node.top + headerHeight;
+    const int bodyHeight = std::max(1, RectHeight(node) - headerHeight);
+    const int rowHeight = std::min(ScaleMetric(kGraphNodePinRowHeight, scale), std::max(ScaleMetric(16, scale), bodyHeight / count));
+    const int total = count * rowHeight;
+    const int bodyCenter = bodyTop + (bodyHeight / 2);
+    const int y = bodyCenter - (total / 2) + (index * rowHeight) + (rowHeight / 2);
+    const int bottom = static_cast<int>(node.bottom);
+    return POINT{
+        node.left + pinInset,
+        std::clamp(y, bodyTop + pinInset, bottom - pinInset),
+    };
 }
 
 [[nodiscard]] POINT OutputPinPoint(const RECT& node, std::size_t index, std::size_t count) noexcept {
@@ -199,11 +341,55 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return OutputPinPoint(node);
     }
     const float scale = NodeScale(node);
+    const int pinInset = ScaleMetric(6, scale);
+    const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
     const int rowHeight = ScaleMetric(kGraphNodePinRowHeight, scale);
     const int total = static_cast<int>(count) * rowHeight;
+    const int top = static_cast<int>(node.top);
+    const int bottom = static_cast<int>(node.bottom);
     return POINT{
-        node.right,
-        node.top + (RectHeight(node) / 2) - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2),
+        node.right - pinInset,
+        std::clamp(
+            top + headerHeight + ((RectHeight(node) - headerHeight) / 2) - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2),
+            top + headerHeight + pinInset,
+            bottom - pinInset),
+    };
+}
+
+[[nodiscard]] POINT OutputPinPoint(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind, std::size_t index, std::size_t count) noexcept {
+    const float scale = NodeUiScale(node, kind);
+    const int pinInset = ScaleMetric(6, scale);
+    if (count <= 1U) {
+        const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+        return POINT{ node.right - pinInset, node.top + headerHeight + ((RectHeight(node) - headerHeight) / 2) };
+    }
+    if (kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+        const int bodyTop = node.top + headerHeight;
+        const int bodyHeight = std::max(1, RectHeight(node) - headerHeight);
+        const int rowHeight = std::min(ScaleMetric(kGraphNodePinRowHeight, scale), std::max(ScaleMetric(16, scale), bodyHeight / static_cast<int>(count)));
+        const int total = static_cast<int>(count) * rowHeight;
+        const int bodyCenter = bodyTop + (bodyHeight / 2);
+        const int y = bodyCenter - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2);
+        const int bottom = static_cast<int>(node.bottom);
+        return POINT{
+            node.right - pinInset,
+            std::clamp(y, bodyTop + pinInset, bottom - pinInset),
+        };
+    }
+    const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+    const int previewTop = node.top + headerHeight + ScaleMetric(8, scale);
+    const int previewBottom = node.bottom - ScaleMetric(10, scale);
+    const int previewHeight = std::max(1, previewBottom - previewTop);
+    const int rowHeight = std::min(
+        ScaleMetric(kGraphNodePinRowHeight, scale),
+        std::max(ScaleMetric(16, scale), previewHeight / static_cast<int>(count)));
+    const int total = static_cast<int>(count) * rowHeight;
+    const int bodyCenter = previewTop + (previewHeight / 2);
+    const int y = bodyCenter - (total / 2) + (static_cast<int>(index) * rowHeight) + (rowHeight / 2);
+    return POINT{
+        node.right - pinInset,
+        std::clamp(y, previewTop + pinInset, previewBottom - pinInset),
     };
 }
 
@@ -220,7 +406,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
             { "alpha", "Alpha" },
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return { { "texture", "Texture" }, { "uv", "UV" } };
+        return { { "texture", "Tex." }, { "uv", "UV" } };
     case kb::render::RenderMaterialGraphNodeKind::Add:
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
@@ -278,6 +464,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return {};
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
@@ -335,6 +522,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "color", "Color" } };
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { { "x", "X" }, { "y", "Y" }, { "z", "Z" }, { "w", "W" } };
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+        return { { "xy", "XY" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return { { "xyz", "XYZ" } };
@@ -342,7 +531,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
         return { { "rgba", "RGBA" } };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return { { "color", "Color" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
+        return { { "color", "RGBA" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return { { "texture", "Texture" } };
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
@@ -360,21 +549,23 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return "Material Output";
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
-        return "Constant Scalar";
+        return "Value";
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+        return "Vector";
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-        return "Constant Vector";
+        return "Vector";
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-        return "Constant Color";
+        return "RGB";
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
-        return "Texture Sample";
+        return "Image Texture";
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
-        return "Scalar Parameter";
+        return "Value Parameter";
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return "Vector Parameter";
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return "Color Parameter";
+        return "RGB Parameter";
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
-        return "Texture Parameter";
+        return "Image Parameter";
     case kb::render::RenderMaterialGraphNodeKind::Add:
         return "Add";
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
@@ -452,52 +643,46 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
-        return "Lerp";
+        return "Mix";
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
-        return "Normal Unpack";
+        return "Normal Map";
     case kb::render::RenderMaterialGraphNodeKind::Uv:
-        return "UV";
+        return "Texture Coordinate";
     }
     return "Material Node";
 }
 
-void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
-    GdiDrawing::FillRectColor(dc, canvas, RGB(17, 18, 20));
+[[nodiscard]] COLORREF GraphOutputPinColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept;
 
-    const int minorSpacing = std::clamp(ScaleMetric(32, zoom), 10, 96);
+void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
+    GdiDrawing::FillRectColor(dc, canvas, BlenderGraphTheme::Canvas);
+
+    const int minorSpacing = std::clamp(ScaleMetric(20, zoom), 8, 80);
     const int majorSpacing = minorSpacing * 4;
     const int minorStartX = canvas.left + ((panX % minorSpacing) + minorSpacing) % minorSpacing;
     const int minorStartY = canvas.top + ((panY % minorSpacing) + minorSpacing) % minorSpacing;
     const int majorStartX = canvas.left + ((panX % majorSpacing) + majorSpacing) % majorSpacing;
     const int majorStartY = canvas.top + ((panY % majorSpacing) + majorSpacing) % majorSpacing;
 
-    HPEN minorPen = CreatePen(PS_SOLID, 1, RGB(31, 34, 38));
-    {
-        const ScopedGdiObject selectedPen(dc, minorPen);
-        for (int x = minorStartX; x < canvas.right; x += minorSpacing) {
-            MoveToEx(dc, x, canvas.top, nullptr);
-            LineTo(dc, x, canvas.bottom);
-        }
+    for (int x = minorStartX; x < canvas.right; x += minorSpacing) {
         for (int y = minorStartY; y < canvas.bottom; y += minorSpacing) {
-            MoveToEx(dc, canvas.left, y, nullptr);
-            LineTo(dc, canvas.right, y);
+            SetPixel(dc, x, y, BlenderGraphTheme::GridDot);
         }
     }
-    DeleteObject(minorPen);
 
-    HPEN majorPen = CreatePen(PS_SOLID, 1, RGB(42, 45, 50));
-    {
-        const ScopedGdiObject selectedPen(dc, majorPen);
-        for (int x = majorStartX; x < canvas.right; x += majorSpacing) {
-            MoveToEx(dc, x, canvas.top, nullptr);
-            LineTo(dc, x, canvas.bottom);
-        }
+    for (int x = majorStartX; x < canvas.right; x += majorSpacing) {
         for (int y = majorStartY; y < canvas.bottom; y += majorSpacing) {
-            MoveToEx(dc, canvas.left, y, nullptr);
-            LineTo(dc, canvas.right, y);
+            GdiDrawing::FillRectColor(dc, RECT{ x - 1, y - 1, x + 2, y + 2 }, BlenderGraphTheme::GridDotMajor);
         }
     }
-    DeleteObject(majorPen);
+}
+
+[[nodiscard]] float GraphBezierHandleDistance(POINT from, POINT to) noexcept {
+    const float distanceX = static_cast<float>(std::abs(static_cast<int>(to.x - from.x)));
+    const float distanceY = static_cast<float>(std::abs(static_cast<int>(to.y - from.y)));
+    const float distance = std::sqrt((distanceX * distanceX) + (distanceY * distanceY));
+    const float naturalHandle = std::max(distanceX * 0.5F, distance * 0.18F);
+    return std::clamp(naturalHandle, 10.0F, 96.0F);
 }
 
 void DrawGraphBezier(HDC dc, POINT from, POINT to, COLORREF color, int width) {
@@ -505,9 +690,16 @@ void DrawGraphBezier(HDC dc, POINT from, POINT to, COLORREF color, int width) {
     Gdiplus::Graphics graphics(dc);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
-    Gdiplus::Pen pen(ToGdiplusColor(color), static_cast<Gdiplus::REAL>(std::max(1, width)));
-    const int controlDistance = std::abs(static_cast<int>(to.x - from.x)) / 2;
-    const float dx = static_cast<float>(std::max(72, controlDistance));
+    Gdiplus::Pen shadowPen(ToGdiplusColor(BlenderGraphTheme::LinkShadow, 96U), static_cast<Gdiplus::REAL>(std::max(1, width + 2)));
+    Gdiplus::Pen haloPen(ToGdiplusColor(color, 50U), static_cast<Gdiplus::REAL>(std::max(1, width + 1)));
+    Gdiplus::Pen pen(ToGdiplusColor(color, 232U), static_cast<Gdiplus::REAL>(std::max(1, width)));
+    shadowPen.SetStartCap(Gdiplus::LineCapRound);
+    shadowPen.SetEndCap(Gdiplus::LineCapRound);
+    haloPen.SetStartCap(Gdiplus::LineCapRound);
+    haloPen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    const float dx = GraphBezierHandleDistance(from, to);
     Gdiplus::GraphicsPath path;
     path.AddBezier(
         static_cast<Gdiplus::REAL>(from.x),
@@ -518,10 +710,19 @@ void DrawGraphBezier(HDC dc, POINT from, POINT to, COLORREF color, int width) {
         static_cast<Gdiplus::REAL>(to.y),
         static_cast<Gdiplus::REAL>(to.x),
         static_cast<Gdiplus::REAL>(to.y));
+    graphics.DrawPath(&shadowPen, &path);
+    graphics.DrawPath(&haloPen, &path);
     graphics.DrawPath(&pen, &path);
 }
 
-void DrawGraphLink(HDC dc, const RECT& fromNode, const RECT& toNode, std::string_view fromPin, std::string_view toPin, const kb::render::RenderMaterialGraphNode& fromGraphNode) {
+void DrawGraphLink(
+    HDC dc,
+    const RECT& fromNode,
+    const RECT& toNode,
+    std::string_view fromPin,
+    std::string_view toPin,
+    const kb::render::RenderMaterialGraphNode& fromGraphNode,
+    const kb::render::RenderMaterialGraphNode& toGraphNode) {
     const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(fromGraphNode.kind);
     std::size_t outputIndex = 0U;
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
@@ -530,9 +731,14 @@ void DrawGraphLink(HDC dc, const RECT& fromNode, const RECT& toNode, std::string
             break;
         }
     }
-    const POINT from = OutputPinPoint(fromNode, outputIndex, outputPins.size());
-    const POINT to = InputPinPoint(toNode, toPin);
-    DrawGraphBezier(dc, from, to, RGB(202, 207, 216), std::max(2, ScaleMetric(3, NodeScale(fromNode))));
+    const POINT from = OutputPinPoint(fromNode, fromGraphNode.kind, outputIndex, outputPins.size());
+    const POINT to = InputPinPoint(toNode, toGraphNode.kind, toPin);
+    DrawGraphBezier(
+        dc,
+        from,
+        to,
+        outputPins.empty() ? BlenderGraphTheme::LinkFallback : GraphOutputPinColor(fromGraphNode.kind, fromPin),
+        std::clamp(ScaleMetric(3, NodeUiScale(fromNode, fromGraphNode.kind)), 1, 3));
 }
 
 [[nodiscard]] double PointSegmentDistanceSquared(double px, double py, double ax, double ay, double bx, double by) noexcept {
@@ -555,8 +761,7 @@ void DrawGraphLink(HDC dc, const RECT& fromNode, const RECT& toNode, std::string
 }
 
 [[nodiscard]] POINT GraphBezierPoint(POINT from, POINT to, double t) noexcept {
-    const double controlDistance = std::abs(static_cast<int>(to.x - from.x)) / 2.0;
-    const double dx = static_cast<double>(std::max(72, static_cast<int>(controlDistance)));
+    const double dx = static_cast<double>(GraphBezierHandleDistance(from, to));
     const double x0 = static_cast<double>(from.x);
     const double y0 = static_cast<double>(from.y);
     const double x1 = x0 + dx;
@@ -630,8 +835,8 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
                 break;
             }
         }
-        const POINT from = OutputPinPoint(*fromRect, outputIndex, outputPins.size());
-        const POINT to = InputPinPoint(*toRect, link.toPin);
+        const POINT from = OutputPinPoint(*fromRect, fromNode->kind, outputIndex, outputPins.size());
+        const POINT to = InputPinPoint(*toRect, toNode->kind, link.toPin);
         const int radius = std::max(8, ScaleMetric(9, sceneContext.MaterialGraphZoom()));
         if (PointNearGraphBezier(from, to, x, y, radius)) {
             return MaterialEditorGraphLinkHit{
@@ -647,11 +852,11 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
 
 namespace {
 
-void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& clip) {
-    const int r = ScaleMetric(kGraphNodePinRadius, scale);
-    const COLORREF edge = ScaleColor(color, 0.74F);
-    const COLORREF face = LerpColor(color, RGB(246, 248, 250), 1, 6);
-    const COLORREF faceTop = LerpColor(color, RGB(255, 255, 255), 1, 3);
+void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& clip, bool tinted = false) {
+    const int r = std::max(3, ScaleMetric(kGraphNodePinRadius, scale));
+    const COLORREF edge = RGB(9, 9, 9);
+    const COLORREF outer = ScaleColor(color, tinted ? 0.64F : 0.78F);
+    const COLORREF face = tinted ? color : ScaleColor(color, 1.06F);
 
     HeroIconGdiplusRuntime::EnsureStarted();
     Gdiplus::Graphics graphics(dc);
@@ -669,41 +874,158 @@ void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& 
         clipHeight));
 
     const float diameter = static_cast<float>(r * 2);
-    const Gdiplus::RectF pinRect{
+    const Gdiplus::RectF outerRect{
         static_cast<float>(point.x - r),
         static_cast<float>(point.y - r),
         diameter,
         diameter,
     };
-    Gdiplus::SolidBrush faceBrush(ToGdiplusColor(face));
-    Gdiplus::Pen edgePen(ToGdiplusColor(edge), std::max(1.0F, scale));
-    graphics.FillEllipse(&faceBrush, pinRect);
-    graphics.DrawEllipse(&edgePen, pinRect);
-
-    const Gdiplus::RectF highlightRect{
-        static_cast<float>(point.x - r + ScaleMetric(2, scale)),
-        static_cast<float>(point.y - r + ScaleMetric(2, scale)),
-        static_cast<float>(std::max(1, r + ScaleMetric(2, scale))),
-        static_cast<float>(std::max(1, r / 2 + ScaleMetric(2, scale))),
+    const float inset = std::max(1.0F, scale);
+    const Gdiplus::RectF innerRect{
+        outerRect.X + inset,
+        outerRect.Y + inset,
+        std::max(1.0F, outerRect.Width - (inset * 2.0F)),
+        std::max(1.0F, outerRect.Height - (inset * 2.0F)),
     };
-    Gdiplus::SolidBrush highlightBrush(ToGdiplusColor(faceTop, 150U));
-    graphics.FillEllipse(&highlightBrush, highlightRect);
+    Gdiplus::SolidBrush shadowBrush(ToGdiplusColor(RGB(0, 0, 0), 84U));
+    Gdiplus::SolidBrush edgeBrush(ToGdiplusColor(edge));
+    Gdiplus::SolidBrush outerBrush(ToGdiplusColor(outer));
+    Gdiplus::SolidBrush faceBrush(ToGdiplusColor(face));
+    Gdiplus::SolidBrush shineBrush(ToGdiplusColor(RGB(255, 255, 255), 40U));
+    Gdiplus::RectF shadowRect = outerRect;
+    shadowRect.X += std::max(1.0F, scale);
+    shadowRect.Y += std::max(1.0F, scale);
+    graphics.FillEllipse(&shadowBrush, shadowRect);
+    graphics.FillEllipse(&edgeBrush, outerRect);
+    graphics.FillEllipse(&outerBrush, innerRect);
+    const float coreInset = std::max(1.0F, inset * 1.35F);
+    const Gdiplus::RectF coreRect{
+        outerRect.X + coreInset,
+        outerRect.Y + coreInset,
+        std::max(1.0F, outerRect.Width - (coreInset * 2.0F)),
+        std::max(1.0F, outerRect.Height - (coreInset * 2.0F)),
+    };
+    graphics.FillEllipse(&faceBrush, coreRect);
+    graphics.FillEllipse(
+        &shineBrush,
+        Gdiplus::RectF{
+            outerRect.X + coreInset,
+            outerRect.Y + coreInset,
+            std::max(1.0F, coreRect.Width * 0.72F),
+            std::max(1.0F, coreRect.Height * 0.42F),
+        });
 }
 
 [[nodiscard]] COLORREF GraphInputPinColor(std::string_view pin) noexcept {
     if (pin == "baseColor") {
-        return RGB(239, 202, 72);
+        return RGB(220, 170, 48);
     }
     if (pin == "normal") {
-        return RGB(89, 206, 122);
+        return RGB(92, 157, 214);
     }
-    return RGB(197, 205, 216);
+    if (pin == "texture") {
+        return RGB(184, 143, 214);
+    }
+    if (pin == "uv") {
+        return RGB(92, 157, 214);
+    }
+    if (pin == "emissive") {
+        return RGB(220, 170, 48);
+    }
+    return RGB(176, 176, 176);
 }
 
-void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body) {
-    const float scale = NodeScale(rect);
-    FillRoundedRect(dc, RECT{ rect.left + ScaleMetric(6, scale), rect.top + ScaleMetric(6, scale), rect.right + ScaleMetric(6, scale), rect.bottom + ScaleMetric(6, scale) }, RGB(8, 9, 11), ScaleMetric(kGraphNodeCornerDiameter + 4, scale));
-    FillRoundedRect(dc, RECT{ rect.left + ScaleMetric(3, scale), rect.top + ScaleMetric(3, scale), rect.right + ScaleMetric(3, scale), rect.bottom + ScaleMetric(3, scale) }, RGB(13, 15, 18), ScaleMetric(kGraphNodeCornerDiameter + 2, scale));
+[[nodiscard]] COLORREF GraphOutputPinLabelColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
+    if (kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return BlenderGraphTheme::TextMuted;
+    }
+    static_cast<void>(pin);
+    return BlenderGraphTheme::Text;
+}
+
+[[nodiscard]] COLORREF GraphOutputPinColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
+    if (pin == "color" || pin == "rgba") {
+        return RGB(220, 170, 48);
+    }
+    if (pin == "normal") {
+        return RGB(92, 157, 214);
+    }
+    if (pin == "uv" || pin == "xy" || pin == "xyz") {
+        return RGB(92, 157, 214);
+    }
+    if (pin == "texture") {
+        return RGB(184, 143, 214);
+    }
+    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "r") {
+        return RGB(214, 82, 82);
+    }
+    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "g") {
+        return RGB(92, 178, 88);
+    }
+    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "b") {
+        return RGB(84, 123, 218);
+    }
+    return RGB(176, 176, 176);
+}
+
+[[nodiscard]] bool GraphOutputPinTinted(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && (pin == "r" || pin == "g" || pin == "b");
+}
+
+[[nodiscard]] COLORREF GraphNodeHeaderColor(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
+        return RGB(98, 58, 51);
+    case kb::render::RenderMaterialGraphNodeKind::TextureSample:
+    case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
+        return RGB(91, 74, 47);
+    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+    case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
+        return RGB(91, 73, 35);
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+    case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
+    case kb::render::RenderMaterialGraphNodeKind::Uv:
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+    case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+        return RGB(55, 73, 96);
+    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
+        return RGB(68, 68, 68);
+    default:
+        return RGB(54, 64, 78);
+    }
+}
+
+void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body, float scale) {
+    const int cornerDiameter = ScaleMetric(kGraphNodeCornerDiameter, scale);
+    const int outerSpread = ScaleMetric(7, scale);
+    const int middleSpread = ScaleMetric(4, scale);
+    const int contactDrop = ScaleMetric(5, scale);
+    const int contactSpread = ScaleMetric(3, scale);
+
+    FillRoundedRectAlpha(
+        dc,
+        RECT{ rect.left - outerSpread, rect.top - outerSpread, rect.right + outerSpread, rect.bottom + outerSpread },
+        BlenderGraphTheme::NodeShadow,
+        26U,
+        cornerDiameter + outerSpread);
+    FillRoundedRectAlpha(
+        dc,
+        RECT{ rect.left - middleSpread, rect.top - middleSpread, rect.right + middleSpread, rect.bottom + middleSpread },
+        BlenderGraphTheme::NodeShadow,
+        42U,
+        cornerDiameter + middleSpread);
+    FillRoundedRectAlpha(
+        dc,
+        RECT{ rect.left - contactSpread, rect.top + contactDrop, rect.right + contactSpread, rect.bottom + contactDrop + contactSpread },
+        BlenderGraphTheme::NodeShadow,
+        72U,
+        cornerDiameter + contactSpread);
     FillRoundedRect(dc, rect, body, ScaleMetric(kGraphNodeCornerDiameter, scale));
 }
 
@@ -763,7 +1085,7 @@ void DrawTexturePreviewBlock(
     const kb::render::RenderMaterialAssetData* material,
     const EditorSceneContext& sceneContext,
     const char* emptyLabel) {
-    GdiDrawing::FillRectColor(dc, preview, RGB(11, 13, 16));
+    FillRoundedRect(dc, preview, RGB(24, 24, 24), std::max(4, ScaleMetric(5, NodeUiScale(nodeRect, node.kind))));
     const kb::assets::AssetId assetId = TextureNodeAssetId(material, node);
     const kb::assets::AssetMetadata* metadata = assetId.IsValid()
         ? sceneContext.Scene().Assets().Manager().Registry().Find(assetId)
@@ -772,13 +1094,16 @@ void DrawTexturePreviewBlock(
         if (const EditorTexturePreviewImage* image = EditorTexturePreviewService::PreviewFor(*metadata); image != nullptr) {
             EditorTexturePreviewService::DrawContain(dc, preview, *image, true);
         } else {
-            GdiDrawing::DrawSharpFrame(dc, preview, RGB(17, 20, 24), RGB(54, 62, 72));
+            StrokeRoundedRect(dc, preview, RGB(66, 66, 66), std::max(4, ScaleMetric(5, NodeUiScale(nodeRect, node.kind))));
         }
-        const std::string label = metadata->name.empty() ? metadata->virtualPath.stem().string() : metadata->name;
-        DrawText(dc, RECT{ preview.left, preview.bottom + 6, preview.right, preview.bottom + ScaleMetric(24, NodeScale(nodeRect)) }, label.c_str(), RGB(218, 226, 238), std::max(10, ScaleMetric(10, NodeScale(nodeRect))), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+            const std::string label = metadata->name.empty() ? metadata->virtualPath.stem().string() : metadata->name;
+            const float graphScale = NodeUiScale(nodeRect, node.kind);
+            DrawGraphText(dc, RECT{ preview.left, preview.bottom + 6, preview.right, preview.bottom + ScaleMetric(24, graphScale) }, label.c_str(), RGB(218, 226, 238), ScaleMetric(kGraphPinFontSize, graphScale), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
     } else {
-        GdiDrawing::DrawSharpFrame(dc, preview, RGB(17, 20, 24), RGB(54, 62, 72));
-        DrawText(dc, preview, emptyLabel, RGB(172, 184, 198), 10, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        StrokeRoundedRect(dc, preview, RGB(66, 66, 66), std::max(4, ScaleMetric(5, NodeUiScale(nodeRect, node.kind))));
+        DrawGraphText(dc, preview, emptyLabel, BlenderGraphTheme::TextMuted, ScaleMetric(kGraphPinFontSize, NodeUiScale(nodeRect, node.kind)), FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 }
 
@@ -797,13 +1122,14 @@ void DrawTextureParameterValue(HDC dc, const RECT& nodeRect, const kb::render::R
 
     const float scale = NodeScale(nodeRect);
     const RECT valueRect = MaterialEditorPanelTextureParameterRect(nodeRect);
-    GdiDrawing::DrawSharpFrame(dc, valueRect, RGB(16, 18, 23), RGB(54, 63, 74));
-    DrawText(
+    FillRoundedRect(dc, valueRect, RGB(31, 31, 31), std::max(4, ScaleMetric(6, scale)));
+    StrokeRoundedRect(dc, valueRect, RGB(18, 18, 18), std::max(4, ScaleMetric(6, scale)));
+    DrawGraphText(
         dc,
         RECT{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(4, scale), valueRect.right - ScaleMetric(10, scale), valueRect.top + ScaleMetric(24, scale) },
         node.parameter.displayName.empty() ? "Texture" : node.parameter.displayName.c_str(),
-        RGB(178, 189, 202),
-        std::max(9, ScaleMetric(10, scale)),
+        BlenderGraphTheme::TextMuted,
+        ScaleMetric(kGraphPinFontSize, NodeUiScale(nodeRect, node.kind)),
         FW_NORMAL,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     const RECT preview{
@@ -815,104 +1141,273 @@ void DrawTextureParameterValue(HDC dc, const RECT& nodeRect, const kb::render::R
     DrawTexturePreviewBlock(dc, nodeRect, preview, node, material, sceneContext, "Select Texture");
 }
 
-void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node) {
+std::array<std::string, 4U> ConstantComponentTexts(
+    const MaterialEditorParameterValue& value,
+    std::string_view editBuffer,
+    std::size_t componentCount,
+    bool editing) {
+    std::array<std::string, 4U> texts{};
+    for (std::size_t index = 0U; index < componentCount && index < texts.size(); ++index) {
+        texts[index] = MaterialEditorPanelFloat(value.numbers[index]);
+    }
+    if (!editing) {
+        return texts;
+    }
+
+    std::istringstream input{ std::string{ editBuffer } };
+    std::size_t parsedCount = 0U;
+    for (; parsedCount < componentCount && parsedCount < texts.size(); ++parsedCount) {
+        float parsed = 0.0F;
+        if (!(input >> parsed)) {
+            break;
+        }
+        texts[parsedCount] = MaterialEditorPanelFloat(parsed);
+    }
+    if (parsedCount == 0U) {
+        texts[0U] = std::string{ editBuffer } + "|";
+    } else {
+        texts[std::min(parsedCount - 1U, texts.size() - 1U)] += "|";
+    }
+    return texts;
+}
+
+void DrawGraphValueSliderField(
+    HDC dc,
+    const RECT& fieldRect,
+    const RECT& textRect,
+    const char* text,
+    float value,
+    bool editing,
+    float scale) {
+    const int radius = std::max(3, ScaleMetric(5, scale));
+    FillRoundedRect(dc, fieldRect, BlenderGraphTheme::Field, radius);
+    StrokeRoundedRect(dc, fieldRect, editing ? BlenderGraphTheme::FieldFocus : BlenderGraphTheme::FieldBorder, radius, editing ? 2 : 1);
+
+    const RECT fillBounds{
+        fieldRect.left + 1,
+        fieldRect.top + 1,
+        fieldRect.right - 1,
+        fieldRect.bottom - 1,
+    };
+    const float normalized = std::clamp(value, 0.0F, 1.0F);
+    const int fillWidth = static_cast<int>(std::round(static_cast<float>(std::max(0, static_cast<int>(fillBounds.right - fillBounds.left))) * normalized));
+    if (fillWidth > 0) {
+        const RECT fillRect{ fillBounds.left, fillBounds.top, fillBounds.left + fillWidth, fillBounds.bottom };
+        FillRoundedRect(dc, fillRect, editing ? BlenderGraphTheme::SliderFillFocus : BlenderGraphTheme::SliderFill, radius);
+    }
+    GdiDrawing::FillRectAlpha(dc, RECT{ fillBounds.left + 2, fillBounds.top + 1, fillBounds.right - 2, fillBounds.top + std::max(2, ScaleMetric(2, scale)) }, RGB(255, 255, 255), 18);
+    DrawGraphText(
+        dc,
+        textRect,
+        text,
+        RGB(238, 238, 238),
+        ScaleMetric(kGraphPinFontSize, scale),
+        FW_NORMAL,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawConstantVectorFields(
+    HDC dc,
+    const RECT& nodeRect,
+    const MaterialEditorParameterValue& value,
+    std::string_view editBuffer,
+    std::size_t componentCount,
+    const char* const* labels,
+    bool editing,
+    float scale) {
+    const std::array<std::string, 4U> texts = ConstantComponentTexts(value, editBuffer, componentCount, editing);
+    for (std::size_t index = 0U; index < componentCount; ++index) {
+        const RECT labelRect = MaterialEditorPanelConstantVectorLabelRect(nodeRect, index, componentCount);
+        const RECT fieldRect = MaterialEditorPanelConstantVectorFieldRect(nodeRect, index, componentCount);
+        DrawGraphText(
+            dc,
+            labelRect,
+            labels[index],
+            BlenderGraphTheme::TextMuted,
+            ScaleMetric(kGraphPinFontSize, scale),
+            FW_NORMAL,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawGraphValueSliderField(
+            dc,
+            fieldRect,
+            RECT{
+                fieldRect.left + ScaleMetric(8, scale),
+                fieldRect.top,
+                fieldRect.right - ScaleMetric(8, scale),
+                fieldRect.bottom,
+            },
+            texts[index].c_str(),
+            value.numbers[index],
+            editing,
+            scale);
+    }
+}
+
+void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, const EditorSceneContext& sceneContext) {
     if (!MaterialEditorPanelIsConstantNode(node.kind)) {
         return;
     }
 
-    const float scale = NodeScale(nodeRect);
+    const float scale = NodeUiScale(nodeRect, node.kind);
     const RECT valueRect = MaterialEditorPanelConstantValueRect(nodeRect);
-    GdiDrawing::DrawSharpFrame(dc, valueRect, RGB(16, 18, 23), RGB(54, 63, 74));
+    const bool editing = sceneContext.MaterialEditor().IsGraphConstantInlineEditing(node.id);
 
     const MaterialEditorParameterValue value = MaterialEditorPanelConstantParameterValue(node.kind, node.parameter.defaultValueHint);
-    const std::string valueText = MaterialEditorPanelParameterValueText(value);
-    const std::string displayName = node.parameter.displayName.empty() ? std::string{ "Value" } : node.parameter.displayName;
-    DrawText(
-        dc,
-        RECT{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(4, scale), valueRect.right - ScaleMetric(10, scale), valueRect.top + ScaleMetric(24, scale) },
-        displayName.c_str(),
-        RGB(178, 189, 202),
-        std::max(9, ScaleMetric(10, scale)),
-        FW_NORMAL,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const std::string valueText = editing
+        ? std::string{ sceneContext.MaterialEditor().GraphConstantInlineEditBuffer() } + "|"
+        : MaterialEditorPanelParameterValueText(value);
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar) {
+        DrawGraphValueSliderField(
+            dc,
+            valueRect,
+            RECT{ valueRect.left + ScaleMetric(13, scale), valueRect.top, valueRect.right - ScaleMetric(10, scale), valueRect.bottom },
+            valueText.c_str(),
+            value.numbers[0],
+            editing,
+            scale);
+        return;
+    }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2) {
+        const char* labels[] = { "X", "Y" };
+        DrawConstantVectorFields(
+            dc,
+            nodeRect,
+            value,
+            sceneContext.MaterialEditor().GraphConstantInlineEditBuffer(),
+            2U,
+            labels,
+            editing,
+            scale);
+        return;
+    }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector) {
+        const char* labels[] = { "X", "Y", "Z" };
+        DrawConstantVectorFields(
+            dc,
+            nodeRect,
+            value,
+            sceneContext.MaterialEditor().GraphConstantInlineEditBuffer(),
+            3U,
+            labels,
+            editing,
+            scale);
+        return;
+    }
 
-    RECT textRect{ valueRect.left + ScaleMetric(10, scale), valueRect.top + ScaleMetric(26, scale), valueRect.right - ScaleMetric(10, scale), valueRect.bottom - ScaleMetric(4, scale) };
+    RECT textRect{ valueRect.left + ScaleMetric(13, scale), valueRect.top, valueRect.right - ScaleMetric(10, scale), valueRect.bottom };
+    RECT colorSwatch{};
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
-        const RECT swatch{
-            valueRect.left + ScaleMetric(10, scale),
-            valueRect.top + ScaleMetric(29, scale),
-            valueRect.left + ScaleMetric(42, scale),
-            valueRect.bottom - ScaleMetric(8, scale),
+        colorSwatch = RECT{
+            valueRect.left + ScaleMetric(8, scale),
+            valueRect.top + ScaleMetric(5, scale),
+            valueRect.left + ScaleMetric(28, scale),
+            valueRect.bottom - ScaleMetric(5, scale),
         };
+        textRect.left = colorSwatch.right + ScaleMetric(11, scale);
+    }
+    const float colorSliderValue = node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor
+        ? ((value.numbers[0] + value.numbers[1] + value.numbers[2]) / 3.0F)
+        : value.numbers[0];
+    DrawGraphValueSliderField(dc, valueRect, textRect, valueText.c_str(), colorSliderValue, editing, scale);
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
         const COLORREF color = RGB(
             std::clamp(static_cast<int>(value.numbers[0] * 255.0F), 0, 255),
             std::clamp(static_cast<int>(value.numbers[1] * 255.0F), 0, 255),
             std::clamp(static_cast<int>(value.numbers[2] * 255.0F), 0, 255));
-        GdiDrawing::DrawSharpFrame(dc, swatch, color, RGB(83, 91, 103));
-        textRect.left = swatch.right + ScaleMetric(8, scale);
+        FillRoundedRect(dc, colorSwatch, color, std::max(3, ScaleMetric(4, scale)));
+        StrokeRoundedRect(dc, colorSwatch, RGB(18, 18, 18), std::max(3, ScaleMetric(4, scale)));
     }
-    DrawText(
-        dc,
-        textRect,
-        valueText.c_str(),
-        RGB(235, 240, 248),
-        std::max(10, ScaleMetric(13, scale)),
-        FW_SEMIBOLD,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
 void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render::RenderMaterialGraphNode& node, bool selected, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
-    const bool outputNode = node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput;
-    const float scale = NodeScale(rect);
+    const float scale = NodeUiScale(rect, node.kind);
     const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
     const int cornerDiameter = ScaleMetric(kGraphNodeCornerDiameter, scale);
     const int pinRadius = ScaleMetric(kGraphNodePinRadius, scale);
-    const COLORREF body = outputNode ? RGB(23, 27, 34) : RGB(23, 25, 30);
-    const COLORREF bodyTop = outputNode ? RGB(48, 53, 64) : RGB(43, 46, 54);
-    const COLORREF bodyBottom = outputNode ? RGB(19, 22, 28) : RGB(22, 24, 29);
-    const COLORREF headerTop = outputNode ? RGB(168, 88, 86) : RGB(63, 70, 82);
-    const COLORREF headerBottom = outputNode ? RGB(103, 56, 57) : RGB(39, 46, 56);
-    const COLORREF border = selected ? RGB(46, 52, 62) : RGB(10, 12, 15);
-    DrawGraphNodeFrame(dc, rect, body);
+    const COLORREF body = BlenderGraphTheme::NodeBody;
+    const COLORREF bodyTop = BlenderGraphTheme::NodeBody;
+    const COLORREF bodyBottom = BlenderGraphTheme::NodeBodyBottom;
+    const COLORREF headerTop = ScaleColor(GraphNodeHeaderColor(node.kind), selected ? 1.12F : 1.0F);
+    const COLORREF headerBottom = ScaleColor(headerTop, 0.86F);
+    const COLORREF border = selected ? BlenderGraphTheme::NodeOutlineSelected : BlenderGraphTheme::NodeOutline;
+    DrawGraphNodeFrame(dc, rect, body, scale);
     const RECT inner{ rect.left + 2, rect.top + 2, rect.right - 2, rect.bottom - 2 };
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, rect.top + headerHeight, inner.right, inner.bottom }, inner, bodyTop, bodyBottom, std::max(2, cornerDiameter - 2));
     DrawVerticalGradientClippedToRound(dc, RECT{ inner.left, inner.top, inner.right, rect.top + headerHeight }, inner, headerTop, headerBottom, std::max(2, cornerDiameter - 2));
-    GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(16, 18, 22));
-    GdiDrawing::FillRectAlpha(dc, RECT{ rect.left + 3, rect.top + 2, rect.right - 3, rect.top + std::max(3, ScaleMetric(4, scale)) }, RGB(255, 255, 255), 24);
+    GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(18, 18, 18));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
 
     const std::string title = GraphNodeTitle(node.kind);
-    const std::string subtitle = outputNode ? std::string{ "Surface Inputs" } : ("#" + std::to_string(node.id));
-    DrawText(dc, RECT{ rect.left + ScaleMetric(16, scale), rect.top + 1, rect.right - ScaleMetric(16, scale), rect.top + headerHeight }, title.c_str(), RGB(248, 249, 251), std::max(9, ScaleMetric(16, scale)), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (!outputNode) {
-        DrawText(dc, RECT{ rect.left + ScaleMetric(18, scale), rect.top + headerHeight + ScaleMetric(5, scale), rect.right - ScaleMetric(12, scale), rect.top + headerHeight + ScaleMetric(18, scale) }, subtitle.c_str(), RGB(129, 140, 150), std::max(7, ScaleMetric(8, scale)));
-    }
+    DrawGraphText(dc, RECT{ rect.left + ScaleMetric(12, scale), rect.top, rect.right - ScaleMetric(12, scale), rect.top + headerHeight }, title.c_str(), RGB(242, 242, 242), ScaleMetric(kGraphTitleFontSize, scale), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
-    DrawConstantValue(dc, rect, node);
+    DrawConstantValue(dc, rect, node, sceneContext);
 
     const std::vector<std::pair<std::string_view, std::string_view>> inputPins = GraphInputPins(node.kind);
     if (!inputPins.empty()) {
         for (std::size_t index = 0; index < inputPins.size(); ++index) {
-            const POINT pin = InputPinPoint(rect, inputPins[index].first);
-            DrawGraphPin(dc, pin, GraphInputPinColor(inputPins[index].first), scale, clip);
-            DrawText(dc, RECT{ rect.left + pinRadius + ScaleMetric(16, scale), pin.y - ScaleMetric(16, scale), rect.right - ScaleMetric(18, scale), pin.y + ScaleMetric(16, scale) }, std::string{ inputPins[index].second }.c_str(), RGB(198, 205, 218), std::max(10, ScaleMetric(outputNode ? 17 : 13, scale)));
+            const POINT scaledPin = InputPinPoint(rect, node.kind, inputPins[index].first);
+            DrawGraphPin(dc, scaledPin, GraphInputPinColor(inputPins[index].first), scale, clip);
+            const bool textureSample = node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample;
+            const RECT texturePreview = textureSample ? MaterialEditorPanelTextureSamplePreviewRect(rect) : RECT{};
+            const int inputLabelRight = textureSample
+                ? std::max(rect.left + ScaleMetric(54, scale), texturePreview.left - ScaleMetric(10, scale))
+                : rect.right - ScaleMetric(18, scale);
+            DrawGraphText(
+                dc,
+                RECT{
+                    rect.left + pinRadius + ScaleMetric(textureSample ? 8 : 16, scale),
+                    scaledPin.y - ScaleMetric(11, scale),
+                    inputLabelRight,
+                    scaledPin.y + ScaleMetric(11, scale),
+                },
+                std::string{ inputPins[index].second }.c_str(),
+                BlenderGraphTheme::Text,
+                ScaleMetric(kGraphPinFontSize, scale),
+                FW_NORMAL,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
     const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(node.kind);
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
-        const POINT output = OutputPinPoint(rect, index, outputPins.size());
-        DrawGraphPin(dc, output, RGB(91, 139, 206), scale, clip);
-        DrawText(
+        const POINT output = OutputPinPoint(rect, node.kind, index, outputPins.size());
+        DrawGraphPin(
             dc,
-            RECT{ rect.left + ScaleMetric(8, scale), output.y - ScaleMetric(10, scale), output.x - pinRadius - ScaleMetric(8, scale), output.y + ScaleMetric(10, scale) },
-            std::string{ outputPins[index].second }.c_str(),
-            RGB(178, 188, 199),
-            node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample
-                ? std::max(10, ScaleMetric(13, scale))
-                : std::max(7, ScaleMetric(8, scale)),
-            FW_NORMAL,
-            DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            output,
+            GraphOutputPinColor(node.kind, outputPins[index].first),
+            scale,
+            clip,
+            GraphOutputPinTinted(node.kind, outputPins[index].first));
+        RECT outputLabelRect{
+            rect.left + ScaleMetric(8, scale),
+            output.y - ScaleMetric(11, scale),
+            output.x - pinRadius - ScaleMetric(8, scale),
+            output.y + ScaleMetric(11, scale),
+        };
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+            const RECT texturePreview = MaterialEditorPanelTextureSamplePreviewRect(rect);
+            outputLabelRect.left = texturePreview.right + ScaleMetric(8, scale);
+            outputLabelRect.right = output.x - pinRadius - ScaleMetric(8, scale);
+        }
+        if (MaterialEditorPanelIsConstantNode(node.kind)) {
+            RECT valueRect = MaterialEditorPanelConstantValueRect(rect);
+            if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2) {
+                valueRect = MaterialEditorPanelConstantVectorFieldsBounds(rect, 2U);
+            } else if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector) {
+                valueRect = MaterialEditorPanelConstantVectorFieldsBounds(rect, 3U);
+            }
+            outputLabelRect.left = std::max(outputLabelRect.left, valueRect.right + ScaleMetric(8, scale));
+        }
+        if (outputLabelRect.right > outputLabelRect.left + ScaleMetric(10, scale)) {
+            DrawGraphText(
+                dc,
+                outputLabelRect,
+                std::string{ outputPins[index].second }.c_str(),
+                GraphOutputPinLabelColor(node.kind, outputPins[index].first),
+                ScaleMetric(kGraphPinFontSize, scale),
+                FW_NORMAL,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
     }
 }
 
@@ -939,7 +1434,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
                 break;
             }
         }
-        anchor = OutputPinPoint(*nodeRect, pinIndex, outputPins.size());
+        anchor = OutputPinPoint(*nodeRect, node->kind, pinIndex, outputPins.size());
     } else {
         const std::vector<std::pair<std::string_view, std::string_view>> inputPins = GraphInputPins(node->kind);
         std::string_view pinName = inputPins.empty() ? std::string_view{} : inputPins.front().first;
@@ -949,7 +1444,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
                 break;
             }
         }
-        anchor = InputPinPoint(*nodeRect, pinName);
+        anchor = InputPinPoint(*nodeRect, node->kind, pinName);
     }
 
     const POINT cursor{ sceneContext.MaterialGraphPinConnectionX(), sceneContext.MaterialGraphPinConnectionY() };
@@ -957,8 +1452,10 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
         dc,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? anchor : cursor,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? cursor : anchor,
-        RGB(226, 231, 238),
-        3);
+        sceneContext.MaterialGraphPinConnectionIsOutput()
+            ? GraphOutputPinColor(node->kind, sceneContext.MaterialGraphPinConnectionPin())
+            : GraphInputPinColor(sceneContext.MaterialGraphPinConnectionPin()),
+        std::clamp(ScaleMetric(3, sceneContext.MaterialGraphZoom()), 1, 3));
 }
 
 void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
@@ -1041,8 +1538,9 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
         const std::optional<RECT> to = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, link.toNodeId, sceneContext, assetId);
         if (from.has_value() && to.has_value()) {
             const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(graphView, link.fromNodeId);
-            if (fromNode != nullptr) {
-                DrawGraphLink(dc, *from, *to, link.fromPin, link.toPin, *fromNode);
+            const kb::render::RenderMaterialGraphNode* toNode = kb::render::FindRenderMaterialGraphNode(graphView, link.toNodeId);
+            if (fromNode != nullptr && toNode != nullptr) {
+                DrawGraphLink(dc, *from, *to, link.fromPin, link.toPin, *fromNode, *toNode);
             }
         }
     }

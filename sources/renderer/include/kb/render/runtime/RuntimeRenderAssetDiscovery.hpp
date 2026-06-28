@@ -25,6 +25,8 @@ public:
 
     void SetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept;
     [[nodiscard]] std::uint64_t DiscoveryIntervalFrames() const noexcept;
+    void SetDiscoveryEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool DiscoveryEnabled() const noexcept;
     [[nodiscard]] RuntimeRenderAssetDiscoveryStats Stats() const noexcept;
 
 private:
@@ -33,6 +35,7 @@ private:
     std::unordered_set<std::uint64_t> registeredScenes_;
     std::unordered_map<std::uint64_t, std::uint64_t> lastDiscoveryFrames_;
     std::uint64_t discoveryIntervalFrames_ = 30ULL;
+    bool discoveryEnabled_ = true;
 };
 
 } // namespace kb::render

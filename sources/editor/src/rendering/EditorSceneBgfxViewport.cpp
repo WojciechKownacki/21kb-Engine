@@ -23,7 +23,6 @@ namespace {
 
 constexpr wchar_t kSceneViewportClassName[] = L"KBEditorSceneBgfxViewport";
 constexpr std::uint32_t kSceneClearRgba = 0x000000FFU;
-constexpr std::uint64_t kEditorSceneAssetDiscoveryIntervalFrames = 600ULL;
 constexpr std::uint32_t kMaxEditorViewportIndex =
     (render::ViewId::Max - render::ViewId::DetachedViewportStart) / render::ViewId::DetachedViewportStride;
 
@@ -612,7 +611,7 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
         return false;
     }
 
-    renderer_.SetRuntimeAssetDiscoveryIntervalFrames(kEditorSceneAssetDiscoveryIntervalFrames);
+    renderer_.SetRuntimeAssetDiscoveryEnabled(false);
     rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
     return true;
 }

@@ -783,6 +783,14 @@ std::uint64_t Renderer::RuntimeAssetDiscoveryIntervalFrames() const noexcept {
     return runtimeAssetDiscovery_.DiscoveryIntervalFrames();
 }
 
+void Renderer::SetRuntimeAssetDiscoveryEnabled(bool enabled) noexcept {
+    runtimeAssetDiscovery_.SetDiscoveryEnabled(enabled);
+}
+
+bool Renderer::RuntimeAssetDiscoveryEnabled() const noexcept {
+    return runtimeAssetDiscovery_.DiscoveryEnabled();
+}
+
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {
     runtimeResourceCache_.ReleaseScene(const_cast<kb::scene::Scene&>(scene), sceneRenderer_.get());
     renderSceneStore_.Release(scene.Id());

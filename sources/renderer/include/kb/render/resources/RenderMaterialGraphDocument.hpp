@@ -66,6 +66,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     ArcCosine,
     ArcTangent,
     ArcTangent2,
+    ConstantVector2,
 };
 
 enum class RenderMaterialGraphArtifactFailurePolicy : std::uint8_t {

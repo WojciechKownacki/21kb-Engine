@@ -97,6 +97,7 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
 
 [[nodiscard]] bool IsRenderMaterialGraphConstantNode(RenderMaterialGraphNodeKind kind) noexcept {
     return kind == RenderMaterialGraphNodeKind::ConstantScalar ||
+        kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
         kind == RenderMaterialGraphNodeKind::ConstantVector ||
         kind == RenderMaterialGraphNodeKind::ConstantColor;
 }
@@ -296,6 +297,9 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ParameterScalar:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        AppendIrPin(irNode, irNode.kind, "xy", true);
+        break;
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ParameterVector:
         AppendIrPin(irNode, irNode.kind, "xyz", true);
@@ -490,6 +494,13 @@ void AddShaderGenerationDiagnostic(
     return "vec3(" + FloatLiteral(x) + ", " + FloatLiteral(y) + ", " + FloatLiteral(z) + ")";
 }
 
+[[nodiscard]] std::string ConstantVector2Expression(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+    const float x = values.size() > 0U ? values[0] : 0.0F;
+    const float y = values.size() > 1U ? values[1] : x;
+    return "vec2(" + FloatLiteral(x) + ", " + FloatLiteral(y) + ")";
+}
+
 [[nodiscard]] std::string ConstantColorExpression(const RenderMaterialGraphNode& node) {
     const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
     const float r = values.size() > 0U ? values[0] : 1.0F;
@@ -531,6 +542,9 @@ void AddShaderGenerationDiagnostic(
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::ConstantScalar:
         expression = ConstantScalarExpression(node);
+        break;
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        expression = ConstantVector2Expression(node);
         break;
     case RenderMaterialGraphNodeKind::ConstantVector:
         expression = ConstantVectorExpression(node);
@@ -839,6 +853,7 @@ void AddShaderGenerationDiagnostic(
         return "textureSample" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::Add:
@@ -936,6 +951,7 @@ void AddShaderGenerationDiagnostic(
         return RenderMaterialParameterType::Texture;
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
@@ -989,6 +1005,7 @@ void AddShaderGenerationDiagnostic(
     switch (kind) {
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
@@ -1128,6 +1145,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "MaterialOutput";
     case RenderMaterialGraphNodeKind::ConstantScalar:
         return "ConstantScalar";
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        return "ConstantVector2";
     case RenderMaterialGraphNodeKind::ConstantVector:
         return "ConstantVector";
     case RenderMaterialGraphNodeKind::ConstantColor:
@@ -1234,6 +1253,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "ConstantScalar") || EqualsIgnoreCase(text, "Scalar")) {
         return RenderMaterialGraphNodeKind::ConstantScalar;
+    }
+    if (EqualsIgnoreCase(text, "ConstantVector2") || EqualsIgnoreCase(text, "Constant2Vector") || EqualsIgnoreCase(text, "Vector2") || EqualsIgnoreCase(text, "Float2") || EqualsIgnoreCase(text, "XY")) {
+        return RenderMaterialGraphNodeKind::ConstantVector2;
     }
     if (EqualsIgnoreCase(text, "ConstantVector") || EqualsIgnoreCase(text, "Vector")) {
         return RenderMaterialGraphNodeKind::ConstantVector;
@@ -2008,6 +2030,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::NormalUnpack:
         return pin == "color";
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterScalar:
@@ -2066,6 +2089,8 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "color";
     case RenderMaterialGraphNodeKind::BreakVector:
         return pin == "x" || pin == "y" || pin == "z" || pin == "w";
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        return pin == "xy";
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ParameterVector:
         return pin == "xyz";
@@ -2129,6 +2154,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ConstantScalar:
     case RenderMaterialGraphNodeKind::ParameterScalar:
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        return outputPin && pin == "xy" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ParameterVector:
         return outputPin && pin == "xyz" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
@@ -2403,6 +2430,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ParameterScalar:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        if (outputPin && pin == "xy") return PinId(nodeKind, direction, 1U);
+        return 0U;
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ParameterVector:
         if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
@@ -2442,6 +2472,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
         return true;
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
