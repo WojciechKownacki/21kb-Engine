@@ -72,6 +72,17 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateStep,
     CreateSmoothStep,
     CreateIf,
+    CreateDesaturate,
+    CreateFresnel,
+    CreateNegate,
+    CreateSign,
+    CreateRound,
+    CreateTruncate,
+    CreateTangent,
+    CreateArcSine,
+    CreateArcCosine,
+    CreateArcTangent,
+    CreateArcTangent2,
     CreateClamp,
     CreateLerp,
     CreateNormalUnpack,
@@ -998,6 +1009,17 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::Step:
         case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
         case kb::render::RenderMaterialGraphNodeKind::If:
+        case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+        case kb::render::RenderMaterialGraphNodeKind::Negate:
+        case kb::render::RenderMaterialGraphNodeKind::Sign:
+        case kb::render::RenderMaterialGraphNodeKind::Round:
+        case kb::render::RenderMaterialGraphNodeKind::Truncate:
+        case kb::render::RenderMaterialGraphNodeKind::Tangent:
+        case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+        case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+        case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+        case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
         case kb::render::RenderMaterialGraphNodeKind::Clamp:
         case kb::render::RenderMaterialGraphNodeKind::Lerp:
         case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:

@@ -248,6 +248,34 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "greater", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::Desaturate:
+        AppendIrPin(irNode, irNode.kind, "color", false);
+        AppendIrPin(irNode, irNode.kind, "fraction", false);
+        AppendIrPin(irNode, irNode.kind, "color", true);
+        break;
+    case RenderMaterialGraphNodeKind::Fresnel:
+        AppendIrPin(irNode, irNode.kind, "normal", false);
+        AppendIrPin(irNode, irNode.kind, "view", false);
+        AppendIrPin(irNode, irNode.kind, "exponent", false);
+        AppendIrPin(irNode, irNode.kind, "base", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        AppendIrPin(irNode, irNode.kind, "value", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        AppendIrPin(irNode, irNode.kind, "y", false);
+        AppendIrPin(irNode, irNode.kind, "x", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
     case RenderMaterialGraphNodeKind::Clamp:
         AppendIrPin(irNode, irNode.kind, "value", false);
         AppendIrPin(irNode, irNode.kind, "min", false);
@@ -696,6 +724,55 @@ void AddShaderGenerationDiagnostic(
         expression = "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
         break;
     }
+    case RenderMaterialGraphNodeKind::Desaturate: {
+        const std::string color = CompileInputExpression(graph, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)", diagnostics, stack);
+        const std::string fraction = CompileInputExpression(graph, node, "fraction", RenderMaterialGraphPinType::Float, "1.0", diagnostics, stack);
+        const std::string luma = "dot((" + color + ").rgb, vec3(0.299, 0.587, 0.114))";
+        expression = "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Fresnel: {
+        const std::string normal = CompileInputExpression(graph, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
+        const std::string view = CompileInputExpression(graph, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
+        const std::string exponent = CompileInputExpression(graph, node, "exponent", RenderMaterialGraphPinType::Float, "5.0", diagnostics, stack);
+        const std::string base = CompileInputExpression(graph, node, "base", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
+        const std::string facing = "clamp(dot(normalize(" + normal + "), normalize(" + view + ")), 0.0, 1.0)";
+        expression = "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Negate:
+        expression = "-(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
+        break;
+    case RenderMaterialGraphNodeKind::Sign:
+        expression = "sign(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
+        break;
+    case RenderMaterialGraphNodeKind::Round:
+        expression = "round(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
+        break;
+    case RenderMaterialGraphNodeKind::Truncate: {
+        const std::string value = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack);
+        expression = "sign(" + value + ") * floor(abs(" + value + "))";
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Tangent:
+        expression = "tan(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
+        break;
+    case RenderMaterialGraphNodeKind::ArcSine:
+        expression = "asin(clamp(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ", vec4(-1.0), vec4(1.0)))";
+        break;
+    case RenderMaterialGraphNodeKind::ArcCosine:
+        expression = "acos(clamp(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) + ", vec4(-1.0), vec4(1.0)))";
+        break;
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        expression = "atan(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
+        break;
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        expression = "atan(" +
+            CompileInputExpression(graph, node, "y", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "x", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            ")";
+        break;
     case RenderMaterialGraphNodeKind::Clamp:
         expression = "clamp(" +
             CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
@@ -790,6 +867,17 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -877,6 +965,17 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -923,6 +1022,17 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -1084,6 +1194,28 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "SmoothStep";
     case RenderMaterialGraphNodeKind::If:
         return "If";
+    case RenderMaterialGraphNodeKind::Desaturate:
+        return "Desaturate";
+    case RenderMaterialGraphNodeKind::Fresnel:
+        return "Fresnel";
+    case RenderMaterialGraphNodeKind::Negate:
+        return "Negate";
+    case RenderMaterialGraphNodeKind::Sign:
+        return "Sign";
+    case RenderMaterialGraphNodeKind::Round:
+        return "Round";
+    case RenderMaterialGraphNodeKind::Truncate:
+        return "Truncate";
+    case RenderMaterialGraphNodeKind::Tangent:
+        return "Tangent";
+    case RenderMaterialGraphNodeKind::ArcSine:
+        return "ArcSine";
+    case RenderMaterialGraphNodeKind::ArcCosine:
+        return "ArcCosine";
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        return "ArcTangent";
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        return "ArcTangent2";
     case RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case RenderMaterialGraphNodeKind::Lerp:
@@ -1201,6 +1333,39 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "If") || EqualsIgnoreCase(text, "Compare")) {
         return RenderMaterialGraphNodeKind::If;
+    }
+    if (EqualsIgnoreCase(text, "Desaturate") || EqualsIgnoreCase(text, "Desaturation")) {
+        return RenderMaterialGraphNodeKind::Desaturate;
+    }
+    if (EqualsIgnoreCase(text, "Fresnel")) {
+        return RenderMaterialGraphNodeKind::Fresnel;
+    }
+    if (EqualsIgnoreCase(text, "Negate") || EqualsIgnoreCase(text, "Minus")) {
+        return RenderMaterialGraphNodeKind::Negate;
+    }
+    if (EqualsIgnoreCase(text, "Sign")) {
+        return RenderMaterialGraphNodeKind::Sign;
+    }
+    if (EqualsIgnoreCase(text, "Round")) {
+        return RenderMaterialGraphNodeKind::Round;
+    }
+    if (EqualsIgnoreCase(text, "Truncate") || EqualsIgnoreCase(text, "Trunc")) {
+        return RenderMaterialGraphNodeKind::Truncate;
+    }
+    if (EqualsIgnoreCase(text, "Tangent") || EqualsIgnoreCase(text, "Tan")) {
+        return RenderMaterialGraphNodeKind::Tangent;
+    }
+    if (EqualsIgnoreCase(text, "ArcSine") || EqualsIgnoreCase(text, "Arcsine") || EqualsIgnoreCase(text, "Asin")) {
+        return RenderMaterialGraphNodeKind::ArcSine;
+    }
+    if (EqualsIgnoreCase(text, "ArcCosine") || EqualsIgnoreCase(text, "Arccosine") || EqualsIgnoreCase(text, "Acos")) {
+        return RenderMaterialGraphNodeKind::ArcCosine;
+    }
+    if (EqualsIgnoreCase(text, "ArcTangent") || EqualsIgnoreCase(text, "Arctangent") || EqualsIgnoreCase(text, "Atan")) {
+        return RenderMaterialGraphNodeKind::ArcTangent;
+    }
+    if (EqualsIgnoreCase(text, "ArcTangent2") || EqualsIgnoreCase(text, "Arctangent2") || EqualsIgnoreCase(text, "Atan2")) {
+        return RenderMaterialGraphNodeKind::ArcTangent2;
     }
     if (EqualsIgnoreCase(text, "Clamp")) {
         return RenderMaterialGraphNodeKind::Clamp;
@@ -1821,6 +1986,21 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "min" || pin == "max" || pin == "value";
     case RenderMaterialGraphNodeKind::If:
         return pin == "a" || pin == "b" || pin == "less" || pin == "equal" || pin == "greater";
+    case RenderMaterialGraphNodeKind::Desaturate:
+        return pin == "color" || pin == "fraction";
+    case RenderMaterialGraphNodeKind::Fresnel:
+        return pin == "normal" || pin == "view" || pin == "exponent" || pin == "base";
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        return pin == "value";
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        return pin == "y" || pin == "x";
     case RenderMaterialGraphNodeKind::Clamp:
         return pin == "value" || pin == "min" || pin == "max";
     case RenderMaterialGraphNodeKind::Lerp:
@@ -1869,9 +2049,21 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
         return pin == "value";
+    case RenderMaterialGraphNodeKind::Desaturate:
+        return pin == "color";
     case RenderMaterialGraphNodeKind::BreakVector:
         return pin == "x" || pin == "y" || pin == "z" || pin == "w";
     case RenderMaterialGraphNodeKind::ConstantVector:
@@ -1995,6 +2187,27 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::If:
         if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float;
         if (!outputPin && (pin == "less" || pin == "equal" || pin == "greater")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Desaturate:
+        if (!outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
+        if (!outputPin && pin == "fraction") return RenderMaterialGraphPinType::Float;
+        return outputPin && pin == "color" ? RenderMaterialGraphPinType::Color : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Fresnel:
+        if (!outputPin && (pin == "normal" || pin == "view")) return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && (pin == "exponent" || pin == "base")) return RenderMaterialGraphPinType::Float;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        if (!outputPin && (pin == "y" || pin == "x")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Clamp:
         if (!outputPin && (pin == "value" || pin == "min" || pin == "max")) return RenderMaterialGraphPinType::Float4;
@@ -2142,6 +2355,34 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "greater") return PinId(nodeKind, direction, 5U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
+    case RenderMaterialGraphNodeKind::Desaturate:
+        if (!outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "fraction") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Fresnel:
+        if (!outputPin && pin == "normal") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "view") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "exponent") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "base") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+        if (!outputPin && pin == "y") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "x") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
     case RenderMaterialGraphNodeKind::Clamp:
         if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "min") return PinId(nodeKind, direction, 2U);
@@ -2230,6 +2471,17 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
