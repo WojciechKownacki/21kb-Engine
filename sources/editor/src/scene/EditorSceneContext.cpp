@@ -75,12 +75,14 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 namespace kb::editor {
 namespace {
 
 constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
+constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
 
 
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
@@ -138,6 +140,31 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
         return metadata.physicalPath;
     }
     return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+[[nodiscard]] std::uint64_t HashBytes(std::string_view text) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char ch : text) {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 1099511628211ULL;
+    }
+    return hash == 0U ? 1U : hash;
+}
+
+[[nodiscard]] std::uint64_t MaterialWorkingCopyRuntimeContentHash(const kb::render::RenderMaterialAssetData& material) {
+    kb::render::RenderMaterialAssetData runtimeRelevant = material;
+    for (kb::render::RenderMaterialGraphNode& node : runtimeRelevant.graph.nodes) {
+        node.positionX = 0;
+        node.positionY = 0;
+    }
+
+    std::ostringstream output;
+    kb::render::RenderMaterialAssetWriter::Write(output, runtimeRelevant);
+    return HashBytes(output.str());
+}
+
+[[nodiscard]] std::filesystem::path SceneMaterialWorkingCopyRuntimePath(kb::assets::AssetId materialAssetId) {
+    return std::filesystem::temp_directory_path() / ("21kb_scene_material_working_" + std::to_string(materialAssetId.value) + ".kbmat");
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMaterialTypeDocument> LoadMaterialTypeDocumentForMaterial(
@@ -1125,6 +1152,9 @@ bool EditorSceneContext::UndoSceneCommand() {
     const bool undone = SceneCommands().Undo();
     if (undone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource()) {
         RefreshOpenMaterialEditorFromSource();
+    } else if (undone && materialEditor_.OpenAssetId().IsValid()) {
+        SyncMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
     }
     return undone;
 }
@@ -1135,6 +1165,9 @@ bool EditorSceneContext::RedoSceneCommand() {
     const bool redone = SceneCommands().Redo();
     if (redone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource()) {
         RefreshOpenMaterialEditorFromSource();
+    } else if (redone && materialEditor_.OpenAssetId().IsValid()) {
+        SyncMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
     }
     return redone;
 }
@@ -1982,6 +2015,7 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
     if (!PrepareMaterialAssetSelectionChange(id)) {
         return false;
     }
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::optional<kb::render::RenderMaterialAssetData> materialDocument = ReadMaterialDocumentAsset(id);
     std::optional<kb::render::RenderMaterialAssetData> refreshedMaterialDocument;
     std::optional<kb::render::RenderMaterialTypeSchema> schema;
@@ -2086,6 +2120,11 @@ bool EditorSceneContext::OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId
 }
 
 void EditorSceneContext::CloseMaterialEditorAsset() noexcept {
+    try {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
+    } catch (...) {
+    }
     materialEditor_.Close();
 }
 
@@ -3098,6 +3137,7 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     if (!HasActiveMaterialAssetEdit()) {
         if (materialEditor_.OpenAssetId() == id && materialEditor_.Dirty()) {
             materialEditor_.RevertToCleanSnapshot();
+            ClearMaterialEditorWorkingCopyRuntimePreview();
             MarkSceneRenderDirty();
             console_.Info("Materials", "Material working copy reverted.");
             return true;
@@ -3223,6 +3263,7 @@ bool EditorSceneContext::ApplyActiveMaterialAssetFloatEdit(float value) {
     edit->Apply(*current);
     if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
         materialEditor_.SetWorkingCopy(*current);
+        SyncMaterialEditorWorkingCopyRuntimePreview();
     } else if (!EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *current)) {
         return false;
     }
@@ -3243,6 +3284,9 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
         return false;
     }
     const kb::render::RenderMaterialAssetData committed = *after;
+    if (materialEditor_.OpenAssetId() == editedAsset) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+    }
 
     std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
         *scene_,
@@ -3271,6 +3315,7 @@ void EditorSceneContext::CancelActiveMaterialAssetEdit() noexcept {
     }
     if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
         materialEditor_.SetWorkingCopy(*activeMaterialEditBefore_);
+        SyncMaterialEditorWorkingCopyRuntimePreview();
     } else {
         static_cast<void>(EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *activeMaterialEditBefore_));
     }
@@ -4041,6 +4086,7 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
     }
 
     materialEditor_.ClearDiagnostics();
+    SyncMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return true;
 }
@@ -4062,8 +4108,92 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
     edit.Apply(working);
     materialEditor_.SetWorkingCopy(std::move(working));
     materialEditor_.ClearDiagnostics();
+    SyncMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return true;
+}
+
+void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
+    if (scene_ == nullptr || !materialEditor_.OpenAssetId().IsValid() || !materialEditor_.WorkingCopy().has_value() || !materialEditor_.Dirty()) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        return;
+    }
+
+    const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(openAsset);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        return;
+    }
+
+    if (materialRuntimePreviewAssetId_.IsValid() && materialRuntimePreviewAssetId_ != openAsset) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        metadata = manager.Registry().Find(openAsset);
+        if (metadata == nullptr || metadata->type != "RenderMaterial") {
+            return;
+        }
+    }
+
+    const std::uint64_t runtimeContentHash = MaterialWorkingCopyRuntimeContentHash(*materialEditor_.WorkingCopy());
+    if (materialRuntimePreviewAssetId_ == openAsset && materialRuntimePreviewContentHash_ == runtimeContentHash) {
+        std::error_code existsError;
+        if (!materialRuntimePreviewPath_.empty() && std::filesystem::exists(materialRuntimePreviewPath_, existsError)) {
+            return;
+        }
+    }
+
+    if (!materialRuntimePreviewSourceMetadata_.has_value()) {
+        materialRuntimePreviewSourceMetadata_ = *metadata;
+    }
+
+    const std::filesystem::path runtimePath = materialRuntimePreviewPath_.empty()
+        ? SceneMaterialWorkingCopyRuntimePath(openAsset)
+        : materialRuntimePreviewPath_;
+    if (!kb::render::RenderMaterialAssetWriter::Save(runtimePath, *materialEditor_.WorkingCopy())) {
+        console_.Warning("Materials", "Material graph live preview could not write its runtime working copy.");
+        return;
+    }
+
+    kb::assets::AssetMetadata runtimeMetadata = *materialRuntimePreviewSourceMetadata_;
+    runtimeMetadata.id = openAsset;
+    runtimeMetadata.type = "RenderMaterial";
+    runtimeMetadata.importCategory = std::string{ kEditorLiveAssetOverrideCategory };
+    runtimeMetadata.physicalPath = runtimePath;
+    runtimeMetadata.contentHash = runtimeContentHash;
+    runtimeMetadata.runtimeLoadable = true;
+    if (runtimeMetadata.name.empty()) {
+        runtimeMetadata.name = "Material Working Copy";
+    }
+    if (runtimeMetadata.virtualPath.empty()) {
+        runtimeMetadata.virtualPath = std::filesystem::path{ "/Editor/Runtime" } / ("WorkingMaterial" + std::to_string(openAsset.value) + ".kbmat");
+    }
+
+    static_cast<void>(manager.RegisterAsset(std::move(runtimeMetadata)));
+    static_cast<void>(manager.Unload(openAsset));
+    materialRuntimePreviewAssetId_ = openAsset;
+    materialRuntimePreviewPath_ = runtimePath;
+    materialRuntimePreviewContentHash_ = runtimeContentHash;
+}
+
+void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
+    if (scene_ != nullptr && materialRuntimePreviewAssetId_.IsValid()) {
+        kb::assets::AssetManager& manager = scene_->Assets().Manager();
+        if (materialRuntimePreviewSourceMetadata_.has_value()) {
+            static_cast<void>(manager.RegisterAsset(*materialRuntimePreviewSourceMetadata_));
+        }
+        static_cast<void>(manager.Unload(materialRuntimePreviewAssetId_));
+    }
+
+    if (!materialRuntimePreviewPath_.empty()) {
+        std::error_code removeError;
+        static_cast<void>(std::filesystem::remove(materialRuntimePreviewPath_, removeError));
+    }
+
+    materialRuntimePreviewAssetId_ = {};
+    materialRuntimePreviewSourceMetadata_.reset();
+    materialRuntimePreviewPath_.clear();
+    materialRuntimePreviewContentHash_ = 0U;
 }
 
 bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
@@ -4083,6 +4213,7 @@ bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
     }
 
     kb::render::RenderMaterialAssetData after = *materialEditor_.WorkingCopy();
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
         *scene_,
         id,
@@ -4096,6 +4227,7 @@ bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
 
     materialEditor_.SetWorkingCopy(after);
     materialEditor_.MarkSaved();
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return ValidateMaterialEditorAsset(id);
 }
@@ -4105,6 +4237,7 @@ void EditorSceneContext::RefreshOpenMaterialEditorFromSource() {
     if (!openAsset.IsValid()) {
         return;
     }
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialDocumentAsset(openAsset);
     if (!material.has_value()) {
         materialEditor_.SetDiagnostics({ "Material source could not be reloaded after undo/redo." }, true);
@@ -4134,6 +4267,7 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
 }
 
 void EditorSceneContext::ResetSceneEditState() {
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     commandStack_.Clear();
     pendingSceneTransactionLabel_.reset();
     activeTransformEdit_.Clear();

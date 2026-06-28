@@ -10,6 +10,15 @@
 #include <unordered_map>
 
 namespace kb::assets {
+namespace {
+
+constexpr const char* kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
+
+[[nodiscard]] bool IsEditorLiveAssetOverride(const AssetMetadata& metadata) noexcept {
+    return metadata.importCategory == kEditorLiveAssetOverrideCategory && metadata.runtimeLoadable;
+}
+
+} // namespace
 
 std::size_t AssetDiscoveryService::DiscoverMountedAssets(
     const AssetMountTable& mounts,
@@ -70,6 +79,14 @@ std::size_t AssetDiscoveryService::DiscoverMountedAssets(
                 .runtimeLoadable = true,
             };
             const auto previous = previousById.find(id.value);
+            if (previous != previousById.end() && IsEditorLiveAssetOverride(previous->second)) {
+                discoveredVirtualPaths.insert(NormalizeAssetPath(*virtualPath));
+                if (registry.Upsert(previous->second)) {
+                    ++discovered;
+                    discoveredIds.insert(id.value);
+                }
+                continue;
+            }
             if (previous != previousById.end() &&
                 (previous->second.contentHash != metadata.contentHash ||
                  previous->second.type != metadata.type ||
