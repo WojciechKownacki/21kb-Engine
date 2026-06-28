@@ -15,6 +15,7 @@
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
 #include "rendering/HierarchyToolbarLayout.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 #include "scene/EditorHierarchyMetrics.hpp"
 
@@ -117,6 +118,17 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (sceneContext_.HasMaterialGraphPinConnection()) {
+        if (!leftButtonDown) {
+            sceneContext_.CancelMaterialGraphPinConnection();
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragMaterialGraphPinConnection(x, y));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.IsMaterialGraphPanning()) {
         if (!rightButtonDown) {
             static_cast<void>(sceneContext_.EndMaterialGraphPan());
@@ -125,6 +137,22 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
             static_cast<void>(sceneContext_.DragMaterialGraphPan(x, y));
         }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
+        const MaterialEditorGraphContextMenuHit hit = MaterialEditorPanelRenderer::GraphContextMenuHit(sceneContext_, x, y);
+        bool changed = false;
+        if (hit.kind == MaterialEditorGraphContextMenuHitKind::Category) {
+            changed = sceneContext_.SetMaterialGraphContextMenuHover(hit.categoryIndex, MaterialEditorGraphMenuCommand::None);
+        } else if (hit.kind == MaterialEditorGraphContextMenuHitKind::Command) {
+            changed = sceneContext_.SetMaterialGraphContextMenuHover(hit.categoryIndex, hit.command);
+        } else {
+            changed = sceneContext_.ClearMaterialGraphContextMenuHover();
+        }
+        if (changed) {
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        }
         return;
     }
 

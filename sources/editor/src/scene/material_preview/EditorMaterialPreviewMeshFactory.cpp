@@ -1,6 +1,7 @@
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 
 #include <cmath>
+#include <array>
 #include <cstdint>
 #include <cstddef>
 
@@ -8,6 +9,26 @@ namespace kb::editor {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846F;
+
+[[nodiscard]] std::array<float, 4> FallbackTangentForNormal(float nx, float ny, float nz) noexcept {
+    const std::array<float, 3> axis = std::abs(ny) < 0.99F
+        ? std::array<float, 3>{ 0.0F, 1.0F, 0.0F }
+        : std::array<float, 3>{ 1.0F, 0.0F, 0.0F };
+    std::array<float, 3> tangent{
+        axis[1] * nz - axis[2] * ny,
+        axis[2] * nx - axis[0] * nz,
+        axis[0] * ny - axis[1] * nx,
+    };
+    const float length = std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2]);
+    if (length > 0.0001F) {
+        tangent[0] /= length;
+        tangent[1] /= length;
+        tangent[2] /= length;
+    } else {
+        tangent = { 1.0F, 0.0F, 0.0F };
+    }
+    return { tangent[0], tangent[1], tangent[2], 1.0F };
+}
 
 void AppendVertex(
     kb::render::RenderMeshAssetData& mesh,
@@ -19,13 +40,18 @@ void AppendVertex(
     float nz,
     float u,
     float v) {
-    mesh.vertices.push_back(kb::render::RenderStaticMeshVertexP3N3UV2{
+    const std::array<float, 4> tangent = FallbackTangentForNormal(nx, ny, nz);
+    mesh.tangentVertices.push_back(kb::render::RenderStaticMeshVertexP3N3T4UV2{
         .x = x,
         .y = y,
         .z = z,
         .nx = nx,
         .ny = ny,
         .nz = nz,
+        .tx = tangent[0],
+        .ty = tangent[1],
+        .tz = tangent[2],
+        .tw = tangent[3],
         .u = u,
         .v = v,
     });
@@ -59,7 +85,7 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildSphere() 
     constexpr std::uint32_t kRings = 24U;
 
     kb::render::RenderMeshAssetData mesh;
-    mesh.vertices.reserve(static_cast<std::size_t>((kRings + 1U) * (kSegments + 1U)));
+    mesh.tangentVertices.reserve(static_cast<std::size_t>((kRings + 1U) * (kSegments + 1U)));
     mesh.indices32.reserve(static_cast<std::size_t>(kRings * kSegments * 6U));
 
     for (std::uint32_t ring = 0U; ring <= kRings; ++ring) {
@@ -118,7 +144,7 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildCube() {
                           float nx,
                           float ny,
                           float nz) {
-        const std::uint32_t base = static_cast<std::uint32_t>(mesh.vertices.size());
+        const std::uint32_t base = static_cast<std::uint32_t>(mesh.tangentVertices.size());
         AppendVertex(mesh, ax, ay, az, nx, ny, nz, 0.0F, 1.0F);
         AppendVertex(mesh, bx, by, bz, nx, ny, nz, 1.0F, 1.0F);
         AppendVertex(mesh, cx, cy, cz, nx, ny, nz, 1.0F, 0.0F);
@@ -134,6 +160,17 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildCube() {
     face(-1.0F, -1.0F, -1.0F, -1.0F, -1.0F, 1.0F, -1.0F, 1.0F, 1.0F, -1.0F, 1.0F, -1.0F, -1.0F, 0.0F, 0.0F);
 
     FinalizeMesh(mesh, 1.7321F);
+    return mesh;
+}
+
+kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildPlane() {
+    kb::render::RenderMeshAssetData mesh;
+    AppendVertex(mesh, -1.0F, -1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 1.0F);
+    AppendVertex(mesh, 1.0F, -1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 1.0F, 1.0F);
+    AppendVertex(mesh, 1.0F, 1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 1.0F, 0.0F);
+    AppendVertex(mesh, -1.0F, 1.0F, 0.0F, 0.0F, 0.0F, -1.0F, 0.0F, 0.0F);
+    mesh.indices32 = { 0U, 1U, 2U, 0U, 2U, 3U };
+    FinalizeMesh(mesh, 1.4143F);
     return mesh;
 }
 

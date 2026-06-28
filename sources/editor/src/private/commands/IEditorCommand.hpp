@@ -15,6 +15,9 @@ public:
     [[nodiscard]] virtual bool AffectsHierarchySelection() const noexcept {
         return true;
     }
+    [[nodiscard]] virtual bool AffectsOpenMaterialSource() const noexcept {
+        return false;
+    }
     [[nodiscard]] virtual bool Execute() = 0;
     [[nodiscard]] virtual bool Undo() = 0;
     [[nodiscard]] virtual bool Redo() = 0;

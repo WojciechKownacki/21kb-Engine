@@ -15,6 +15,7 @@
 #include "inspection/InspectorMaterialTextureSlotFormatter.hpp"
 #include "inspection/EditorValueFormatter.hpp"
 #include "inspection/MaterialAssetFormatter.hpp"
+#include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "rendering/EditorMeshPreviewService.hpp"
@@ -986,6 +987,79 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
     return "Missing material asset " + std::to_string(id);
 }
 
+[[nodiscard]] bool IsMaterialDocument(const kb::assets::AssetMetadata& metadata) noexcept;
+
+[[nodiscard]] bool IsBuiltInPbrMaterial(const kb::render::RenderMaterialAssetData& material) noexcept {
+    const bool builtInType =
+        material.materialType.empty() ||
+        (material.materialType == kb::render::kRenderMaterialAssetBuiltInPbrType &&
+            material.materialTypeVersion == kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion);
+    return builtInType && material.materialTypeAssetId == 0U && material.materialTypeAssetPath.empty();
+}
+
+[[nodiscard]] std::string MaterialGraphArtifactStatus(const kb::render::RenderMaterialAssetData& material) {
+    return material.graph.lastGoodArtifact.IsValid()
+        ? "artifact ready #" + std::to_string(material.graph.lastGoodArtifact.assetId)
+        : "artifact pending";
+}
+
+[[nodiscard]] std::string MaterialGraphDiagnosticStatus(const kb::render::RenderMaterialAssetData& material) {
+    const std::vector<kb::render::RenderMaterialGraphDiagnostic> diagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(material);
+    std::size_t errors = 0U;
+    std::size_t warnings = 0U;
+    for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : diagnostics) {
+        if (diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error) {
+            ++errors;
+        } else {
+            ++warnings;
+        }
+    }
+    if (errors != 0U) {
+        return "diagnostics error x" + std::to_string(errors);
+    }
+    if (warnings != 0U) {
+        return "diagnostics warning x" + std::to_string(warnings);
+    }
+    return "diagnostics ok";
+}
+
+[[nodiscard]] std::string MaterialSlotRuntimeStatus(const EditorSceneContext& sceneContext, std::uint64_t id) {
+    if (id == 0U) {
+        return "None";
+    }
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ id });
+    if (metadata == nullptr) {
+        return "Missing material asset " + std::to_string(id);
+    }
+    if (!IsMaterialDocument(*metadata)) {
+        return "Not a material";
+    }
+    const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext.ReadMaterialDocumentAsset(metadata->id);
+    if (!material.has_value()) {
+        return "Unreadable material";
+    }
+    if (IsBuiltInPbrMaterial(*material)) {
+        return "Built-in PBR | runtime ready";
+    }
+
+    std::string referenceStatus = "type reference ok";
+    if (metadata->type == "RenderMaterial") {
+        const kb::render::RenderMaterialTypeReferenceValidationResult reference =
+            kb::render::ValidateRenderMaterialTypeReference(*material, *metadata, manager);
+        if (!reference.Succeeded()) {
+            referenceStatus = "type reference error x" + std::to_string(reference.diagnostics.size());
+        }
+    }
+
+    return "Graph-backed | "
+        + referenceStatus
+        + " | "
+        + MaterialGraphDiagnosticStatus(*material)
+        + " | "
+        + MaterialGraphArtifactStatus(*material);
+}
+
 [[nodiscard]] std::optional<kb::render::RenderMeshAssetData> LoadMeshAssetData(const EditorSceneContext& sceneContext, std::uint64_t meshAssetId) {
     if (meshAssetId == 0U) {
         return std::nullopt;
@@ -1030,6 +1104,29 @@ void DrawEmpty(HDC dc, RECT content, const EditorTheme& theme) {
         return InspectorPropertyId::MeshRendererMaterialSlot6;
     case 7U:
         return InspectorPropertyId::MeshRendererMaterialSlot7;
+    default:
+        return InspectorPropertyId::None;
+    }
+}
+
+[[nodiscard]] InspectorPropertyId MeshRendererMaterialSlotPickerProperty(std::uint32_t slotIndex) noexcept {
+    switch (slotIndex) {
+    case 0U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker0;
+    case 1U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker1;
+    case 2U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker2;
+    case 3U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker3;
+    case 4U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker4;
+    case 5U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker5;
+    case 6U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker6;
+    case 7U:
+        return InspectorPropertyId::MeshRendererMaterialSlotPicker7;
     default:
         return InspectorPropertyId::None;
     }
@@ -1352,9 +1449,8 @@ void PaintMaterialAsset(HDC dc, RECT content, const EditorTheme& theme, const Ed
         return;
     }
     {
-        const bool editable = metadata.type == "RenderMaterial";
-        const auto property = [editable](InspectorPropertyId id) noexcept {
-            return editable ? id : InspectorPropertyId::None;
+        const auto property = [](InspectorPropertyId) noexcept {
+            return InspectorPropertyId::None;
         };
         SectionWriter section(dc, Rect(content.left, y, content.right, content.bottom), theme, inspector, InspectorSectionId::Material, HeroIconKind::AdjustmentsHorizontal, "Material");
         section.Float("Base R", FormatFloat(material->desc.baseColor[0]), property(InspectorPropertyId::MaterialBaseColorR));
@@ -1557,13 +1653,17 @@ void PaintMeshRendererSection(
     const std::vector<InspectorMeshRendererMaterialSlotRow> slotRows = InspectorMeshRendererMaterialSlotModel::Build(
         renderer,
         mesh,
-        [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
-    const InspectorMeshRendererMaterialSlotRow* primaryOverride = slotRows.empty() ? nullptr : &slotRows.front();
-    section.AssetField(
-        primaryOverride != nullptr ? primaryOverride->label : "Material Override",
-        primaryOverride != nullptr ? primaryOverride->value : "None",
-        primaryOverride != nullptr ? MeshRendererMaterialSlotProperty(primaryOverride->slotIndex) : InspectorPropertyId::MeshRendererMaterialSlot0,
-        InspectorPropertyId::MeshRendererMaterialOverridePicker);
+        [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); },
+        [&sceneContext](std::uint64_t materialId) { return MaterialSlotRuntimeStatus(sceneContext, materialId); });
+    for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
+        const std::string prefix = "Slot " + std::to_string(row.slotIndex + 1U);
+        section.Field(prefix + " Name", row.slotName);
+        section.Field(prefix + " Source", row.importedSourceName);
+        section.Field(prefix + " Default", row.defaultMaterialName);
+        section.AssetField(row.label, row.overrideMaterialName, MeshRendererMaterialSlotProperty(row.slotIndex), MeshRendererMaterialSlotPickerProperty(row.slotIndex));
+        section.Field(prefix + " Material Status", row.activeMaterialStatus);
+        section.Field(prefix + " Sections", row.sectionsUsingSlot);
+    }
     section.Bool("Casts Shadow", renderer.castsShadow);
     section.Bool("Receives Shadow", renderer.receivesShadow);
     y = section.Bottom() + kSectionGap;
@@ -2333,7 +2433,7 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 return hit;
             }
             y += kSectionGap;
-            if (InspectorPanelRenderer::Hit hit = HitTestMaterialSection(viewport, state, x, scrolledY, y); hit.kind != InspectorHitKind::None) {
+            if (InspectorPanelRenderer::Hit hit = HitSectionHeader(viewport, y, state, InspectorSectionId::Material, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }
             y += kSectionGap;
@@ -2462,13 +2562,24 @@ InspectorPanelRenderer::Hit InspectorPanelRenderer::HitTest(const RECT& content,
                 *renderer,
                 mesh,
                 [&sceneContext](std::uint64_t materialId) { return MaterialDisplayName(sceneContext, materialId); });
-            const InspectorPropertyId overrideProperty = slotRows.empty()
-                ? InspectorPropertyId::MeshRendererMaterialSlot0
-                : MeshRendererMaterialSlotProperty(slotRows.front().slotIndex);
-            if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(RowRect(viewport, y), InspectorSectionId::MeshRenderer, overrideProperty, InspectorPropertyId::MeshRendererMaterialOverridePicker, x, scrolledY); hit.kind != InspectorHitKind::None) {
-                return hit;
+            for (const InspectorMeshRendererMaterialSlotRow& row : slotRows) {
+                AdvanceRow(y);
+                AdvanceRow(y);
+                AdvanceRow(y);
+                if (InspectorPanelRenderer::Hit hit = HitAssetFieldRow(
+                        RowRect(viewport, y),
+                        InspectorSectionId::MeshRenderer,
+                        MeshRendererMaterialSlotProperty(row.slotIndex),
+                        MeshRendererMaterialSlotPickerProperty(row.slotIndex),
+                        x,
+                        scrolledY);
+                    hit.kind != InspectorHitKind::None) {
+                    return hit;
+                }
+                AdvanceRow(y);
+                AdvanceRow(y);
+                AdvanceRow(y);
             }
-            AdvanceRow(y);
             if (InspectorPanelRenderer::Hit hit = HitBool(RowRect(viewport, y), InspectorSectionId::MeshRenderer, InspectorPropertyId::None, x, scrolledY); hit.kind != InspectorHitKind::None) {
                 return hit;
             }

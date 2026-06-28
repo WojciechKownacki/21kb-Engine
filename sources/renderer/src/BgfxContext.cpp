@@ -5,16 +5,74 @@
 #include <bgfx/platform.h>
 #include <cstdarg>
 #include <cstdlib>
+#include <fstream>
+#include <string>
+#include <string_view>
 
 #if defined(_WIN32)
 #include <Windows.h>
 #endif
 
 namespace kb::render {
+namespace {
+
+[[nodiscard]] const char* BgfxFatalCodeName(bgfx::Fatal::Enum code) noexcept {
+    switch (code) {
+    case bgfx::Fatal::DebugCheck:
+        return "DebugCheck";
+    case bgfx::Fatal::InvalidShader:
+        return "InvalidShader";
+    case bgfx::Fatal::UnableToInitialize:
+        return "UnableToInitialize";
+    case bgfx::Fatal::UnableToCreateTexture:
+        return "UnableToCreateTexture";
+    case bgfx::Fatal::DeviceLost:
+        return "DeviceLost";
+    case bgfx::Fatal::Count:
+        return "Count";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] std::string BgfxLogPath() {
+#if defined(_WIN32)
+    char tempPath[MAX_PATH]{};
+    if (GetTempPathA(MAX_PATH, tempPath) != 0U) {
+        return std::string{ tempPath } + "21kb_bgfx_fatal.log";
+    }
+    return "21kb_bgfx_fatal.log";
+#else
+    return "/tmp/21kb_bgfx_fatal.log";
+#endif
+}
+
+void AppendBgfxLog(std::string_view text) {
+    std::ofstream output(BgfxLogPath(), std::ios::out | std::ios::app);
+    output << text;
+#if defined(_WIN32)
+    OutputDebugStringA(std::string{ text }.c_str());
+#endif
+}
+
+void WriteBgfxFatalLog(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) {
+    std::string text = "\nbgfx fatal ";
+    text += BgfxFatalCodeName(code);
+    text += " at ";
+    text += filePath != nullptr ? filePath : "<unknown>";
+    text += ":";
+    text += std::to_string(line);
+    text += "\n";
+    text += message != nullptr ? message : "<no message>";
+    text += "\n";
+    AppendBgfxLog(text);
+}
+
+} // namespace
 
 class BgfxEngineCallback final : public bgfx::CallbackI {
 public:
     void fatal(const char* filePath, std::uint16_t line, bgfx::Fatal::Enum code, const char* message) override {
+        WriteBgfxFatalLog(filePath, line, code, message);
 #if defined(_WIN32)
         if (code == bgfx::Fatal::DeviceLost) {
             MessageBoxA(nullptr, message != nullptr ? message : "bgfx device lost", "21kb Engine - bgfx fatal", MB_OK | MB_ICONERROR);

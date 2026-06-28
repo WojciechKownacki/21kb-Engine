@@ -10,7 +10,11 @@
 #include "app/pointer/EditorSetCursorRouter.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "app/EditorWindowInvalidator.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 
+#include <algorithm>
+#include <optional>
 #include <windowsx.h>
 
 namespace kb::editor {
@@ -144,10 +148,24 @@ LRESULT EditorWindowPointerHandler::HandleLeftButtonUp(HWND messageWindow, LPARA
     return 0;
 }
 
-LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow) {
+LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPARAM lparam) {
     if (sceneContext_.IsMaterialGraphPanning()) {
+        const int x = GET_X_LPARAM(lparam);
+        const int y = GET_Y_LPARAM(lparam);
+        const bool openMenu = !sceneContext_.HasMaterialGraphPanMoved();
         static_cast<void>(sceneContext_.EndMaterialGraphPan());
         ReleaseCapture();
+        const std::optional<RECT> materialEditorContent =
+            EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        if (openMenu && materialEditorContent.has_value()) {
+            const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+            if (MaterialEditorPanelPointInRect(layout.graphCanvas, x, y)) {
+                const float zoom = std::max(0.1F, sceneContext_.MaterialGraphZoom());
+                const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext_.MaterialGraphPanX()) / zoom);
+                const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext_.MaterialGraphPanY()) / zoom);
+                static_cast<void>(sceneContext_.OpenMaterialGraphContextMenu(sceneContext_.MaterialEditor().OpenAssetId(), x, y, graphX, graphY));
+            }
+        }
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return 0;
     }

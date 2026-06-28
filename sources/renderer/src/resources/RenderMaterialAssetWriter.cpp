@@ -60,20 +60,70 @@ void WriteGraph(std::ostream& output, const RenderMaterialGraphDocument& graph) 
     if (graph.nodes.empty() && graph.links.empty()) {
         return;
     }
-    output << "graphVersion " << (graph.documentVersion == 0U ? kRenderMaterialGraphDocumentVersion : graph.documentVersion) << '\n';
-    for (const RenderMaterialGraphNode& node : graph.nodes) {
-        output << "graphNode "
-            << node.id << ' '
-            << RenderMaterialGraphNodeKindName(node.kind) << ' '
-            << node.positionX << ' '
-            << node.positionY << '\n';
+    WriteRenderMaterialGraphDocument(output, graph);
+}
+
+[[nodiscard]] const char* MaterialParameterTypeName(RenderMaterialParameterType type) noexcept {
+    switch (type) {
+    case RenderMaterialParameterType::Scalar:
+        return "Scalar";
+    case RenderMaterialParameterType::Vec3:
+        return "Vec3";
+    case RenderMaterialParameterType::Vec4:
+        return "Vec4";
+    case RenderMaterialParameterType::Color:
+        return "Color";
+    case RenderMaterialParameterType::Enum:
+        return "Enum";
+    case RenderMaterialParameterType::Bool:
+        return "Bool";
+    case RenderMaterialParameterType::Texture:
+        return "Texture";
     }
-    for (const RenderMaterialGraphLink& link : graph.links) {
-        output << "graphLink "
-            << link.fromNodeId << ' '
-            << link.fromPin << ' '
-            << link.toNodeId << ' '
-            << link.toPin << '\n';
+    return "Scalar";
+}
+
+void WriteGraphParameterValues(std::ostream& output, const RenderMaterialAssetData& asset) {
+    for (const RenderMaterialGraphParameterValue& value : asset.graphParameterValues) {
+        if (value.stableId.empty()) {
+            continue;
+        }
+        output << "graphParameterValue " << value.stableId << ' ' << MaterialParameterTypeName(value.type);
+        switch (value.type) {
+        case RenderMaterialParameterType::Scalar:
+            output << ' ';
+            WriteFloat(output, value.numbers[0]);
+            break;
+        case RenderMaterialParameterType::Vec3:
+            output << ' ';
+            WriteFloat(output, value.numbers[0]);
+            output << ' ';
+            WriteFloat(output, value.numbers[1]);
+            output << ' ';
+            WriteFloat(output, value.numbers[2]);
+            break;
+        case RenderMaterialParameterType::Vec4:
+        case RenderMaterialParameterType::Color:
+            output << ' ';
+            WriteFloat(output, value.numbers[0]);
+            output << ' ';
+            WriteFloat(output, value.numbers[1]);
+            output << ' ';
+            WriteFloat(output, value.numbers[2]);
+            output << ' ';
+            WriteFloat(output, value.numbers[3]);
+            break;
+        case RenderMaterialParameterType::Bool:
+            output << ' ' << (value.boolValue ? "true" : "false");
+            break;
+        case RenderMaterialParameterType::Enum:
+            output << ' ' << (value.text.empty() ? "_" : value.text);
+            break;
+        case RenderMaterialParameterType::Texture:
+            output << ' ' << value.assetId;
+            break;
+        }
+        output << '\n';
     }
 }
 
@@ -651,9 +701,22 @@ void RenderMaterialAssetWriter::Write(std::ostream& output, const RenderMaterial
     output << "version " << (asset.documentVersion == 0U ? kRenderMaterialAssetDocumentVersion : asset.documentVersion) << '\n';
     output << "materialType " << (asset.materialType.empty() ? kRenderMaterialAssetBuiltInPbrType : asset.materialType) << '\n';
     output << "materialTypeVersion " << (asset.materialTypeVersion == 0U ? kRenderMaterialAssetBuiltInPbrTypeVersion : asset.materialTypeVersion) << '\n';
+    if (asset.materialTypeAssetId != 0U) {
+        output << "materialTypeAssetId " << asset.materialTypeAssetId << '\n';
+    }
+    if (!asset.materialTypeAssetPath.empty()) {
+        output << "materialTypeAsset " << asset.materialTypeAssetPath << '\n';
+    }
+    if (asset.graphSourceAssetId != 0U) {
+        output << "graphSourceAssetId " << asset.graphSourceAssetId << '\n';
+    }
+    if (!asset.graphSourceAssetPath.empty()) {
+        output << "graphSourceAsset " << asset.graphSourceAssetPath << '\n';
+    }
     for (const IRenderMaterialAssetPropertyWriter* writer : PropertyWriters()) {
         writer->Write(output, asset);
     }
+    WriteGraphParameterValues(output, asset);
     WriteGraph(output, asset.graph);
 }
 

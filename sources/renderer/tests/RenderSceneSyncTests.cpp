@@ -228,6 +228,42 @@ void RunSyncEntitiesUpdatesOnlyRequestedProxyTest() {
     Require(NearlyEqual(secondProxy->desc.model[12], 2.0F), "Incremental sync updated an entity that was not requested");
 }
 
+void RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest() {
+    kb::scene::Scene scene;
+    const kb::scene::SceneEntity mesh = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "MaterialDirtyMesh",
+        .transform = TransformAt(1.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(mesh, kb::scene::MeshRendererComponent{
+        .meshAssetId = 10U,
+        .materialAssetId = 20U,
+    });
+
+    RenderScene renderScene;
+    EcsRenderSceneSynchronizer synchronizer;
+    synchronizer.Sync(scene, renderScene);
+    const std::vector<SceneRenderDrawGroup>& initialGroups = renderScene.DrawGroups();
+    Require(initialGroups.size() == 1U && initialGroups[0].materialAssetId == 20U, "KBMAT-UE-0012: setup did not build the initial material draw group");
+    renderScene.ClearDirty();
+
+    static_cast<void>(scene.Runtime().Update(0.016F));
+    kb::scene::MeshRendererComponent* renderer = scene.Components().MeshRenderers().TryGet(mesh);
+    Require(renderer != nullptr, "KBMAT-UE-0012: setup lost the mesh renderer");
+    renderer->materialAssetId = 30U;
+    scene.Components().MeshRenderers().MarkModified(mesh);
+    Require(scene.Runtime().MeshRendererRenderProxyUpdateEntities().size() == 1U, "KBMAT-UE-0012: MeshRenderer::MarkModified did not enqueue a render proxy update");
+
+    synchronizer.SyncMeshRendererUpdates(scene, renderScene);
+    const MeshRenderProxy* proxy = renderScene.FindMeshByEntity(mesh.Id());
+    Require(proxy != nullptr, "KBMAT-UE-0012: mesh renderer update sync lost the mesh proxy");
+    Require(HasDirtyFlag(proxy->dirty, RenderProxyDirtyFlag::Material), "KBMAT-UE-0012: mesh renderer material change did not mark the render proxy Material dirty");
+    Require(!HasDirtyFlag(proxy->dirty, RenderProxyDirtyFlag::Mesh), "KBMAT-UE-0012: pure material change should not dirty the mesh payload");
+    Require(!HasDirtyFlag(proxy->dirty, RenderProxyDirtyFlag::Transform), "KBMAT-UE-0012: pure material change should not dirty the transform payload");
+
+    const std::vector<SceneRenderDrawGroup>& materialGroups = renderScene.DrawGroups();
+    Require(materialGroups.size() == 1U && materialGroups[0].materialAssetId == 30U, "KBMAT-UE-0012: material dirty sync did not rebuild draw groups with the new material");
+}
+
 void RunSyncTransformUpdatesUsesRuntimeCacheTest() {
     kb::scene::Scene scene;
     const kb::scene::SceneObject first = scene.Entities().CreateObject(kb::scene::SceneObjectDesc{
@@ -369,7 +405,7 @@ void RunRenderResourceMapRequiresExplicitBindingsTest() {
     SceneRenderResourceMapStats stats = resources.Stats();
     Require(stats.meshBindingCount == 1U, "SceneRenderResourceMap stats did not count mesh bindings");
     Require(stats.materialBindingCount == 1U, "SceneRenderResourceMap stats did not count material bindings");
-    Require(stats.textureBindingCount == 1U, "SceneRenderResourceMap stats did not count texture bindings");
+    Require(stats.textureBindingCount == 2U, "SceneRenderResourceMap stats did not count color-space texture bindings");
 
     resources.UnbindMesh(42U);
     resources.UnbindMaterial(7U);
@@ -1800,6 +1836,7 @@ void RunRenderSceneSyncTests() {
     RunRenderSceneIgnoresLightsWithoutBasicLightingProviderTest();
     RunTracksUpdatesWithoutReplacingProxyTest();
     RunSyncEntitiesUpdatesOnlyRequestedProxyTest();
+    RunMeshRendererModifiedRuntimeQueueInvalidatesMaterialProxyTest();
     RunSyncTransformUpdatesUsesRuntimeCacheTest();
     RunSyncEntitiesRemovesDestroyedProxyTest();
     RunVisibilityKeepsProxyButRemovesSnapshotInstanceTest();

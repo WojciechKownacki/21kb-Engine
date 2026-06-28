@@ -6,11 +6,26 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <bgfx/bgfx.h>
 
 namespace kb::render {
+namespace {
+
+[[nodiscard]] bool IsRuntimeTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
+}
+
+[[nodiscard]] std::filesystem::path ResolveAssetPhysicalPath(const kb::assets::AssetManager& manager, const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.physicalPath.empty()) {
+        return metadata.physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+} // namespace
 
 void RuntimeTextureResourceEnsurer::Ensure(
     const RuntimeRenderResourceEnsureContext& context,
@@ -34,7 +49,7 @@ void RuntimeTextureResourceEnsurer::Ensure(
         const kb::assets::AssetId assetId{ textureAssetId };
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetId);
         auto cacheIt = textures.find(runtimeKey);
-        if (metadata == nullptr || metadata->type != "RenderTexture") {
+        if (metadata == nullptr || !IsRuntimeTextureAsset(*metadata)) {
             if (cacheIt != textures.end()) {
                 context.sceneRenderer.ResourceMap().UnbindTextureHandle(cacheIt->second.handle);
                 context.sceneRenderer.Resources().DestroyTexture(cacheIt->second.handle);
@@ -60,8 +75,11 @@ void RuntimeTextureResourceEnsurer::Ensure(
             textures.erase(cacheIt);
         }
 
-        const kb::assets::AssetHandle<RenderTextureAssetData> asset = manager.Load<RenderTextureAssetData>(assetId);
-        if (!asset.IsLoaded() || asset->rgba8.empty()) {
+        const std::filesystem::path texturePath = ResolveAssetPhysicalPath(manager, *metadata);
+        const std::optional<RenderTextureAssetData> asset = texturePath.empty()
+            ? std::nullopt
+            : RenderTextureAssetLoader::LoadTexture(texturePath);
+        if (!asset.has_value() || asset->rgba8.empty()) {
             context.sceneRenderer.ResourceMap().UnbindTexture(textureAssetId, colorSpace);
             return;
         }
@@ -98,11 +116,11 @@ void RuntimeTextureResourceEnsurer::Ensure(
         if (material == nullptr) {
             continue;
         }
-        ensureTexture(material->albedoTextureAssetId, RenderTextureColorSpace::Srgb);
-        ensureTexture(material->normalTextureAssetId, RenderTextureColorSpace::Linear);
-        ensureTexture(material->metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear);
-        ensureTexture(material->occlusionTextureAssetId, RenderTextureColorSpace::Linear);
-        ensureTexture(material->emissiveTextureAssetId, RenderTextureColorSpace::Srgb);
+        for (const RenderMaterialTextureSlotBinding slot : RenderMaterialTextureSlots(*material)) {
+            if (slot.policy.runtimeSupport == RenderMaterialFeatureSupport::Supported) {
+                ensureTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
+            }
+        }
     }
 }
 

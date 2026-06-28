@@ -11,6 +11,7 @@ public:
     [[nodiscard]] static RenderMaterialAssetParseResult LoadWithDiagnostics(const std::filesystem::path& path);
     [[nodiscard]] static RenderMaterialAssetParseResult LoadWithDiagnostics(const std::filesystem::path& path, kb::assets::AssetId assetId);
     [[nodiscard]] static RenderMaterialAssetParseResult ParseWithDiagnostics(std::istream& input);
+    [[nodiscard]] static RenderMaterialAssetParseResult ParseWithDiagnostics(std::istream& input, const RenderMaterialAssetParseSourceContext& sourceContext);
 };
 
 } // namespace kb::render

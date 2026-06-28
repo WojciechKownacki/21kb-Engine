@@ -5,6 +5,7 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,6 +15,8 @@ class Scene;
 }
 
 namespace kb::editor {
+
+class MaterialEditorState;
 
 class IEditorMaterialAssetPropertyEdit {
 public:
@@ -152,6 +155,7 @@ public:
     [[nodiscard]] std::string_view Label() const noexcept override;
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
     [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
+    [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
     [[nodiscard]] bool Execute() override;
     [[nodiscard]] bool Undo() override;
     [[nodiscard]] bool Redo() override;
@@ -171,6 +175,45 @@ private:
     std::string label_;
     kb::render::RenderMaterialAssetData before_;
     kb::render::RenderMaterialAssetData after_;
+};
+
+class EditorMaterialWorkingCopyEditCommand final : public IEditorCommand {
+public:
+    [[nodiscard]] static std::unique_ptr<EditorMaterialWorkingCopyEditCommand> Create(
+        MaterialEditorState& editor,
+        kb::assets::AssetId materialId,
+        std::string label,
+        kb::render::RenderMaterialAssetData before,
+        kb::render::RenderMaterialAssetData after,
+        std::uint32_t beforeSelectedNodeId,
+        std::uint32_t afterSelectedNodeId);
+
+    [[nodiscard]] std::string_view Label() const noexcept override;
+    [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
+    [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
+    [[nodiscard]] bool Execute() override;
+    [[nodiscard]] bool Undo() override;
+    [[nodiscard]] bool Redo() override;
+
+private:
+    EditorMaterialWorkingCopyEditCommand(
+        MaterialEditorState& editor,
+        kb::assets::AssetId materialId,
+        std::string label,
+        kb::render::RenderMaterialAssetData before,
+        kb::render::RenderMaterialAssetData after,
+        std::uint32_t beforeSelectedNodeId,
+        std::uint32_t afterSelectedNodeId);
+
+    [[nodiscard]] bool Apply(const kb::render::RenderMaterialAssetData& asset, std::uint32_t selectedNodeId);
+
+    MaterialEditorState& editor_;
+    kb::assets::AssetId materialId_{};
+    std::string label_;
+    kb::render::RenderMaterialAssetData before_;
+    kb::render::RenderMaterialAssetData after_;
+    std::uint32_t beforeSelectedNodeId_ = 0U;
+    std::uint32_t afterSelectedNodeId_ = 0U;
 };
 
 } // namespace kb::editor

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <istream>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -42,6 +43,98 @@ namespace {
     return result.ec == std::errc{} && result.ptr == end;
 }
 
+[[nodiscard]] bool ParseUInt64(std::string_view text, std::uint64_t& output) noexcept {
+    text = Trim(text);
+    const char* begin = text.data();
+    const char* end = text.data() + text.size();
+    const std::from_chars_result result = std::from_chars(begin, end, output);
+    return result.ec == std::errc{} && result.ptr == end;
+}
+
+[[nodiscard]] bool ParseFloat(std::string_view text, float& output) noexcept {
+    text = Trim(text);
+    const char* begin = text.data();
+    const char* end = text.data() + text.size();
+    const std::from_chars_result result = std::from_chars(begin, end, output);
+    return result.ec == std::errc{} && result.ptr == end;
+}
+
+[[nodiscard]] bool ParseBoolToken(std::string_view text, bool& output) noexcept {
+    text = Trim(text);
+    if (text == "true" || text == "1" || text == "yes") {
+        output = true;
+        return true;
+    }
+    if (text == "false" || text == "0" || text == "no") {
+        output = false;
+        return true;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ParseMaterialParameterType(std::string_view text, RenderMaterialParameterType& output) noexcept {
+    if (text == "Scalar") output = RenderMaterialParameterType::Scalar;
+    else if (text == "Vec3") output = RenderMaterialParameterType::Vec3;
+    else if (text == "Vec4") output = RenderMaterialParameterType::Vec4;
+    else if (text == "Color") output = RenderMaterialParameterType::Color;
+    else if (text == "Enum") output = RenderMaterialParameterType::Enum;
+    else if (text == "Bool") output = RenderMaterialParameterType::Bool;
+    else if (text == "Texture") output = RenderMaterialParameterType::Texture;
+    else return false;
+    return true;
+}
+
+[[nodiscard]] bool ParseGraphParameterValue(std::string_view rest, RenderMaterialGraphParameterValue& output) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string stableId;
+    std::string typeName;
+    if (!(stream >> stableId >> typeName) || stableId.empty()) {
+        return false;
+    }
+    RenderMaterialParameterType type = RenderMaterialParameterType::Scalar;
+    if (!ParseMaterialParameterType(typeName, type)) {
+        return false;
+    }
+
+    output = RenderMaterialGraphParameterValue{
+        .stableId = std::move(stableId),
+        .type = type,
+    };
+    std::string token;
+    switch (type) {
+    case RenderMaterialParameterType::Scalar:
+        return (stream >> token) && ParseFloat(token, output.numbers[0]);
+    case RenderMaterialParameterType::Vec3:
+        for (std::size_t index = 0U; index < 3U; ++index) {
+            if (!(stream >> token) || !ParseFloat(token, output.numbers[index])) {
+                return false;
+            }
+        }
+        return true;
+    case RenderMaterialParameterType::Vec4:
+    case RenderMaterialParameterType::Color:
+        for (std::size_t index = 0U; index < 4U; ++index) {
+            if (!(stream >> token) || !ParseFloat(token, output.numbers[index])) {
+                return false;
+            }
+        }
+        return true;
+    case RenderMaterialParameterType::Bool:
+        return (stream >> token) && ParseBoolToken(token, output.boolValue);
+    case RenderMaterialParameterType::Enum:
+        if (!(stream >> output.text)) {
+            return false;
+        }
+        if (output.text == "_") {
+            output.text.clear();
+        }
+        return true;
+    case RenderMaterialParameterType::Texture:
+        return (stream >> token) && ParseUInt64(token, output.assetId);
+    }
+    return false;
+}
+
 [[nodiscard]] bool IsSupportedMaterialType(std::string_view text) noexcept {
     return text == kRenderMaterialAssetBuiltInPbrType;
 }
@@ -55,6 +148,10 @@ void AttachContext(RenderMaterialAssetParseResult& result, const std::filesystem
         diagnostic.path = path;
         diagnostic.assetId = assetId;
     }
+}
+
+void AttachContext(RenderMaterialAssetParseResult& result, const RenderMaterialAssetParseSourceContext& sourceContext) {
+    AttachContext(result, sourceContext.path, sourceContext.assetId);
 }
 
 [[nodiscard]] bool HasError(const std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) noexcept {
@@ -358,15 +455,19 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::LoadWithDiagnostics(co
             },
         };
     }
-    RenderMaterialAssetParseResult result = ParseWithDiagnostics(input);
-    AttachContext(result, path, assetId);
-    return result;
+    return ParseWithDiagnostics(input, RenderMaterialAssetParseSourceContext{
+        .assetId = assetId,
+        .path = path,
+    });
 }
 
 RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(std::istream& input) {
     RenderMaterialAssetData asset{};
     std::vector<RenderMaterialAssetParseDiagnostic> diagnostics;
     bool sawMaterialProperty = false;
+    std::size_t graphLastGoodArtifactLine = 0U;
+    std::size_t materialTypeLine = 0U;
+    std::size_t materialTypeVersionLine = 0U;
 
     std::string line;
     std::size_t lineNumber = 0U;
@@ -409,22 +510,19 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
         }
 
         if (keyword == "materialType") {
-            if (rest.empty() || !IsSupportedMaterialType(rest)) {
+            if (rest.empty()) {
                 diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-                    .code = rest.empty()
-                        ? RenderMaterialAssetParseDiagnosticCode::MissingMaterialType
-                        : RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialType,
+                    .code = RenderMaterialAssetParseDiagnosticCode::MissingMaterialType,
                     .line = lineNumber,
                     .field = "materialType",
-                    .message = rest.empty()
-                        ? "Material type is required for material assets."
-                        : "Unsupported material type '" + std::string{ rest } + "'.",
+                    .message = "Material type is required for material assets.",
                     .text = std::string{ trimmed },
                 });
                 continue;
             }
             asset.materialType = std::string{ rest };
             asset.hasExplicitMaterialType = true;
+            materialTypeLine = lineNumber;
             continue;
         }
 
@@ -440,94 +538,191 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
                 });
                 continue;
             }
-            const std::uint32_t supportedVersion = SupportedMaterialTypeVersion(asset.materialType);
-            if (supportedVersion == 0U || version > supportedVersion) {
+            asset.materialTypeVersion = version;
+            asset.hasExplicitMaterialTypeVersion = true;
+            materialTypeVersionLine = lineNumber;
+            continue;
+        }
+
+        if (keyword == "materialTypeAssetId") {
+            std::uint64_t assetId = 0U;
+            if (!ParseUInt64(rest, assetId) || assetId == 0U) {
                 diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-                    .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialTypeVersion,
+                    .code = RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue,
                     .line = lineNumber,
-                    .field = "materialTypeVersion",
-                    .message = "Unsupported material type version " + std::to_string(version) + " for '" + asset.materialType + "'.",
+                    .field = "materialTypeAssetId",
+                    .message = "Invalid material type asset id.",
                     .text = std::string{ trimmed },
                 });
                 continue;
             }
-            asset.materialTypeVersion = version;
-            asset.hasExplicitMaterialTypeVersion = true;
-            continue;
-        }
-
-        const RenderMaterialGraphFieldParseResult graphField = RenderMaterialGraphFieldParser::Apply(keyword, rest, lineNumber, asset, diagnostics);
-        if (graphField != RenderMaterialGraphFieldParseResult::Unknown) {
+            asset.materialTypeAssetId = assetId;
             sawMaterialProperty = true;
             continue;
         }
 
-        if (!RenderMaterialAssetFieldParser::Apply(keyword, rest, asset)) {
-            const bool known = RenderMaterialAssetFieldParser::IsKnown(keyword);
-            const RenderMaterialAssetParseDiagnosticCode code = !known
-                ? RenderMaterialAssetParseDiagnosticCode::UnknownField
-                : IsEnumMaterialField(keyword)
-                    ? RenderMaterialAssetParseDiagnosticCode::InvalidEnum
-                    : IsNumericMaterialField(keyword)
-                        ? RenderMaterialAssetParseDiagnosticCode::InvalidFloat
-                        : RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue;
-            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-                .code = code,
-                .line = lineNumber,
-                .field = std::string{ keyword },
-                .message = !known
-                    ? "Unknown material field '" + std::string{ keyword } + "'."
-                    : code == RenderMaterialAssetParseDiagnosticCode::InvalidEnum
-                        ? "Invalid enum value for material field '" + std::string{ keyword } + "'."
-                        : code == RenderMaterialAssetParseDiagnosticCode::InvalidFloat
-                            ? "Invalid float value for material field '" + std::string{ keyword } + "'."
-                            : "Invalid value for material field '" + std::string{ keyword } + "'.",
-                .text = std::string{ trimmed },
-            });
+        if (keyword == "materialTypeAsset") {
+            if (rest.empty()) {
+                diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                    .code = RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue,
+                    .line = lineNumber,
+                    .field = "materialTypeAsset",
+                    .message = "Invalid material type asset path.",
+                    .text = std::string{ trimmed },
+                });
+                continue;
+            }
+            asset.materialTypeAssetPath = std::string{ rest };
+            sawMaterialProperty = true;
             continue;
         }
 
-        if (IsOutOfRangeMaterialField(keyword, asset)) {
-            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
-                .code = RenderMaterialAssetParseDiagnosticCode::OutOfRange,
-                .line = lineNumber,
-                .field = std::string{ keyword },
-                .message = "Material field '" + std::string{ keyword } + "' is outside the supported built-in PBR range.",
-                .text = std::string{ trimmed },
-            });
+        if (keyword == "graphSourceAssetId") {
+            std::uint64_t assetId = 0U;
+            if (!ParseUInt64(rest, assetId) || assetId == 0U) {
+                diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                    .code = RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue,
+                    .line = lineNumber,
+                    .field = "graphSourceAssetId",
+                    .message = "Invalid material graph source asset id.",
+                    .text = std::string{ trimmed },
+                });
+                continue;
+            }
+            asset.graphSourceAssetId = assetId;
+            sawMaterialProperty = true;
             continue;
         }
 
-        if (IsActiveUnsupportedAdvancedField(keyword, asset)) {
+        if (keyword == "graphSourceAsset") {
+            if (rest.empty()) {
+                diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                    .code = RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue,
+                    .line = lineNumber,
+                    .field = "graphSourceAsset",
+                    .message = "Invalid material graph source asset path.",
+                    .text = std::string{ trimmed },
+                });
+                continue;
+            }
+            asset.graphSourceAssetPath = std::string{ rest };
+            sawMaterialProperty = true;
+            continue;
+        }
+
+        const RenderMaterialTypeSchema& materialTypeSchema = GetBuiltInPbrMaterialTypeSchema();
+        if (const RenderMaterialTypeMigrationOperation* removed = FindMaterialTypeMigration(
+                materialTypeSchema,
+                RenderMaterialTypeMigrationOperationKind::RemoveUnsupported,
+                keyword)) {
             diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
                 .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField,
                 .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
                 .line = lineNumber,
                 .field = std::string{ keyword },
-                .message = "Material field '" + std::string{ keyword } + "' is parsed but ignored by the current runtime shader path.",
+                .message = "Material field '" + std::string{ keyword } + "' was removed by the material type migration table. " + std::string{ removed->reason },
+                .text = std::string{ trimmed },
+            });
+            continue;
+        }
+
+        const RenderMaterialTypeMigrationOperation* rename = FindMaterialTypeMigration(
+            materialTypeSchema,
+            RenderMaterialTypeMigrationOperationKind::RenameParameter,
+            keyword);
+        const std::string_view materialKeyword = rename == nullptr ? keyword : rename->targetField;
+        if ((materialKeyword == "graphLastGoodArtifactAssetId" || materialKeyword == "graphLastGoodArtifactHash") && graphLastGoodArtifactLine == 0U) {
+            graphLastGoodArtifactLine = lineNumber;
+        }
+
+        if (materialKeyword == "graphParameterValue") {
+            RenderMaterialGraphParameterValue value{};
+            if (!ParseGraphParameterValue(rest, value)) {
+                diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                    .code = RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue,
+                    .line = lineNumber,
+                    .field = "graphParameterValue",
+                    .message = "Invalid graph material parameter value.",
+                    .text = std::string{ trimmed },
+                });
+                continue;
+            }
+            asset.graphParameterValues.push_back(std::move(value));
+            sawMaterialProperty = true;
+            continue;
+        }
+
+        const RenderMaterialGraphFieldParseResult graphField = RenderMaterialGraphFieldParser::Apply(materialKeyword, rest, lineNumber, asset, diagnostics);
+        if (graphField != RenderMaterialGraphFieldParseResult::Unknown) {
+            sawMaterialProperty = true;
+            continue;
+        }
+
+        if (!RenderMaterialAssetFieldParser::Apply(materialKeyword, rest, asset)) {
+            const bool known = RenderMaterialAssetFieldParser::IsKnown(materialKeyword);
+            const RenderMaterialAssetParseDiagnosticCode code = !known
+                ? RenderMaterialAssetParseDiagnosticCode::UnknownField
+                : IsEnumMaterialField(materialKeyword)
+                    ? RenderMaterialAssetParseDiagnosticCode::InvalidEnum
+                    : IsNumericMaterialField(materialKeyword)
+                        ? RenderMaterialAssetParseDiagnosticCode::InvalidFloat
+                        : RenderMaterialAssetParseDiagnosticCode::InvalidFieldValue;
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .code = code,
+                .line = lineNumber,
+                .field = std::string{ materialKeyword },
+                .message = !known
+                    ? "Unknown material field '" + std::string{ keyword } + "'."
+                    : code == RenderMaterialAssetParseDiagnosticCode::InvalidEnum
+                        ? "Invalid enum value for material field '" + std::string{ materialKeyword } + "'."
+                        : code == RenderMaterialAssetParseDiagnosticCode::InvalidFloat
+                            ? "Invalid float value for material field '" + std::string{ materialKeyword } + "'."
+                            : "Invalid value for material field '" + std::string{ materialKeyword } + "'.",
+                .text = std::string{ trimmed },
+            });
+            continue;
+        }
+
+        if (IsOutOfRangeMaterialField(materialKeyword, asset)) {
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .code = RenderMaterialAssetParseDiagnosticCode::OutOfRange,
+                .line = lineNumber,
+                .field = std::string{ materialKeyword },
+                .message = "Material field '" + std::string{ materialKeyword } + "' is outside the supported built-in PBR range.",
+                .text = std::string{ trimmed },
+            });
+            continue;
+        }
+
+        if (IsActiveUnsupportedAdvancedField(materialKeyword, asset)) {
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedAdvancedField,
+                .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
+                .line = lineNumber,
+                .field = std::string{ materialKeyword },
+                .message = "Material field '" + std::string{ materialKeyword } + "' is parsed but ignored by the current runtime shader path.",
                 .text = std::string{ trimmed },
             });
         }
 
-        if (IsTextureColorSpaceExpectationField(keyword, asset)) {
-            const RenderMaterialTypeSchema& schema = GetBuiltInPbrMaterialTypeSchema();
-            std::string_view pathFieldName = keyword;
-            if (keyword == "albedoTextureAssetId" || keyword == "baseColorTextureAssetId") pathFieldName = "albedoTexture";
-            else if (keyword == "normalTextureAssetId") pathFieldName = "normalTexture";
-            else if (keyword == "metallicRoughnessTextureAssetId") pathFieldName = "metallicRoughnessTexture";
-            else if (keyword == "occlusionTextureAssetId") pathFieldName = "occlusionTexture";
-            else if (keyword == "emissiveTextureAssetId") pathFieldName = "emissiveTexture";
-            else if (keyword == "clearcoatTextureAssetId") pathFieldName = "clearcoatTexture";
-            else if (keyword == "clearcoatRoughnessTextureAssetId") pathFieldName = "clearcoatRoughnessTexture";
-            else if (keyword == "sheenColorTextureAssetId") pathFieldName = "sheenColorTexture";
-            else if (keyword == "transmissionTextureAssetId") pathFieldName = "transmissionTexture";
-            else if (keyword == "thicknessTextureAssetId") pathFieldName = "thicknessTexture";
-            else if (keyword == "anisotropyTextureAssetId") pathFieldName = "anisotropyTexture";
-            else if (keyword == "decalTextureAssetId") pathFieldName = "decalTexture";
-            else if (keyword == "layerMaskTextureAssetId") pathFieldName = "layerMaskTexture";
+        if (IsTextureColorSpaceExpectationField(materialKeyword, asset)) {
+            std::string_view pathFieldName = materialKeyword;
+            if (materialKeyword == "albedoTextureAssetId" || materialKeyword == "baseColorTextureAssetId") pathFieldName = "albedoTexture";
+            else if (materialKeyword == "normalTextureAssetId") pathFieldName = "normalTexture";
+            else if (materialKeyword == "metallicRoughnessTextureAssetId") pathFieldName = "metallicRoughnessTexture";
+            else if (materialKeyword == "occlusionTextureAssetId") pathFieldName = "occlusionTexture";
+            else if (materialKeyword == "emissiveTextureAssetId") pathFieldName = "emissiveTexture";
+            else if (materialKeyword == "clearcoatTextureAssetId") pathFieldName = "clearcoatTexture";
+            else if (materialKeyword == "clearcoatRoughnessTextureAssetId") pathFieldName = "clearcoatRoughnessTexture";
+            else if (materialKeyword == "sheenColorTextureAssetId") pathFieldName = "sheenColorTexture";
+            else if (materialKeyword == "transmissionTextureAssetId") pathFieldName = "transmissionTexture";
+            else if (materialKeyword == "thicknessTextureAssetId") pathFieldName = "thicknessTexture";
+            else if (materialKeyword == "anisotropyTextureAssetId") pathFieldName = "anisotropyTexture";
+            else if (materialKeyword == "decalTextureAssetId") pathFieldName = "decalTexture";
+            else if (materialKeyword == "layerMaskTextureAssetId") pathFieldName = "layerMaskTexture";
 
             const RenderMaterialTextureSlotSchema* slot = nullptr;
-            for (const auto& s : schema.textureSlots) {
+            for (const auto& s : materialTypeSchema.textureSlots) {
                 if (s.pathFieldName == pathFieldName) {
                     slot = &s;
                     break;
@@ -542,13 +737,45 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
                     .code = RenderMaterialAssetParseDiagnosticCode::TextureColorSpaceExpectation,
                     .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
                     .line = lineNumber,
-                    .field = std::string{ keyword },
+                    .field = std::string{ materialKeyword },
                     .message = "Texture slot '" + std::string{ slot->name } + "' expects " + expectedSpace + " color space. Validate that the assigned texture matches this expectation.",
                     .text = std::string{ trimmed },
                 });
             }
         }
         sawMaterialProperty = true;
+    }
+
+    const bool builtInMaterialType = IsSupportedMaterialType(asset.materialType);
+    const bool hasMaterialTypeAssetReference = asset.materialTypeAssetId != 0U || !asset.materialTypeAssetPath.empty();
+    if (!builtInMaterialType && !hasMaterialTypeAssetReference) {
+        diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialType,
+            .line = materialTypeLine,
+            .field = "materialType",
+            .message = "Unsupported material type '" + asset.materialType + "'.",
+            .text = asset.materialType,
+        });
+        if (asset.hasExplicitMaterialTypeVersion) {
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialTypeVersion,
+                .line = materialTypeVersionLine,
+                .field = "materialTypeVersion",
+                .message = "Unsupported material type version " + std::to_string(asset.materialTypeVersion) + " for '" + asset.materialType + "'.",
+                .text = std::to_string(asset.materialTypeVersion),
+            });
+        }
+    } else if (builtInMaterialType) {
+        const std::uint32_t supportedVersion = SupportedMaterialTypeVersion(asset.materialType);
+        if (asset.materialTypeVersion > supportedVersion) {
+            diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+                .code = RenderMaterialAssetParseDiagnosticCode::UnsupportedMaterialTypeVersion,
+                .line = materialTypeVersionLine,
+                .field = "materialTypeVersion",
+                .message = "Unsupported material type version " + std::to_string(asset.materialTypeVersion) + " for '" + asset.materialType + "'.",
+                .text = std::to_string(asset.materialTypeVersion),
+            });
+        }
     }
 
     if (!sawMaterialProperty && diagnostics.empty()) {
@@ -561,13 +788,39 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
         });
     }
     if (sawMaterialProperty && asset.graph.nodes.empty()) {
+        RenderMaterialGraphDocument graphMetadata = std::move(asset.graph);
         asset.graph = MakeDefaultRenderMaterialGraphDocument();
+        asset.graph.documentVersion = graphMetadata.documentVersion;
+        asset.graph.hasExplicitDocumentVersion = graphMetadata.hasExplicitDocumentVersion;
+        asset.graph.materialDomain = std::move(graphMetadata.materialDomain);
+        asset.graph.shadingModel = std::move(graphMetadata.shadingModel);
+        asset.graph.storageModel = std::move(graphMetadata.storageModel);
+        asset.graph.diagnosticSchemaVersion = graphMetadata.diagnosticSchemaVersion;
+        asset.graph.persistCompileDiagnostics = graphMetadata.persistCompileDiagnostics;
+        asset.graph.artifactFailurePolicy = graphMetadata.artifactFailurePolicy;
+        asset.graph.hasExplicitArtifactFailurePolicy = graphMetadata.hasExplicitArtifactFailurePolicy;
+        asset.graph.lastGoodArtifact = graphMetadata.lastGoodArtifact;
+    }
+    if ((asset.graph.lastGoodArtifact.assetId == 0U) != (asset.graph.lastGoodArtifact.contentHash == 0U)) {
+        diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+            .code = RenderMaterialAssetParseDiagnosticCode::InvalidGraphField,
+            .line = graphLastGoodArtifactLine,
+            .field = "graphLastGoodArtifact",
+            .message = "Material graph last-good artifact requires both asset id and content hash.",
+            .text = {},
+        });
     }
 
     return RenderMaterialAssetParseResult{
         .asset = !HasError(diagnostics) && sawMaterialProperty ? std::optional<RenderMaterialAssetData>{ asset } : std::nullopt,
         .diagnostics = std::move(diagnostics),
     };
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(std::istream& input, const RenderMaterialAssetParseSourceContext& sourceContext) {
+    RenderMaterialAssetParseResult result = ParseWithDiagnostics(input);
+    AttachContext(result, sourceContext);
+    return result;
 }
 
 } // namespace kb::render

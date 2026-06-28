@@ -72,9 +72,14 @@ const SceneCachedDrawCommand& SceneDrawCommandCache::Resolve(
     const auto cacheIt = store.lookup.find(key);
     if (cacheIt != store.lookup.end()) {
         ++stats.meshDrawCommandCacheHitCount;
-        store.commands[cacheIt->second].lastUsedBuildId = store.currentBuildId;
+        SceneCachedDrawCommand& cachedCommand = store.commands[cacheIt->second];
+        cachedCommand.mesh = desc.mesh;
+        cachedCommand.material = desc.material;
+        cachedCommand.meshResource = desc.meshResource;
+        cachedCommand.materialResource = desc.materialResource;
+        cachedCommand.lastUsedBuildId = store.currentBuildId;
         UpdateStats(store, stats);
-        return store.commands[cacheIt->second];
+        return cachedCommand;
     }
 
     const std::size_t commandIndex = store.commands.size();

@@ -41,6 +41,14 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewMaterialGraph: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateMaterialGraphAsset(destinationFolder);
+    }
+    case EditorAssetContextCommand::NewMaterialType: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateMaterialTypeAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::Duplicate:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.DuplicateMaterialAsset(targetAsset);
@@ -49,6 +57,16 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
     case EditorAssetContextCommand::CreateMaterialInstance:
         if (targetKind == EditorAssetContextTargetKind::Asset) {
             return sceneContext.CreateMaterialInstanceAsset(targetAsset);
+        }
+        return false;
+    case EditorAssetContextCommand::CreateMaterialFromGraph:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.CreateMaterialFromGraphAsset(targetAsset);
+        }
+        return false;
+    case EditorAssetContextCommand::CreateMaterialFromMaterialType:
+        if (targetKind == EditorAssetContextTargetKind::Asset) {
+            return sceneContext.CreateMaterialFromMaterialTypeAsset(targetAsset);
         }
         return false;
     case EditorAssetContextCommand::NewInputAction: {

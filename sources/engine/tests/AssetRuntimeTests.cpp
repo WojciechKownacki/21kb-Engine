@@ -201,8 +201,10 @@ void RunAssetImportServiceBinaryContainerTest() {
     const std::array<std::filesystem::path, 1> files{ sourceRoot / "Albedo.png" };
     const kb::assets::AssetImportResult result = kb::assets::AssetImportService::ImportFiles(manager, files, "/Game/Textures");
     kb::tests::Require(result.Succeeded() && result.ImportedCount() == 1U, "Asset import service did not import the source file");
+    kb::tests::Require(result.CreatedCount() == 1U && result.ReusedCount() == 0U, "Asset import service did not report a created import");
 
     const kb::assets::AssetImportItemResult& item = result.items.front();
+    kb::tests::Require(item.status == kb::assets::AssetImportItemStatus::Created, "Imported asset item did not report created status");
     kb::tests::Require(item.assetPhysicalPath.extension() == ".21kb", "Imported asset file should use the .21kb extension");
     kb::tests::Require(item.metaPhysicalPath.extension() == ".meta", "Imported asset meta file should use the .meta extension");
     kb::tests::Require(item.assetPhysicalPath.stem() == item.metaPhysicalPath.stem(), "Imported asset and meta should share the same base name");
@@ -228,6 +230,42 @@ void RunAssetImportServiceBinaryContainerTest() {
     kb::tests::Require(rediscovered.DiscoverMountedAssets() == 1U, "Imported asset rediscovery did not find the .21kb file");
     const kb::assets::AssetMetadata* rediscoveredMetadata = rediscovered.Registry().FindByPath(item.virtualPath);
     kb::tests::Require(rediscoveredMetadata != nullptr && rediscoveredMetadata->importCategory == "Texture", "Imported asset rediscovery did not read the binary category flag");
+}
+
+void RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest() {
+    ResetTestRoot();
+
+    const std::filesystem::path assetsRoot = TestRoot() / "Project" / "Assets";
+    const std::filesystem::path sourceRoot = TestRoot() / "External";
+    WriteTextFile(sourceRoot / "Albedo.png", "texture bytes");
+    WriteTextFile(sourceRoot / "Readme.unsupported", "not a supported asset");
+
+    kb::assets::AssetManager manager;
+    kb::tests::Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported asset report test loader registration failed");
+    kb::tests::Require(manager.Mounts().Mount("Game", assetsRoot), "Game asset mount failed for import report test");
+
+    const std::array<std::filesystem::path, 1> firstFiles{ sourceRoot / "Albedo.png" };
+    const kb::assets::AssetImportResult first = kb::assets::AssetImportService::ImportFiles(manager, firstFiles, "/Game/Textures");
+    kb::tests::Require(first.Succeeded() && first.CreatedCount() == 1U, "Import report test could not create the initial texture asset");
+
+    const std::array<std::filesystem::path, 3> mixedFiles{
+        sourceRoot / "Albedo.png",
+        sourceRoot / "Missing.png",
+        sourceRoot / "Readme.unsupported",
+    };
+    const kb::assets::AssetImportResult report = kb::assets::AssetImportService::ImportFiles(manager, mixedFiles, "/Game/Textures");
+    kb::tests::Require(!report.Succeeded(), "Mixed import report should not report complete success");
+    kb::tests::Require(report.ImportedCount() == 1U, "Mixed import report should count the reused asset as imported");
+    kb::tests::Require(report.CreatedCount() == 0U, "Mixed import report should not create a duplicate asset");
+    kb::tests::Require(report.ReusedCount() == 1U, "Mixed import report did not count reused texture assets");
+    kb::tests::Require(report.MissingCount() == 1U, "Mixed import report did not count missing texture sources");
+    kb::tests::Require(report.UnsupportedCount() == 1U, "Mixed import report did not count unsupported source files");
+    kb::tests::Require(report.FailedCount() == 2U, "Mixed import report did not expose failed item count");
+    kb::tests::Require(report.items[0].status == kb::assets::AssetImportItemStatus::Reused, "Mixed import report did not mark the existing texture as reused");
+    kb::tests::Require(report.items[0].id == first.items[0].id && report.items[0].virtualPath == first.items[0].virtualPath, "Reused import did not return the existing asset identity");
+    kb::tests::Require(report.items[1].status == kb::assets::AssetImportItemStatus::Missing && report.items[1].category == kb::assets::AssetImportCategory::Texture, "Mixed import report did not classify missing texture source");
+    kb::tests::Require(report.items[2].status == kb::assets::AssetImportItemStatus::Unsupported && report.items[2].category == kb::assets::AssetImportCategory::Unknown, "Mixed import report did not classify unsupported source");
+    kb::tests::Require(!std::filesystem::exists(assetsRoot / "Textures" / "Albedo_1.21kb"), "Reused import should not create a duplicate texture asset");
 }
 
 void RunScenePrefabRuntimeAssetTest() {
@@ -372,6 +410,7 @@ void RunAssetRuntimeTests() {
     RunAssetManagerDiscoveryCacheAndManifestTest();
     RunAssetManagerFolderAndRenameOperationsTest();
     RunAssetImportServiceBinaryContainerTest();
+    RunAssetImportServiceReportsCreatedReusedMissingAndUnsupportedTest();
     RunScenePrefabRuntimeAssetTest();
     RunSceneAudioClipAssetDiscoveryTest();
     RunScriptAssetPipelineTest();

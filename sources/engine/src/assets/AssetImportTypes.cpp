@@ -10,6 +10,30 @@ std::size_t AssetImportResult::ImportedCount() const noexcept {
     }));
 }
 
+std::size_t AssetImportResult::CreatedCount() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(items, [](const AssetImportItemResult& item) {
+        return item.status == AssetImportItemStatus::Created;
+    }));
+}
+
+std::size_t AssetImportResult::ReusedCount() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(items, [](const AssetImportItemResult& item) {
+        return item.status == AssetImportItemStatus::Reused;
+    }));
+}
+
+std::size_t AssetImportResult::MissingCount() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(items, [](const AssetImportItemResult& item) {
+        return item.status == AssetImportItemStatus::Missing;
+    }));
+}
+
+std::size_t AssetImportResult::UnsupportedCount() const noexcept {
+    return static_cast<std::size_t>(std::ranges::count_if(items, [](const AssetImportItemResult& item) {
+        return item.status == AssetImportItemStatus::Unsupported;
+    }));
+}
+
 std::size_t AssetImportResult::FailedCount() const noexcept {
     return items.size() - ImportedCount();
 }
@@ -49,6 +73,24 @@ std::string_view ToString(AssetImportCategory category) noexcept {
     case AssetImportCategory::Unknown:
     default:
         return "Unknown";
+    }
+}
+
+std::string_view ToString(AssetImportItemStatus status) noexcept {
+    switch (status) {
+    case AssetImportItemStatus::Created:
+        return "created";
+    case AssetImportItemStatus::Reused:
+        return "reused";
+    case AssetImportItemStatus::Missing:
+        return "missing";
+    case AssetImportItemStatus::Unsupported:
+        return "unsupported";
+    case AssetImportItemStatus::Failed:
+        return "failed";
+    case AssetImportItemStatus::None:
+    default:
+        return "none";
     }
 }
 

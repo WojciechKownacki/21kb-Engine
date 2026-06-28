@@ -1,14 +1,236 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
+#include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::render {
+namespace {
+
+void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        return;
+    }
+    for (const kb::assets::AssetId existing : dependencies) {
+        if (existing == id) {
+            return;
+        }
+    }
+    dependencies.push_back(id);
+}
+
+[[nodiscard]] kb::assets::AssetId MaterialTypeDependencyId(std::string_view materialType, std::uint32_t materialTypeVersion) {
+    std::string key{ "MaterialType:" };
+    key += materialType;
+    key += ':';
+    key += std::to_string(materialTypeVersion);
+    return kb::assets::MakeAssetId(key);
+}
+
+[[nodiscard]] bool IsMaterialTypeAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialType" || metadata.type == "MaterialType" || metadata.importCategory == "MaterialType";
+}
+
+[[nodiscard]] bool IsMaterialGraphAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialGraph" || metadata.type == "MaterialGraph" || metadata.importCategory == "MaterialGraph";
+}
+
+[[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
+}
+
+[[nodiscard]] std::optional<kb::assets::AssetId> ResolveMaterialTypePathDependency(
+    std::string_view materialTypePath,
+    const kb::assets::AssetMetadata& owner,
+    const kb::assets::AssetRegistry& registry) {
+    if (materialTypePath.empty()) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path authoredPath{ std::string{ materialTypePath } };
+    const std::filesystem::path candidate = authoredPath.is_absolute()
+        ? authoredPath.lexically_normal()
+        : (owner.virtualPath.parent_path() / authoredPath).lexically_normal();
+    const kb::assets::AssetMetadata* materialType = registry.FindByPath(candidate);
+    if (materialType == nullptr || !IsMaterialTypeAsset(*materialType)) {
+        return std::nullopt;
+    }
+    return materialType->id;
+}
+
+[[nodiscard]] std::optional<kb::assets::AssetId> ResolveMaterialGraphPathDependency(
+    std::string_view graphPath,
+    const kb::assets::AssetMetadata& owner,
+    const kb::assets::AssetRegistry& registry) {
+    if (graphPath.empty()) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path authoredPath{ std::string{ graphPath } };
+    const std::filesystem::path candidate = authoredPath.is_absolute()
+        ? authoredPath.lexically_normal()
+        : (owner.virtualPath.parent_path() / authoredPath).lexically_normal();
+    const kb::assets::AssetMetadata* graph = registry.FindByPath(candidate);
+    if (graph == nullptr || !IsMaterialGraphAsset(*graph)) {
+        return std::nullopt;
+    }
+    return graph->id;
+}
+
+[[nodiscard]] std::optional<kb::assets::AssetId> ResolveTexturePathDependency(
+    std::string_view texturePath,
+    const kb::assets::AssetMetadata& owner,
+    const kb::assets::AssetRegistry& registry) {
+    if (texturePath.empty()) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path authoredPath{ std::string{ texturePath } };
+    const std::filesystem::path candidate = authoredPath.is_absolute()
+        ? authoredPath.lexically_normal()
+        : (owner.virtualPath.parent_path() / authoredPath).lexically_normal();
+    const kb::assets::AssetMetadata* texture = registry.FindByPath(candidate);
+    if (texture == nullptr || !IsTextureAsset(*texture)) {
+        return std::nullopt;
+    }
+    return texture->id;
+}
+
+[[nodiscard]] const RenderMaterialGraphParameterValue* FindGraphParameterValue(
+    const std::vector<RenderMaterialGraphParameterValue>& values,
+    std::string_view stableId) noexcept {
+    for (const RenderMaterialGraphParameterValue& value : values) {
+        if (value.stableId == stableId) {
+            return &value;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool HasMaterialParameter(const RenderMaterialTypeSchema& schema, std::string_view stableId) noexcept {
+    for (const RenderMaterialParameterSchema& parameter : schema.parameters) {
+        if (parameter.name == stableId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::vector<float> ParseDefaultNumbers(std::string_view text) {
+    std::vector<float> numbers;
+    if (text.empty() || text == "_") {
+        return numbers;
+    }
+    std::istringstream input{ std::string{ text } };
+    float value = 0.0F;
+    while (input >> value) {
+        numbers.push_back(value);
+    }
+    return numbers;
+}
+
+[[nodiscard]] RenderMaterialGraphParameterValue DefaultGraphParameterValue(const RenderMaterialParameterSchema& parameter) {
+    RenderMaterialGraphParameterValue value{
+        .stableId = parameter.name,
+        .type = parameter.type,
+    };
+    const std::vector<float> numbers = ParseDefaultNumbers(parameter.defaultValueHint);
+    switch (parameter.type) {
+    case RenderMaterialParameterType::Scalar:
+        if (!numbers.empty()) value.numbers[0] = numbers[0];
+        break;
+    case RenderMaterialParameterType::Vec3:
+        for (std::size_t index = 0U; index < std::min<std::size_t>(3U, numbers.size()); ++index) value.numbers[index] = numbers[index];
+        break;
+    case RenderMaterialParameterType::Vec4:
+    case RenderMaterialParameterType::Color:
+        for (std::size_t index = 0U; index < std::min<std::size_t>(4U, numbers.size()); ++index) value.numbers[index] = numbers[index];
+        break;
+    case RenderMaterialParameterType::Bool:
+        value.boolValue = parameter.defaultValueHint == "true" || parameter.defaultValueHint == "1";
+        break;
+    case RenderMaterialParameterType::Enum:
+        value.text = parameter.defaultValueHint == "_" ? std::string{} : parameter.defaultValueHint;
+        break;
+    case RenderMaterialParameterType::Texture:
+        value.assetId = 0U;
+        break;
+    }
+    return value;
+}
+
+[[nodiscard]] bool IsBuiltInMaterialField(std::string_view stableId) noexcept {
+    return stableId == "baseColor" ||
+        stableId == "baseColorFactor" ||
+        stableId == "emissiveColor" ||
+        stableId == "emissiveFactor" ||
+        stableId == "metallicFactor" ||
+        stableId == "roughnessFactor" ||
+        stableId == "normalScale" ||
+        stableId == "occlusionStrength" ||
+        stableId == "emissiveStrength" ||
+        stableId == "alphaCutoff" ||
+        stableId == "alphaMode" ||
+        stableId == "doubleSided";
+}
+
+[[nodiscard]] std::filesystem::path ResolveAssetPath(
+    const kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata) {
+    if (!metadata.physicalPath.empty()) {
+        return metadata.physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+void AppendMaterialTypeReferenceDiagnostic(
+    RenderMaterialTypeReferenceValidationResult& result,
+    RenderMaterialTypeReferenceDiagnosticCode code,
+    kb::assets::AssetId assetId,
+    std::filesystem::path path,
+    std::string message) {
+    result.diagnostics.push_back(RenderMaterialTypeReferenceDiagnostic{
+        .code = code,
+        .assetId = assetId,
+        .path = std::move(path),
+        .message = std::move(message),
+    });
+}
+
+[[nodiscard]] const kb::assets::AssetMetadata* FindMaterialTypeAssetByPath(
+    const kb::assets::AssetManager& manager,
+    std::string_view materialTypeAssetPath) {
+    if (materialTypeAssetPath.empty()) {
+        return nullptr;
+    }
+    const std::filesystem::path authoredPath{ std::string{ materialTypeAssetPath } };
+    const kb::assets::AssetMetadata* metadata = manager.Registry().FindByPath(authoredPath);
+    if (metadata != nullptr) {
+        return metadata;
+    }
+    if (const std::optional<std::filesystem::path> resolved = manager.Mounts().Resolve(authoredPath)) {
+        for (const kb::assets::AssetMetadata& candidate : manager.Registry().All()) {
+            const std::filesystem::path candidatePath = ResolveAssetPath(manager, candidate);
+            std::error_code error;
+            if (!candidatePath.empty() && std::filesystem::equivalent(candidatePath, *resolved, error) && !error) {
+                return &candidate;
+            }
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
 
 std::string_view RenderMaterialAssetParseDiagnosticCodeName(RenderMaterialAssetParseDiagnosticCode code) noexcept {
     switch (code) {
@@ -54,6 +276,227 @@ std::string_view RenderMaterialAssetParseDiagnosticCodeName(RenderMaterialAssetP
         return "invalid_graph_link";
     }
     return "unknown_diagnostic";
+}
+
+std::string_view RenderMaterialTypeReferenceDiagnosticCodeName(RenderMaterialTypeReferenceDiagnosticCode code) noexcept {
+    switch (code) {
+    case RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeReference:
+        return "missing_material_type_reference";
+    case RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeAsset:
+        return "missing_material_type_asset";
+    case RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeAsset:
+        return "incompatible_material_type_asset";
+    case RenderMaterialTypeReferenceDiagnosticCode::MaterialTypeAssetLoadFailed:
+        return "material_type_asset_load_failed";
+    case RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialType:
+        return "incompatible_material_type";
+    case RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeVersion:
+        return "incompatible_material_type_version";
+    }
+    return "material_type_reference_error";
+}
+
+std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialAssetGraphDiagnostics(const RenderMaterialAssetData& asset) {
+    std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(asset.graph);
+    if (asset.desc.alphaMode == RenderMaterialAlphaMode::Blend) {
+        diagnostics.push_back(RenderMaterialGraphDiagnostic{
+            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+            .kind = RenderMaterialGraphDiagnosticKind::UnsupportedBlendMode,
+            .nodeId = 0U,
+            .linkId = 0U,
+            .pin = "alpha",
+            .message = "Alpha BLEND is parsed but disabled by the current mesh runtime; use OPAQUE or MASK until transparent pass support is enabled.",
+        });
+    }
+    return diagnostics;
+}
+
+RenderMaterialSchemaRefreshResult RefreshRenderMaterialGraphBackedMaterialSchema(
+    const RenderMaterialAssetData& material,
+    const RenderMaterialTypeDocument& materialType) {
+    RenderMaterialSchemaRefreshResult result{
+        .material = material,
+        .diagnostics = {},
+    };
+    result.material.materialType = materialType.stableTypeId;
+    result.material.materialTypeVersion = materialType.version;
+    result.material.hasExplicitMaterialType = true;
+    result.material.hasExplicitMaterialTypeVersion = true;
+
+    if (material.materialType != materialType.stableTypeId || material.materialTypeVersion != materialType.version) {
+        result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+            .kind = RenderMaterialSchemaRefreshDiagnosticKind::MaterialTypeChanged,
+            .stableId = materialType.stableTypeId,
+            .message = "Material Type reference refreshed to " + materialType.stableTypeId + " version " + std::to_string(materialType.version) + ".",
+        });
+    }
+
+    std::vector<RenderMaterialGraphParameterValue> refreshedValues;
+    refreshedValues.reserve(materialType.schema.parameters.size());
+    for (const RenderMaterialParameterSchema& parameter : materialType.schema.parameters) {
+        if (IsBuiltInMaterialField(parameter.name)) {
+            continue;
+        }
+        if (const RenderMaterialGraphParameterValue* existing = FindGraphParameterValue(material.graphParameterValues, parameter.name);
+            existing != nullptr) {
+            if (existing->type == parameter.type) {
+                refreshedValues.push_back(*existing);
+                continue;
+            }
+            refreshedValues.push_back(DefaultGraphParameterValue(parameter));
+            result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+                .kind = RenderMaterialSchemaRefreshDiagnosticKind::ChangedParameterType,
+                .stableId = parameter.name,
+                .message = "Reset graph parameter '" + parameter.name + "' to its default because its type changed in the refreshed Material Type schema.",
+            });
+            continue;
+        }
+        refreshedValues.push_back(DefaultGraphParameterValue(parameter));
+        result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+            .kind = RenderMaterialSchemaRefreshDiagnosticKind::AddedDefaultParameter,
+            .stableId = parameter.name,
+            .message = "Added default value for graph parameter '" + parameter.name + "'.",
+        });
+    }
+
+    for (const RenderMaterialGraphParameterValue& existing : material.graphParameterValues) {
+        if (!HasMaterialParameter(materialType.schema, existing.stableId)) {
+            result.diagnostics.push_back(RenderMaterialSchemaRefreshDiagnostic{
+                .kind = RenderMaterialSchemaRefreshDiagnosticKind::RemovedUnknownParameter,
+                .stableId = existing.stableId,
+                .message = "Removed graph parameter value '" + existing.stableId + "' because it is not present in the refreshed Material Type schema.",
+            });
+        }
+    }
+
+    result.material.graphParameterValues = std::move(refreshedValues);
+    return result;
+}
+
+RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& materialMetadata,
+    const kb::assets::AssetManager& manager) {
+    RenderMaterialTypeReferenceValidationResult result{};
+    const bool builtInPbr =
+        material.materialType.empty() ||
+        (material.materialType == kRenderMaterialAssetBuiltInPbrType &&
+            material.materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion);
+    const bool hasTypeReference = material.materialTypeAssetId != 0U || !material.materialTypeAssetPath.empty();
+    if (builtInPbr && !hasTypeReference) {
+        return result;
+    }
+    if (!hasTypeReference) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeReference,
+            materialMetadata.id,
+            materialMetadata.virtualPath,
+            "Material type '" + material.materialType + "' version " + std::to_string(material.materialTypeVersion) + " requires a Material Type asset reference.");
+        return result;
+    }
+
+    const kb::assets::AssetMetadata* idMetadata = nullptr;
+    if (material.materialTypeAssetId != 0U) {
+        idMetadata = manager.Registry().Find(kb::assets::AssetId{ material.materialTypeAssetId });
+        if (idMetadata == nullptr) {
+            AppendMaterialTypeReferenceDiagnostic(
+                result,
+                RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeAsset,
+                kb::assets::AssetId{ material.materialTypeAssetId },
+                {},
+                "Referenced Material Type asset id " + std::to_string(material.materialTypeAssetId) + " is not registered.");
+        } else if (!IsMaterialTypeAsset(*idMetadata)) {
+            AppendMaterialTypeReferenceDiagnostic(
+                result,
+                RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeAsset,
+                idMetadata->id,
+                idMetadata->virtualPath,
+                "Referenced asset id " + std::to_string(idMetadata->id.value) + " is not a Material Type asset.");
+            idMetadata = nullptr;
+        }
+    }
+
+    const kb::assets::AssetMetadata* pathMetadata = nullptr;
+    if (!material.materialTypeAssetPath.empty()) {
+        pathMetadata = FindMaterialTypeAssetByPath(manager, material.materialTypeAssetPath);
+        if (pathMetadata == nullptr) {
+            AppendMaterialTypeReferenceDiagnostic(
+                result,
+                RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeAsset,
+                {},
+                material.materialTypeAssetPath,
+                "Referenced Material Type asset path '" + material.materialTypeAssetPath + "' is not registered.");
+        } else if (!IsMaterialTypeAsset(*pathMetadata)) {
+            AppendMaterialTypeReferenceDiagnostic(
+                result,
+                RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeAsset,
+                pathMetadata->id,
+                pathMetadata->virtualPath,
+                "Referenced asset path '" + material.materialTypeAssetPath + "' is not a Material Type asset.");
+            pathMetadata = nullptr;
+        }
+    }
+
+    if (idMetadata != nullptr && pathMetadata != nullptr && idMetadata->id != pathMetadata->id) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeAsset,
+            idMetadata->id,
+            pathMetadata->virtualPath,
+            "Material Type asset id and path resolve to different assets.");
+        return result;
+    }
+
+    const kb::assets::AssetMetadata* typeMetadata = idMetadata != nullptr ? idMetadata : pathMetadata;
+    if (typeMetadata == nullptr) {
+        return result;
+    }
+
+    const std::filesystem::path typePath = ResolveAssetPath(manager, *typeMetadata);
+    if (typePath.empty()) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::MaterialTypeAssetLoadFailed,
+            typeMetadata->id,
+            typeMetadata->virtualPath,
+            "Material Type asset path could not be resolved.");
+        return result;
+    }
+
+    const RenderMaterialTypeDocumentParseResult loadedType = RenderMaterialTypeAssetLoader::LoadTypeWithDiagnostics(typePath);
+    if (!loadedType.document.has_value()) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::MaterialTypeAssetLoadFailed,
+            typeMetadata->id,
+            typePath,
+            "Material Type asset could not be loaded.");
+        return result;
+    }
+
+    result.materialType = *loadedType.document;
+    if (loadedType.document->stableTypeId != material.materialType) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialType,
+            typeMetadata->id,
+            typePath,
+            "Material Type asset stable id '" + loadedType.document->stableTypeId + "' does not match material type '" + material.materialType + "'.");
+    }
+    if (loadedType.document->version != material.materialTypeVersion) {
+        AppendMaterialTypeReferenceDiagnostic(
+            result,
+            RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeVersion,
+            typeMetadata->id,
+            typePath,
+            "Material Type asset version " + std::to_string(loadedType.document->version) + " does not match material version " + std::to_string(material.materialTypeVersion) + ".");
+    }
+    return result;
+}
+
+bool RenderMaterialTypeReferenceValidationResult::Succeeded() const noexcept {
+    return diagnostics.empty();
 }
 
 bool RenderMaterialAssetParseResult::Succeeded() const noexcept {
@@ -110,6 +553,16 @@ kb::assets::AssetLoadResult RenderMaterialAssetLoader::Load(const kb::assets::As
     };
 }
 
+std::vector<kb::assets::AssetId> RenderMaterialAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) const {
+    const RenderMaterialAssetParseResult material = LoadMaterialWithDiagnostics(metadata.physicalPath, metadata.id);
+    if (!material.asset.has_value()) {
+        return {};
+    }
+    return DiscoverMaterialDependencies(*material.asset, metadata, registry);
+}
+
 std::optional<RenderMaterialAssetData> RenderMaterialAssetLoader::LoadMaterial(const std::filesystem::path& path) {
     return RenderMaterialAssetParser::Load(path);
 }
@@ -128,6 +581,80 @@ RenderMaterialAssetParseResult RenderMaterialAssetLoader::LoadMaterialWithDiagno
 
 RenderMaterialAssetParseResult RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(std::istream& input) {
     return RenderMaterialAssetParser::ParseWithDiagnostics(input);
+}
+
+RenderMaterialAssetParseResult RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(std::istream& input, const RenderMaterialAssetParseSourceContext& sourceContext) {
+    return RenderMaterialAssetParser::ParseWithDiagnostics(input, sourceContext);
+}
+
+std::vector<kb::assets::AssetId> RenderMaterialAssetLoader::DiscoverMaterialDependencies(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) {
+    std::vector<kb::assets::AssetId> dependencies;
+    dependencies.reserve(16U);
+    if (material.materialTypeAssetId != 0U) {
+        AppendUnique(dependencies, kb::assets::AssetId{ material.materialTypeAssetId });
+    } else {
+        AppendUnique(dependencies, MaterialTypeDependencyId(material.materialType, material.materialTypeVersion));
+    }
+    if (std::optional<kb::assets::AssetId> materialTypePathDependency = ResolveMaterialTypePathDependency(material.materialTypeAssetPath, metadata, registry); materialTypePathDependency.has_value()) {
+        AppendUnique(dependencies, *materialTypePathDependency);
+    }
+    if (material.graphSourceAssetId != 0U) {
+        AppendUnique(dependencies, kb::assets::AssetId{ material.graphSourceAssetId });
+    }
+    if (std::optional<kb::assets::AssetId> graphSourcePathDependency = ResolveMaterialGraphPathDependency(material.graphSourceAssetPath, metadata, registry); graphSourcePathDependency.has_value()) {
+        AppendUnique(dependencies, *graphSourcePathDependency);
+    }
+    AppendUnique(dependencies, kb::assets::AssetId{ material.graph.lastGoodArtifact.assetId });
+
+    const std::array<std::uint64_t, 13U> textureAssetIds{
+        material.desc.albedoTextureAssetId,
+        material.desc.normalTextureAssetId,
+        material.desc.metallicRoughnessTextureAssetId,
+        material.desc.occlusionTextureAssetId,
+        material.desc.emissiveTextureAssetId,
+        material.desc.clearcoatTextureAssetId,
+        material.desc.clearcoatRoughnessTextureAssetId,
+        material.desc.sheenColorTextureAssetId,
+        material.desc.transmissionTextureAssetId,
+        material.desc.thicknessTextureAssetId,
+        material.desc.anisotropyTextureAssetId,
+        material.desc.decalTextureAssetId,
+        material.desc.layerMaskTextureAssetId,
+    };
+    for (const std::uint64_t textureAssetId : textureAssetIds) {
+        AppendUnique(dependencies, kb::assets::AssetId{ textureAssetId });
+    }
+
+    const std::array<std::string_view, 13U> texturePaths{
+        material.albedoTexturePath,
+        material.normalTexturePath,
+        material.metallicRoughnessTexturePath,
+        material.occlusionTexturePath,
+        material.emissiveTexturePath,
+        material.clearcoatTexturePath,
+        material.clearcoatRoughnessTexturePath,
+        material.sheenColorTexturePath,
+        material.transmissionTexturePath,
+        material.thicknessTexturePath,
+        material.anisotropyTexturePath,
+        material.decalTexturePath,
+        material.layerMaskTexturePath,
+    };
+    for (const std::string_view texturePath : texturePaths) {
+        if (const std::optional<kb::assets::AssetId> textureId = ResolveTexturePathDependency(texturePath, metadata, registry)) {
+            AppendUnique(dependencies, *textureId);
+        }
+    }
+    for (const RenderMaterialGraphParameterValue& value : material.graphParameterValues) {
+        if (value.type == RenderMaterialParameterType::Texture) {
+            AppendUnique(dependencies, kb::assets::AssetId{ value.assetId });
+        }
+    }
+
+    return dependencies;
 }
 
 } // namespace kb::render

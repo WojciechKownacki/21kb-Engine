@@ -51,6 +51,21 @@ namespace {
     return true;
 }
 
+[[nodiscard]] bool HandleMaterialGraphShortcut(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, WPARAM key) {
+    if (!sceneContext.IsMaterialGraphFocused() || key != VK_DELETE) {
+        return false;
+    }
+
+    if (sceneContext.SelectedMaterialGraphNodeId() != 0U) {
+        static_cast<void>(sceneContext.DeleteSelectedMaterialGraphNode(sceneContext.MaterialEditor().OpenAssetId()));
+    }
+    InvalidateRect(messageWindow, nullptr, FALSE);
+    if (messageWindow != mainWindow) {
+        InvalidateRect(mainWindow, nullptr, FALSE);
+    }
+    return true;
+}
+
 } // namespace
 
 EditorWindowMessageRouter::EditorWindowMessageRouter(EditorWindowMessageContext context) noexcept
@@ -171,6 +186,10 @@ LRESULT EditorWindowMessageRouter::Handle(HWND messageWindow, UINT message, WPAR
             return 0;
         }
         if (EditorAssetBrowserInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {
+            return 0;
+        }
+        if (HandleMaterialGraphShortcut(context_.mainWindow, messageWindow, context_.sceneContext, wparam)) {
+            context_.sceneViewport.RequestPresent();
             return 0;
         }
         if (EditorHierarchySearchInputHandler{ context_.mainWindow, context_.sceneContext }.HandleKeyDown(messageWindow, wparam)) {

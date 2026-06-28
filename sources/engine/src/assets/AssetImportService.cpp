@@ -72,6 +72,44 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     }
 }
 
+[[nodiscard]] bool ReadU16(std::istream& input, std::uint16_t& value) {
+    char bytes[2]{};
+    input.read(bytes, 2);
+    if (!input.good()) {
+        return false;
+    }
+    value = static_cast<std::uint16_t>(
+        static_cast<std::uint16_t>(static_cast<unsigned char>(bytes[0])) |
+        (static_cast<std::uint16_t>(static_cast<unsigned char>(bytes[1])) << 8U));
+    return true;
+}
+
+[[nodiscard]] bool ReadU32(std::istream& input, std::uint32_t& value) {
+    char bytes[4]{};
+    input.read(bytes, 4);
+    if (!input.good()) {
+        return false;
+    }
+    value = 0U;
+    for (int index = 0; index < 4; ++index) {
+        value |= static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[index])) << (index * 8);
+    }
+    return true;
+}
+
+[[nodiscard]] bool ReadU64(std::istream& input, std::uint64_t& value) {
+    char bytes[8]{};
+    input.read(bytes, 8);
+    if (!input.good()) {
+        return false;
+    }
+    value = 0U;
+    for (int index = 0; index < 8; ++index) {
+        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[index])) << (index * 8);
+    }
+    return true;
+}
+
 [[nodiscard]] bool WriteString(std::ostream& output, std::string_view text) {
     if (text.size() > std::numeric_limits<std::uint32_t>::max()) {
         return false;
@@ -79,6 +117,16 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     WriteU32(output, static_cast<std::uint32_t>(text.size()));
     output.write(text.data(), static_cast<std::streamsize>(text.size()));
     return output.good();
+}
+
+[[nodiscard]] bool ReadString(std::istream& input, std::string& text) {
+    std::uint32_t length = 0U;
+    if (!ReadU32(input, length) || length > 65536U) {
+        return false;
+    }
+    text.assign(length, '\0');
+    input.read(text.data(), static_cast<std::streamsize>(length));
+    return input.good();
 }
 
 [[nodiscard]] bool CopyPayload(std::ostream& output, const std::filesystem::path& sourcePath) {
@@ -176,6 +224,72 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     return true;
 }
 
+struct ImportedAssetHeader {
+    AssetImportCategory category = AssetImportCategory::Unknown;
+    std::uint64_t sourceSize = 0U;
+    std::uint64_t sourceHash = 0U;
+    std::string sourceName;
+    std::string sourceExtension;
+};
+
+[[nodiscard]] std::optional<ImportedAssetHeader> ReadImportedAssetHeader(const std::filesystem::path& assetPath) {
+    std::ifstream input{ assetPath, std::ios::binary };
+    if (!input.is_open()) {
+        return std::nullopt;
+    }
+
+    std::array<char, AssetMagic.size()> magic{};
+    std::uint32_t version = 0U;
+    std::uint16_t category = 0U;
+    std::uint16_t flags = 0U;
+    ImportedAssetHeader header{};
+    if (!input.read(magic.data(), static_cast<std::streamsize>(magic.size())) ||
+        magic != AssetMagic ||
+        !ReadU32(input, version) ||
+        version != ImportFormatVersion ||
+        !ReadU16(input, category) ||
+        !ReadU16(input, flags) ||
+        !ReadU64(input, header.sourceSize) ||
+        !ReadU64(input, header.sourceHash) ||
+        !ReadString(input, header.sourceName) ||
+        !ReadString(input, header.sourceExtension)) {
+        return std::nullopt;
+    }
+
+    header.category = static_cast<AssetImportCategory>(category);
+    return header;
+}
+
+[[nodiscard]] bool SameVirtualFolder(const std::filesystem::path& left, const std::filesystem::path& right) {
+    return NormalizeAssetPath(left) == NormalizeAssetPath(right);
+}
+
+[[nodiscard]] const AssetMetadata* FindReusableImportedAsset(
+    const AssetManager& manager,
+    const std::filesystem::path& destinationVirtualFolder,
+    const std::filesystem::path& sourcePath,
+    AssetImportCategory category,
+    std::uint64_t sourceHash) {
+    for (const AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != RuntimeAssetType(category) ||
+            metadata.importCategory != ToString(category) ||
+            !SameVirtualFolder(metadata.virtualPath.parent_path(), destinationVirtualFolder) ||
+            metadata.physicalPath.empty()) {
+            continue;
+        }
+
+        const std::optional<ImportedAssetHeader> header = ReadImportedAssetHeader(metadata.physicalPath);
+        if (header.has_value() &&
+            header->category == category &&
+            header->sourceHash == sourceHash &&
+            header->sourceName == sourcePath.filename().string() &&
+            header->sourceExtension == sourcePath.extension().string()) {
+            return &metadata;
+        }
+    }
+    return nullptr;
+}
+
 [[nodiscard]] AssetImportItemResult ImportOne(
     AssetManager& manager,
     const std::filesystem::path& sourcePath,
@@ -186,24 +300,57 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     result.category = AssetImportCatalog::ClassifyExtension(sourcePath.extension());
 
     std::error_code error;
-    if (sourcePath.empty() || !std::filesystem::is_regular_file(sourcePath, error)) {
+    if (sourcePath.empty() || !std::filesystem::exists(sourcePath, error)) {
         result.error = "Source file is not a regular file.";
+        result.status = AssetImportItemStatus::Missing;
+        return result;
+    }
+    if (!std::filesystem::is_regular_file(sourcePath, error)) {
+        result.error = "Source file is not a regular file.";
+        result.status = AssetImportItemStatus::Failed;
         return result;
     }
     if (AssetImportCatalog::IsMetaExtension(sourcePath.extension())) {
         result.error = "Meta sidecar files cannot be imported as source assets.";
+        result.status = AssetImportItemStatus::Unsupported;
+        return result;
+    }
+    if (result.category == AssetImportCategory::Unknown) {
+        result.error = "Unsupported source asset extension.";
+        result.status = AssetImportItemStatus::Unsupported;
         return result;
     }
 
     std::filesystem::create_directories(destinationFolder, error);
     if (error || !std::filesystem::is_directory(destinationFolder, error)) {
         result.error = "Destination folder could not be prepared.";
+        result.status = AssetImportItemStatus::Failed;
+        return result;
+    }
+
+    result.sourceHash = AssetFileSystem::HashFile(sourcePath);
+    const std::uint64_t sourceSize = static_cast<std::uint64_t>(std::filesystem::file_size(sourcePath, error));
+    if (error) {
+        result.error = "Source file could not be measured.";
+        result.status = AssetImportItemStatus::Failed;
+        return result;
+    }
+
+    if (const AssetMetadata* reusable = FindReusableImportedAsset(manager, destinationVirtualFolder, sourcePath, result.category, result.sourceHash);
+        reusable != nullptr) {
+        result.id = reusable->id;
+        result.assetPhysicalPath = reusable->physicalPath;
+        result.metaPhysicalPath = MetaPathForAssetPath(reusable->physicalPath);
+        result.virtualPath = reusable->virtualPath;
+        result.assetHash = reusable->contentHash;
+        result.status = AssetImportItemStatus::Reused;
         return result;
     }
 
     result.assetPhysicalPath = UniqueAssetPathWithMeta(destinationFolder, sourcePath.stem().string());
     if (result.assetPhysicalPath.empty()) {
         result.error = "Unique destination asset path could not be created.";
+        result.status = AssetImportItemStatus::Failed;
         return result;
     }
     result.metaPhysicalPath = MetaPathForAssetPath(result.assetPhysicalPath);
@@ -211,21 +358,16 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
     const std::string runtimeType{ RuntimeAssetType(result.category) };
     result.id = MakeAssetId(NormalizeAssetPath(result.virtualPath) + ":" + runtimeType);
 
-    result.sourceHash = AssetFileSystem::HashFile(sourcePath);
-    const std::uint64_t sourceSize = static_cast<std::uint64_t>(std::filesystem::file_size(sourcePath, error));
-    if (error) {
-        result.error = "Source file could not be measured.";
-        return result;
-    }
-
     if (!WriteAssetContainer(result.assetPhysicalPath, sourcePath, result.category, sourceSize, result.sourceHash)) {
         result.error = "Imported asset container could not be written.";
+        result.status = AssetImportItemStatus::Failed;
         return result;
     }
     result.assetHash = AssetFileSystem::HashFile(result.assetPhysicalPath);
     if (!WriteMeta(result.metaPhysicalPath, result.id, result.virtualPath, sourcePath, result.category, sourceSize, result.sourceHash, result.assetHash)) {
         std::filesystem::remove(result.assetPhysicalPath, error);
         result.error = "Imported asset meta could not be written.";
+        result.status = AssetImportItemStatus::Failed;
         return result;
     }
 
@@ -240,6 +382,7 @@ void WriteU64(std::ostream& output, std::uint64_t value) {
         .dependencies = {},
         .runtimeLoadable = true,
     }));
+    result.status = AssetImportItemStatus::Created;
     return result;
 }
 
@@ -257,6 +400,8 @@ AssetImportResult AssetImportService::ImportFiles(
         for (const std::filesystem::path& sourceFile : sourceFiles) {
             result.items.push_back(AssetImportItemResult{
                 .sourcePath = sourceFile,
+                .category = AssetImportCatalog::ClassifyExtension(sourceFile.extension()),
+                .status = AssetImportItemStatus::Failed,
                 .error = "Destination virtual folder is not mounted.",
             });
         }

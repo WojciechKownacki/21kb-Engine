@@ -10,9 +10,15 @@
 #include <filesystem>
 #include <iosfwd>
 #include <optional>
+#include <array>
 #include <string>
 #include <typeindex>
 #include <vector>
+
+namespace kb::assets {
+class AssetManager;
+struct AssetMetadata;
+}
 
 namespace kb::render {
 
@@ -20,8 +26,30 @@ inline constexpr std::uint32_t kRenderMaterialAssetDocumentVersion = 1U;
 inline constexpr const char* kRenderMaterialAssetBuiltInPbrType = "builtin.pbr";
 inline constexpr std::uint32_t kRenderMaterialAssetBuiltInPbrTypeVersion = 1U;
 
+struct RenderMaterialGraphParameterValue {
+    std::string stableId;
+    RenderMaterialParameterType type = RenderMaterialParameterType::Scalar;
+    std::array<float, 4U> numbers{};
+    std::uint64_t assetId = 0U;
+    bool boolValue = false;
+    std::string text;
+};
+
+enum class RenderMaterialSchemaRefreshDiagnosticKind : std::uint8_t {
+    AddedDefaultParameter,
+    RemovedUnknownParameter,
+    MaterialTypeChanged,
+    ChangedParameterType,
+};
+
+struct RenderMaterialSchemaRefreshDiagnostic {
+    RenderMaterialSchemaRefreshDiagnosticKind kind = RenderMaterialSchemaRefreshDiagnosticKind::AddedDefaultParameter;
+    std::string stableId;
+    std::string message;
+};
+
 /// RenderMaterialAssetData represents a Material asset (.kbmat file).
-/// It stores the parent material defaults and shader contract metadata used by
+/// It stores the parent material defaults and shader metadata used by
 /// material instances and direct material assignments.
 struct RenderMaterialAssetData {
     std::uint32_t documentVersion = kRenderMaterialAssetDocumentVersion;
@@ -30,6 +58,10 @@ struct RenderMaterialAssetData {
     std::uint32_t materialTypeVersion = kRenderMaterialAssetBuiltInPbrTypeVersion;
     bool hasExplicitMaterialType = false;
     bool hasExplicitMaterialTypeVersion = false;
+    std::uint64_t materialTypeAssetId = 0U;
+    std::string materialTypeAssetPath;
+    std::uint64_t graphSourceAssetId = 0U;
+    std::string graphSourceAssetPath;
     RenderMaterialDesc desc{};
     std::string albedoTexturePath;
     std::string normalTexturePath;
@@ -44,7 +76,36 @@ struct RenderMaterialAssetData {
     std::string anisotropyTexturePath;
     std::string decalTexturePath;
     std::string layerMaskTexturePath;
+    std::vector<RenderMaterialGraphParameterValue> graphParameterValues;
     RenderMaterialGraphDocument graph{};
+};
+
+struct RenderMaterialSchemaRefreshResult {
+    RenderMaterialAssetData material;
+    std::vector<RenderMaterialSchemaRefreshDiagnostic> diagnostics;
+};
+
+enum class RenderMaterialTypeReferenceDiagnosticCode : std::uint8_t {
+    MissingMaterialTypeReference,
+    MissingMaterialTypeAsset,
+    IncompatibleMaterialTypeAsset,
+    MaterialTypeAssetLoadFailed,
+    IncompatibleMaterialType,
+    IncompatibleMaterialTypeVersion,
+};
+
+struct RenderMaterialTypeReferenceDiagnostic {
+    RenderMaterialTypeReferenceDiagnosticCode code = RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeReference;
+    kb::assets::AssetId assetId{};
+    std::filesystem::path path;
+    std::string message;
+};
+
+struct RenderMaterialTypeReferenceValidationResult {
+    std::optional<RenderMaterialTypeDocument> materialType;
+    std::vector<RenderMaterialTypeReferenceDiagnostic> diagnostics;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
 };
 
 enum class RenderMaterialAssetParseDiagnosticCode : std::uint8_t {
@@ -86,7 +147,21 @@ struct RenderMaterialAssetParseDiagnostic {
     std::string text;
 };
 
+struct RenderMaterialAssetParseSourceContext {
+    kb::assets::AssetId assetId{};
+    std::filesystem::path path;
+};
+
 [[nodiscard]] std::string_view RenderMaterialAssetParseDiagnosticCodeName(RenderMaterialAssetParseDiagnosticCode code) noexcept;
+[[nodiscard]] std::string_view RenderMaterialTypeReferenceDiagnosticCodeName(RenderMaterialTypeReferenceDiagnosticCode code) noexcept;
+[[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialAssetGraphDiagnostics(const RenderMaterialAssetData& asset);
+[[nodiscard]] RenderMaterialSchemaRefreshResult RefreshRenderMaterialGraphBackedMaterialSchema(
+    const RenderMaterialAssetData& material,
+    const RenderMaterialTypeDocument& materialType);
+[[nodiscard]] RenderMaterialTypeReferenceValidationResult ValidateRenderMaterialTypeReference(
+    const RenderMaterialAssetData& material,
+    const kb::assets::AssetMetadata& materialMetadata,
+    const kb::assets::AssetManager& manager);
 
 struct RenderMaterialAssetParseResult {
     std::optional<RenderMaterialAssetData> asset;
@@ -102,12 +177,20 @@ public:
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
 
     [[nodiscard]] static std::optional<RenderMaterialAssetData> LoadMaterial(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderMaterialAssetData> LoadMaterial(std::istream& input);
     [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(const std::filesystem::path& path);
     [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(const std::filesystem::path& path, kb::assets::AssetId assetId);
     [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(std::istream& input);
+    [[nodiscard]] static RenderMaterialAssetParseResult LoadMaterialWithDiagnostics(std::istream& input, const RenderMaterialAssetParseSourceContext& sourceContext);
+    [[nodiscard]] static std::vector<kb::assets::AssetId> DiscoverMaterialDependencies(
+        const RenderMaterialAssetData& material,
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry);
 };
 
 } // namespace kb::render

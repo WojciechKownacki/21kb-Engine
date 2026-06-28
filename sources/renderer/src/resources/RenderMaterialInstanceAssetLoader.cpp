@@ -1,5 +1,8 @@
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 
+#include "engine/assets/AssetRegistry.hpp"
+#include "resources/RenderMaterialAssetParser.hpp"
+
 #include <charconv>
 #include <fstream>
 #include <memory>
@@ -10,6 +13,18 @@
 
 namespace kb::render {
 namespace {
+
+void AppendUnique(std::vector<kb::assets::AssetId>& dependencies, kb::assets::AssetId id) {
+    if (!id.IsValid()) {
+        return;
+    }
+    for (const kb::assets::AssetId existing : dependencies) {
+        if (existing == id) {
+            return;
+        }
+    }
+    dependencies.push_back(id);
+}
 
 [[nodiscard]] std::string_view Trim(std::string_view text) noexcept {
     while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r')) {
@@ -49,10 +64,120 @@ void AddDiagnostic(
     });
 }
 
+[[nodiscard]] bool HasMaterialParseError(const RenderMaterialAssetParseResult& result) noexcept {
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : result.diagnostics) {
+        if (diagnostic.severity == RenderMaterialAssetParseDiagnosticSeverity::Error) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::optional<RenderMaterialParameterType> ParameterTypeForGraphNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+        return RenderMaterialParameterType::Scalar;
+    case RenderMaterialGraphNodeKind::ParameterVector:
+        return RenderMaterialParameterType::Vec4;
+    case RenderMaterialGraphNodeKind::ParameterColor:
+        return RenderMaterialParameterType::Color;
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureSample:
+        return RenderMaterialParameterType::Texture;
+    case RenderMaterialGraphNodeKind::MaterialOutput:
+    case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Clamp:
+    case RenderMaterialGraphNodeKind::Lerp:
+    case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Uv:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::string StableParameterIdForGraphNode(const RenderMaterialGraphNode& node) {
+    if (!node.parameter.stableId.empty()) {
+        return node.parameter.stableId;
+    }
+    switch (node.kind) {
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+        return "scalar" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::ParameterVector:
+        return "vector" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::ParameterColor:
+        return "color" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+        return "texture" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSample:
+        return "textureSample" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::MaterialOutput:
+    case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Clamp:
+    case RenderMaterialGraphNodeKind::Lerp:
+    case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Uv:
+        break;
+    }
+    return "parameter" + std::to_string(node.id);
+}
+
+[[nodiscard]] std::optional<RenderMaterialParameterType> FindParentGraphParameterType(
+    const RenderMaterialAssetData& parentMaterial,
+    std::string_view stableId) {
+    for (const RenderMaterialGraphParameterValue& value : parentMaterial.graphParameterValues) {
+        if (value.stableId == stableId) {
+            return value.type;
+        }
+    }
+    for (const RenderMaterialGraphNode& node : parentMaterial.graph.nodes) {
+        if (StableParameterIdForGraphNode(node) != stableId) {
+            continue;
+        }
+        if (const std::optional<RenderMaterialParameterType> type = ParameterTypeForGraphNode(node.kind);
+            type.has_value()) {
+            return type;
+        }
+    }
+    return std::nullopt;
+}
+
+void AppendOverrideDiagnostics(
+    RenderMaterialInstanceAssetParseResult& result,
+    const RenderMaterialAssetParseResult& materialResult) {
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : materialResult.diagnostics) {
+        if (diagnostic.severity != RenderMaterialAssetParseDiagnosticSeverity::Error) {
+            continue;
+        }
+        std::string message{ "Invalid material instance override: " };
+        message += std::string{ RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) };
+        if (!diagnostic.message.empty()) {
+            message += ": ";
+            message += diagnostic.message;
+        }
+        AddDiagnostic(
+            result,
+            RenderMaterialInstanceAssetParseDiagnosticCode::InvalidOverrideMaterial,
+            diagnostic.line,
+            diagnostic.field,
+            std::move(message),
+            diagnostic.text);
+    }
+}
+
 [[nodiscard]] RenderMaterialInstanceAssetParseResult Parse(std::istream& input) {
     RenderMaterialInstanceAssetParseResult result;
     RenderMaterialInstanceAssetData asset{};
     bool sawContent = false;
+    bool sawOverrideContent = false;
+    std::ostringstream overrideDocument;
 
     std::string line;
     std::size_t lineNumber = 0U;
@@ -87,7 +212,8 @@ void AddDiagnostic(
             }
             asset.parentMaterialAssetId = kb::assets::AssetId{ *id };
         } else {
-            AddDiagnostic(result, RenderMaterialInstanceAssetParseDiagnosticCode::UnknownField, lineNumber, std::string{ field }, "Unknown material instance field.", std::string{ text });
+            sawOverrideContent = true;
+            overrideDocument << text << '\n';
         }
     }
 
@@ -96,6 +222,19 @@ void AddDiagnostic(
     }
     if (!asset.parentMaterialAssetId.IsValid()) {
         AddDiagnostic(result, RenderMaterialInstanceAssetParseDiagnosticCode::MissingParentMaterial, 0U, "parentMaterialAssetId", "Material instance is missing a parent material asset reference.");
+    }
+    if (sawOverrideContent) {
+        std::istringstream overrideInput{ overrideDocument.str() };
+        const RenderMaterialAssetParseResult overrides = RenderMaterialAssetParser::ParseWithDiagnostics(overrideInput);
+        if (!overrides.asset.has_value() || HasMaterialParseError(overrides)) {
+            AppendOverrideDiagnostics(result, overrides);
+            if (result.diagnostics.empty()) {
+                AddDiagnostic(result, RenderMaterialInstanceAssetParseDiagnosticCode::InvalidOverrideMaterial, 0U, {}, "Material instance override document is invalid.");
+            }
+        } else {
+            asset.overrides = *overrides.asset;
+            asset.hasOverrides = true;
+        }
     }
     if (result.diagnostics.empty()) {
         result.asset = std::move(asset);
@@ -121,8 +260,28 @@ std::string_view RenderMaterialInstanceAssetParseDiagnosticCodeName(RenderMateri
         return "unsupported_document_version";
     case RenderMaterialInstanceAssetParseDiagnosticCode::MissingParentMaterial:
         return "missing_parent_material";
+    case RenderMaterialInstanceAssetParseDiagnosticCode::InvalidOverrideMaterial:
+        return "invalid_override_material";
     }
     return "unknown_diagnostic";
+}
+
+std::string_view RenderMaterialInstanceValidationDiagnosticCodeName(RenderMaterialInstanceValidationDiagnosticCode code) noexcept {
+    switch (code) {
+    case RenderMaterialInstanceValidationDiagnosticCode::IncompatibleMaterialType:
+        return "incompatible_material_type";
+    case RenderMaterialInstanceValidationDiagnosticCode::IncompatibleMaterialTypeVersion:
+        return "incompatible_material_type_version";
+    case RenderMaterialInstanceValidationDiagnosticCode::UnknownOverrideParameter:
+        return "unknown_override_parameter";
+    case RenderMaterialInstanceValidationDiagnosticCode::IncompatibleOverrideParameterType:
+        return "incompatible_override_parameter_type";
+    }
+    return "unknown_diagnostic";
+}
+
+bool RenderMaterialInstanceValidationResult::Succeeded() const noexcept {
+    return diagnostics.empty();
 }
 
 bool RenderMaterialInstanceAssetParseResult::Succeeded() const noexcept {
@@ -178,6 +337,27 @@ kb::assets::AssetLoadResult RenderMaterialInstanceAssetLoader::Load(const kb::as
     };
 }
 
+std::vector<kb::assets::AssetId> RenderMaterialInstanceAssetLoader::DiscoverDependencies(
+    const kb::assets::AssetMetadata& metadata,
+    const kb::assets::AssetRegistry& registry) const {
+    const RenderMaterialInstanceAssetParseResult instance = LoadInstanceWithDiagnostics(metadata.physicalPath, metadata.id);
+    if (!instance.asset.has_value()) {
+        return {};
+    }
+
+    std::vector<kb::assets::AssetId> dependencies;
+    dependencies.reserve(16U);
+    AppendUnique(dependencies, instance.asset->parentMaterialAssetId);
+    if (instance.asset->hasOverrides) {
+        std::vector<kb::assets::AssetId> overrideDependencies =
+            RenderMaterialAssetLoader::DiscoverMaterialDependencies(instance.asset->overrides, metadata, registry);
+        for (const kb::assets::AssetId dependency : overrideDependencies) {
+            AppendUnique(dependencies, dependency);
+        }
+    }
+    return dependencies;
+}
+
 std::optional<RenderMaterialInstanceAssetData> RenderMaterialInstanceAssetLoader::LoadInstance(const std::filesystem::path& path) {
     RenderMaterialInstanceAssetParseResult result = LoadInstanceWithDiagnostics(path);
     return result.asset;
@@ -214,6 +394,46 @@ RenderMaterialInstanceAssetParseResult RenderMaterialInstanceAssetLoader::LoadIn
 
 RenderMaterialInstanceAssetParseResult RenderMaterialInstanceAssetLoader::LoadInstanceWithDiagnostics(std::istream& input) {
     return Parse(input);
+}
+
+RenderMaterialInstanceValidationResult RenderMaterialInstanceAssetLoader::ValidateAgainstParent(
+    const RenderMaterialInstanceAssetData& instance,
+    const RenderMaterialAssetData& parentMaterial) {
+    RenderMaterialInstanceValidationResult result{};
+    if (!instance.hasOverrides) {
+        return result;
+    }
+    if (instance.overrides.materialType != parentMaterial.materialType) {
+        result.diagnostics.push_back(RenderMaterialInstanceValidationDiagnostic{
+            .code = RenderMaterialInstanceValidationDiagnosticCode::IncompatibleMaterialType,
+            .message = "Material instance override type '" + instance.overrides.materialType + "' does not match parent material type '" + parentMaterial.materialType + "'.",
+        });
+    }
+    if (instance.overrides.materialTypeVersion != parentMaterial.materialTypeVersion) {
+        result.diagnostics.push_back(RenderMaterialInstanceValidationDiagnostic{
+            .code = RenderMaterialInstanceValidationDiagnosticCode::IncompatibleMaterialTypeVersion,
+            .message = "Material instance override type version " + std::to_string(instance.overrides.materialTypeVersion) +
+                " does not match parent material type version " + std::to_string(parentMaterial.materialTypeVersion) + ".",
+        });
+    }
+    for (const RenderMaterialGraphParameterValue& overrideValue : instance.overrides.graphParameterValues) {
+        const std::optional<RenderMaterialParameterType> parentType =
+            FindParentGraphParameterType(parentMaterial, overrideValue.stableId);
+        if (!parentType.has_value()) {
+            result.diagnostics.push_back(RenderMaterialInstanceValidationDiagnostic{
+                .code = RenderMaterialInstanceValidationDiagnosticCode::UnknownOverrideParameter,
+                .message = "Material instance override parameter '" + overrideValue.stableId + "' is not exposed by its parent material.",
+            });
+            continue;
+        }
+        if (*parentType != overrideValue.type) {
+            result.diagnostics.push_back(RenderMaterialInstanceValidationDiagnostic{
+                .code = RenderMaterialInstanceValidationDiagnosticCode::IncompatibleOverrideParameterType,
+                .message = "Material instance override parameter '" + overrideValue.stableId + "' has a type that does not match its parent material parameter.",
+            });
+        }
+    }
+    return result;
 }
 
 } // namespace kb::render

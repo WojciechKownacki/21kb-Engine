@@ -40,6 +40,10 @@ namespace {
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
+[[nodiscard]] bool IsMaterialGraphAsset(const kb::assets::AssetMetadata& metadata) {
+    return metadata.type == "RenderMaterialGraph";
+}
+
 [[nodiscard]] bool IsTextureAsset(const kb::assets::AssetMetadata& metadata) {
     return metadata.type == "RenderTexture" || metadata.type == "Texture" || metadata.importCategory == "Texture";
 }
@@ -107,6 +111,7 @@ void EditorPointerDragSourceResolver::Resolve(
             drag.assetAddsBehaviour = kb::script::ScriptBehaviourAsset::IsBehaviourAsset(*metadata);
             drag.assetAssignsAudioClip = IsAudioAsset(*metadata);
             drag.assetAssignsMaterial = IsMaterialAsset(*metadata);
+            drag.assetAssignsMaterialGraph = IsMaterialGraphAsset(*metadata);
             drag.assetAssignsTexture = IsTextureAsset(*metadata);
             return;
         }
