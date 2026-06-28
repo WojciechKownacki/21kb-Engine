@@ -238,6 +238,10 @@ std::span<const WorldTransformAffine3x4> SceneRuntimeService::TransformRenderPro
     return SceneAccess::State(scene).transformRenderProxyWorldAffine3x4;
 }
 
+std::span<const SceneEntity> SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(const Scene& scene) noexcept {
+    return SceneAccess::State(scene).meshRendererRenderProxyUpdateEntities;
+}
+
 bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     SceneState& state = SceneAccess::State(scene);
     if (state.mode == SceneMode::PrefabPrivate) {
@@ -249,6 +253,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
         state.transformRenderProxyVisibleMeshRendererIndices.clear();
         state.transformRenderProxyCameraIndices.clear();
         state.transformRenderProxyLightIndices.clear();
+        state.meshRendererRenderProxyUpdateEntities.clear();
         state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
         SynchronizeTransformHierarchy(state);
         return false;
@@ -262,6 +267,7 @@ bool SceneRuntimeService::Update(Scene& scene, float deltaSeconds) {
     state.transformRenderProxyVisibleMeshRendererIndices.clear();
     state.transformRenderProxyCameraIndices.clear();
     state.transformRenderProxyLightIndices.clear();
+    state.meshRendererRenderProxyUpdateEntities.clear();
     state.lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     state.transformRenderProxyUpdateEntities.reserve(HierarchyTrackedSlotCount(state));
     state.transformRenderProxyWorldAffine3x4.reserve(HierarchyTrackedSlotCount(state));

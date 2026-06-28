@@ -41,6 +41,7 @@ private:
     bgfx::UniformHandle materialParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialEmissiveUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle materialUvTransformUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;

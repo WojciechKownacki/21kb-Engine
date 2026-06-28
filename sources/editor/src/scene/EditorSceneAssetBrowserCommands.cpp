@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::editor {
@@ -25,6 +26,40 @@ namespace {
 
 [[nodiscard]] kb::assets::AssetManager& AssetManager(kb::scene::Scene& scene) noexcept {
     return scene.Assets().Manager();
+}
+
+[[nodiscard]] const kb::assets::AssetMetadata* FirstExternalDependent(
+    const kb::assets::AssetManager& manager,
+    kb::assets::AssetId target,
+    const std::unordered_set<std::uint64_t>& sameOperationAssets = {}) {
+    if (!target.IsValid()) {
+        return nullptr;
+    }
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.id == target || sameOperationAssets.contains(metadata.id.value)) {
+            continue;
+        }
+        for (const kb::assets::AssetId dependency : metadata.dependencies) {
+            if (dependency == target) {
+                return &metadata;
+            }
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] bool CanMutateDependencyTarget(
+    kb::assets::AssetManager& manager,
+    kb::assets::AssetId target,
+    std::string_view operation,
+    const std::unordered_set<std::uint64_t>& sameOperationAssets = {}) {
+    if (const kb::assets::AssetMetadata* dependent = FirstExternalDependent(manager, target, sameOperationAssets); dependent != nullptr) {
+        manager.SetError(
+            "Asset " + kb::assets::ToString(target) + " cannot be " + std::string{ operation } +
+            " because " + dependent->virtualPath.generic_string() + " depends on it.");
+        return false;
+    }
+    return true;
 }
 
 void RefreshAssets(kb::scene::Scene& scene) {
@@ -92,7 +127,7 @@ bool EditorSceneAssetBrowserCommands::CommitTextEdit(kb::scene::Scene& scene, Ed
         const kb::assets::AssetMetadata* metadata = manager.Registry().Find(assetBrowser.TextEditTargetAsset());
         if (metadata != nullptr) {
             const std::filesystem::path renamedVirtualPath = metadata->virtualPath.parent_path() / (value + metadata->virtualPath.extension().string());
-            committed = manager.RenameAsset(metadata->id, value);
+            committed = CanMutateDependencyTarget(manager, metadata->id, "renamed") && manager.RenameAsset(metadata->id, value);
             if (committed) {
                 if (const kb::assets::AssetMetadata* renamed = manager.Registry().FindByPath(renamedVirtualPath); renamed != nullptr) {
                     static_cast<void>(assetBrowser.SelectAsset(renamed->id, manager));
@@ -144,6 +179,17 @@ bool EditorSceneAssetBrowserCommands::DeleteSelected(kb::scene::Scene& scene, Ed
         return false;
     }
 
+    std::unordered_set<std::uint64_t> deletingAssetIds;
+    deletingAssetIds.reserve(assetsToDelete.size());
+    for (const kb::assets::AssetId asset : assetsToDelete) {
+        deletingAssetIds.insert(asset.value);
+    }
+    for (const kb::assets::AssetId asset : assetsToDelete) {
+        if (!CanMutateDependencyTarget(manager, asset, "deleted", deletingAssetIds)) {
+            return false;
+        }
+    }
+
     const std::filesystem::path openFolderBeforeDelete = assetBrowser.SelectedFolder();
     bool deleted = false;
     for (const kb::assets::AssetId asset : assetsToDelete) {
@@ -168,6 +214,9 @@ bool EditorSceneAssetBrowserCommands::DeleteSelected(kb::scene::Scene& scene, Ed
 
 bool EditorSceneAssetBrowserCommands::DeleteAsset(kb::scene::Scene& scene, EditorAssetBrowserState& assetBrowser, kb::assets::AssetId id) {
     kb::assets::AssetManager& manager = AssetManager(scene);
+    if (!CanMutateDependencyTarget(manager, id, "deleted")) {
+        return false;
+    }
     const bool deleted = manager.DeleteAsset(id);
     if (deleted) {
         assetBrowser.ClearSelection();
@@ -316,14 +365,22 @@ bool EditorSceneAssetBrowserCommands::ImportFiles(
     EditorAssetBrowserState& assetBrowser,
     std::span<const std::filesystem::path> sourceFiles,
     const std::filesystem::path& destinationVirtualFolder) {
+    return ImportFilesWithReport(scene, assetBrowser, sourceFiles, destinationVirtualFolder).ImportedCount() > 0U;
+}
+
+kb::assets::AssetImportResult EditorSceneAssetBrowserCommands::ImportFilesWithReport(
+    kb::scene::Scene& scene,
+    EditorAssetBrowserState& assetBrowser,
+    std::span<const std::filesystem::path> sourceFiles,
+    const std::filesystem::path& destinationVirtualFolder) {
     if (sourceFiles.empty()) {
-        return false;
+        return {};
     }
 
     kb::assets::AssetManager& manager = AssetManager(scene);
     const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, destinationVirtualFolder);
     if (imported.ImportedCount() == 0U) {
-        return false;
+        return imported;
     }
 
     RefreshAssets(scene);
@@ -336,7 +393,7 @@ bool EditorSceneAssetBrowserCommands::ImportFiles(
             break;
         }
     }
-    return true;
+    return imported;
 }
 
 } // namespace kb::editor

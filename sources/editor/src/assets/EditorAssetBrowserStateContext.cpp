@@ -6,16 +6,24 @@ namespace kb::editor {
 namespace {
 
 [[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) noexcept {
-    return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
+    return metadata.type == "RenderMaterial"
+        || metadata.type == "RenderMaterialInstance"
+        || metadata.type == "RenderMaterialGraph"
+        || metadata.type == "RenderMaterialType";
 }
 
 [[nodiscard]] std::vector<EditorAssetContextMenuItem> MaterialContextMenuItems(const kb::assets::AssetMetadata& metadata) {
-    std::vector<EditorAssetContextMenuItem> items{
-        EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" },
-    };
+    std::vector<EditorAssetContextMenuItem> items;
+    if (metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance") {
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Open, .label = "Open" });
+    }
     if (metadata.type == "RenderMaterial") {
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Duplicate, .label = "Duplicate" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialInstance, .label = "Create Material Instance", .separatorAfter = true });
+    } else if (metadata.type == "RenderMaterialGraph") {
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromGraph, .label = "Create Material From Graph", .separatorAfter = true });
+    } else if (metadata.type == "RenderMaterialType") {
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::CreateMaterialFromMaterialType, .label = "Create Material From Material Type", .separatorAfter = true });
     }
     items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Rename, .label = "Rename" });
     items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::Delete, .label = "Delete" });

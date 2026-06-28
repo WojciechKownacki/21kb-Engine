@@ -59,6 +59,10 @@ std::span<const WorldTransformAffine3x4> SceneRuntimeQueries::TransformRenderPro
     return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
 }
 
+std::span<const SceneEntity> SceneRuntimeQueries::MeshRendererRenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(scene_);
+}
+
 SceneRuntime::SceneRuntime(Scene& scene) noexcept
     : scene_(scene) {}
 
@@ -124,6 +128,10 @@ std::span<const SceneEntity> SceneRuntime::TransformRenderProxyUpdateEntities() 
 
 std::span<const WorldTransformAffine3x4> SceneRuntime::TransformRenderProxyWorldAffine3x4() const noexcept {
     return SceneRuntimeService::TransformRenderProxyWorldAffine3x4(scene_);
+}
+
+std::span<const SceneEntity> SceneRuntime::MeshRendererRenderProxyUpdateEntities() const noexcept {
+    return SceneRuntimeService::MeshRendererRenderProxyUpdateEntities(scene_);
 }
 
 bool SceneRuntime::Update(float deltaSeconds) {

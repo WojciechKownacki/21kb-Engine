@@ -10,7 +10,9 @@
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/EditorHostSurfaceLayoutResolver.hpp"
+#include "rendering/MaterialEditorPanelRenderer.hpp"
 
 namespace kb::editor {
 
@@ -48,6 +50,36 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
 
     if (sceneContext_.IsMaterialGraphNodeDragging()) {
         static_cast<void>(sceneContext_.EndMaterialGraphNodeDrag());
+        ReleaseCapture();
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.HasMaterialGraphPinConnection()) {
+        const kb::assets::AssetId materialId = sceneContext_.MaterialGraphPinConnectionAssetId();
+        const std::optional<RECT> materialEditorContent = EditorPanelContentResolver::Resolve(DockPanelKind::MaterialEditor, messageWindow, mainWindow_, dockModel_, floatingWindows_, metrics_);
+        if (materialEditorContent.has_value()) {
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+                ? sceneContext_.MaterialEditor().WorkingCopy()
+                : sceneContext_.ReadMaterialDocumentAsset(materialId);
+            if (material.has_value()) {
+                if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    if (!sceneContext_.CompleteMaterialGraphPinConnection(
+                        materialId,
+                        pin->nodeId,
+                        pin->pin,
+                        pin->direction == MaterialEditorGraphPinDirection::Input)) {
+                        sceneContext_.CancelMaterialGraphPinConnection();
+                    }
+                } else {
+                    sceneContext_.CancelMaterialGraphPinConnection();
+                }
+            } else {
+                sceneContext_.CancelMaterialGraphPinConnection();
+            }
+        } else {
+            sceneContext_.CancelMaterialGraphPinConnection();
+        }
         ReleaseCapture();
         EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
         return;

@@ -2,12 +2,59 @@
 
 #if defined(_WIN32)
 #include "app/EditorSceneLifecycleGuard.hpp"
+#include "engine/assets/AssetManager.hpp"
+#include "engine/assets/AssetMetadata.hpp"
+#include "engine/scene/SceneAssets.hpp"
 #include "kb/editor/docking/DockTypes.hpp"
 #include "scene/EditorSceneContext.hpp"
 
 #include <optional>
+#include <string>
 
 namespace kb::editor {
+namespace {
+
+[[nodiscard]] std::wstring DirtyMaterialPromptText(const EditorSceneContext& sceneContext, std::wstring_view action) {
+    std::wstring materialName = L"the open material";
+    const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
+    if (const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(materialId);
+        metadata != nullptr) {
+        const std::string name = metadata->name.empty() ? metadata->virtualPath.filename().string() : metadata->name;
+        materialName.assign(name.begin(), name.end());
+    }
+
+    std::wstring text = L"Save changes to ";
+    text += materialName;
+    text += L" before ";
+    text += action;
+    text += L"?\n\nYes = Save\nNo = Discard changes\nCancel = keep editing";
+    return text;
+}
+
+[[nodiscard]] bool ResolveDirtyMaterialEditorClose(HWND owner, EditorSceneContext& sceneContext, std::wstring_view action) {
+    if (!sceneContext.HasDirtyMaterialAssetEdit()) {
+        return true;
+    }
+
+    const int result = MessageBoxW(
+        owner,
+        DirtyMaterialPromptText(sceneContext, action).c_str(),
+        L"Unsaved Material",
+        MB_ICONWARNING | MB_YESNOCANCEL | MB_DEFBUTTON1 | MB_APPLMODAL);
+
+    const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
+    switch (result) {
+    case IDYES:
+        return sceneContext.SaveMaterialEditorAsset(materialId);
+    case IDNO:
+        return sceneContext.RevertMaterialEditorAsset(materialId);
+    case IDCANCEL:
+    default:
+        return false;
+    }
+}
+
+} // namespace
 
 EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, bool& running, EditorDockModel& dockModel, EditorFloatingWindowManager& floatingWindows, EditorSceneContext& sceneContext) noexcept
     : mainWindow_(mainWindow)
@@ -19,7 +66,8 @@ EditorWindowLifecycleHandler::EditorWindowLifecycleHandler(HWND& mainWindow, boo
 LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     if (const std::uint32_t panelId = floatingWindows_.Queries().PanelId(messageWindow); panelId != 0) {
         const DockPanel* panel = dockModel_.Queries().FindPanel(panelId);
-        if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor && !sceneContext_.PrepareMaterialEditorClose("closing the Material Editor")) {
+        if (panel != nullptr && panel->kind == DockPanelKind::MaterialEditor &&
+            !ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the Material Editor")) {
             return 0;
         }
         floatingWindows_.Commands().Destroy(panelId);
@@ -29,7 +77,7 @@ LRESULT EditorWindowLifecycleHandler::HandleClose(HWND messageWindow) {
     }
 
     static_cast<void>(sceneContext_.RestorePlayModeSceneSession());
-    if (!sceneContext_.PrepareMaterialEditorClose("closing the editor")) {
+    if (!ResolveDirtyMaterialEditorClose(messageWindow, sceneContext_, L"closing the editor")) {
         return 0;
     }
     const std::optional<EditorDirtySceneResolution> resolution =

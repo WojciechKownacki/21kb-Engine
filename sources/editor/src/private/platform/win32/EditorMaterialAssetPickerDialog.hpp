@@ -31,4 +31,22 @@ public:
 #endif
 };
 
+class EditorTextureAssetPickerDialog {
+public:
+    EditorTextureAssetPickerDialog() = delete;
+
+#if defined(_WIN32)
+    struct Result {
+        bool accepted = false;
+        kb::assets::AssetId assetId{};
+    };
+
+    [[nodiscard]] static Result Show(
+        HWND owner,
+        const EditorTheme& theme,
+        const EditorSceneContext& sceneContext,
+        kb::assets::AssetId currentTexture);
+#endif
+};
+
 } // namespace kb::editor

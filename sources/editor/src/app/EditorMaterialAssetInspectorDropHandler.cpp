@@ -34,6 +34,22 @@ namespace {
         return 6U;
     case InspectorPropertyId::MeshRendererMaterialSlot7:
         return 7U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker0:
+        return 0U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker1:
+        return 1U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker2:
+        return 2U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker3:
+        return 3U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker4:
+        return 4U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker5:
+        return 5U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker6:
+        return 6U;
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker7:
+        return 7U;
     default:
         return std::nullopt;
     }

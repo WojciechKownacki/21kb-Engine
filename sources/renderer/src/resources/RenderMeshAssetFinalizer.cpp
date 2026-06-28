@@ -208,6 +208,26 @@ void OptimizeMeshAssetVertexFetch(std::vector<Vertex>& vertices, std::vector<std
 
 } // namespace
 
+[[nodiscard]] std::array<float, 4> FallbackTangentForNormal(float nx, float ny, float nz) noexcept {
+    const std::array<float, 3> axis = std::abs(ny) < 0.99F
+        ? std::array<float, 3>{ 0.0F, 1.0F, 0.0F }
+        : std::array<float, 3>{ 1.0F, 0.0F, 0.0F };
+    std::array<float, 3> tangent{
+        axis[1] * nz - axis[2] * ny,
+        axis[2] * nx - axis[0] * nz,
+        axis[0] * ny - axis[1] * nx,
+    };
+    const float length = std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2]);
+    if (length > 0.0001F) {
+        tangent[0] /= length;
+        tangent[1] /= length;
+        tangent[2] /= length;
+    } else {
+        tangent = { 1.0F, 0.0F, 0.0F };
+    }
+    return { tangent[0], tangent[1], tangent[2], 1.0F };
+}
+
 void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& asset) {
     if (!asset.tangentVertices.empty()) {
         return;
@@ -215,6 +235,7 @@ void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& a
 
     asset.tangentVertices.reserve(asset.vertices.size());
     for (const RenderStaticMeshVertexP3N3UV2& vertex : asset.vertices) {
+        const std::array<float, 4> tangent = FallbackTangentForNormal(vertex.nx, vertex.ny, vertex.nz);
         asset.tangentVertices.push_back(RenderStaticMeshVertexP3N3T4UV2{
             .x = vertex.x,
             .y = vertex.y,
@@ -222,10 +243,10 @@ void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& a
             .nx = vertex.nx,
             .ny = vertex.ny,
             .nz = vertex.nz,
-            .tx = 1.0F,
-            .ty = 0.0F,
-            .tz = 0.0F,
-            .tw = 1.0F,
+            .tx = tangent[0],
+            .ty = tangent[1],
+            .tz = tangent[2],
+            .tw = tangent[3],
             .u = vertex.u,
             .v = vertex.v,
             .r = vertex.r,
@@ -240,6 +261,7 @@ bool RenderMeshAssetFinalizer::Finalize(RenderMeshAssetData& asset) {
     if (!ValidateMeshAssetIndices(asset)) {
         return false;
     }
+    EnsureTangentVertexStorage(asset);
     OptimizeMeshAssetVertexCache(asset);
     if (!asset.tangentVertices.empty()) {
         OptimizeMeshAssetVertexFetch(asset.tangentVertices, asset.indices32);
