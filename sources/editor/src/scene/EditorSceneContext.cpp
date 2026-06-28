@@ -2890,6 +2890,28 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SmoothStep, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateIf:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::If, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDesaturate:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Desaturate, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateFresnel:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Fresnel, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateNegate:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Negate, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSign:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Sign, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateRound:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Round, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTruncate:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Truncate, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTangent:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Tangent, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcSine:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcSine, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcCosine:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcCosine, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcTangent:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangent, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangent2, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateClamp:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Clamp, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateLerp:

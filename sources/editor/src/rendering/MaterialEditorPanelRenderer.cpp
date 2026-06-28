@@ -254,6 +254,21 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "min", "Min" }, { "max", "Max" }, { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::If:
         return { { "a", "A" }, { "b", "B" }, { "less", "Less" }, { "equal", "Equal" }, { "greater", "Greater" } };
+    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        return { { "color", "Color" }, { "fraction", "Fraction" } };
+    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+        return { { "normal", "Normal" }, { "view", "View" }, { "exponent", "Exponent" }, { "base", "Base" } };
+    case kb::render::RenderMaterialGraphNodeKind::Negate:
+    case kb::render::RenderMaterialGraphNodeKind::Sign:
+    case kb::render::RenderMaterialGraphNodeKind::Round:
+    case kb::render::RenderMaterialGraphNodeKind::Truncate:
+    case kb::render::RenderMaterialGraphNodeKind::Tangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+        return { { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+        return { { "y", "Y" }, { "x", "X" } };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { { "value", "Value" }, { "min", "Min" }, { "max", "Max" } };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -303,9 +318,21 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Step:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
     case kb::render::RenderMaterialGraphNodeKind::If:
+    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+    case kb::render::RenderMaterialGraphNodeKind::Negate:
+    case kb::render::RenderMaterialGraphNodeKind::Sign:
+    case kb::render::RenderMaterialGraphNodeKind::Round:
+    case kb::render::RenderMaterialGraphNodeKind::Truncate:
+    case kb::render::RenderMaterialGraphNodeKind::Tangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        return { { "color", "Color" } };
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { { "x", "X" }, { "y", "Y" }, { "z", "Z" }, { "w", "W" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -400,6 +427,28 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Smooth Step";
     case kb::render::RenderMaterialGraphNodeKind::If:
         return "If";
+    case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+        return "Desaturate";
+    case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+        return "Fresnel";
+    case kb::render::RenderMaterialGraphNodeKind::Negate:
+        return "Negate";
+    case kb::render::RenderMaterialGraphNodeKind::Sign:
+        return "Sign";
+    case kb::render::RenderMaterialGraphNodeKind::Round:
+        return "Round";
+    case kb::render::RenderMaterialGraphNodeKind::Truncate:
+        return "Truncate";
+    case kb::render::RenderMaterialGraphNodeKind::Tangent:
+        return "Tan";
+    case kb::render::RenderMaterialGraphNodeKind::ArcSine:
+        return "Asin";
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
+        return "Acos";
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+        return "Atan";
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+        return "Atan2";
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case kb::render::RenderMaterialGraphNodeKind::Lerp:

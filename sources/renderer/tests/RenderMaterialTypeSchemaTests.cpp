@@ -1239,6 +1239,17 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Step") == RenderMaterialGraphNodeKind::Step, "Material graph conditional math should parse Step node");
     Require(ParseRenderMaterialGraphNodeKind("SmoothStep") == RenderMaterialGraphNodeKind::SmoothStep, "Material graph conditional math should parse SmoothStep node");
     Require(ParseRenderMaterialGraphNodeKind("Compare") == RenderMaterialGraphNodeKind::If, "Material graph conditional math should parse Compare alias");
+    Require(ParseRenderMaterialGraphNodeKind("Desaturation") == RenderMaterialGraphNodeKind::Desaturate, "Material graph surface utility should parse Desaturation alias");
+    Require(ParseRenderMaterialGraphNodeKind("Fresnel") == RenderMaterialGraphNodeKind::Fresnel, "Material graph surface utility should parse Fresnel node");
+    Require(ParseRenderMaterialGraphNodeKind("Minus") == RenderMaterialGraphNodeKind::Negate, "Material graph advanced math should parse Minus alias");
+    Require(ParseRenderMaterialGraphNodeKind("Sign") == RenderMaterialGraphNodeKind::Sign, "Material graph advanced math should parse Sign node");
+    Require(ParseRenderMaterialGraphNodeKind("Round") == RenderMaterialGraphNodeKind::Round, "Material graph advanced math should parse Round node");
+    Require(ParseRenderMaterialGraphNodeKind("Trunc") == RenderMaterialGraphNodeKind::Truncate, "Material graph advanced math should parse Trunc alias");
+    Require(ParseRenderMaterialGraphNodeKind("Tan") == RenderMaterialGraphNodeKind::Tangent, "Material graph advanced math should parse Tan alias");
+    Require(ParseRenderMaterialGraphNodeKind("Asin") == RenderMaterialGraphNodeKind::ArcSine, "Material graph advanced math should parse Asin alias");
+    Require(ParseRenderMaterialGraphNodeKind("Acos") == RenderMaterialGraphNodeKind::ArcCosine, "Material graph advanced math should parse Acos alias");
+    Require(ParseRenderMaterialGraphNodeKind("Atan") == RenderMaterialGraphNodeKind::ArcTangent, "Material graph advanced math should parse Atan alias");
+    Require(ParseRenderMaterialGraphNodeKind("Atan2") == RenderMaterialGraphNodeKind::ArcTangent2, "Material graph advanced math should parse Atan2 alias");
 
     std::istringstream input{
         "version 1\n"
@@ -2064,6 +2075,116 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(conditionalResult.shader.source.find("abs(") != std::string::npos &&
             conditionalResult.shader.source.find("?") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit If compare expression");
+
+    RenderMaterialGraphDocument surfaceGraph = MakeDefaultRenderMaterialGraphDocument();
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+    });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" },
+    });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Desaturate, .positionX = 320, .positionY = 110 });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 300,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1" },
+    });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 6U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 400,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 -1" },
+    });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 7U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 500,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "2" },
+    });
+    surfaceGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::Fresnel, .positionX = 320, .positionY = 380 });
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::Desaturate, 4U, "color"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Desaturate, 4U, "fraction"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Desaturate, 4U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 5U, "xyz", RenderMaterialGraphNodeKind::Fresnel, 8U, "normal"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 6U, "xyz", RenderMaterialGraphNodeKind::Fresnel, 8U, "view"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::Fresnel, 8U, "exponent"));
+    surfaceGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Fresnel, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    const RenderMaterialGraphCompileResult surfaceResult = CompileRenderMaterialGraphToShaderSource(
+        surfaceGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledSurfaceUtility.kbmat",
+        });
+    Require(surfaceResult.Succeeded(), "KBMAT-GRAPH-0202: Surface utility graph should compile to shader source");
+    Require(surfaceResult.shader.source.find("vec3(0.299, 0.587, 0.114)") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Desaturate luminance expression");
+    Require(surfaceResult.shader.source.find("pow(1.0 -") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Fresnel falloff expression");
+
+    RenderMaterialGraphDocument advancedMathGraph = MakeDefaultRenderMaterialGraphDocument();
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "-0.25" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Negate });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.6" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::Round });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.75" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::Truncate });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::Sign });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 10U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 11U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 12U, .kind = RenderMaterialGraphNodeKind::Tangent });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 13U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 14U, .kind = RenderMaterialGraphNodeKind::ArcSine });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 15U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 16U, .kind = RenderMaterialGraphNodeKind::ArcCosine });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 17U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 18U, .kind = RenderMaterialGraphNodeKind::ArcTangent });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 19U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 20U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    advancedMathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 21U, .kind = RenderMaterialGraphNodeKind::ArcTangent2 });
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Negate, 3U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Negate, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 10U, "x"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Round, 5U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Round, 5U, "value", RenderMaterialGraphNodeKind::MakeVector, 10U, "y"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::Truncate, 7U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Truncate, 7U, "value", RenderMaterialGraphNodeKind::MakeVector, 10U, "z"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::Sign, 9U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Sign, 9U, "value", RenderMaterialGraphNodeKind::MakeVector, 10U, "w"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 11U, "value", RenderMaterialGraphNodeKind::Tangent, 12U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Tangent, 12U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::ArcSine, 14U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcSine, 14U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 15U, "value", RenderMaterialGraphNodeKind::ArcCosine, 16U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcCosine, 16U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 17U, "value", RenderMaterialGraphNodeKind::ArcTangent, 18U, "value"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangent, 18U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 19U, "value", RenderMaterialGraphNodeKind::ArcTangent2, 21U, "y"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 20U, "value", RenderMaterialGraphNodeKind::ArcTangent2, 21U, "x"));
+    advancedMathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangent2, 21U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult advancedMathResult = CompileRenderMaterialGraphToShaderSource(
+        advancedMathGraph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x0204U, .sourcePath = "/Game/Materials/CompiledAdvancedMath.kbmat" });
+    Require(advancedMathResult.Succeeded(), "KBMAT-GRAPH-0202: Advanced math graph should compile to shader source");
+    Require(advancedMathResult.shader.source.find("sign(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit Sign expression");
+    Require(advancedMathResult.shader.source.find("round(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit Round expression");
+    Require(advancedMathResult.shader.source.find("floor(abs(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit Truncate expression");
+    Require(advancedMathResult.shader.source.find("tan(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit Tangent expression");
+    Require(advancedMathResult.shader.source.find("asin(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcSine expression");
+    Require(advancedMathResult.shader.source.find("acos(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcCosine expression");
+    Require(advancedMathResult.shader.source.find("atan(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcTangent expression");
 
     RenderMaterialGraphDocument textureGraph = MakeDefaultRenderMaterialGraphDocument();
     textureGraph.nodes.push_back(RenderMaterialGraphNode{
