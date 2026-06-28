@@ -2557,6 +2557,114 @@ bool EditorSceneContext::SetMaterialGraphConstantValue(
     return true;
 }
 
+bool EditorSceneContext::BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+    return materialEditor_.BeginGraphConstantInlineEdit(nodeId);
+}
+
+bool EditorSceneContext::IsMaterialGraphConstantInlineEditing() const noexcept {
+    return materialEditor_.IsGraphConstantInlineEditing();
+}
+
+bool EditorSceneContext::BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+    const std::optional<float> value = materialEditor_.GraphConstantComponentValue(nodeId, componentIndex);
+    if (!value.has_value()) {
+        return false;
+    }
+    materialGraphConstantSliderAssetId_ = id;
+    materialGraphConstantSliderNodeId_ = nodeId;
+    materialGraphConstantSliderComponentIndex_ = componentIndex;
+    materialGraphConstantSliderStartX_ = x;
+    materialGraphConstantSliderStartValue_ = *value;
+    materialGraphConstantSliderLastValue_ = *value;
+    materialGraphConstantSliderStartDocument_ = materialEditor_.WorkingCopy();
+    materialGraphConstantSliderStartSelectedNodeId_ = materialEditor_.SelectedNodeId();
+    materialGraphConstantSliderChanged_ = false;
+    materialGraphConstantSliderDragging_ = true;
+    return true;
+}
+
+bool EditorSceneContext::DragMaterialGraphConstantSlider(int x) {
+    if (!materialGraphConstantSliderDragging_ ||
+        materialEditor_.OpenAssetId() != materialGraphConstantSliderAssetId_ ||
+        !materialEditor_.WorkingCopy().has_value() ||
+        materialGraphConstantSliderNodeId_ == 0U) {
+        return false;
+    }
+    const float graphAdjustedDelta = static_cast<float>(x - materialGraphConstantSliderStartX_) / std::max(0.1F, materialGraphZoom_);
+    const float rawValue = materialGraphConstantSliderStartValue_ + (graphAdjustedDelta * 0.02F);
+    const float nextValue = std::clamp(std::round(rawValue * 10.0F) / 10.0F, 0.0F, 1.0F);
+    if (std::abs(nextValue - materialGraphConstantSliderLastValue_) < 0.0001F) {
+        return false;
+    }
+    if (!materialEditor_.SetGraphConstantComponentValue(materialGraphConstantSliderNodeId_, materialGraphConstantSliderComponentIndex_, nextValue)) {
+        return false;
+    }
+    materialGraphConstantSliderLastValue_ = nextValue;
+    materialGraphConstantSliderChanged_ = true;
+    materialEditor_.ClearDiagnostics();
+    return true;
+}
+
+bool EditorSceneContext::EndMaterialGraphConstantSliderDrag() {
+    if (!materialGraphConstantSliderDragging_) {
+        return false;
+    }
+    const bool shouldRecord = materialGraphConstantSliderChanged_ && materialGraphConstantSliderStartDocument_.has_value();
+    const kb::assets::AssetId assetId = materialGraphConstantSliderAssetId_;
+    std::optional<kb::render::RenderMaterialAssetData> before = std::move(materialGraphConstantSliderStartDocument_);
+    const std::uint32_t beforeSelectedNodeId = materialGraphConstantSliderStartSelectedNodeId_;
+    materialGraphConstantSliderDragging_ = false;
+    materialGraphConstantSliderAssetId_ = {};
+    materialGraphConstantSliderNodeId_ = 0U;
+    materialGraphConstantSliderComponentIndex_ = 0U;
+    materialGraphConstantSliderStartX_ = 0;
+    materialGraphConstantSliderStartValue_ = 0.0F;
+    materialGraphConstantSliderLastValue_ = 0.0F;
+    materialGraphConstantSliderStartSelectedNodeId_ = 0U;
+    materialGraphConstantSliderChanged_ = false;
+    if (shouldRecord) {
+        return RecordMaterialGraphWorkingCopyEdit(assetId, "Edit Material Graph Constant", std::move(*before), beforeSelectedNodeId);
+    }
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialGraphConstantSliderDragging() const noexcept {
+    return materialGraphConstantSliderDragging_;
+}
+
+void EditorSceneContext::AppendMaterialGraphConstantInlineEditText(wchar_t character) {
+    materialEditor_.AppendGraphConstantInlineEditText(character);
+}
+
+void EditorSceneContext::BackspaceMaterialGraphConstantInlineEdit() {
+    materialEditor_.BackspaceGraphConstantInlineEdit();
+}
+
+bool EditorSceneContext::CommitMaterialGraphConstantInlineEdit() {
+    const kb::assets::AssetId id = materialEditor_.OpenAssetId();
+    const std::uint32_t nodeId = materialEditor_.GraphConstantInlineEditNodeId();
+    const std::string value{ materialEditor_.GraphConstantInlineEditBuffer() };
+    if (!id.IsValid() || nodeId == 0U) {
+        materialEditor_.CancelGraphConstantInlineEdit();
+        return false;
+    }
+    const bool committed = SetMaterialGraphConstantValue(id, nodeId, value);
+    if (committed) {
+        materialEditor_.CancelGraphConstantInlineEdit();
+    }
+    return committed;
+}
+
+void EditorSceneContext::CancelMaterialGraphConstantInlineEdit() noexcept {
+    materialEditor_.CancelGraphConstantInlineEdit();
+}
+
 bool EditorSceneContext::BeginMaterialGraphPinConnection(kb::assets::AssetId id, std::uint32_t nodeId, std::string pin) {
     return BeginMaterialGraphPinConnection(id, nodeId, std::move(pin), true, 0, 0);
 }
@@ -2703,10 +2811,10 @@ bool EditorSceneContext::DisconnectMaterialGraphLink(
     return true;
 }
 
-bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
+bool EditorSceneContext::DetachMaterialGraphInputPinConnection(
     kb::assets::AssetId id,
-    std::uint32_t fromNodeId,
-    std::string_view fromPin,
+    std::uint32_t toNodeId,
+    std::string_view toPin,
     int x,
     int y) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
@@ -2715,7 +2823,7 @@ bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
 
     const kb::render::RenderMaterialGraphLink* detachedLink = nullptr;
     for (const kb::render::RenderMaterialGraphLink& link : materialEditor_.WorkingCopy()->graph.links) {
-        if (link.fromNodeId == fromNodeId && link.fromPin == fromPin) {
+        if (link.toNodeId == toNodeId && link.toPin == toPin) {
             detachedLink = &link;
             break;
         }
@@ -2724,12 +2832,13 @@ bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
         return false;
     }
 
-    const std::uint32_t toNodeId = detachedLink->toNodeId;
-    const std::string toPin = detachedLink->toPin;
-    if (!DisconnectMaterialGraphLink(id, fromNodeId, fromPin, toNodeId, toPin)) {
+    const std::uint32_t fromNodeId = detachedLink->fromNodeId;
+    const std::string fromPin = detachedLink->fromPin;
+    const std::string inputPin{ toPin };
+    if (!DisconnectMaterialGraphLink(id, fromNodeId, fromPin, toNodeId, inputPin)) {
         return false;
     }
-    return BeginMaterialGraphPinConnection(id, toNodeId, toPin, false, x, y);
+    return BeginMaterialGraphPinConnection(id, fromNodeId, fromPin, true, x, y);
 }
 
 void EditorSceneContext::CancelMaterialGraphPinConnection() noexcept {
@@ -2867,6 +2976,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Uv, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScalar:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVector2:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector2, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVector:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateColor:

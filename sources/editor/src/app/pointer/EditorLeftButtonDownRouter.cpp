@@ -50,6 +50,49 @@ constexpr int kHierarchyScrollbarMinThumb = 24;
     return (GetKeyState(VK_LMENU) & 0x8000) != 0;
 }
 
+[[nodiscard]] bool KeyDown(int virtualKey) noexcept {
+    return (GetKeyState(virtualKey) & 0x8000) != 0;
+}
+
+[[nodiscard]] std::optional<kb::render::RenderMaterialGraphNodeKind> MaterialGraphShortcutNodeKind() noexcept {
+    if (KeyDown(VK_CONTROL) || KeyDown(VK_MENU)) {
+        return std::nullopt;
+    }
+    if (KeyDown('1')) {
+        return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
+    }
+    if (KeyDown('2')) {
+        return kb::render::RenderMaterialGraphNodeKind::ConstantVector2;
+    }
+    if (KeyDown('3')) {
+        return kb::render::RenderMaterialGraphNodeKind::ConstantVector;
+    }
+    if (KeyDown('4')) {
+        return kb::render::RenderMaterialGraphNodeKind::ConstantColor;
+    }
+    if (KeyDown('S')) {
+        return kb::render::RenderMaterialGraphNodeKind::ParameterScalar;
+    }
+    if (KeyDown('V')) {
+        return kb::render::RenderMaterialGraphNodeKind::ParameterVector;
+    }
+    if (KeyDown('T')) {
+        return kb::render::RenderMaterialGraphNodeKind::TextureSample;
+    }
+    if (KeyDown('U')) {
+        return kb::render::RenderMaterialGraphNodeKind::Uv;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] POINT MaterialGraphCanvasPoint(const MaterialEditorPanelLayout& layout, const EditorSceneContext& sceneContext, int x, int y) noexcept {
+    const float zoom = std::max(0.1F, sceneContext.MaterialGraphZoom());
+    return POINT{
+        static_cast<LONG>(static_cast<float>(x - layout.graphCanvas.left - sceneContext.MaterialGraphPanX()) / zoom),
+        static_cast<LONG>(static_cast<float>(y - layout.graphCanvas.top - sceneContext.MaterialGraphPanY()) / zoom),
+    };
+}
+
 [[nodiscard]] const DockPanelLayout* TabCloseHit(const DockLayout& layout, int x, int y) noexcept {
     for (const DockPanelLayout& panel : layout.panels) {
         if (DockTabControlGeometry::ContainsClose(panel.tab, x, y)) {
@@ -330,9 +373,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 if (const std::optional<MaterialEditorGraphPinHit> pin = MaterialEditorPanelRenderer::GraphPinAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(pin->nodeId));
                     const bool connectionStarted = pin->direction == MaterialEditorGraphPinDirection::Output
-                        ? (sceneContext_.DetachMaterialGraphOutputPinConnection(materialId, pin->nodeId, pin->pin, x, y) ||
-                            sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y))
-                        : sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y);
+                        ? sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, true, x, y)
+                        : (sceneContext_.DetachMaterialGraphInputPinConnection(materialId, pin->nodeId, pin->pin, x, y) ||
+                            sceneContext_.BeginMaterialGraphPinConnection(materialId, pin->nodeId, pin->pin, false, x, y));
                     if (connectionStarted) {
                         SetCapture(messageWindow);
                     }
@@ -354,12 +397,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 }
                 if (const std::optional<MaterialEditorGraphConstantValueHit> constant = MaterialEditorPanelRenderer::GraphConstantValueAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
                     static_cast<void>(sceneContext_.SelectMaterialGraphNode(constant->nodeId));
-                    const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
-                        mainWindow_,
-                        constant->displayName,
-                        MaterialEditorPanelParameterValueText(constant->value));
-                    if (value.has_value()) {
-                        static_cast<void>(sceneContext_.SetMaterialGraphConstantValue(materialId, constant->nodeId, *value));
+                    static_cast<void>(sceneContext_.BeginMaterialGraphConstantInlineEdit(materialId, constant->nodeId));
+                    if (sceneContext_.BeginMaterialGraphConstantSliderDrag(materialId, constant->nodeId, constant->componentIndex, x)) {
+                        SetCapture(messageWindow);
                     }
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
@@ -370,6 +410,9 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     if (sceneContext_.BeginMaterialGraphNodeDrag(materialId, *nodeId, x, y)) {
                         SetCapture(messageWindow);
                     }
+                } else if (const std::optional<kb::render::RenderMaterialGraphNodeKind> shortcutKind = MaterialGraphShortcutNodeKind()) {
+                    const POINT graphPoint = MaterialGraphCanvasPoint(materialLayout, sceneContext_, x, y);
+                    static_cast<void>(sceneContext_.AddMaterialGraphNode(materialId, *shortcutKind, graphPoint.x, graphPoint.y));
                 } else {
                     static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
                 }

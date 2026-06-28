@@ -34,6 +34,15 @@ namespace {
     return metadata == nullptr ? 0U : metadata->contentHash;
 }
 
+[[nodiscard]] std::uint64_t AssetDependencyHash(const kb::scene::Scene& scene, std::uint64_t assetId) noexcept {
+    if (assetId == 0U) {
+        return 0U;
+    }
+    const kb::assets::AssetMetadata* metadata = scene.Assets().Manager().Registry().Find(kb::assets::AssetId{ assetId });
+    const std::uint64_t contentHash = metadata == nullptr ? 0U : metadata->contentHash;
+    return assetId ^ (contentHash + 0x9e3779b97f4a7c15ULL + (assetId << 6U) + (assetId >> 2U));
+}
+
 [[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
     return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
 }
@@ -45,6 +54,36 @@ namespace {
         hash *= 1099511628211ULL;
     }
     return hash == 0U ? 1U : hash;
+}
+
+[[nodiscard]] std::uint64_t MaterialTextureDependencyHash(
+    const kb::scene::Scene& scene,
+    const kb::render::RenderMaterialAssetData& material) noexcept {
+    std::uint64_t hash = 0xBADC0FFEE0DDF00DULL;
+    const auto appendTexture = [&scene, &hash](std::uint64_t assetId) noexcept {
+        if (assetId != 0U) {
+            hash = HashCombine(hash, AssetDependencyHash(scene, assetId));
+        }
+    };
+    appendTexture(material.desc.albedoTextureAssetId);
+    appendTexture(material.desc.normalTextureAssetId);
+    appendTexture(material.desc.metallicRoughnessTextureAssetId);
+    appendTexture(material.desc.occlusionTextureAssetId);
+    appendTexture(material.desc.emissiveTextureAssetId);
+    appendTexture(material.desc.clearcoatTextureAssetId);
+    appendTexture(material.desc.clearcoatRoughnessTextureAssetId);
+    appendTexture(material.desc.sheenColorTextureAssetId);
+    appendTexture(material.desc.transmissionTextureAssetId);
+    appendTexture(material.desc.thicknessTextureAssetId);
+    appendTexture(material.desc.anisotropyTextureAssetId);
+    appendTexture(material.desc.decalTextureAssetId);
+    appendTexture(material.desc.layerMaskTextureAssetId);
+    for (const kb::render::RenderMaterialGraphParameterValue& value : material.graphParameterValues) {
+        if (value.type == kb::render::RenderMaterialParameterType::Texture) {
+            appendTexture(value.assetId);
+        }
+    }
+    return hash;
 }
 
 [[nodiscard]] std::uint64_t WorkingCopyContentHash(const kb::render::RenderMaterialAssetData& material) {
@@ -95,7 +134,9 @@ namespace {
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* workingCopy) {
     if (workingCopy != nullptr) {
-        return HashCombine(WorkingCopyContentHash(*workingCopy), 0xA11CE21FULL);
+        return HashCombine(
+            HashCombine(WorkingCopyContentHash(*workingCopy), MaterialTextureDependencyHash(scene, *workingCopy)),
+            0xA11CE21FULL);
     }
     return MaterialDocumentContentHash(scene, materialAssetId);
 }
@@ -190,9 +231,8 @@ const kb::scene::Scene& EditorMaterialPreviewScene::SceneFor(
     const kb::scene::Scene& sourceScene,
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* workingCopy) {
-    const std::uint64_t sourceRevision = sourceScene.Assets().Manager().Revision();
     const std::uint64_t contentHash = MaterialPreviewContentHash(sourceScene, materialAssetId, workingCopy);
-    if (scene_ == nullptr || materialAssetId_.value != materialAssetId.value || sourceAssetRevision_ != sourceRevision || materialContentHash_ != contentHash) {
+    if (scene_ == nullptr || materialAssetId_.value != materialAssetId.value || materialContentHash_ != contentHash) {
         Rebuild(sourceScene, materialAssetId, workingCopy, contentHash);
     }
     return *scene_;
@@ -233,7 +273,6 @@ void EditorMaterialPreviewScene::Clear() noexcept {
     }
     telemetry_ = {};
     materialAssetId_ = {};
-    sourceAssetRevision_ = 0U;
     materialContentHash_ = 0U;
     ++revision_;
 }
@@ -276,7 +315,6 @@ void EditorMaterialPreviewScene::Rebuild(
 
     telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(targetManager, materialAssetId, resolved.resolved ? &telemetryMaterial : nullptr, true);
     materialAssetId_ = materialAssetId;
-    sourceAssetRevision_ = sourceScene.Assets().Manager().Revision();
     materialContentHash_ = contentHash;
     ++revision_;
 }

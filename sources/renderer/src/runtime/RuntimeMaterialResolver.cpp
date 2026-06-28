@@ -16,6 +16,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace kb::render {
@@ -316,6 +317,7 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
         return "color" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::Add:
@@ -442,6 +444,13 @@ struct MaterialGraphRuntimeValue {
     return RuntimeValue(x, y, z, 1.0F, RenderMaterialGraphPinType::Float3, !values.empty());
 }
 
+[[nodiscard]] MaterialGraphRuntimeValue ConstantVector2RuntimeValue(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
+    const float x = values.size() > 0U ? values[0] : 0.0F;
+    const float y = values.size() > 1U ? values[1] : x;
+    return RuntimeValue(x, y, 0.0F, 1.0F, RenderMaterialGraphPinType::Float2, !values.empty());
+}
+
 [[nodiscard]] MaterialGraphRuntimeValue ConstantColorRuntimeValue(const RenderMaterialGraphNode& node) {
     const std::vector<float> values = ParseGraphDefaultNumbers(node.parameter.defaultValueHint);
     const float r = values.size() > 0U ? values[0] : 1.0F;
@@ -513,6 +522,58 @@ struct MaterialGraphRuntimeValue {
     return {};
 }
 
+[[nodiscard]] RenderMaterialGraphDocument MaterialOutputRuntimeGraph(const RenderMaterialGraphDocument& graph) {
+    const RenderMaterialGraphNode* output = nullptr;
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            output = &node;
+            break;
+        }
+    }
+    if (output == nullptr) {
+        return graph;
+    }
+
+    std::unordered_set<std::uint32_t> nodeIds;
+    std::unordered_set<std::uint32_t> linkIds;
+    std::vector<std::uint32_t> stack{ output->id };
+    static_cast<void>(nodeIds.insert(output->id));
+    while (!stack.empty()) {
+        const std::uint32_t nodeId = stack.back();
+        stack.pop_back();
+        for (const RenderMaterialGraphLink& link : graph.links) {
+            if (link.toNodeId != nodeId) {
+                continue;
+            }
+            static_cast<void>(linkIds.insert(link.id));
+            if (FindRenderMaterialGraphNode(graph, link.fromNodeId) != nullptr && nodeIds.insert(link.fromNodeId).second) {
+                stack.push_back(link.fromNodeId);
+            }
+        }
+    }
+
+    RenderMaterialGraphDocument runtimeGraph = graph;
+    runtimeGraph.nodes.clear();
+    runtimeGraph.links.clear();
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (nodeIds.contains(node.id)) {
+            runtimeGraph.nodes.push_back(node);
+        }
+    }
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (linkIds.contains(link.id)) {
+            runtimeGraph.links.push_back(link);
+        }
+    }
+    return runtimeGraph;
+}
+
+[[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> ValidateMaterialOutputRuntimeGraphDiagnostics(const RenderMaterialAssetData& asset) {
+    RenderMaterialAssetData runtimeAsset = asset;
+    runtimeAsset.graph = MaterialOutputRuntimeGraph(asset.graph);
+    return ValidateRenderMaterialAssetGraphDiagnostics(runtimeAsset);
+}
+
 [[nodiscard]] MaterialGraphRuntimeValue EvaluateGraphNodeOutput(
     const RenderMaterialAssetData& materialAsset,
     const RenderMaterialGraphNode& node,
@@ -573,6 +634,9 @@ struct MaterialGraphRuntimeValue {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::ConstantScalar:
         result = ConstantScalarRuntimeValue(node);
+        break;
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+        result = ConstantVector2RuntimeValue(node);
         break;
     case RenderMaterialGraphNodeKind::ConstantVector:
         result = ConstantVectorRuntimeValue(node);
@@ -1490,7 +1554,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
             return fallback;
         }
 
-        const std::vector<RenderMaterialGraphDiagnostic> graphDiagnostics = ValidateRenderMaterialAssetGraphDiagnostics(*loaded.asset);
+        const std::vector<RenderMaterialGraphDiagnostic> graphDiagnostics = ValidateMaterialOutputRuntimeGraphDiagnostics(*loaded.asset);
         const bool graphHasError = std::any_of(graphDiagnostics.begin(), graphDiagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
             return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
         });
@@ -1605,7 +1669,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     }
 
     const RenderMaterialAssetData instanceMaterial = BuildResolvedMaterialInstanceAsset(*parentMaterial.asset, *instance);
-    const std::vector<RenderMaterialGraphDiagnostic> instanceGraphDiagnostics = ValidateRenderMaterialAssetGraphDiagnostics(instanceMaterial);
+    const std::vector<RenderMaterialGraphDiagnostic> instanceGraphDiagnostics = ValidateMaterialOutputRuntimeGraphDiagnostics(instanceMaterial);
     const bool instanceGraphHasError = std::any_of(instanceGraphDiagnostics.begin(), instanceGraphDiagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
     });
