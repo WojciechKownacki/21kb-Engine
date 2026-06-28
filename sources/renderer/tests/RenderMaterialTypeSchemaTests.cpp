@@ -1066,6 +1066,14 @@ void RunMaterialGraphRoundTripTest() {
         .kind = RenderMaterialGraphNodeKind::ConstantColor,
         .positionX = 240,
         .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .displayName = "Warm Tint",
+            .defaultValueHint = "0.2 0.4 0.6 1",
+            .hasRange = true,
+            .rangeMin = 0.0F,
+            .rangeMax = 1.0F,
+            .overrideSupported = false,
+        },
     });
     RenderMaterialGraphLink baseColorLink{
         .fromNodeId = 2U,
@@ -1089,6 +1097,8 @@ void RunMaterialGraphRoundTripTest() {
     Require(output.str().find("graphArtifactFailurePolicy LastGoodThenErrorMaterial\n") != std::string::npos, "Material writer did not emit graph artifact failure policy");
     Require(output.str().find("graphNode 1 MaterialOutput 640 240\n") != std::string::npos, "Material writer did not emit material output node");
     Require(output.str().find("graphNode 2 ConstantColor 240 180\n") != std::string::npos, "Material writer did not emit constant color node");
+    Require(output.str().find("graphParameter 2 _ Warm%20Tint Core 0.2%200.4%200.6%201 0.000000 1.000000 _ Unknown false 0 _\n") != std::string::npos,
+        "Material writer did not emit constant color value metadata");
     const std::string expectedLink = "graphLink " + std::to_string(baseColorLink.id) + " 2 " + std::to_string(baseColorLink.fromPinId) + " rgba 1 " + std::to_string(baseColorLink.toPinId) + " baseColor\n";
     Require(output.str().find(expectedLink) != std::string::npos, "Material writer did not emit graph link with stable ids");
 
@@ -1107,6 +1117,11 @@ void RunMaterialGraphRoundTripTest() {
     Require(result.asset->graph.links.size() == 1U, "Material graph round-trip lost links");
     Require(result.asset->graph.nodes[0].kind == RenderMaterialGraphNodeKind::MaterialOutput, "Material graph round-trip changed output node kind");
     Require(result.asset->graph.nodes[1].kind == RenderMaterialGraphNodeKind::ConstantColor, "Material graph round-trip changed constant node kind");
+    Require(result.asset->graph.nodes[1].parameter.displayName == "Warm Tint" &&
+            result.asset->graph.nodes[1].parameter.defaultValueHint == "0.2 0.4 0.6 1" &&
+            result.asset->graph.nodes[1].parameter.hasRange &&
+            !result.asset->graph.nodes[1].parameter.overrideSupported,
+        "Material graph round-trip lost constant color value metadata");
     Require(result.asset->graph.links[0].fromNodeId == 2U && result.asset->graph.links[0].toNodeId == 1U, "Material graph round-trip changed link nodes");
     Require(result.asset->graph.links[0].id == baseColorLink.id && result.asset->graph.links[0].fromPinId == baseColorLink.fromPinId && result.asset->graph.links[0].toPinId == baseColorLink.toPinId, "Material graph round-trip changed stable link identity");
     Require(result.asset->graph.links[0].fromPin == "rgba" && result.asset->graph.links[0].toPin == "baseColor", "Material graph round-trip changed link pins");
@@ -1610,6 +1625,39 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
         "KBMAT-GRAPH-0202: Shader compiler should emit connected BaseColor expression");
     Require(result.shader.source.find("material.roughness = 1.0;") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit PBR default roughness");
+
+    RenderMaterialGraphDocument authoredConstantGraph = MakeDefaultRenderMaterialGraphDocument();
+    authoredConstantGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "0.25 0.5 0.75 1",
+        },
+    });
+    authoredConstantGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 200,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "0.42",
+        },
+    });
+    authoredConstantGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    authoredConstantGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    const RenderMaterialGraphCompileResult authoredConstantResult = CompileRenderMaterialGraphToShaderSource(
+        authoredConstantGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/AuthoredConstants.kbmat",
+        });
+    Require(authoredConstantResult.Succeeded(), "KBMAT-GRAPH-0202: Authored constant graph should compile");
+    Require(authoredConstantResult.shader.source.find("material.baseColor = vec4(0.25, 0.5, 0.75, 1.0);") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantColor values");
+    Require(authoredConstantResult.shader.source.find("material.roughness = 0.42;") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantScalar values");
 
     RenderMaterialGraphDocument textureGraph = MakeDefaultRenderMaterialGraphDocument();
     textureGraph.nodes.push_back(RenderMaterialGraphNode{
