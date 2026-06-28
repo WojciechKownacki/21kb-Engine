@@ -2,7 +2,9 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -29,14 +31,18 @@ public:
     [[nodiscard]] static std::optional<kb::render::RenderMaterialAssetData> Read(const kb::scene::Scene& scene, kb::assets::AssetId id);
     [[nodiscard]] static bool WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset);
     [[nodiscard]] bool WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset);
+    [[nodiscard]] bool WriteNewMaterialGraph(const std::filesystem::path& path, const kb::render::RenderMaterialGraphDocument& graph);
     [[nodiscard]] bool WriteNewMaterialInstance(const std::filesystem::path& path, const kb::render::RenderMaterialInstanceAssetData& asset);
+    [[nodiscard]] bool WriteNewMaterialType(const std::filesystem::path& path, const kb::render::RenderMaterialTypeDocument& document);
     [[nodiscard]] std::optional<std::filesystem::path> DuplicateMaterial(kb::assets::AssetId id);
     [[nodiscard]] bool Mutate(kb::assets::AssetId id, const std::function<void(kb::render::RenderMaterialAssetData&)>& mutate);
 
 private:
     void DiscoverAndSelect(const std::filesystem::path& path);
     void EnsureMaterialLoader();
+    void EnsureMaterialGraphLoader();
     void EnsureMaterialInstanceLoader();
+    void EnsureMaterialTypeLoader();
 
     kb::scene::Scene& scene_;
     EditorAssetBrowserState& browser_;

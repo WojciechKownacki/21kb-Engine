@@ -26,6 +26,19 @@ enum class RuntimeMaterialResolveStatus : std::uint8_t {
     Resolved,
     DefaultMaterial,
     ErrorMaterial,
+    LastGoodMaterial,
+};
+
+enum class RuntimeFallbackMaterialKind : std::uint8_t {
+    Default,
+    Error,
+};
+
+struct RuntimeFallbackMaterialProfile {
+    RuntimeFallbackMaterialKind kind = RuntimeFallbackMaterialKind::Default;
+    RuntimeMaterialResolveStatus status = RuntimeMaterialResolveStatus::DefaultMaterial;
+    std::string_view stableName;
+    RenderMaterialDesc desc{};
 };
 
 enum class RuntimeMaterialResolveDiagnosticSeverity : std::uint8_t {
@@ -40,6 +53,9 @@ enum class RuntimeMaterialResolveDiagnosticKind : std::uint8_t {
     MaterialInstanceLoadFailed,
     MissingParentMaterial,
     ParentMaterialLoadFailed,
+    MaterialInstanceValidationFailed,
+    MaterialTypeReferenceValidationFailed,
+    MaterialGraphValidationFailed,
     UnresolvedTexturePath,
 };
 
@@ -63,6 +79,10 @@ struct ResolvedRuntimeMaterialAsset {
 class RuntimeMaterialResolver {
 public:
     [[nodiscard]] static std::uint64_t EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept;
+    [[nodiscard]] static std::uint64_t MaterialRuntimeContentHash(
+        kb::assets::AssetManager& manager,
+        const kb::assets::AssetMetadata& metadata);
+    [[nodiscard]] static RuntimeFallbackMaterialProfile FallbackMaterialProfile(RuntimeFallbackMaterialKind kind) noexcept;
     [[nodiscard]] static RenderMaterialDesc DefaultMaterialDesc() noexcept;
     [[nodiscard]] static RenderMaterialDesc ErrorMaterialDesc() noexcept;
 

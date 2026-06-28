@@ -22,11 +22,23 @@ namespace {
     return parent.empty() ? std::filesystem::path{ "/Game" } : parent;
 }
 
+[[nodiscard]] bool IsSafeEmbeddedTexturePath(const std::filesystem::path& texturePath) {
+    if (texturePath.empty() || texturePath.is_absolute() || texturePath.has_root_name()) {
+        return false;
+    }
+    for (const std::filesystem::path& part : texturePath) {
+        if (part == "." || part == ".." || part.empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] std::vector<std::filesystem::path> CandidateTexturePaths(
     const std::filesystem::path& texturePath,
     const kb::assets::AssetMetadata& meshMetadata) {
     std::vector<std::filesystem::path> candidates;
-    if (texturePath.empty()) {
+    if (!IsSafeEmbeddedTexturePath(texturePath)) {
         return candidates;
     }
 
@@ -103,6 +115,11 @@ void ResolveSlot(
     }
 
     *binding.materialPath = *binding.sourcePath;
+    if (!IsSafeEmbeddedTexturePath(std::filesystem::path{ *binding.sourcePath })) {
+        diagnostics.push_back(
+            "Blocked unsafe embedded material texture '" + *binding.sourcePath + "' for " + std::string{ binding.label } + ".");
+        return;
+    }
     if (const std::optional<kb::assets::AssetId> textureId = ResolveTexture(*binding.sourcePath, meshMetadata, manager)) {
         *binding.materialAssetId = textureId->value;
         binding.materialPath->clear();

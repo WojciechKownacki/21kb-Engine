@@ -4,11 +4,17 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/ImportedAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialCookPayload.hpp"
+#include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/RenderMeshAssetBuilder.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 
@@ -23,6 +29,15 @@
 
 namespace kb::render::tests {
 namespace {
+
+[[nodiscard]] bool ContainsDependency(const std::vector<kb::assets::AssetId>& dependencies, kb::assets::AssetId id) noexcept {
+    for (const kb::assets::AssetId dependency : dependencies) {
+        if (dependency == id) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void RunRenderTextureColorSpaceDescTest() {
     const bgfx::Memory memory{};
@@ -275,11 +290,15 @@ void RunObjImporterBuildsRenderMeshDescWithSectionsAndSlotsTest() {
     });
 
     Require(asset.has_value(), "OBJ importer failed to build a mesh asset");
-    Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3UV2, "OBJ importer did not choose the expected vertex format");
+    Require(asset->desc.vertexFormat == RenderVertexFormat::P3N3T4UV2, "OBJ importer did not synthesize tangent vertex storage for the PBR shader");
+    Require(asset->vertices.empty() && asset->tangentVertices.size() == asset->desc.vertexCount, "OBJ importer did not expose tangent vertices through RenderMeshDesc");
     Require(asset->desc.indexFormat == RenderIndexFormat::Uint16, "OBJ importer did not compact small OBJ indices to uint16");
     Require(asset->desc.vertexCount == 4U, "OBJ importer did not deduplicate shared vertex tuples");
     Require(asset->desc.indexCount == 9U, "OBJ importer did not triangulate face indices");
     Require(asset->sections.size() == 2U, "OBJ importer did not create material sections");
+    Require(asset->materialNames.size() == 2U && asset->materialNames[0] == "body" && asset->materialNames[1] == "trim", "OBJ importer did not preserve material slot names");
+    Require(asset->materialSlots.size() == 2U, "OBJ importer did not preserve mesh material slots");
+    Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U, "OBJ importer did not keep section-to-material-slot mapping");
     Require(asset->bounds.IsValid() && asset->desc.bounds.IsValid(), "OBJ importer did not compute mesh bounds");
     Require(NearlyEqual(asset->bounds.center[0], 0.5F) && NearlyEqual(asset->bounds.center[1], 0.5F), "OBJ importer computed the wrong mesh bounds center");
     Require(asset->sections[0].bounds.IsValid() && asset->sections[1].bounds.IsValid(), "OBJ importer did not compute section bounds");
@@ -305,11 +324,16 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
             << "v 0 0 0\n"
             << "v 1 0 0\n"
             << "v 1 1 0\n"
+            << "v 0 1 0\n"
             << "vt 0 0\n"
             << "vt 1 0\n"
             << "vt 1 1\n"
+            << "vt 0 1\n"
             << "vn 0 0 1\n"
-            << "f 1/1/1 2/2/1 3/3/1\n";
+            << "usemtl body\n"
+            << "f 1/1/1 2/2/1 3/3/1\n"
+            << "usemtl trim\n"
+            << "f 1/1/1 3/3/1 4/4/1\n";
     }
 
     kb::assets::AssetManager manager;
@@ -321,7 +345,10 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsObjThroughAssetManagerTest() {
     Require(metadata != nullptr && metadata->type == "RenderMesh", "AssetManager registered the OBJ mesh with the wrong type");
     const kb::assets::AssetHandle<RenderMeshAssetData> asset = manager.Load<RenderMeshAssetData>(metadata->id);
     Require(asset.IsLoaded(), "AssetManager did not load RenderMeshAssetData through RenderMeshAssetLoader");
-    Require(asset->desc.vertexCount == 3U && asset->desc.indexCount == 3U, "Loaded RenderMeshAssetData has the wrong geometry counts");
+    Require(asset->desc.vertexCount == 4U && asset->desc.indexCount == 6U, "Loaded RenderMeshAssetData has the wrong geometry counts");
+    Require(asset->materialNames.size() == 2U && asset->materialNames[0] == "body" && asset->materialNames[1] == "trim", "Loaded OBJ mesh did not preserve material slot names");
+    Require(asset->materialSlots.size() == 2U && asset->sections.size() == 2U, "Loaded OBJ mesh did not preserve material slots");
+    Require(asset->sections[0].materialSlot == 0U && asset->sections[1].materialSlot == 1U, "Loaded OBJ mesh did not preserve section material slot mapping");
 
     std::filesystem::remove_all(root, error);
 }
@@ -462,7 +489,7 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
             << "      \"baseColorFactor\": [0.2, 0.4, 0.8, 0.5],\n"
             << "      \"metallicFactor\": 0.7,\n"
             << "      \"roughnessFactor\": 0.35,\n"
-            << "      \"baseColorTexture\": { \"index\": 0 },\n"
+            << "      \"baseColorTexture\": { \"index\": 0, \"extensions\": { \"KHR_texture_transform\": { \"offset\": [0.25, 0.5], \"scale\": [2.0, 3.0] } } },\n"
             << "      \"metallicRoughnessTexture\": { \"index\": 1 }\n"
             << "    },\n"
             << "    \"normalTexture\": { \"index\": 2, \"scale\": 0.75 },\n"
@@ -476,7 +503,7 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
             << "  }],\n"
             << "  \"textures\": [{ \"source\": 0 }, { \"source\": 1 }, { \"source\": 2 }, { \"source\": 3 }, { \"source\": 4 }],\n"
             << "  \"images\": [{ \"uri\": \"albedo.png\" }, { \"uri\": \"mr.png\" }, { \"uri\": \"normal.png\" }, { \"uri\": \"ao.png\" }, { \"uri\": \"emissive.png\" }],\n"
-            << "  \"extensionsUsed\": [\"KHR_materials_emissive_strength\"],\n"
+            << "  \"extensionsUsed\": [\"KHR_materials_emissive_strength\", \"KHR_texture_transform\"],\n"
             << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0, \"NORMAL\": 1, \"TANGENT\": 2, \"TEXCOORD_0\": 3 }, \"indices\": 4, \"material\": 0 }] }],\n"
             << "  \"buffers\": [{ \"uri\": \"mesh.bin\", \"byteLength\": 152 }],\n"
             << "  \"bufferViews\": [\n"
@@ -522,6 +549,8 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.emissiveColor[2], 0.3F), "glTF importer did not preserve embedded material emissive color");
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.emissiveStrength, 2.5F), "glTF importer did not preserve embedded material emissive strength");
     Require(NearlyEqual(asset->embeddedMaterials[0].desc.alphaCutoff, 0.45F), "glTF importer did not preserve embedded material alpha cutoff");
+    Require(NearlyEqual(asset->embeddedMaterials[0].desc.uvTiling[0], 2.0F) && NearlyEqual(asset->embeddedMaterials[0].desc.uvTiling[1], 3.0F), "glTF importer did not preserve embedded material UV tiling");
+    Require(NearlyEqual(asset->embeddedMaterials[0].desc.uvOffset[0], 0.25F) && NearlyEqual(asset->embeddedMaterials[0].desc.uvOffset[1], 0.5F), "glTF importer did not preserve embedded material UV offset");
     Require(asset->embeddedMaterials[0].desc.alphaMode == RenderMaterialAlphaMode::Blend, "glTF importer did not preserve embedded material alpha mode");
     Require(asset->embeddedMaterials[0].desc.doubleSided, "glTF importer did not preserve embedded material double sided state");
     Require(asset->embeddedMaterials[0].albedoTexturePath == "albedo.png", "glTF importer did not preserve embedded albedo texture path");
@@ -530,6 +559,212 @@ void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
     Require(asset->embeddedMaterials[0].occlusionTexturePath == "ao.png", "glTF importer did not preserve embedded occlusion texture path");
     Require(asset->embeddedMaterials[0].emissiveTexturePath == "emissive.png", "glTF importer did not preserve embedded emissive texture path");
     Require(asset->desc.bounds.IsValid() && asset->sections[0].bounds.IsValid(), "glTF importer did not compute mesh and section bounds");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunGltfImporterKeepsDefaultUvTransformForUnsupportedTextureRotationTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_gltf_material_unsupported_uv_transform";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Unsupported glTF texture transform test could not create temp root");
+
+    const std::filesystem::path binPath = root / "mesh.bin";
+    {
+        const std::vector<float> positions{
+            0.0F, 0.0F, 0.0F,
+            1.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F,
+        };
+        const std::vector<float> texCoords{
+            0.0F, 0.0F,
+            1.0F, 0.0F,
+            0.0F, 1.0F,
+        };
+        const std::uint16_t indices[]{ 0U, 1U, 2U };
+
+        std::ofstream output{ binPath, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(positions.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(texCoords.data()), static_cast<std::streamsize>(texCoords.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(indices), static_cast<std::streamsize>(sizeof(indices)));
+        const std::uint16_t padding = 0U;
+        output.write(reinterpret_cast<const char*>(&padding), static_cast<std::streamsize>(sizeof(padding)));
+    }
+
+    const std::filesystem::path gltfPath = root / "unsupported_uv_transform.gltf";
+    {
+        std::ofstream output{ gltfPath, std::ios::trunc };
+        output
+            << "{\n"
+            << "  \"asset\": { \"version\": \"2.0\" },\n"
+            << "  \"scene\": 0,\n"
+            << "  \"scenes\": [{ \"nodes\": [0] }],\n"
+            << "  \"nodes\": [{ \"mesh\": 0 }],\n"
+            << "  \"materials\": [{\n"
+            << "    \"name\": \"rotated_surface\",\n"
+            << "    \"pbrMetallicRoughness\": {\n"
+            << "      \"baseColorTexture\": { \"index\": 0, \"extensions\": { \"KHR_texture_transform\": { \"offset\": [0.25, 0.5], \"scale\": [2.0, 3.0], \"rotation\": 0.5 } } }\n"
+            << "    }\n"
+            << "  }],\n"
+            << "  \"textures\": [{ \"source\": 0 }],\n"
+            << "  \"images\": [{ \"uri\": \"albedo.png\" }],\n"
+            << "  \"extensionsUsed\": [\"KHR_texture_transform\"],\n"
+            << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0, \"TEXCOORD_0\": 1 }, \"indices\": 2, \"material\": 0 }] }],\n"
+            << "  \"buffers\": [{ \"uri\": \"mesh.bin\", \"byteLength\": 68 }],\n"
+            << "  \"bufferViews\": [\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 36, \"target\": 34962 },\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 36, \"byteLength\": 24, \"target\": 34962 },\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 60, \"byteLength\": 6, \"target\": 34963 }\n"
+            << "  ],\n"
+            << "  \"accessors\": [\n"
+            << "    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\", \"min\": [0, 0, 0], \"max\": [1, 1, 0] },\n"
+            << "    { \"bufferView\": 1, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC2\" },\n"
+            << "    { \"bufferView\": 2, \"componentType\": 5123, \"count\": 3, \"type\": \"SCALAR\" }\n"
+            << "  ]\n"
+            << "}\n";
+    }
+
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadGltf(gltfPath);
+    Require(asset.has_value(), "glTF importer rejected a mesh with unsupported texture rotation metadata");
+    Require(asset->embeddedMaterials.size() == 1U, "glTF importer lost material with unsupported texture rotation metadata");
+    Require(NearlyEqual(asset->embeddedMaterials[0].desc.uvTiling[0], 1.0F) && NearlyEqual(asset->embeddedMaterials[0].desc.uvTiling[1], 1.0F),
+            "glTF importer applied unsupported rotated texture tiling");
+    Require(NearlyEqual(asset->embeddedMaterials[0].desc.uvOffset[0], 0.0F) && NearlyEqual(asset->embeddedMaterials[0].desc.uvOffset[1], 0.0F),
+            "glTF importer applied unsupported rotated texture offset");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunGltfImporterBlocksTraversalTextureUrisTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_gltf_texture_traversal";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "glTF traversal texture URI test could not create temp root");
+
+    const std::filesystem::path binPath = root / "mesh.bin";
+    {
+        const std::vector<float> positions{
+            0.0F, 0.0F, 0.0F,
+            1.0F, 0.0F, 0.0F,
+            0.0F, 1.0F, 0.0F,
+        };
+        const std::vector<float> texCoords{
+            0.0F, 0.0F,
+            1.0F, 0.0F,
+            0.0F, 1.0F,
+        };
+        const std::uint16_t indices[]{ 0U, 1U, 2U };
+
+        std::ofstream output{ binPath, std::ios::binary | std::ios::trunc };
+        output.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(positions.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(texCoords.data()), static_cast<std::streamsize>(texCoords.size() * sizeof(float)));
+        output.write(reinterpret_cast<const char*>(indices), static_cast<std::streamsize>(sizeof(indices)));
+        const std::uint16_t padding = 0U;
+        output.write(reinterpret_cast<const char*>(&padding), static_cast<std::streamsize>(sizeof(padding)));
+    }
+
+    const std::filesystem::path gltfPath = root / "unsafe_textures.gltf";
+    {
+        std::ofstream output{ gltfPath, std::ios::trunc };
+        output
+            << "{\n"
+            << "  \"asset\": { \"version\": \"2.0\" },\n"
+            << "  \"scene\": 0,\n"
+            << "  \"scenes\": [{ \"nodes\": [0] }],\n"
+            << "  \"nodes\": [{ \"mesh\": 0 }],\n"
+            << "  \"materials\": [{\n"
+            << "    \"name\": \"unsafe_surface\",\n"
+            << "    \"pbrMetallicRoughness\": { \"baseColorTexture\": { \"index\": 0 } },\n"
+            << "    \"normalTexture\": { \"index\": 1 }\n"
+            << "  }],\n"
+            << "  \"textures\": [{ \"source\": 0 }, { \"source\": 1 }],\n"
+            << "  \"images\": [{ \"uri\": \"../outside/albedo.png\" }, { \"uri\": \"Textures/%2e%2e/normal.png\" }],\n"
+            << "  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0, \"TEXCOORD_0\": 1 }, \"indices\": 2, \"material\": 0 }] }],\n"
+            << "  \"buffers\": [{ \"uri\": \"mesh.bin\", \"byteLength\": 68 }],\n"
+            << "  \"bufferViews\": [\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 36, \"target\": 34962 },\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 36, \"byteLength\": 24, \"target\": 34962 },\n"
+            << "    { \"buffer\": 0, \"byteOffset\": 60, \"byteLength\": 6, \"target\": 34963 }\n"
+            << "  ],\n"
+            << "  \"accessors\": [\n"
+            << "    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC3\", \"min\": [0, 0, 0], \"max\": [1, 1, 0] },\n"
+            << "    { \"bufferView\": 1, \"componentType\": 5126, \"count\": 3, \"type\": \"VEC2\" },\n"
+            << "    { \"bufferView\": 2, \"componentType\": 5123, \"count\": 3, \"type\": \"SCALAR\" }\n"
+            << "  ]\n"
+            << "}\n";
+    }
+
+    const std::optional<RenderMeshAssetData> asset = RenderMeshAssetBuilder::LoadGltf(gltfPath);
+    Require(asset.has_value(), "glTF importer rejected a mesh instead of blocking unsafe texture URIs");
+    Require(asset->embeddedMaterials.size() == 1U, "glTF importer lost material while blocking unsafe texture URIs");
+    Require(asset->embeddedMaterials[0].albedoTexturePath.empty(), "glTF importer preserved path traversal albedo texture URI");
+    Require(asset->embeddedMaterials[0].normalTexturePath.empty(), "glTF importer preserved percent-encoded path traversal normal texture URI");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRuntimeMaterialResolverBlocksTraversalTexturePathsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_texture_traversal";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Materials", error);
+    std::filesystem::create_directories(root / "Textures", error);
+    Require(!error, "Runtime texture traversal test could not create temp root");
+
+    {
+        std::ofstream output{ root / "Materials" / "unsafe.kbmat", std::ios::trunc };
+        output
+            << "baseColor 1 1 1 1\n"
+            << "albedoTexture ../Textures/albedo.kbtex\n";
+    }
+    {
+        std::ofstream output{ root / "Textures" / "albedo.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 255 255 255 255\n";
+    }
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Runtime texture traversal test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Runtime texture traversal test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Runtime texture traversal test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 2U, "Runtime texture traversal test did not discover material and texture");
+
+    const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Materials/unsafe.kbmat");
+    const kb::assets::AssetMetadata* texture = manager.Registry().FindByPath("/Game/Textures/albedo.kbtex");
+    Require(material != nullptr && texture != nullptr, "Runtime texture traversal test did not register material and texture metadata");
+
+    RuntimeMaterialResolver resolver;
+    const ResolvedRuntimeMaterialAsset resolved = resolver.ResolveAsset(manager, *material);
+    Require(resolved.resolved && resolved.status == RuntimeMaterialResolveStatus::Resolved, "Runtime texture traversal test material did not resolve");
+    Require(resolved.material.desc.albedoTextureAssetId == 0U, "Runtime resolver followed a path traversal texture reference");
+    Require(resolved.material.unresolvedTexturePathCount == 1U, "Runtime resolver did not count blocked traversal texture as unresolved");
+
+    kb::assets::AssetMetadata importedOwner{};
+    importedOwner.id = kb::assets::AssetId{ 0x7100U };
+    importedOwner.type = "RenderMaterial";
+    importedOwner.virtualPath = "/Game/ImportedOwner.kbmat";
+    importedOwner.physicalPath = root / "ImportedOwner.kbmat";
+    {
+        std::ofstream output{ importedOwner.physicalPath, std::ios::trunc };
+        output
+            << "baseColor 1 1 1 1\n"
+            << "albedoTexture Textures/imported_source.21kb\n";
+    }
+    Require(manager.RegisterAsset(importedOwner), "Runtime texture resolver imported texture test could not register material owner");
+    kb::assets::AssetMetadata importedTexture{};
+    importedTexture.id = kb::assets::AssetId{ 0x7101U };
+    importedTexture.type = "Texture";
+    importedTexture.importCategory = "Texture";
+    importedTexture.virtualPath = "/Game/Textures/imported_source.21kb";
+    importedTexture.physicalPath = root / "Textures" / "albedo.kbtex";
+    Require(manager.RegisterAsset(importedTexture), "Runtime texture resolver imported texture test could not register imported texture");
+    const ResolvedRuntimeMaterialAsset importedResolved = resolver.ResolveAsset(manager, importedOwner);
+    Require(importedResolved.resolved, "Runtime resolver imported texture owner material did not resolve");
+    Require(importedResolved.status == RuntimeMaterialResolveStatus::Resolved, "Runtime resolver imported texture owner material resolved to a fallback");
+    Require(importedResolved.material.unresolvedTexturePathCount == 0U, "Runtime resolver did not resolve imported Texture virtual path");
+    Require(importedResolved.material.desc.albedoTextureAssetId == importedTexture.id.value,
+        "Runtime resolver did not bind editor-imported Texture assets to material texture ids");
 
     std::filesystem::remove_all(root, error);
 }
@@ -898,6 +1133,499 @@ void RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTes
     std::filesystem::remove_all(root, error);
 }
 
+void RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_dependency_graph";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Textures", error);
+    Require(!error, "Material dependency graph test could not create temp root");
+
+    {
+        std::ofstream output{ root / "Textures" / "albedo.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 255 255 255 255\n";
+    }
+    {
+        std::ofstream output{ root / "Textures" / "normal.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 128 128 255 255\n";
+    }
+    {
+        std::ofstream output{ root / "Textures" / "graph_mask.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 32 64 128 255\n";
+    }
+
+    RenderMaterialAssetData parent{};
+    parent.materialType = kRenderMaterialAssetBuiltInPbrType;
+    parent.materialTypeVersion = kRenderMaterialAssetBuiltInPbrTypeVersion;
+    parent.hasExplicitMaterialType = true;
+    parent.hasExplicitMaterialTypeVersion = true;
+    parent.albedoTexturePath = "Textures/albedo.kbtex";
+    Require(RenderMaterialAssetWriter::Save(root / "parent.kbmat", parent), "Material dependency graph test could not write parent material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Material dependency graph test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "Material dependency graph test could not register material instance loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Material dependency graph test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Material dependency graph test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Material dependency graph test did not discover parent material and textures");
+
+    const kb::assets::AssetMetadata* parentMetadata = manager.Registry().FindByPath("/Game/parent.kbmat");
+    const kb::assets::AssetMetadata* albedoMetadata = manager.Registry().FindByPath("/Game/Textures/albedo.kbtex");
+    const kb::assets::AssetMetadata* normalMetadata = manager.Registry().FindByPath("/Game/Textures/normal.kbtex");
+    Require(parentMetadata != nullptr && parentMetadata->type == "RenderMaterial", "Material dependency graph test did not discover parent material");
+    Require(albedoMetadata != nullptr && albedoMetadata->type == "RenderTexture", "Material dependency graph test did not discover albedo texture");
+    Require(normalMetadata != nullptr && normalMetadata->type == "RenderTexture", "Material dependency graph test did not discover normal texture");
+
+    RenderMaterialInstanceAssetData instance{};
+    instance.parentMaterialAssetId = parentMetadata->id;
+    instance.hasOverrides = true;
+    instance.overrides.materialType = kRenderMaterialAssetBuiltInPbrType;
+    instance.overrides.materialTypeVersion = kRenderMaterialAssetBuiltInPbrTypeVersion;
+    instance.overrides.hasExplicitMaterialType = true;
+    instance.overrides.hasExplicitMaterialTypeVersion = true;
+    instance.overrides.normalTexturePath = "Textures/normal.kbtex";
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "parent_instance.kbmatinst", instance), "Material dependency graph test could not write material instance");
+    Require(manager.DiscoverMountedAssets() >= 4U, "Material dependency graph test did not rediscover material instance");
+
+    parentMetadata = manager.Registry().FindByPath("/Game/parent.kbmat");
+    const kb::assets::AssetMetadata* instanceMetadata = manager.Registry().FindByPath("/Game/parent_instance.kbmatinst");
+    albedoMetadata = manager.Registry().FindByPath("/Game/Textures/albedo.kbtex");
+    normalMetadata = manager.Registry().FindByPath("/Game/Textures/normal.kbtex");
+    Require(parentMetadata != nullptr && instanceMetadata != nullptr && albedoMetadata != nullptr && normalMetadata != nullptr, "Material dependency graph test lost discovered assets");
+
+    const kb::assets::AssetId materialTypeDependency = kb::assets::MakeAssetId("MaterialType:builtin.pbr:1");
+    Require(ContainsDependency(parentMetadata->dependencies, materialTypeDependency), "Material dependency graph did not link material to material type");
+    Require(ContainsDependency(parentMetadata->dependencies, albedoMetadata->id), "Material dependency graph did not link material to texture path dependency");
+    Require(ContainsDependency(instanceMetadata->dependencies, parentMetadata->id), "Material dependency graph did not link instance to parent material");
+    Require(ContainsDependency(instanceMetadata->dependencies, materialTypeDependency), "Material dependency graph did not link instance override to material type");
+    Require(ContainsDependency(instanceMetadata->dependencies, normalMetadata->id), "Material dependency graph did not link instance override to texture dependency");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunMaterialGraphAndTypeAssetDiscoveryTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_graph_type_assets";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "MaterialTypes", error);
+    std::filesystem::create_directories(root / "Graphs", error);
+    Require(!error, "KBMAT-GRAPH-0005: Material graph/type asset test could not create temp root");
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.storageModel = "material-graph-asset";
+    graph.lastGoodArtifact.assetId = 0xA771U;
+    graph.lastGoodArtifact.contentHash = 0xBEEFU;
+    Require(RenderMaterialGraphAssetLoader::SaveGraph(root / "Graphs" / "Surface.kbmaterialgraph", graph),
+        "KBMAT-GRAPH-0005: Material Graph asset writer failed");
+
+    RenderMaterialTypeDocument type = GetBuiltInPbrMaterialTypeDocument();
+    type.stableTypeId = "graph.surface";
+    type.displayName = "Graph Surface";
+    type.schema.typeName = type.stableTypeId;
+    Require(RenderMaterialTypeAssetLoader::SaveType(root / "MaterialTypes" / "GraphSurface.kbmaterialtype", type),
+        "KBMAT-GRAPH-0005: Material Type asset writer failed");
+
+    RenderMaterialAssetData material{};
+    material.materialType = "graph.surface";
+    material.materialTypeVersion = 1U;
+    material.hasExplicitMaterialType = true;
+    material.hasExplicitMaterialTypeVersion = true;
+    material.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurface.kbmaterialtype";
+    material.graphSourceAssetPath = "/Game/Graphs/Surface.kbmaterialgraph";
+    Require(RenderMaterialAssetWriter::Save(root / "GraphBacked.kbmat", material),
+        "KBMAT-GRAPH-0005: Graph-backed material writer failed");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialGraphAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material graph loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialTypeAssetLoader>()), "KBMAT-GRAPH-0005: Could not register material type loader");
+    Require(manager.Mounts().Mount("Game", root), "KBMAT-GRAPH-0005: Could not mount graph/type asset root");
+    Require(manager.DiscoverMountedAssets() >= 3U, "KBMAT-GRAPH-0005: Asset discovery missed material graph/type/material files");
+
+    const kb::assets::AssetMetadata* graphMetadata = manager.Registry().FindByPath("/Game/Graphs/Surface.kbmaterialgraph");
+    const kb::assets::AssetMetadata* typeMetadata = manager.Registry().FindByPath("/Game/MaterialTypes/GraphSurface.kbmaterialtype");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/GraphBacked.kbmat");
+    Require(graphMetadata != nullptr && graphMetadata->type == kRenderMaterialGraphAssetType,
+        "KBMAT-GRAPH-0005: Material Graph metadata was not discovered");
+    Require(typeMetadata != nullptr && typeMetadata->type == kRenderMaterialTypeAssetType,
+        "KBMAT-GRAPH-0005: Material Type metadata was not discovered");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial",
+        "KBMAT-GRAPH-0005: Graph-backed material metadata was not discovered");
+
+    const kb::assets::AssetHandle<RenderMaterialGraphDocument> graphHandle =
+        manager.Load<RenderMaterialGraphDocument>(graphMetadata->id);
+    const kb::assets::AssetHandle<RenderMaterialTypeDocument> typeHandle =
+        manager.Load<RenderMaterialTypeDocument>(typeMetadata->id);
+    Require(graphHandle.IsLoaded() && graphHandle->storageModel == "material-graph-asset",
+        "KBMAT-GRAPH-0005: Material Graph asset should be runtime loadable");
+    Require(typeHandle.IsLoaded() && typeHandle->stableTypeId == "graph.surface" && !typeHandle->schema.parameters.empty(),
+        "KBMAT-GRAPH-0005: Material Type asset should be runtime loadable with schema");
+    Require(ContainsDependency(graphMetadata->dependencies, kb::assets::AssetId{ 0xA771U }),
+        "KBMAT-GRAPH-0005: Material Graph dependency discovery should include last-good artifact asset id");
+    Require(ContainsDependency(materialMetadata->dependencies, typeMetadata->id),
+        "KBMAT-GRAPH-0005: .kbmat dependency discovery should link to referenced Material Type asset");
+    Require(ContainsDependency(materialMetadata->dependencies, graphMetadata->id),
+        "KBMAT-GRAPH-0304: .kbmat dependency discovery should link to source Material Graph asset");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunMaterialTypeReferenceValidationDrivesRuntimeErrorMaterialTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_type_reference_validation";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "MaterialTypes", error);
+    Require(!error, "KBMAT-GRAPH-0305: Material Type validation test could not create temp root");
+
+    RenderMaterialTypeDocument validType = GetBuiltInPbrMaterialTypeDocument();
+    validType.stableTypeId = "graph.surface";
+    validType.version = 1U;
+    validType.schema.typeName = validType.stableTypeId;
+    validType.schema.typeVersion = validType.version;
+    Require(RenderMaterialTypeAssetLoader::SaveType(root / "MaterialTypes" / "GraphSurface.kbmaterialtype", validType),
+        "KBMAT-GRAPH-0305: Could not write valid Material Type fixture");
+
+    RenderMaterialTypeDocument incompatibleType = validType;
+    incompatibleType.stableTypeId = "graph.other";
+    incompatibleType.schema.typeName = incompatibleType.stableTypeId;
+    Require(RenderMaterialTypeAssetLoader::SaveType(root / "MaterialTypes" / "GraphOther.kbmaterialtype", incompatibleType),
+        "KBMAT-GRAPH-0305: Could not write incompatible Material Type fixture");
+
+    RenderMaterialTypeDocument versionType = validType;
+    versionType.version = 2U;
+    versionType.schema.typeVersion = versionType.version;
+    Require(RenderMaterialTypeAssetLoader::SaveType(root / "MaterialTypes" / "GraphSurfaceV2.kbmaterialtype", versionType),
+        "KBMAT-GRAPH-0305: Could not write version-mismatched Material Type fixture");
+
+    RenderMaterialAssetData validMaterial{};
+    validMaterial.materialType = "graph.surface";
+    validMaterial.materialTypeVersion = 1U;
+    validMaterial.hasExplicitMaterialType = true;
+    validMaterial.hasExplicitMaterialTypeVersion = true;
+    validMaterial.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurface.kbmaterialtype";
+    Require(RenderMaterialAssetWriter::Save(root / "ValidGraphMaterial.kbmat", validMaterial),
+        "KBMAT-GRAPH-0305: Could not write valid graph material fixture");
+
+    RenderMaterialAssetData missingTypeMaterial = validMaterial;
+    missingTypeMaterial.materialTypeAssetPath = "/Game/MaterialTypes/Missing.kbmaterialtype";
+    Require(RenderMaterialAssetWriter::Save(root / "MissingTypeMaterial.kbmat", missingTypeMaterial),
+        "KBMAT-GRAPH-0305: Could not write missing-type material fixture");
+
+    RenderMaterialAssetData incompatibleMaterial = validMaterial;
+    incompatibleMaterial.materialTypeAssetPath = "/Game/MaterialTypes/GraphOther.kbmaterialtype";
+    Require(RenderMaterialAssetWriter::Save(root / "IncompatibleTypeMaterial.kbmat", incompatibleMaterial),
+        "KBMAT-GRAPH-0305: Could not write incompatible-type material fixture");
+
+    RenderMaterialAssetData versionMismatchMaterial = validMaterial;
+    versionMismatchMaterial.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurfaceV2.kbmaterialtype";
+    Require(RenderMaterialAssetWriter::Save(root / "VersionMismatchMaterial.kbmat", versionMismatchMaterial),
+        "KBMAT-GRAPH-0305: Could not write version-mismatch material fixture");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "KBMAT-GRAPH-0305: Could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialTypeAssetLoader>()), "KBMAT-GRAPH-0305: Could not register material type loader");
+    Require(manager.Mounts().Mount("Game", root), "KBMAT-GRAPH-0305: Could not mount temp root");
+    Require(manager.DiscoverMountedAssets() >= 7U, "KBMAT-GRAPH-0305: Asset discovery missed material/type fixtures");
+
+    const kb::assets::AssetMetadata* validMetadata = manager.Registry().FindByPath("/Game/ValidGraphMaterial.kbmat");
+    const kb::assets::AssetMetadata* missingMetadata = manager.Registry().FindByPath("/Game/MissingTypeMaterial.kbmat");
+    const kb::assets::AssetMetadata* incompatibleMetadata = manager.Registry().FindByPath("/Game/IncompatibleTypeMaterial.kbmat");
+    const kb::assets::AssetMetadata* versionMetadata = manager.Registry().FindByPath("/Game/VersionMismatchMaterial.kbmat");
+    Require(validMetadata != nullptr && missingMetadata != nullptr && incompatibleMetadata != nullptr && versionMetadata != nullptr,
+        "KBMAT-GRAPH-0305: Material validation fixtures were not discovered");
+
+    const std::optional<RenderMaterialAssetData> validLoaded = RenderMaterialAssetLoader::LoadMaterial(validMetadata->physicalPath);
+    Require(validLoaded.has_value(), "KBMAT-GRAPH-0305: Valid graph material did not parse");
+    const RenderMaterialTypeReferenceValidationResult validReference =
+        ValidateRenderMaterialTypeReference(*validLoaded, *validMetadata, manager);
+    Require(validReference.Succeeded() && validReference.materialType.has_value(),
+        "KBMAT-GRAPH-0305: Valid Material Type reference should pass validation");
+
+    const std::optional<RenderMaterialAssetData> missingLoaded = RenderMaterialAssetLoader::LoadMaterial(missingMetadata->physicalPath);
+    const RenderMaterialTypeReferenceValidationResult missingReference =
+        ValidateRenderMaterialTypeReference(*missingLoaded, *missingMetadata, manager);
+    Require(!missingReference.Succeeded() &&
+            missingReference.diagnostics[0].code == RenderMaterialTypeReferenceDiagnosticCode::MissingMaterialTypeAsset,
+        "KBMAT-GRAPH-0305: Missing Material Type asset should produce a typed diagnostic");
+
+    const std::optional<RenderMaterialAssetData> incompatibleLoaded = RenderMaterialAssetLoader::LoadMaterial(incompatibleMetadata->physicalPath);
+    const RenderMaterialTypeReferenceValidationResult incompatibleReference =
+        ValidateRenderMaterialTypeReference(*incompatibleLoaded, *incompatibleMetadata, manager);
+    Require(!incompatibleReference.Succeeded() &&
+            std::ranges::any_of(incompatibleReference.diagnostics, [](const RenderMaterialTypeReferenceDiagnostic& diagnostic) {
+                return diagnostic.code == RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialType;
+            }),
+        "KBMAT-GRAPH-0305: Stable Material Type mismatch should produce an incompatible type diagnostic");
+
+    const std::optional<RenderMaterialAssetData> versionLoaded = RenderMaterialAssetLoader::LoadMaterial(versionMetadata->physicalPath);
+    const RenderMaterialTypeReferenceValidationResult versionReference =
+        ValidateRenderMaterialTypeReference(*versionLoaded, *versionMetadata, manager);
+    Require(!versionReference.Succeeded() &&
+            std::ranges::any_of(versionReference.diagnostics, [](const RenderMaterialTypeReferenceDiagnostic& diagnostic) {
+                return diagnostic.code == RenderMaterialTypeReferenceDiagnosticCode::IncompatibleMaterialTypeVersion;
+            }),
+        "KBMAT-GRAPH-0305: Material Type version mismatch should produce an incompatible version diagnostic");
+
+    RuntimeMaterialResolver resolver;
+    const ResolvedRuntimeMaterialAsset validResolved = resolver.ResolveAsset(manager, *validMetadata);
+    Require(validResolved.status == RuntimeMaterialResolveStatus::Resolved && validResolved.diagnostics.empty(),
+        "KBMAT-GRAPH-0305: Valid graph-backed Material Type reference should resolve normally");
+
+    const ResolvedRuntimeMaterialAsset missingResolved = resolver.ResolveAsset(manager, *missingMetadata);
+    Require(missingResolved.status == RuntimeMaterialResolveStatus::ErrorMaterial &&
+            missingResolved.material.desc.baseColor[0] == RuntimeMaterialResolver::ErrorMaterialDesc().baseColor[0] &&
+            std::ranges::any_of(missingResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.kind == RuntimeMaterialResolveDiagnosticKind::MaterialTypeReferenceValidationFailed &&
+                    diagnostic.message.find("missing_material_type_asset") != std::string::npos;
+            }),
+        "KBMAT-GRAPH-0305: Missing Material Type reference should force runtime error material with diagnostics");
+
+    const ResolvedRuntimeMaterialAsset incompatibleResolved = resolver.ResolveAsset(manager, *incompatibleMetadata);
+    Require(incompatibleResolved.status == RuntimeMaterialResolveStatus::ErrorMaterial &&
+            std::ranges::any_of(incompatibleResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.kind == RuntimeMaterialResolveDiagnosticKind::MaterialTypeReferenceValidationFailed &&
+                    diagnostic.message.find("incompatible_material_type") != std::string::npos;
+            }),
+        "KBMAT-GRAPH-0305: Incompatible Material Type reference should force runtime error material with diagnostics");
+
+    const ResolvedRuntimeMaterialAsset versionResolved = resolver.ResolveAsset(manager, *versionMetadata);
+    Require(versionResolved.status == RuntimeMaterialResolveStatus::ErrorMaterial &&
+            std::ranges::any_of(versionResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.kind == RuntimeMaterialResolveDiagnosticKind::MaterialTypeReferenceValidationFailed &&
+                    diagnostic.message.find("incompatible_material_type_version") != std::string::npos;
+            }),
+        "KBMAT-GRAPH-0305: Version-mismatched Material Type reference should force runtime error material with diagnostics");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_material_cook_payload";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root / "Textures", error);
+    Require(!error, "Material cook payload test could not create temp root");
+
+    {
+        std::ofstream output{ root / "Textures" / "albedo.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 255 255 255 255\n";
+    }
+    {
+        std::ofstream output{ root / "Textures" / "normal.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 128 128 255 255\n";
+    }
+    {
+        std::ofstream output{ root / "Textures" / "graph_mask.kbtex", std::ios::trunc };
+        output << "size 1 1\nrgba8 32 64 128 255\n";
+    }
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Material cook payload test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Material cook payload test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Material cook payload test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Material cook payload test did not discover textures");
+
+    const kb::assets::AssetMetadata* albedoMetadata = manager.Registry().FindByPath("/Game/Textures/albedo.kbtex");
+    const kb::assets::AssetMetadata* normalMetadata = manager.Registry().FindByPath("/Game/Textures/normal.kbtex");
+    const kb::assets::AssetMetadata* graphMaskMetadata = manager.Registry().FindByPath("/Game/Textures/graph_mask.kbtex");
+    Require(albedoMetadata != nullptr && normalMetadata != nullptr && graphMaskMetadata != nullptr, "Material cook payload test lost texture metadata");
+    const kb::assets::AssetId albedoId = albedoMetadata->id;
+    const kb::assets::AssetId normalId = normalMetadata->id;
+    const kb::assets::AssetId graphMaskId = graphMaskMetadata->id;
+
+    RenderMaterialAssetData material{};
+    material.materialType = kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.desc.baseColor[0] = 0.3F;
+    material.desc.baseColor[1] = 0.4F;
+    material.desc.baseColor[2] = 0.5F;
+    material.desc.baseColor[3] = 1.0F;
+    material.desc.roughnessFactor = 0.42F;
+    material.desc.albedoTextureAssetId = albedoId.value;
+    material.normalTexturePath = "Textures/normal.kbtex";
+    Require(RenderMaterialAssetWriter::Save(root / "cookable.kbmat", material), "Material cook payload test could not write material");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Material cook payload test did not discover material");
+
+    const kb::assets::AssetMetadata* materialMetadataPtr = manager.Registry().FindByPath("/Game/cookable.kbmat");
+    Require(materialMetadataPtr != nullptr && materialMetadataPtr->type == "RenderMaterial", "Material cook payload test did not discover material metadata");
+    const kb::assets::AssetMetadata materialMetadata = *materialMetadataPtr;
+    const std::optional<RenderMaterialAssetData> loaded = RenderMaterialAssetLoader::LoadMaterial(materialMetadata.physicalPath);
+    Require(loaded.has_value(), "Material cook payload test could not load material");
+
+    const RenderMaterialCookPayload payload = RenderMaterialCookPayloadBuilder::Build(*loaded, materialMetadata, manager.Registry());
+    Require(payload.materialType == kRenderMaterialAssetBuiltInPbrType, "Material cook payload lost material type");
+    Require(payload.materialTypeVersion == kRenderMaterialAssetBuiltInPbrTypeVersion, "Material cook payload lost material type version");
+    Require(!payload.materialTypeAssetId.IsValid() && payload.materialTypeAssetPath.empty(), "Material cook payload should keep built-in PBR free of material type asset references");
+    Require(payload.sourceContentHash == materialMetadata.contentHash && payload.sourceContentHash != 0U, "Material cook payload lost source content hash");
+    Require(payload.payloadHash != 0U, "Material cook payload did not compute payload hash");
+    Require(NearlyEqual(payload.params.baseColor[0], 0.3F), "Material cook payload lost base color params");
+    Require(NearlyEqual(payload.params.roughnessFactor, 0.42F), "Material cook payload lost roughness params");
+    Require(payload.textureDependencies.size() == 2U, "Material cook payload did not collect texture dependencies");
+    Require(payload.textureDependencies[0].value < payload.textureDependencies[1].value, "Material cook payload texture dependencies should be deterministic");
+    Require(ContainsDependency(payload.textureDependencies, albedoId), "Material cook payload lost direct texture dependency");
+    Require(ContainsDependency(payload.textureDependencies, normalId), "Material cook payload lost path texture dependency");
+
+    const RenderMaterialCookPayload repeated = RenderMaterialCookPayloadBuilder::Build(*loaded, materialMetadata, manager.Registry());
+    Require(repeated.payloadHash == payload.payloadHash, "Material cook payload hash should be deterministic for identical inputs");
+    RenderMaterialAssetData changed = *loaded;
+    changed.desc.roughnessFactor = 0.75F;
+    const RenderMaterialCookPayload changedPayload = RenderMaterialCookPayloadBuilder::Build(changed, materialMetadata, manager.Registry());
+    Require(changedPayload.payloadHash != payload.payloadHash, "Material cook payload hash should change when material params change");
+
+    RenderMaterialAssetData editorOnlyChange = *loaded;
+    editorOnlyChange.graph = MakeDefaultRenderMaterialGraphDocument();
+    editorOnlyChange.graph.nodes.front().positionX += 120;
+    kb::assets::AssetMetadata editorOnlyMetadata = materialMetadata;
+    editorOnlyMetadata.contentHash += 1000U;
+    const RenderMaterialCookPayload editorOnlyPayload = RenderMaterialCookPayloadBuilder::Build(editorOnlyChange, editorOnlyMetadata, manager.Registry());
+    Require(editorOnlyPayload.sourceContentHash == editorOnlyMetadata.contentHash, "KBMAT-0905: Material cook payload should preserve source hash separately");
+    Require(editorOnlyPayload.payloadHash == payload.payloadHash, "KBMAT-0905: Editor-only material metadata must not change runtime payload hash");
+
+    RenderMaterialAssetData graphBackedMaterial = *loaded;
+    graphBackedMaterial.materialType = "graph.surface";
+    graphBackedMaterial.materialTypeVersion = 3U;
+    graphBackedMaterial.materialTypeAssetId = 0x4700U;
+    graphBackedMaterial.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurface.kbmaterialtype";
+    graphBackedMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    graphBackedMaterial.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 80,
+    });
+    RenderMaterialGraphLink graphBaseColorLink{
+        .fromNodeId = 2U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
+        .fromPin = "rgba",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    };
+    graphBaseColorLink.id = MakeRenderMaterialGraphLinkId(graphBaseColorLink);
+    graphBackedMaterial.graph.links.push_back(graphBaseColorLink);
+    graphBackedMaterial.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "graphMask",
+        .type = RenderMaterialParameterType::Texture,
+        .assetId = graphMaskId.value,
+    });
+    const RenderMaterialCookPayload graphPayload = RenderMaterialCookPayloadBuilder::Build(graphBackedMaterial, materialMetadata, manager.Registry());
+    Require(graphPayload.materialType == "graph.surface" && graphPayload.materialTypeVersion == 3U, "KBMAT-GRAPH-0003: Cook payload lost graph-backed material type identity");
+    Require(graphPayload.materialTypeAssetId.value == 0x4700U && graphPayload.materialTypeAssetPath == "/Game/MaterialTypes/GraphSurface.kbmaterialtype", "KBMAT-GRAPH-0003: Cook payload lost material type asset reference");
+    Require(graphPayload.payloadHash != payload.payloadHash, "KBMAT-GRAPH-0003: Cook payload hash should include material type asset reference");
+    Require(ContainsDependency(graphPayload.textureDependencies, graphMaskId), "KBMAT-GRAPH-0206: Cook payload lost graph texture parameter dependency");
+    Require(graphPayload.graphBacked && graphPayload.graphCompileSucceeded, "KBMAT-GRAPH-0206: Graph-backed cook payload should contain a successful graph compile artifact");
+    Require(graphPayload.graphCompileKey.combinedHash != 0U && graphPayload.graphShader.sourceHash != 0U, "KBMAT-GRAPH-0206: Graph-backed cook payload should carry graph compile/cache hashes");
+    Require(graphPayload.graphShader.source.find("EvaluateMaterialGraph") != std::string::npos, "KBMAT-GRAPH-0206: Graph-backed cook payload should carry generated shader source for runtime/cook consumers");
+    Require(graphPayload.graphDiagnostics.empty(), "KBMAT-GRAPH-0206: Valid graph-backed cook payload should not carry graph compile diagnostics");
+    const std::vector<kb::assets::AssetId> graphDependencies =
+        RenderMaterialAssetLoader::DiscoverMaterialDependencies(graphBackedMaterial, materialMetadata, manager.Registry());
+    Require(ContainsDependency(graphDependencies, graphMaskId), "KBMAT-GRAPH-0405: Material dependency discovery lost graph texture parameter dependency");
+    RenderMaterialAssetData changedGraphTexture = graphBackedMaterial;
+    changedGraphTexture.graphParameterValues.front().assetId = albedoId.value;
+    const RenderMaterialCookPayload changedGraphTexturePayload = RenderMaterialCookPayloadBuilder::Build(changedGraphTexture, materialMetadata, manager.Registry());
+    Require(changedGraphTexturePayload.payloadHash != graphPayload.payloadHash,
+        "KBMAT-GRAPH-0405: Graph texture parameter changes must invalidate the cooked material payload hash");
+
+    RenderMaterialAssetData inlineTextureSampleMaterial = *loaded;
+    inlineTextureSampleMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    inlineTextureSampleMaterial.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "textureSample2",
+            .displayName = "Texture Sample 2",
+            .textureRole = "normal",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Linear,
+            .overrideSupported = true,
+        },
+    });
+    RenderMaterialGraphLink inlineTextureBaseColorLink{
+        .fromNodeId = 2U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true),
+        .fromPin = "color",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    };
+    inlineTextureBaseColorLink.id = MakeRenderMaterialGraphLinkId(inlineTextureBaseColorLink);
+    inlineTextureSampleMaterial.graph.links.push_back(inlineTextureBaseColorLink);
+    inlineTextureSampleMaterial.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "textureSample2",
+        .type = RenderMaterialParameterType::Texture,
+        .assetId = graphMaskId.value,
+    });
+    Require(RenderMaterialAssetWriter::Save(root / "inline_texture_sample_preview.kbmat", inlineTextureSampleMaterial),
+        "KBMAT-GRAPH-0406: Inline TextureSample material could not be written");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    const kb::assets::AssetMetadata* inlineTextureMetadata = manager.Registry().FindByPath("/Game/inline_texture_sample_preview.kbmat");
+    Require(inlineTextureMetadata != nullptr && inlineTextureMetadata->type == "RenderMaterial",
+        "KBMAT-GRAPH-0406: Inline TextureSample material metadata missing");
+    const ResolvedRuntimeMaterialAsset inlineTextureResolved = RuntimeMaterialResolver{}.ResolveAsset(manager, inlineTextureMetadata->id);
+    Require(inlineTextureResolved.resolved && inlineTextureResolved.material.desc.albedoTextureAssetId == graphMaskId.value,
+        "KBMAT-GRAPH-0406: Runtime resolver should map Material Output BaseColor links to PBR albedo texture for previews");
+    Require(NearlyEqual(inlineTextureResolved.material.desc.baseColor[0], 1.0F) &&
+            NearlyEqual(inlineTextureResolved.material.desc.baseColor[1], 1.0F) &&
+            NearlyEqual(inlineTextureResolved.material.desc.baseColor[2], 1.0F) &&
+            NearlyEqual(inlineTextureResolved.material.desc.baseColor[3], 1.0F),
+        "KBMAT-GRAPH-0406: Texture Sample BaseColor output should use a neutral white base factor so preview textures are not tinted");
+
+    RenderMaterialAssetData disconnectedBaseColorMaterial = inlineTextureSampleMaterial;
+    disconnectedBaseColorMaterial.graph.links.clear();
+    const std::vector<RenderMaterialGraphDiagnostic> disconnectedDiagnostics =
+        ValidateRenderMaterialAssetGraphDiagnostics(disconnectedBaseColorMaterial);
+    Require(!std::ranges::any_of(disconnectedDiagnostics, [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error &&
+            diagnostic.kind == RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput &&
+            diagnostic.pin == "baseColor";
+    }), "KBMAT-GRAPH-0407: Disconnected Material Output Base Color should use black fallback instead of graph validation error");
+    Require(RenderMaterialAssetWriter::Save(root / "disconnected_basecolor_preview.kbmat", disconnectedBaseColorMaterial),
+        "KBMAT-GRAPH-0407: Disconnected BaseColor material could not be written");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    const kb::assets::AssetMetadata* disconnectedBaseColorMetadata = manager.Registry().FindByPath("/Game/disconnected_basecolor_preview.kbmat");
+    Require(disconnectedBaseColorMetadata != nullptr && disconnectedBaseColorMetadata->type == "RenderMaterial",
+        "KBMAT-GRAPH-0407: Disconnected BaseColor material metadata missing");
+    const ResolvedRuntimeMaterialAsset disconnectedBaseColorResolved = RuntimeMaterialResolver{}.ResolveAsset(manager, disconnectedBaseColorMetadata->id);
+    Require(disconnectedBaseColorResolved.resolved &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[0], 0.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[1], 0.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[3], 1.0F) &&
+            disconnectedBaseColorResolved.material.desc.albedoTextureAssetId == 0U,
+        "KBMAT-GRAPH-0407: Runtime resolver should preview disconnected Material Output Base Color as black material");
+
+    RenderMaterialAssetData secondMaterial = *loaded;
+    secondMaterial.desc.baseColor[0] = 0.9F;
+    kb::assets::AssetMetadata secondMetadata = materialMetadata;
+    secondMetadata.id = kb::assets::AssetId{ materialMetadata.id.value + 17U };
+    secondMetadata.contentHash += 17U;
+    const std::array<RenderMaterialCookManifestInput, 2U> orderedInputs{{
+        RenderMaterialCookManifestInput{ .material = &secondMaterial, .metadata = &secondMetadata },
+        RenderMaterialCookManifestInput{ .material = &*loaded, .metadata = &materialMetadata },
+    }};
+    const std::array<RenderMaterialCookManifestInput, 2U> reversedInputs{{
+        RenderMaterialCookManifestInput{ .material = &*loaded, .metadata = &materialMetadata },
+        RenderMaterialCookManifestInput{ .material = &secondMaterial, .metadata = &secondMetadata },
+    }};
+    const RenderMaterialCookManifest orderedManifest = RenderMaterialCookManifestBuilder::Build(orderedInputs, manager.Registry());
+    const RenderMaterialCookManifest reversedManifest = RenderMaterialCookManifestBuilder::Build(reversedInputs, manager.Registry());
+    Require(orderedManifest.entries.size() == 2U && reversedManifest.entries.size() == 2U, "KBMAT-0906: Material cook manifest should keep valid material entries");
+    Require(orderedManifest.entries[0].materialAssetId.value < orderedManifest.entries[1].materialAssetId.value, "KBMAT-0906: Material cook manifest entries should be sorted by material asset id");
+    Require(orderedManifest.manifestHash == reversedManifest.manifestHash, "KBMAT-0906: Material cook manifest hash should not depend on input order");
+    Require(orderedManifest.entries[0].payloadHash == reversedManifest.entries[0].payloadHash &&
+            orderedManifest.entries[1].payloadHash == reversedManifest.entries[1].payloadHash,
+        "KBMAT-0906: Material cook manifest entries should be deterministic");
+
+    const std::array<RenderMaterialCookManifestInput, 1U> graphInputs{{
+        RenderMaterialCookManifestInput{ .material = &graphBackedMaterial, .metadata = &materialMetadata },
+    }};
+    const RenderMaterialCookManifest graphManifest = RenderMaterialCookManifestBuilder::Build(graphInputs, manager.Registry());
+    Require(graphManifest.entries.size() == 1U && graphManifest.entries[0].materialTypeAssetId.value == 0x4700U, "KBMAT-GRAPH-0003: Cook manifest lost material type asset id");
+    Require(graphManifest.entries[0].materialTypeAssetPath == "/Game/MaterialTypes/GraphSurface.kbmaterialtype", "KBMAT-GRAPH-0003: Cook manifest lost material type asset path");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
     RenderMaterialAssetData source{};
     source.desc.baseColor[0] = 0.12F;
@@ -995,6 +1723,127 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
     Require(loaded->clearcoatRoughnessTexturePath == source.clearcoatRoughnessTexturePath, "Material writer roundtrip lost clearcoat roughness path");
     Require(loaded->layerMaskTexturePath == source.layerMaskTexturePath, "Material writer roundtrip lost layer mask path");
 
+    RenderMaterialAssetData graphBackedSource{};
+    graphBackedSource.materialType = "graph.surface";
+    graphBackedSource.materialTypeVersion = 2U;
+    graphBackedSource.materialTypeAssetId = 0x4D545950U;
+    graphBackedSource.materialTypeAssetPath = "/Game/MaterialTypes/GraphSurface.kbmaterialtype";
+    graphBackedSource.graphSourceAssetId = 0x4752415048U;
+    graphBackedSource.graphSourceAssetPath = "/Game/Graphs/Surface.kbmaterialgraph";
+    std::ostringstream graphOutput;
+    RenderMaterialAssetWriter::Write(graphOutput, graphBackedSource);
+    const std::string expectedMaterialTypeHeader =
+        "materialType graph.surface\nmaterialTypeVersion 2\nmaterialTypeAssetId " +
+        std::to_string(graphBackedSource.materialTypeAssetId) +
+        "\nmaterialTypeAsset /Game/MaterialTypes/GraphSurface.kbmaterialtype\n"
+        "graphSourceAssetId " +
+        std::to_string(graphBackedSource.graphSourceAssetId) +
+        "\ngraphSourceAsset /Game/Graphs/Surface.kbmaterialgraph\n";
+    Require(graphOutput.str().find(expectedMaterialTypeHeader) != std::string::npos,
+        "KBMAT-GRAPH-0304: Material writer did not emit graph-backed type and source graph asset references in canonical header");
+    std::istringstream graphInput{ graphOutput.str() };
+    const RenderMaterialAssetParseResult graphLoaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(graphInput);
+    Require(graphLoaded.asset.has_value() && graphLoaded.diagnostics.empty(), "KBMAT-GRAPH-0003: Parser rejected graph-backed material type asset reference");
+    Require(graphLoaded.asset->materialType == "graph.surface" && graphLoaded.asset->materialTypeVersion == 2U, "KBMAT-GRAPH-0003: Parser lost graph-backed material type identity");
+    Require(graphLoaded.asset->materialTypeAssetId == 0x4D545950U && graphLoaded.asset->materialTypeAssetPath == "/Game/MaterialTypes/GraphSurface.kbmaterialtype", "KBMAT-GRAPH-0003: Parser lost graph-backed material type asset reference");
+    Require(graphLoaded.asset->graphSourceAssetId == 0x4752415048U && graphLoaded.asset->graphSourceAssetPath == "/Game/Graphs/Surface.kbmaterialgraph",
+        "KBMAT-GRAPH-0304: Parser lost graph-backed source graph asset reference");
+
+    graphBackedSource.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "tintColor",
+        .type = RenderMaterialParameterType::Color,
+        .numbers = { 0.2F, 0.4F, 0.6F, 1.0F },
+    });
+    graphBackedSource.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "obsoleteParam",
+        .type = RenderMaterialParameterType::Scalar,
+        .numbers = { 0.75F, 0.0F, 0.0F, 0.0F },
+    });
+    graphBackedSource.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "wear",
+        .type = RenderMaterialParameterType::Scalar,
+        .numbers = { 0.9F, 0.0F, 0.0F, 0.0F },
+    });
+    std::ostringstream graphParameterOutput;
+    RenderMaterialAssetWriter::Write(graphParameterOutput, graphBackedSource);
+    Require(graphParameterOutput.str().find("graphParameterValue tintColor Color 0.200000003 0.400000006 0.600000024 1\n") != std::string::npos,
+        "KBMAT-GRAPH-0303: Material writer did not emit graph parameter values");
+    std::istringstream graphParameterInput{ graphParameterOutput.str() };
+    const RenderMaterialAssetParseResult graphParameterLoaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(graphParameterInput);
+    Require(graphParameterLoaded.asset.has_value() && graphParameterLoaded.asset->graphParameterValues.size() == 3U,
+        "KBMAT-GRAPH-0303: Parser lost graph parameter values");
+    Require(graphParameterLoaded.asset->graphParameterValues[0].stableId == "tintColor" &&
+            graphParameterLoaded.asset->graphParameterValues[0].type == RenderMaterialParameterType::Color &&
+            NearlyEqual(graphParameterLoaded.asset->graphParameterValues[0].numbers[1], 0.4F),
+        "KBMAT-GRAPH-0303: Graph parameter value round-trip lost stable id/type/value");
+
+    RenderMaterialTypeDocument refreshedType = GetBuiltInPbrMaterialTypeDocument();
+    refreshedType.stableTypeId = "graph.surface";
+    refreshedType.version = 3U;
+    refreshedType.schema.typeName = refreshedType.stableTypeId;
+    refreshedType.schema.typeVersion = refreshedType.version;
+    refreshedType.schema.parameters = {
+        RenderMaterialParameterSchema{
+            .name = "tintColor",
+            .displayName = "Tint Color",
+            .type = RenderMaterialParameterType::Color,
+            .group = RenderMaterialParameterGroup::Surface,
+            .defaultValueHint = "1 1 1 1",
+        },
+        RenderMaterialParameterSchema{
+            .name = "edgeWear",
+            .displayName = "Edge Wear",
+            .type = RenderMaterialParameterType::Scalar,
+            .group = RenderMaterialParameterGroup::Surface,
+            .range = RenderMaterialParameterRange{ .min = 0.0F, .max = 1.0F },
+            .defaultValueHint = "0.25",
+        },
+        RenderMaterialParameterSchema{
+            .name = "wear",
+            .displayName = "Wear Color",
+            .type = RenderMaterialParameterType::Color,
+            .group = RenderMaterialParameterGroup::Surface,
+            .defaultValueHint = "0.1 0.2 0.3 1",
+        },
+        RenderMaterialParameterSchema{
+            .name = "roughnessFactor",
+            .displayName = "Roughness",
+            .type = RenderMaterialParameterType::Scalar,
+            .group = RenderMaterialParameterGroup::Core,
+            .defaultValueHint = "0.5",
+        },
+    };
+    const RenderMaterialSchemaRefreshResult refresh = RefreshRenderMaterialGraphBackedMaterialSchema(*graphParameterLoaded.asset, refreshedType);
+    Require(refresh.material.materialType == "graph.surface" && refresh.material.materialTypeVersion == 3U,
+        "KBMAT-GRAPH-0303: Schema refresh did not update material type identity");
+    Require(refresh.material.graphParameterValues.size() == 3U, "KBMAT-GRAPH-0303: Schema refresh should keep matching custom params, reset changed types and add new defaults");
+    Require(refresh.material.graphParameterValues[0].stableId == "tintColor" && NearlyEqual(refresh.material.graphParameterValues[0].numbers[2], 0.6F),
+        "KBMAT-GRAPH-0303: Schema refresh did not preserve matching stable parameter value");
+    Require(refresh.material.graphParameterValues[1].stableId == "edgeWear" && NearlyEqual(refresh.material.graphParameterValues[1].numbers[0], 0.25F),
+        "KBMAT-GRAPH-0303: Schema refresh did not add default for new graph parameter");
+    Require(refresh.material.graphParameterValues[2].stableId == "wear" &&
+            refresh.material.graphParameterValues[2].type == RenderMaterialParameterType::Color &&
+            NearlyEqual(refresh.material.graphParameterValues[2].numbers[2], 0.3F),
+        "KBMAT-GRAPH-0504: Schema refresh did not reset changed-type graph parameter to schema default");
+    Require(std::ranges::any_of(refresh.diagnostics, [](const RenderMaterialSchemaRefreshDiagnostic& diagnostic) {
+            return diagnostic.kind == RenderMaterialSchemaRefreshDiagnosticKind::RemovedUnknownParameter && diagnostic.stableId == "obsoleteParam";
+        }),
+        "KBMAT-GRAPH-0303: Schema refresh did not diagnose removed/unknown graph parameter values");
+    Require(std::ranges::any_of(refresh.diagnostics, [](const RenderMaterialSchemaRefreshDiagnostic& diagnostic) {
+            return diagnostic.kind == RenderMaterialSchemaRefreshDiagnosticKind::ChangedParameterType && diagnostic.stableId == "wear";
+        }),
+        "KBMAT-GRAPH-0504: Schema refresh did not diagnose changed graph parameter type");
+
+    kb::assets::AssetManager dependencyManager;
+    kb::assets::AssetMetadata graphMaterialMetadata{};
+    graphMaterialMetadata.id = kb::assets::AssetId{ 0xA551U };
+    graphMaterialMetadata.type = "RenderMaterial";
+    graphMaterialMetadata.virtualPath = "/Game/Materials/GraphSurfaceUse.kbmat";
+    const std::vector<kb::assets::AssetId> graphDependencies =
+        RenderMaterialAssetLoader::DiscoverMaterialDependencies(*graphLoaded.asset, graphMaterialMetadata, dependencyManager.Registry());
+    Require(ContainsDependency(graphDependencies, kb::assets::AssetId{ 0x4D545950U }), "KBMAT-GRAPH-0003: Material dependency discovery lost material type asset id");
+    Require(ContainsDependency(graphDependencies, kb::assets::AssetId{ 0x4752415048U }), "KBMAT-GRAPH-0304: Material dependency discovery lost source graph asset id");
+
     std::istringstream shuffledInput{
         "normalTexture Textures/normal.kbtex\n"
         "doubleSided true\n"
@@ -1058,6 +1907,12 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "decalBlendMode DISABLED\n"
         "layerBlendMode REPLACE\n"
         "graphVersion 1\n"
+        "graphMaterialDomain surface\n"
+        "graphShadingModel lit\n"
+        "graphStorageModel inline-kbmat\n"
+        "graphDiagnosticSchemaVersion 1\n"
+        "graphPersistCompileDiagnostics true\n"
+        "graphArtifactFailurePolicy LastGoodThenErrorMaterial\n"
         "graphNode 1 MaterialOutput 640 240\n";
     Require(canonicalOutput.str() == expectedCanonical, "Material writer did not emit deterministic canonical field ordering");
 
@@ -1313,6 +2168,38 @@ void RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest(
     return {};
 }
 
+void RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest() {
+    const std::filesystem::path imagePath = ResolveFixturePath("third_party/bgfx.cmake/bgfx/examples/runtime/images/SplashScreen.png");
+    Require(!imagePath.empty(), "Imported texture PNG fixture was not found");
+
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_imported_texture_asset_loader";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Imported texture loader test could not create temp root");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<kb::assets::ImportedAssetLoader>()), "Imported texture loader test could not register imported asset loader");
+    Require(manager.Mounts().Mount("Game", root), "Imported texture loader test could not mount temp root");
+
+    const std::array sourceFiles{ imagePath };
+    const kb::assets::AssetImportResult imported = kb::assets::AssetImportService::ImportFiles(manager, sourceFiles, "/Game");
+    Require(imported.Succeeded() && imported.items.size() == 1U, "PNG fixture did not import into a .21kb texture container");
+
+    const kb::assets::AssetImportItemResult& item = imported.items.front();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(item.id);
+    Require(metadata != nullptr && metadata->type == "ImportedAsset" && metadata->importCategory == "Texture",
+        "Imported PNG did not register as an imported texture container");
+
+    const std::optional<RenderTextureAssetData> texture = RenderTextureAssetLoader::LoadTexture(item.assetPhysicalPath);
+    Require(texture.has_value(), "RenderTextureAssetLoader did not decode the imported .21kb texture payload");
+    Require(texture->width > 0U && texture->height > 0U, "Imported .21kb texture decoded with invalid dimensions");
+    Require(texture->rgba8.size() == static_cast<std::size_t>(texture->width) * static_cast<std::size_t>(texture->height) * 4U,
+        "Imported .21kb texture was not converted to RGBA8");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRenderTextureAssetLoaderLoadsImageThroughAssetManagerTest(
     const std::filesystem::path& relativePath,
     const std::filesystem::path& virtualPath,
@@ -1396,15 +2283,23 @@ void RunRenderResourceRegistryTests() {
     RunRenderMeshAssetLoaderLoadsImportedObjContainerTest();
     RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest();
     RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest();
+    RunGltfImporterKeepsDefaultUvTransformForUnsupportedTextureRotationTest();
+    RunGltfImporterBlocksTraversalTextureUrisTest();
+    RunRuntimeMaterialResolverBlocksTraversalTexturePathsTest();
     RunGltfImporterRejectsSkinnedMeshesUntilSkinningRuntimeExistsTest();
     RunGltfImporterRejectsSkinNodesUntilSkinningRuntimeExistsTest();
     RunGltfImporterRejectsOutOfRangeIndicesTest();
     RunGltfImporterKeepsUint32IndicesForLargeTangentMeshesTest();
     RunRenderMaterialAssetLoaderDiscoversAndLoadsMaterialThroughAssetManagerTest();
+    RunMaterialAssetDiscoveryBuildsMaterialDependencyGraphTest();
+    RunMaterialGraphAndTypeAssetDiscoveryTest();
+    RunMaterialTypeReferenceValidationDrivesRuntimeErrorMaterialTest();
+    RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest();
     RunRenderMaterialAssetWriterRoundTripsThroughParserTest();
     RunRenderMaterialAssetParserReportsReadableErrorsTest();
     RunRenderTextureColorSpaceDescTest();
     RunRenderTextureAssetLoaderDiscoversAndLoadsTextureThroughAssetManagerTest();
+    RunRenderTextureAssetLoaderLoadsImportedTextureContainerTest();
     RunRenderTextureAssetLoaderLoadsPngJpgAndDdsThroughAssetManagerTest();
     RunMeshAssetDataKeepsUint32IndicesForLargeMeshesTest();
     RunSceneRendererTicksRegistryDeferredDestroyTest();

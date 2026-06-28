@@ -1,5 +1,6 @@
 #include "scene/pipeline/MeshPipelineResourceResolver.hpp"
 
+#include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "scene/pipeline/MeshPipelinePassPolicy.hpp"
 
 namespace kb::render {
@@ -106,6 +107,13 @@ MeshPipelineResolvedMesh MeshPipelineResourceResolver::ResolveMeshBatch(
         EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::UnsupportedMeshVertexFormat, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
         return {};
     }
+    if (!bgfx::isValid(meshResource->vertexBuffer) || !bgfx::isValid(meshResource->indexBuffer)) {
+        stats.visibleMeshCount += passInstanceCount;
+        ++stats.visibleDrawGroupCount;
+        stats.missingMeshResourceCount += passInstanceCount;
+        EmitPassDiagnostics(diagnostics, SceneRenderDiagnosticKind::MissingMeshResource, SceneRenderDiagnosticSeverity::Error, pass, batch, batch.materialAssetId, selectedEntityIds);
+        return {};
+    }
 
     return MeshPipelineResolvedMesh{
         .handle = meshHandle,
@@ -181,11 +189,11 @@ void MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(
         }
     };
 
-    validateTexture(material->albedoTexture, material->albedoTextureAssetId, RenderTextureColorSpace::Srgb);
-    validateTexture(material->normalTexture, material->normalTextureAssetId, RenderTextureColorSpace::Linear);
-    validateTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear);
-    validateTexture(material->occlusionTexture, material->occlusionTextureAssetId, RenderTextureColorSpace::Linear);
-    validateTexture(material->emissiveTexture, material->emissiveTextureAssetId, RenderTextureColorSpace::Srgb);
+    for (const RenderMaterialTextureSlotBinding slot : RenderMaterialTextureSlots(*material)) {
+        if (slot.policy.runtimeSupport == RenderMaterialFeatureSupport::Supported) {
+            validateTexture(slot.directHandle, slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
+        }
+    }
 }
 
 std::uint64_t MeshPipelineResourceResolver::MaterialAssetForSectionInstance(

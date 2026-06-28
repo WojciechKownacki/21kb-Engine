@@ -26,6 +26,15 @@ enum class AssetImportCategory : std::uint16_t {
     InputMappingContext,
 };
 
+enum class AssetImportItemStatus : std::uint8_t {
+    None = 0,
+    Created,
+    Reused,
+    Missing,
+    Unsupported,
+    Failed,
+};
+
 struct AssetImportItemResult {
     std::filesystem::path sourcePath;
     std::filesystem::path assetPhysicalPath;
@@ -33,12 +42,17 @@ struct AssetImportItemResult {
     std::filesystem::path virtualPath;
     AssetId id{};
     AssetImportCategory category = AssetImportCategory::Unknown;
+    AssetImportItemStatus status = AssetImportItemStatus::None;
     std::uint64_t sourceHash = 0;
     std::uint64_t assetHash = 0;
     std::string error;
 
     [[nodiscard]] bool Succeeded() const noexcept {
-        return error.empty() && id.IsValid() && !assetPhysicalPath.empty() && !metaPhysicalPath.empty();
+        return error.empty() &&
+            (status == AssetImportItemStatus::Created || status == AssetImportItemStatus::Reused) &&
+            id.IsValid() &&
+            !assetPhysicalPath.empty() &&
+            !metaPhysicalPath.empty();
     }
 };
 
@@ -46,11 +60,16 @@ struct AssetImportResult {
     std::vector<AssetImportItemResult> items;
 
     [[nodiscard]] std::size_t ImportedCount() const noexcept;
+    [[nodiscard]] std::size_t CreatedCount() const noexcept;
+    [[nodiscard]] std::size_t ReusedCount() const noexcept;
+    [[nodiscard]] std::size_t MissingCount() const noexcept;
+    [[nodiscard]] std::size_t UnsupportedCount() const noexcept;
     [[nodiscard]] std::size_t FailedCount() const noexcept;
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
 [[nodiscard]] std::string_view ToString(AssetImportCategory category) noexcept;
+[[nodiscard]] std::string_view ToString(AssetImportItemStatus status) noexcept;
 [[nodiscard]] std::string_view RuntimeAssetType(AssetImportCategory category) noexcept;
 
 } // namespace kb::assets

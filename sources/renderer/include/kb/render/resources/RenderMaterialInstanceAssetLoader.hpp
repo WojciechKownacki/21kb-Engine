@@ -20,6 +20,7 @@ struct RenderMaterialInstanceAssetData {
     std::uint32_t documentVersion = kRenderMaterialInstanceAssetDocumentVersion;
     bool hasExplicitDocumentVersion = false;
     kb::assets::AssetId parentMaterialAssetId{};
+    bool hasOverrides = false;
     RenderMaterialAssetData overrides{};
 };
 
@@ -31,6 +32,7 @@ enum class RenderMaterialInstanceAssetParseDiagnosticCode : std::uint8_t {
     InvalidDocumentVersion,
     UnsupportedDocumentVersion,
     MissingParentMaterial,
+    InvalidOverrideMaterial,
 };
 
 struct RenderMaterialInstanceAssetParseDiagnostic {
@@ -53,18 +55,44 @@ struct RenderMaterialInstanceAssetParseResult {
     [[nodiscard]] std::string ErrorMessage() const;
 };
 
+enum class RenderMaterialInstanceValidationDiagnosticCode : std::uint8_t {
+    IncompatibleMaterialType,
+    IncompatibleMaterialTypeVersion,
+    UnknownOverrideParameter,
+    IncompatibleOverrideParameterType,
+};
+
+struct RenderMaterialInstanceValidationDiagnostic {
+    RenderMaterialInstanceValidationDiagnosticCode code = RenderMaterialInstanceValidationDiagnosticCode::IncompatibleMaterialType;
+    std::string message;
+};
+
+struct RenderMaterialInstanceValidationResult {
+    std::vector<RenderMaterialInstanceValidationDiagnostic> diagnostics;
+
+    [[nodiscard]] bool Succeeded() const noexcept;
+};
+
+[[nodiscard]] std::string_view RenderMaterialInstanceValidationDiagnosticCodeName(RenderMaterialInstanceValidationDiagnosticCode code) noexcept;
+
 class RenderMaterialInstanceAssetLoader final : public kb::assets::IAssetLoader {
 public:
     [[nodiscard]] std::string_view Type() const noexcept override;
     [[nodiscard]] std::type_index PayloadType() const noexcept override;
     [[nodiscard]] std::vector<std::string> Extensions() const override;
     [[nodiscard]] kb::assets::AssetLoadResult Load(const kb::assets::AssetLoadRequest& request) override;
+    [[nodiscard]] std::vector<kb::assets::AssetId> DiscoverDependencies(
+        const kb::assets::AssetMetadata& metadata,
+        const kb::assets::AssetRegistry& registry) const override;
 
     [[nodiscard]] static std::optional<RenderMaterialInstanceAssetData> LoadInstance(const std::filesystem::path& path);
     [[nodiscard]] static std::optional<RenderMaterialInstanceAssetData> LoadInstance(std::istream& input);
     [[nodiscard]] static RenderMaterialInstanceAssetParseResult LoadInstanceWithDiagnostics(const std::filesystem::path& path);
     [[nodiscard]] static RenderMaterialInstanceAssetParseResult LoadInstanceWithDiagnostics(const std::filesystem::path& path, kb::assets::AssetId assetId);
     [[nodiscard]] static RenderMaterialInstanceAssetParseResult LoadInstanceWithDiagnostics(std::istream& input);
+    [[nodiscard]] static RenderMaterialInstanceValidationResult ValidateAgainstParent(
+        const RenderMaterialInstanceAssetData& instance,
+        const RenderMaterialAssetData& parentMaterial);
 };
 
 } // namespace kb::render

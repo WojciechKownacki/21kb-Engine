@@ -120,6 +120,14 @@ public:
         return result;
     }
 
+    [[nodiscard]] static std::string RejectionMessage(const kb::assets::AssetMetadata& metadata, const EditorMaterialTextureSlotValidationResult& validation) {
+        return "Texture '" + (metadata.name.empty() ? metadata.virtualPath.filename().string() : metadata.name)
+            + "' looks like " + std::string{ SemanticName(validation.inferredSemantic) }
+            + "/" + std::string{ ColorSpaceName(validation.inferredColorSpace) }
+            + ", but the " + std::string{ SemanticName(validation.expectedSemantic) }
+            + " slot expects " + std::string{ ColorSpaceName(validation.expectedColorSpace) } + ".";
+    }
+
 private:
     [[nodiscard]] static std::string LowerAscii(std::string text) {
         std::ranges::transform(text, text.begin(), [](unsigned char value) {

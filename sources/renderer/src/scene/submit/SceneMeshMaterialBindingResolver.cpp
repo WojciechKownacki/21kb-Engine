@@ -1,20 +1,20 @@
 #include "SceneMeshMaterialBindingResolver.hpp"
 
+#include "kb/render/resources/RenderMaterialTextureSlots.hpp"
+
 #include <algorithm>
 
 namespace kb::render {
 namespace {
 
 [[nodiscard]] bgfx::TextureHandle ResolveMaterialTexture(
-    RenderTextureHandle directTexture,
-    std::uint64_t textureAssetId,
-    RenderTextureColorSpace colorSpace,
+    const RenderMaterialTextureSlotBinding& slot,
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
     bgfx::TextureHandle fallback) noexcept {
-    RenderTextureHandle textureHandle = directTexture;
-    if (!textureHandle.IsValid() && textureAssetId != 0U) {
-        textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
+    RenderTextureHandle textureHandle = slot.directHandle;
+    if (!textureHandle.IsValid() && slot.assetId != 0U) {
+        textureHandle = resourceMap.ResolveTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
     }
 
     const RenderTextureResource* texture = resources.FindTexture(textureHandle);
@@ -22,14 +22,12 @@ namespace {
 }
 
 [[nodiscard]] bool HasResolvedMaterialTexture(
-    RenderTextureHandle directTexture,
-    std::uint64_t textureAssetId,
-    RenderTextureColorSpace colorSpace,
+    const RenderMaterialTextureSlotBinding& slot,
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap) noexcept {
-    RenderTextureHandle textureHandle = directTexture;
-    if (!textureHandle.IsValid() && textureAssetId != 0U) {
-        textureHandle = resourceMap.ResolveTexture(textureAssetId, colorSpace);
+    RenderTextureHandle textureHandle = slot.directHandle;
+    if (!textureHandle.IsValid() && slot.assetId != 0U) {
+        textureHandle = resourceMap.ResolveTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
     }
 
     const RenderTextureResource* texture = resources.FindTexture(textureHandle);
@@ -43,7 +41,7 @@ namespace {
     bgfx::TextureHandle fallback) noexcept {
     return material == nullptr
         ? fallback
-        : ResolveMaterialTexture(material->albedoTexture, material->albedoTextureAssetId, RenderTextureColorSpace::Srgb, resources, resourceMap, fallback);
+        : ResolveMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Albedo), resources, resourceMap, fallback);
 }
 
 [[nodiscard]] bgfx::TextureHandle ResolveNormalTexture(
@@ -53,7 +51,7 @@ namespace {
     bgfx::TextureHandle fallback) noexcept {
     return material == nullptr
         ? fallback
-        : ResolveMaterialTexture(material->normalTexture, material->normalTextureAssetId, RenderTextureColorSpace::Linear, resources, resourceMap, fallback);
+        : ResolveMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Normal), resources, resourceMap, fallback);
 }
 
 [[nodiscard]] bgfx::TextureHandle ResolveMetallicRoughnessTexture(
@@ -63,7 +61,7 @@ namespace {
     bgfx::TextureHandle fallback) noexcept {
     return material == nullptr
         ? fallback
-        : ResolveMaterialTexture(material->metallicRoughnessTexture, material->metallicRoughnessTextureAssetId, RenderTextureColorSpace::Linear, resources, resourceMap, fallback);
+        : ResolveMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::MetallicRoughness), resources, resourceMap, fallback);
 }
 
 [[nodiscard]] bgfx::TextureHandle ResolveEmissiveTexture(
@@ -73,7 +71,7 @@ namespace {
     bgfx::TextureHandle fallback) noexcept {
     return material == nullptr
         ? fallback
-        : ResolveMaterialTexture(material->emissiveTexture, material->emissiveTextureAssetId, RenderTextureColorSpace::Srgb, resources, resourceMap, fallback);
+        : ResolveMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Emissive), resources, resourceMap, fallback);
 }
 
 [[nodiscard]] bgfx::TextureHandle ResolveOcclusionTexture(
@@ -83,7 +81,7 @@ namespace {
     bgfx::TextureHandle fallback) noexcept {
     return material == nullptr
         ? fallback
-        : ResolveMaterialTexture(material->occlusionTexture, material->occlusionTextureAssetId, RenderTextureColorSpace::Linear, resources, resourceMap, fallback);
+        : ResolveMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Occlusion), resources, resourceMap, fallback);
 }
 
 [[nodiscard]] std::array<float, 4> MaterialParams(const RenderMaterialResource* material, bool normalTextureResolved) noexcept {
@@ -131,6 +129,18 @@ namespace {
     };
 }
 
+[[nodiscard]] std::array<float, 4> MaterialUvTransform(const RenderMaterialResource* material) noexcept {
+    if (material == nullptr) {
+        return { 1.0F, 1.0F, 0.0F, 0.0F };
+    }
+    return {
+        material->uvTiling[0],
+        material->uvTiling[1],
+        material->uvOffset[0],
+        material->uvOffset[1],
+    };
+}
+
 } // namespace
 
 SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
@@ -138,7 +148,7 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
     const RenderResourceRegistry& resources,
     const SceneRenderResourceMap& resourceMap,
     SceneMeshMaterialBindingFallbacks fallbacks) noexcept {
-    const bool normalTextureResolved = material != nullptr && HasResolvedMaterialTexture(material->normalTexture, material->normalTextureAssetId, RenderTextureColorSpace::Linear, resources, resourceMap);
+    const bool normalTextureResolved = material != nullptr && HasResolvedMaterialTexture(RenderMaterialTextureSlot(*material, RenderMaterialTextureSlotKind::Normal), resources, resourceMap);
     return SceneMeshMaterialBinding{
         .albedoTexture = ResolveAlbedoTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .normalTexture = ResolveNormalTexture(material, resources, resourceMap, fallbacks.normalTexture),
@@ -148,6 +158,7 @@ SceneMeshMaterialBinding SceneMeshMaterialBindingResolver::Resolve(
         .params = MaterialParams(material, normalTextureResolved),
         .emissive = MaterialEmissive(material),
         .flags = MaterialFlags(material),
+        .uvTransform = MaterialUvTransform(material),
     };
 }
 
@@ -160,6 +171,7 @@ SceneMeshShadowMaterialBinding SceneMeshMaterialBindingResolver::ResolveShadow(
         .albedoTexture = ResolveAlbedoTexture(material, resources, resourceMap, fallbacks.whiteTexture),
         .params = MaterialParams(material, false),
         .flags = MaterialFlags(material),
+        .uvTransform = MaterialUvTransform(material),
     };
 }
 

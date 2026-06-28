@@ -42,10 +42,10 @@ void ShaderManifestDeclaresRuntimePrograms() {
 void PrebuiltShaderProfilesContainRequiredManifest() {
     const std::filesystem::path cwd = std::filesystem::current_path();
     const std::vector<std::filesystem::path> candidates{
-        cwd / "shaders",
         cwd / "sources" / "renderer" / "prebuilt_shaders",
         cwd / ".." / "sources" / "renderer" / "prebuilt_shaders",
         cwd / ".." / ".." / "sources" / "renderer" / "prebuilt_shaders",
+        cwd / "shaders",
     };
     const auto rootIter = std::ranges::find_if(candidates, [](const std::filesystem::path& candidate) {
         return std::filesystem::exists(candidate / "dxbc" / "vs_mesh_instanced.sc.bin");
@@ -71,10 +71,10 @@ void PrebuiltShaderProfilesContainRequiredManifest() {
 void ShaderManifestCoversEveryPrebuiltShaderVariant() {
     const std::filesystem::path cwd = std::filesystem::current_path();
     const std::vector<std::filesystem::path> candidates{
-        cwd / "shaders",
         cwd / "sources" / "renderer" / "prebuilt_shaders",
         cwd / ".." / "sources" / "renderer" / "prebuilt_shaders",
         cwd / ".." / ".." / "sources" / "renderer" / "prebuilt_shaders",
+        cwd / "shaders",
     };
     const auto rootIter = std::ranges::find_if(candidates, [](const std::filesystem::path& candidate) {
         return std::filesystem::exists(candidate / "dxbc" / "vs_mesh_instanced.sc.bin");

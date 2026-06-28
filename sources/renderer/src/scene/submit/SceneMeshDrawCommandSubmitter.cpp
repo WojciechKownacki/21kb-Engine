@@ -44,6 +44,19 @@ void EmitGroupDiagnostics(
 
 void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc& desc) {
     for (const MeshDrawCommand& command : desc.commands) {
+        if (command.meshResource == nullptr ||
+            !bgfx::isValid(command.meshResource->vertexBuffer) ||
+            !bgfx::isValid(command.meshResource->indexBuffer)) {
+            desc.stats.missingMeshResourceCount += static_cast<std::uint32_t>(command.instances.size());
+            EmitGroupDiagnostics(
+                desc.diagnostics,
+                SceneRenderDiagnosticKind::MissingMeshResource,
+                SceneRenderDiagnosticSeverity::Error,
+                command,
+                0U,
+                static_cast<std::uint32_t>(command.instances.size()));
+            continue;
+        }
         const std::uint32_t instanceCount = static_cast<std::uint32_t>(command.instances.size());
         const std::uint32_t availableInstances = bgfx::getAvailInstanceDataBuffer(instanceCount, RenderInstanceBuffer::Stride());
         if (availableInstances == 0U) {

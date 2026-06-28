@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <istream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -49,7 +50,7 @@ struct ObjImportContext {
     std::vector<Vec2> texCoords;
     std::vector<Vec3> normals;
     std::map<ObjVertexKey, std::uint32_t> vertexMap;
-    std::uint32_t currentMaterialSlot = 0U;
+    std::uint32_t currentMaterialSlot = std::numeric_limits<std::uint32_t>::max();
     std::uint32_t currentSectionStart = 0U;
 };
 
@@ -194,7 +195,15 @@ void AppendIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     asset.indices32.push_back(index);
 }
 
-[[nodiscard]] bool ParseFace(std::string_view rest, RenderMeshAssetData& asset, ObjImportContext& context) {
+[[nodiscard]] bool ParseFace(
+    std::string_view rest,
+    RenderMeshAssetData& asset,
+    ObjImportContext& context,
+    const RenderMeshObjImportDesc& desc) {
+    if (context.currentMaterialSlot == std::numeric_limits<std::uint32_t>::max()) {
+        context.currentMaterialSlot = RenderMeshObjMaterialResolver::EnsureMaterialSlot(asset, {}, desc);
+    }
+
     std::istringstream stream{ std::string{ rest } };
     std::vector<std::uint32_t> faceIndices;
     std::string token;
@@ -230,7 +239,6 @@ std::optional<RenderMeshAssetData> RenderMeshObjImporter::Load(const std::filesy
 std::optional<RenderMeshAssetData> RenderMeshObjImporter::Load(std::istream& input, const RenderMeshObjImportDesc& desc) {
     RenderMeshAssetData asset{};
     ObjImportContext context{};
-    context.currentMaterialSlot = RenderMeshObjMaterialResolver::EnsureMaterialSlot(asset, {}, desc);
 
     std::string line;
     while (std::getline(input, line)) {
@@ -264,7 +272,7 @@ std::optional<RenderMeshAssetData> RenderMeshObjImporter::Load(std::istream& inp
             FinishSection(asset, context);
             context.currentMaterialSlot = RenderMeshObjMaterialResolver::EnsureMaterialSlot(asset, rest, desc);
         } else if (keyword == "f") {
-            if (!ParseFace(rest, asset, context)) {
+            if (!ParseFace(rest, asset, context, desc)) {
                 return std::nullopt;
             }
         }

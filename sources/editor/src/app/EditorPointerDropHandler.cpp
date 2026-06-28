@@ -16,11 +16,17 @@
 #include "app/EditorPrefabAssetHierarchyDropHandler.hpp"
 #include "app/EditorPrefabAssetProjectFilesDropHandler.hpp"
 #include "app/EditorPrefabAssetSceneDropHandler.hpp"
+#include "app/scene_viewport/EditorSceneViewportHitResolver.hpp"
+#include "app/scene_viewport/EditorSceneViewportMeshPicker.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/scene/SceneAssets.hpp"
+#include "engine/scene/SceneEntities.hpp"
+#include "inspection/InspectorPanelState.hpp"
+#include "rendering/InspectorPanelRenderer.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
+#include "scene/EditorSceneMaterialAssetActions.hpp"
 
 namespace kb::editor {
 namespace {
@@ -64,6 +70,132 @@ namespace {
     return sceneContext.SetMaterialTextureAsset(materialId, *slot, textureId);
 }
 
+[[nodiscard]] bool IsMeshRendererMaterialHit(const InspectorPanelRenderer::Hit& hit) noexcept {
+    if (hit.section != InspectorSectionId::MeshRenderer) {
+        return false;
+    }
+    switch (hit.property) {
+    case InspectorPropertyId::MeshRendererMaterial:
+    case InspectorPropertyId::MeshRendererMaterialPicker:
+    case InspectorPropertyId::MeshRendererMaterialOverridePicker:
+    case InspectorPropertyId::MeshRendererMaterialSlot0:
+    case InspectorPropertyId::MeshRendererMaterialSlot1:
+    case InspectorPropertyId::MeshRendererMaterialSlot2:
+    case InspectorPropertyId::MeshRendererMaterialSlot3:
+    case InspectorPropertyId::MeshRendererMaterialSlot4:
+    case InspectorPropertyId::MeshRendererMaterialSlot5:
+    case InspectorPropertyId::MeshRendererMaterialSlot6:
+    case InspectorPropertyId::MeshRendererMaterialSlot7:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker0:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker1:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker2:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker3:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker4:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker5:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker6:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker7:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] std::optional<std::uint32_t> MeshRendererMaterialSlotIndex(const InspectorPanelRenderer::Hit& hit) noexcept {
+    switch (hit.property) {
+    case InspectorPropertyId::MeshRendererMaterialOverridePicker:
+    case InspectorPropertyId::MeshRendererMaterialSlot0:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker0:
+        return 0U;
+    case InspectorPropertyId::MeshRendererMaterialSlot1:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker1:
+        return 1U;
+    case InspectorPropertyId::MeshRendererMaterialSlot2:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker2:
+        return 2U;
+    case InspectorPropertyId::MeshRendererMaterialSlot3:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker3:
+        return 3U;
+    case InspectorPropertyId::MeshRendererMaterialSlot4:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker4:
+        return 4U;
+    case InspectorPropertyId::MeshRendererMaterialSlot5:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker5:
+        return 5U;
+    case InspectorPropertyId::MeshRendererMaterialSlot6:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker6:
+        return 6U;
+    case InspectorPropertyId::MeshRendererMaterialSlot7:
+    case InspectorPropertyId::MeshRendererMaterialSlotPicker7:
+        return 7U;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<kb::assets::AssetId> CreateMaterialFromGraphForDrop(
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId graphAssetId) {
+    if (!sceneContext.CreateMaterialFromGraphAsset(graphAssetId)) {
+        return std::nullopt;
+    }
+    const kb::assets::AssetId materialId = sceneContext.AssetBrowser().SelectedAsset();
+    const kb::assets::AssetMetadata* metadata = sceneContext.Scene().Assets().Manager().Registry().Find(materialId);
+    if (metadata == nullptr || !EditorSceneMaterialAssetActions::IsMaterialAsset(*metadata)) {
+        sceneContext.Console().Error("Materials", "Material Graph drop created no assignable .kbmat material.");
+        return std::nullopt;
+    }
+    return materialId;
+}
+
+[[nodiscard]] bool CreateMaterialFromGraphAndAssignToTarget(
+    HWND sourceWindow,
+    HWND mainWindow,
+    int x,
+    int y,
+    const EditorDockModel& dockModel,
+    const EditorFloatingWindowManager& floatingWindows,
+    const EditorMetrics& metrics,
+    EditorSceneContext& sceneContext,
+    kb::assets::AssetId graphAssetId) {
+    if (const std::optional<RECT> inspector = EditorDropPanelResolver::Resolve(DockPanelKind::Inspector, sourceWindow, mainWindow, dockModel, floatingWindows, metrics);
+        inspector.has_value() && Contains(*inspector, x, y)) {
+        const kb::scene::SceneEntity entity = sceneContext.SelectedEntity();
+        if (entity.IsValid() && sceneContext.Scene().Entities().IsAlive(entity)) {
+            const InspectorPanelRenderer::Hit hit = InspectorPanelRenderer::HitTest(*inspector, sceneContext, x, y);
+            if (IsMeshRendererMaterialHit(hit)) {
+                const std::optional<kb::assets::AssetId> materialId = CreateMaterialFromGraphForDrop(sceneContext, graphAssetId);
+                if (!materialId.has_value()) {
+                    return true;
+                }
+                if (const std::optional<std::uint32_t> slotIndex = MeshRendererMaterialSlotIndex(hit)) {
+                    static_cast<void>(sceneContext.SetMeshRendererMaterialSlotAsset(entity, *slotIndex, *materialId));
+                } else {
+                    static_cast<void>(sceneContext.SetMeshRendererMaterialAsset(entity, *materialId));
+                }
+                sceneContext.Console().Info("Materials", "Material Graph converted to .kbmat and assigned to Mesh Renderer.");
+                return true;
+            }
+        }
+    }
+
+    const std::optional<EditorSceneViewportHit> hit =
+        EditorSceneViewportHitResolver::ResolveRay(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext);
+    if (!hit.has_value()) {
+        return false;
+    }
+    const EditorSceneViewportPickResult pick = EditorSceneViewportMeshPicker::PickNearest(sceneContext.Scene(), hit->ray);
+    if (!pick.IsValid()) {
+        return false;
+    }
+    const std::optional<kb::assets::AssetId> materialId = CreateMaterialFromGraphForDrop(sceneContext, graphAssetId);
+    if (materialId.has_value()) {
+        static_cast<void>(sceneContext.SetMeshRendererMaterialAsset(pick.entity, *materialId));
+        sceneContext.SelectEntity(pick.entity);
+        sceneContext.Console().Info("Materials", "Material Graph converted to .kbmat and assigned to Mesh Renderer.");
+    }
+    return true;
+}
+
 } // namespace
 
 bool EditorPointerDropHandler::Drop(
@@ -90,8 +222,9 @@ bool EditorPointerDropHandler::Drop(
             || (drag.assetAddsBehaviour && EditorBehaviourAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsAudioClip && EditorAudioAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || (drag.assetAssignsTexture && DropTextureOnMaterialEditor(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
-            || (drag.assetId.IsValid() && EditorMaterialAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
-            || (drag.assetId.IsValid() && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAssignsMaterial && EditorMaterialAssetSceneDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAssignsMaterial && EditorMaterialAssetInspectorDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
+            || (drag.assetAssignsMaterialGraph && CreateMaterialFromGraphAndAssignToTarget(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId))
             || EditorPrefabAssetProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetId);
     case EditorPointerDragKind::AssetFolder:
         return EditorAssetFolderProjectFilesDropHandler::Drop(sourceWindow, mainWindow, x, y, dockModel, floatingWindows, metrics, sceneContext, drag.assetFolderPath);

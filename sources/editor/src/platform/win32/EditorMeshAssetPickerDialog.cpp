@@ -127,6 +127,24 @@ void Text(HDC dc, RECT rect, std::string_view text, COLORREF color, UINT format 
     return rows;
 }
 
+[[nodiscard]] std::vector<AssetPickerRow> BuildTextureRows(const EditorSceneContext& sceneContext) {
+    std::vector<AssetPickerRow> rows;
+    const kb::assets::AssetManager& manager = sceneContext.Scene().Assets().Manager();
+    for (const kb::assets::AssetMetadata& metadata : manager.Registry().All()) {
+        if (metadata.type != "RenderTexture" && metadata.type != "Texture" && metadata.importCategory != "Texture") {
+            continue;
+        }
+        rows.push_back(AssetPickerRow{ .assetId = metadata.id, .name = DisplayName(metadata, "Texture"), .path = DisplayPath(metadata) });
+    }
+    std::ranges::sort(rows, [](const AssetPickerRow& lhs, const AssetPickerRow& rhs) {
+        if (lhs.name != rhs.name) {
+            return lhs.name < rhs.name;
+        }
+        return lhs.assetId.value < rhs.assetId.value;
+    });
+    return rows;
+}
+
 [[nodiscard]] RECT CenteredWindowRect(HWND owner) {
     RECT base{};
     if (owner != nullptr && IsWindow(owner) != 0) {
@@ -442,6 +460,24 @@ EditorMaterialAssetPickerDialog::Result EditorMaterialAssetPickerDialog::Show(
     };
     const AssetPickerResult result = window.Show(owner);
     return EditorMaterialAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
+}
+
+EditorTextureAssetPickerDialog::Result EditorTextureAssetPickerDialog::Show(
+    HWND owner,
+    const EditorTheme& theme,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId currentTexture) {
+    AssetPickerWindow window{
+        theme,
+        BuildTextureRows(sceneContext),
+        currentTexture,
+        "Select Texture",
+        "Choose a texture asset for the Texture Sample node.",
+        "Clear Texture Sample texture",
+        HeroIconKind::RectangleGroup,
+    };
+    const AssetPickerResult result = window.Show(owner);
+    return EditorTextureAssetPickerDialog::Result{ .accepted = result.accepted, .assetId = result.assetId };
 }
 
 } // namespace kb::editor

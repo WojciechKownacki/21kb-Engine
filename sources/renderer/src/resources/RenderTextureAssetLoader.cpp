@@ -1,9 +1,13 @@
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
 
+#include "engine/assets/ImportedAsset.hpp"
+#include "engine/assets/ImportedAssetLoader.hpp"
+
 #include <bimg/decode.h>
 #include <bx/allocator.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <charconv>
 #include <cctype>
 #include <cstring>
@@ -110,17 +114,16 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
     return bytes;
 }
 
-[[nodiscard]] std::optional<RenderTextureAssetData> LoadImageFile(const std::filesystem::path& path) {
-    std::optional<std::vector<std::uint8_t>> bytes = ReadBinaryFile(path);
-    if (!bytes.has_value()) {
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadImageBytes(const void* data, std::size_t size) {
+    if (data == nullptr || size == 0U || size > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
         return std::nullopt;
     }
 
     bx::DefaultAllocator allocator;
     bimg::ImageContainer* image = bimg::imageParse(
         &allocator,
-        bytes->data(),
-        static_cast<std::uint32_t>(bytes->size()),
+        data,
+        static_cast<std::uint32_t>(size),
         bimg::TextureFormat::RGBA8);
     if (image == nullptr) {
         return std::nullopt;
@@ -148,6 +151,37 @@ void FillTexture(RenderTextureAssetData& asset, const std::uint8_t (&rgba)[4]) {
 
     bimg::imageFree(image);
     return asset;
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadImageFile(const std::filesystem::path& path) {
+    std::optional<std::vector<std::uint8_t>> bytes = ReadBinaryFile(path);
+    if (!bytes.has_value()) {
+        return std::nullopt;
+    }
+    return LoadImageBytes(bytes->data(), bytes->size());
+}
+
+[[nodiscard]] std::optional<RenderTextureAssetData> LoadImportedTextureContainer(const std::filesystem::path& path) {
+    kb::assets::AssetMetadata metadata{};
+    metadata.physicalPath = path;
+    metadata.virtualPath = path.filename();
+    metadata.type = "Texture";
+    metadata.importCategory = "Texture";
+
+    kb::assets::ImportedAssetLoader importedLoader;
+    kb::assets::AssetLoadResult result = importedLoader.Load(kb::assets::AssetLoadRequest{
+        .metadata = metadata,
+        .resolvedPath = path,
+    });
+    if (!result.Succeeded()) {
+        return std::nullopt;
+    }
+
+    const std::shared_ptr<kb::assets::ImportedAsset> imported = std::static_pointer_cast<kb::assets::ImportedAsset>(result.asset);
+    if (imported == nullptr || imported->category != kb::assets::AssetImportCategory::Texture || imported->payload.empty()) {
+        return std::nullopt;
+    }
+    return LoadImageBytes(imported->payload.data(), imported->payload.size());
 }
 
 } // namespace
@@ -187,6 +221,9 @@ kb::assets::AssetLoadResult RenderTextureAssetLoader::Load(const kb::assets::Ass
 }
 
 std::optional<RenderTextureAssetData> RenderTextureAssetLoader::LoadTexture(const std::filesystem::path& path) {
+    if (LowerExtension(path) == ".21kb") {
+        return LoadImportedTextureContainer(path);
+    }
     if (LowerExtension(path) != ".kbtex") {
         return LoadImageFile(path);
     }

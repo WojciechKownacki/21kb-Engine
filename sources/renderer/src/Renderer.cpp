@@ -262,6 +262,10 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastUnresolvedMaterialTexturePathCount_ = 0U;
     lastDefaultMaterialFallbackCount_ = 0U;
     lastErrorMaterialFallbackCount_ = 0U;
+    lastMaterialLoadedCount_ = 0U;
+    lastMaterialFallbackCount_ = 0U;
+    lastMaterialErrorCount_ = 0U;
+    lastMaterialReloadCount_ = 0U;
     lastMaterialResolverDiagnosticCount_ = 0U;
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
@@ -330,25 +334,31 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RenderScene& renderScene = RenderSceneFor(scene);
     if (desc.synchronizeScene) {
         renderSceneSynchronizer_->Sync(scene, renderScene);
-    } else if (desc.transformAffineSync) {
-        const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
-        const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
-        // Above a threshold the columnar affine sync is worth dispatching across
-        // the shared render-sync worker pool (H6); below it the serial path wins.
-        constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
-        if (affineEntities.size() >= kParallelAffineSyncThreshold) {
-            if (renderSyncWorkerPool_ == nullptr) {
-                renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+    } else {
+        if (desc.transformAffineSync) {
+            const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
+            const std::span<const kb::scene::WorldTransformAffine3x4> affines = scene.Runtime().TransformRenderProxyWorldAffine3x4();
+            // Above a threshold the columnar affine sync is worth dispatching across
+            // the shared render-sync worker pool (H6); below it the serial path wins.
+            constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
+            if (affineEntities.size() >= kParallelAffineSyncThreshold) {
+                if (renderSyncWorkerPool_ == nullptr) {
+                    renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
+                }
+                if (!renderSyncWorkerPool_->Running()) {
+                    renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
+                }
+                renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
+            } else {
+                renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
             }
-            if (!renderSyncWorkerPool_->Running()) {
-                renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
-            }
-            renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
-        } else {
-            renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
         }
-    } else if (!desc.dirtySceneEntityIds.empty()) {
-        renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
+        if (!desc.dirtySceneEntityIds.empty()) {
+            renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
+        }
+        if (!scene.Runtime().MeshRendererRenderProxyUpdateEntities().empty()) {
+            renderSceneSynchronizer_->SyncMeshRendererUpdates(scene, renderScene);
+        }
     }
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
@@ -361,6 +371,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .unresolvedMaterialTexturePathCount = lastUnresolvedMaterialTexturePathCount_,
         .defaultMaterialFallbackCount = lastDefaultMaterialFallbackCount_,
         .errorMaterialFallbackCount = lastErrorMaterialFallbackCount_,
+        .materialLoadedCount = lastMaterialLoadedCount_,
+        .materialFallbackCount = lastMaterialFallbackCount_,
+        .materialErrorCount = lastMaterialErrorCount_,
+        .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
@@ -391,7 +405,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    const bool temporalJitterEnabled = desc.postProcessEnabled && defaultPostProcessSettings_.temporalJitterEnabled && !desc.editorSceneOverlaysEnabled;
+    const bool temporalJitterEnabled = desc.postProcessEnabled &&
+        (desc.postProcessSettings.has_value()
+                ? desc.postProcessSettings->temporalJitterEnabled
+                : defaultPostProcessSettings_.temporalJitterEnabled) &&
+        !desc.editorSceneOverlaysEnabled;
     const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
     if (overlayCamera != nullptr) {
         jitteredCamera = *overlayCamera;
@@ -624,6 +642,10 @@ Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexc
         .unresolvedMaterialTexturePathCount = lastUnresolvedMaterialTexturePathCount_,
         .defaultMaterialFallbackCount = lastDefaultMaterialFallbackCount_,
         .errorMaterialFallbackCount = lastErrorMaterialFallbackCount_,
+        .materialLoadedCount = lastMaterialLoadedCount_,
+        .materialFallbackCount = lastMaterialFallbackCount_,
+        .materialErrorCount = lastMaterialErrorCount_,
+        .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
         .scenePassSubmitStatsCapacity = static_cast<std::uint32_t>(lastScenePassSubmitStats_.capacity()),
         .shadowMapSize = defaultShadowMap_.Size(),

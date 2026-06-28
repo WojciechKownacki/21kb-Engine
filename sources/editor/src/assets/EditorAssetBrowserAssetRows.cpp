@@ -15,6 +15,18 @@ constexpr std::string_view kMaterialTypeFilter = "Materials";
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
+[[nodiscard]] bool IsMaterialGraphAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialGraph" || metadata.type == "MaterialGraph";
+}
+
+[[nodiscard]] bool IsMaterialTypeAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialType" || metadata.type == "MaterialType";
+}
+
+[[nodiscard]] bool IsMaterialFamilyAsset(const kb::assets::AssetMetadata& metadata) noexcept {
+    return IsMaterialAsset(metadata) || IsMaterialGraphAsset(metadata) || IsMaterialTypeAsset(metadata);
+}
+
 [[nodiscard]] bool MatchesFolder(const std::filesystem::path& assetPath, const std::filesystem::path& selectedFolder, bool recursive) {
     if (recursive) {
         return asset_browser::StartsWithFolder(assetPath, selectedFolder);
@@ -29,6 +41,12 @@ constexpr std::string_view kMaterialTypeFilter = "Materials";
         if (metadata.type == "RenderMaterialInstance") {
             text += " instance material-instance .kbmatinst";
         }
+    }
+    if (IsMaterialGraphAsset(metadata)) {
+        text += " material graph shader nodes materialy graf .kbmaterialgraph";
+    }
+    if (IsMaterialTypeAsset(metadata)) {
+        text += " material type schema shader contract materialy typ .kbmaterialtype";
     }
     return asset_browser::Lower(std::move(text));
 }
@@ -45,7 +63,7 @@ constexpr std::string_view kMaterialTypeFilter = "Materials";
 [[nodiscard]] bool MatchesType(const kb::assets::AssetMetadata& metadata, std::string_view typeFilter) {
     return typeFilter.empty()
         || metadata.type == typeFilter
-        || (typeFilter == kMaterialTypeFilter && IsMaterialAsset(metadata));
+        || (typeFilter == kMaterialTypeFilter && IsMaterialFamilyAsset(metadata));
 }
 
 [[nodiscard]] bool MatchesTemplateFilter(const kb::assets::AssetMetadata& metadata, bool showTemplates) {
@@ -106,7 +124,7 @@ std::vector<std::string> EditorAssetBrowserAssetRows::AssetTypes(const kb::asset
         if (!metadata.type.empty()) {
             types.insert(metadata.type);
         }
-        hasMaterialAsset = hasMaterialAsset || IsMaterialAsset(metadata);
+        hasMaterialAsset = hasMaterialAsset || IsMaterialFamilyAsset(metadata);
     }
     if (hasMaterialAsset) {
         types.insert(std::string{ kMaterialTypeFilter });

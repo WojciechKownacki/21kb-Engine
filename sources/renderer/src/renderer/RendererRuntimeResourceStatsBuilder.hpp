@@ -25,6 +25,10 @@ struct RendererRuntimeResourceStatsBuildDesc {
     std::uint32_t unresolvedMaterialTexturePathCount = 0;
     std::uint32_t defaultMaterialFallbackCount = 0;
     std::uint32_t errorMaterialFallbackCount = 0;
+    std::uint32_t materialLoadedCount = 0;
+    std::uint32_t materialFallbackCount = 0;
+    std::uint32_t materialErrorCount = 0;
+    std::uint32_t materialReloadCount = 0;
     std::uint32_t materialResolverDiagnosticCount = 0;
     std::uint32_t scenePassSubmitStatsCapacity = 0;
     std::uint32_t shadowMapSize = 0;

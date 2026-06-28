@@ -17,7 +17,11 @@ namespace {
     output.reserve(name.size());
     for (const char character : name) {
         const unsigned char value = static_cast<unsigned char>(character);
-        output.push_back(std::isalnum(value) ? character : '_');
+        if (std::isalnum(value)) {
+            output.push_back(character);
+        } else if (!output.empty() && output.back() != '_') {
+            output.push_back('_');
+        }
     }
     while (!output.empty() && output.back() == '_') {
         output.pop_back();

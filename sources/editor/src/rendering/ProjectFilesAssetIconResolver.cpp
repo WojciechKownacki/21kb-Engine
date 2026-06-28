@@ -41,6 +41,14 @@ bool ProjectFilesAssetIconResolver::IsMaterial(const kb::assets::AssetMetadata& 
     return metadata.type == "RenderMaterial" || metadata.type == "RenderMaterialInstance";
 }
 
+bool ProjectFilesAssetIconResolver::IsMaterialGraph(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialGraph" || metadata.type == "MaterialGraph" || metadata.importCategory == "MaterialGraph";
+}
+
+bool ProjectFilesAssetIconResolver::IsMaterialType(const kb::assets::AssetMetadata& metadata) noexcept {
+    return metadata.type == "RenderMaterialType" || metadata.type == "MaterialType" || metadata.importCategory == "MaterialType";
+}
+
 ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::AssetMetadata& metadata, bool selected) noexcept {
     if (IsPrefab(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(106, 177, 255) : RGB(68, 145, 236), .strokeWidth = 2 };
@@ -56,6 +64,12 @@ ProjectFilesAssetIcon ProjectFilesAssetIconResolver::Resolve(const kb::assets::A
     }
     if (IsMaterial(metadata)) {
         return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = selected ? RGB(242, 220, 176) : RGB(206, 172, 118), .strokeWidth = 2 };
+    }
+    if (IsMaterialGraph(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::RectangleGroup, .color = selected ? RGB(190, 235, 255) : RGB(92, 184, 226), .strokeWidth = 2 };
+    }
+    if (IsMaterialType(metadata)) {
+        return ProjectFilesAssetIcon{ .kind = HeroIconKind::DocumentText, .color = selected ? RGB(218, 226, 255) : RGB(145, 163, 232), .strokeWidth = 2 };
     }
     return ProjectFilesAssetIcon{ .kind = HeroIconKind::Cube, .color = AssetNeutral(selected), .strokeWidth = 2 };
 }

@@ -54,6 +54,7 @@ bool SceneMeshPassResources::Initialize() {
     materialParamsUniform_ = bgfx::createUniform("u_materialParams", bgfx::UniformType::Vec4);
     materialEmissiveUniform_ = bgfx::createUniform("u_materialEmissive", bgfx::UniformType::Vec4);
     materialFlagsUniform_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
+    materialUvTransformUniform_ = bgfx::createUniform("u_materialUvTransform", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
     lightDirKindUniform_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
     lightPositionRangeUniform_ = bgfx::createUniform("u_lightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
@@ -145,6 +146,10 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(materialFlagsUniform_);
         materialFlagsUniform_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(materialUvTransformUniform_)) {
+        bgfx::destroy(materialUvTransformUniform_);
+        materialUvTransformUniform_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(materialEmissiveUniform_)) {
         bgfx::destroy(materialEmissiveUniform_);
         materialEmissiveUniform_ = BGFX_INVALID_HANDLE;
@@ -196,6 +201,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(materialParamsUniform_) &&
         bgfx::isValid(materialEmissiveUniform_) &&
         bgfx::isValid(materialFlagsUniform_) &&
+        bgfx::isValid(materialUvTransformUniform_) &&
         bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(lightDirKindUniform_) &&
         bgfx::isValid(lightPositionRangeUniform_) &&
@@ -233,6 +239,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
         bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
         bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
+        bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
         return shadowProgram_;
     }
 
@@ -244,6 +251,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
     bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
     bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
+    bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
 
     const std::array<float, 4> disabledShadowParams{};
     bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);

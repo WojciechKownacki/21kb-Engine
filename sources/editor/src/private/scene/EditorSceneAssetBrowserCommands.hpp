@@ -2,6 +2,7 @@
 
 #include "assets/EditorAssetBrowserState.hpp"
 #include "engine/assets/AssetId.hpp"
+#include "engine/assets/AssetImportTypes.hpp"
 
 #include <filesystem>
 #include <span>
@@ -41,6 +42,11 @@ public:
         const std::filesystem::path& sourceVirtualFolder,
         const std::filesystem::path& destinationVirtualFolder);
     [[nodiscard]] static bool ImportFiles(
+        kb::scene::Scene& scene,
+        EditorAssetBrowserState& assetBrowser,
+        std::span<const std::filesystem::path> sourceFiles,
+        const std::filesystem::path& destinationVirtualFolder);
+    [[nodiscard]] static kb::assets::AssetImportResult ImportFilesWithReport(
         kb::scene::Scene& scene,
         EditorAssetBrowserState& assetBrowser,
         std::span<const std::filesystem::path> sourceFiles,

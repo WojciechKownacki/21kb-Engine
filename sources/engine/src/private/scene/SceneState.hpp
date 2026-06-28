@@ -144,6 +144,7 @@ public:
     std::vector<std::size_t> transformRenderProxyVisibleMeshRendererIndices;
     std::vector<std::size_t> transformRenderProxyCameraIndices;
     std::vector<std::size_t> transformRenderProxyLightIndices;
+    std::vector<SceneEntity> meshRendererRenderProxyUpdateEntities;
     std::vector<std::size_t> transformRenderProxyIdentityAffineChunkCountsScratch;
     std::size_t lastTransformRenderProxyIdentityAffineFastPathCount = 0U;
     std::unique_ptr<kb::ecs::WorkerPool> transformWorkerPool;

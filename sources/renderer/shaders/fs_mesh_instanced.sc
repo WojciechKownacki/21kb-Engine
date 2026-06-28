@@ -11,6 +11,7 @@ SAMPLER2D(s_shadowMap, 5);
 uniform vec4 u_materialParams;
 uniform vec4 u_materialEmissive;
 uniform vec4 u_materialFlags;
+uniform vec4 u_materialUvTransform;
 uniform vec4 u_cameraPosition;
 uniform vec4 u_lightDirKind[4];
 uniform vec4 u_lightPositionRange[4];
@@ -152,21 +153,22 @@ float SampleShadowVisibility(vec3 shadowCoord)
 
 void main()
 {
-    vec4 albedo = texture2D(s_albedo, v_texcoord0) * v_color0;
+    vec2 materialUv = v_texcoord0 * u_materialUvTransform.xy + u_materialUvTransform.zw;
+    vec4 albedo = texture2D(s_albedo, materialUv) * v_color0;
     if (u_materialFlags.x > 0.5 && u_materialFlags.x < 1.5 && albedo.a < u_materialParams.w) {
         discard;
     }
 
     vec3 normal = normalize(v_normal);
     if (u_materialParams.z > 0.0) {
-        vec3 normalSample = texture2D(s_normal, v_texcoord0).xyz * 2.0 - 1.0;
+        vec3 normalSample = texture2D(s_normal, materialUv).xyz * 2.0 - 1.0;
         normalSample.xy *= u_materialParams.z;
         normal = normalize(v_tangent * normalSample.x + v_bitangent * normalSample.y + normal * normalSample.z);
     }
-    vec4 metallicRoughness = texture2D(s_metallicRoughness, v_texcoord0);
+    vec4 metallicRoughness = texture2D(s_metallicRoughness, materialUv);
     float metallic = clamp(u_materialParams.x * metallicRoughness.b, 0.0, 1.0);
     float roughness = clamp(u_materialParams.y * metallicRoughness.g, 0.04, 1.0);
-    float occlusionSample = texture2D(s_occlusion, v_texcoord0).r;
+    float occlusionSample = texture2D(s_occlusion, materialUv).r;
     float occlusion = mix(1.0, occlusionSample, clamp(u_materialFlags.y, 0.0, 1.0));
     vec3 viewDir = normalize(u_cameraPosition.xyz - v_worldPos);
     vec3 shadowCoord = v_shadowPos.xyz / max(v_shadowPos.w, 0.0001);
@@ -184,7 +186,7 @@ void main()
             lighting += lightIndex == 0 ? directLight * shadowVisible : directLight;
         }
     }
-    vec3 emissive = texture2D(s_emissive, v_texcoord0).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
+    vec3 emissive = texture2D(s_emissive, materialUv).rgb * u_materialEmissive.rgb * u_materialEmissive.a;
     float outputAlpha = u_materialFlags.x < 0.5 ? 1.0 : albedo.a;
     gl_FragColor = vec4(lighting + emissive, outputAlpha);
 }

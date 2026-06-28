@@ -451,7 +451,9 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
             if (slotHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialSlot0) {
                 slotHit = hit;
             }
-            if (overridePickerHit.kind == InspectorHitKind::None && hit.kind == InspectorHitKind::TextField && hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker) {
+            if (overridePickerHit.kind == InspectorHitKind::None &&
+                hit.kind == InspectorHitKind::TextField &&
+                (hit.property == InspectorPropertyId::MeshRendererMaterialOverridePicker || hit.property == InspectorPropertyId::MeshRendererMaterialSlotPicker0)) {
                 overridePickerHit = hit;
             }
         }

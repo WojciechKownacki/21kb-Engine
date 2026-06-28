@@ -16,12 +16,14 @@ struct SceneMeshMaterialBinding {
     std::array<float, 4> params{};
     std::array<float, 4> emissive{};
     std::array<float, 4> flags{};
+    std::array<float, 4> uvTransform{};
 };
 
 struct SceneMeshShadowMaterialBinding {
     bgfx::TextureHandle albedoTexture = BGFX_INVALID_HANDLE;
     std::array<float, 4> params{};
     std::array<float, 4> flags{};
+    std::array<float, 4> uvTransform{};
 };
 
 struct SceneMeshMaterialBindingFallbacks {

@@ -39,9 +39,12 @@ add_library(kb_renderer STATIC
     include/kb/render/resources/NativeWindowFramebuffer.hpp
     include/kb/render/resources/RenderMaterialAssetLoader.hpp
     include/kb/render/resources/RenderMaterialAssetWriter.hpp
+    include/kb/render/resources/RenderMaterialCookPayload.hpp
+    include/kb/render/resources/RenderMaterialGraphAssetLoader.hpp
     include/kb/render/resources/RenderMaterialGraphDocument.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetLoader.hpp
     include/kb/render/resources/RenderMaterialInstanceAssetWriter.hpp
+    include/kb/render/resources/RenderMaterialTypeAssetLoader.hpp
     include/kb/render/resources/RenderMaterialTypeSchema.hpp
     include/kb/render/resources/RenderMeshAssetBuilder.hpp
     include/kb/render/resources/RenderMeshAssetLoader.hpp
@@ -142,11 +145,14 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialAssetParser.cpp
     src/resources/RenderMaterialAssetParser.hpp
     src/resources/RenderMaterialAssetWriter.cpp
+    src/resources/RenderMaterialCookPayload.cpp
+    src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
     src/resources/RenderMaterialGraphFieldParser.cpp
     src/resources/RenderMaterialGraphFieldParser.hpp
     src/resources/RenderMaterialInstanceAssetLoader.cpp
     src/resources/RenderMaterialInstanceAssetWriter.cpp
+    src/resources/RenderMaterialTypeAssetLoader.cpp
     src/resources/RenderMaterialTextureFieldParser.cpp
     src/resources/RenderMaterialTextureFieldParser.hpp
     src/resources/RenderMaterialResourceBuilder.cpp

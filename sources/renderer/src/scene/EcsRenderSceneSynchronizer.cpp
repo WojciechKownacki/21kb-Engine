@@ -367,6 +367,16 @@ void EcsRenderSceneSynchronizer::SyncTransformUpdates(const kb::scene::Scene& sc
     SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
 }
 
+void EcsRenderSceneSynchronizer::SyncMeshRendererUpdates(const kb::scene::Scene& scene, RenderScene& renderScene) const {
+    transformUpdateEntities_.clear();
+    const std::span<const kb::scene::SceneEntity> entities = scene.Runtime().MeshRendererRenderProxyUpdateEntities();
+    transformUpdateEntities_.reserve(entities.size());
+    for (const kb::scene::SceneEntity entity : entities) {
+        transformUpdateEntities_.push_back(entity.Id());
+    }
+    SyncEntities(scene, renderScene, std::span<const std::uint64_t>{ transformUpdateEntities_ });
+}
+
 EcsRenderSceneSynchronizerStats EcsRenderSceneSynchronizer::Stats() const noexcept {
     return EcsRenderSceneSynchronizerStats{
         .meshSeenCount = static_cast<std::uint32_t>(seenMeshes_.size()),

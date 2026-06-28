@@ -18,6 +18,10 @@ constexpr UINT_PTR kAssetMenuNewInputAxis = 2006;
 constexpr UINT_PTR kAssetMenuNewInputMappingContext = 2005;
 constexpr UINT_PTR kAssetMenuNewMaterial = 2007;
 constexpr UINT_PTR kAssetMenuCreateMaterialInstance = 2008;
+constexpr UINT_PTR kAssetMenuNewMaterialGraph = 2009;
+constexpr UINT_PTR kAssetMenuNewMaterialType = 2010;
+constexpr UINT_PTR kAssetMenuCreateMaterialFromGraph = 2011;
+constexpr UINT_PTR kAssetMenuCreateMaterialFromMaterialType = 2012;
 constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
 constexpr UINT_PTR kAssetMenuPointLight = 2102;
 constexpr UINT_PTR kAssetMenuSpotLight = 2103;
@@ -36,8 +40,16 @@ constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
         return kAssetMenuNewLuaScript;
     case EditorAssetContextCommand::NewMaterial:
         return kAssetMenuNewMaterial;
+    case EditorAssetContextCommand::NewMaterialGraph:
+        return kAssetMenuNewMaterialGraph;
+    case EditorAssetContextCommand::NewMaterialType:
+        return kAssetMenuNewMaterialType;
     case EditorAssetContextCommand::CreateMaterialInstance:
         return kAssetMenuCreateMaterialInstance;
+    case EditorAssetContextCommand::CreateMaterialFromGraph:
+        return kAssetMenuCreateMaterialFromGraph;
+    case EditorAssetContextCommand::CreateMaterialFromMaterialType:
+        return kAssetMenuCreateMaterialFromMaterialType;
     case EditorAssetContextCommand::NewInputAction:
         return kAssetMenuNewInputAction;
     case EditorAssetContextCommand::NewInputAxis:
@@ -75,8 +87,16 @@ constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
         return EditorAssetContextCommand::NewLuaScript;
     case kAssetMenuNewMaterial:
         return EditorAssetContextCommand::NewMaterial;
+    case kAssetMenuNewMaterialGraph:
+        return EditorAssetContextCommand::NewMaterialGraph;
+    case kAssetMenuNewMaterialType:
+        return EditorAssetContextCommand::NewMaterialType;
     case kAssetMenuCreateMaterialInstance:
         return EditorAssetContextCommand::CreateMaterialInstance;
+    case kAssetMenuCreateMaterialFromGraph:
+        return EditorAssetContextCommand::CreateMaterialFromGraph;
+    case kAssetMenuCreateMaterialFromMaterialType:
+        return EditorAssetContextCommand::CreateMaterialFromMaterialType;
     case kAssetMenuNewInputAction:
         return EditorAssetContextCommand::NewInputAction;
     case kAssetMenuNewInputAxis:

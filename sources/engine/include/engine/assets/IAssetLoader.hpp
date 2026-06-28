@@ -11,6 +11,8 @@
 
 namespace kb::assets {
 
+class AssetRegistry;
+
 struct AssetLoadRequest {
     const AssetMetadata& metadata;
     std::filesystem::path resolvedPath;
@@ -33,6 +35,11 @@ public:
     [[nodiscard]] virtual std::type_index PayloadType() const noexcept = 0;
     [[nodiscard]] virtual std::vector<std::string> Extensions() const = 0;
     [[nodiscard]] virtual AssetLoadResult Load(const AssetLoadRequest& request) = 0;
+    [[nodiscard]] virtual std::vector<AssetId> DiscoverDependencies(const AssetMetadata& metadata, const AssetRegistry& registry) const {
+        static_cast<void>(metadata);
+        static_cast<void>(registry);
+        return {};
+    }
 };
 
 } // namespace kb::assets

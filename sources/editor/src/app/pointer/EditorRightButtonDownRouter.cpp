@@ -6,12 +6,14 @@
 #include "app/EditorWindowInvalidator.hpp"
 #include "app/console/EditorConsolePointerController.hpp"
 #include "app/project_files/EditorProjectFilesDeleteConfirmOverlayController.hpp"
+#include "app/project_files/EditorProjectFilesTransientUiController.hpp"
 #include "app/scene_viewport/EditorSceneViewportCameraController.hpp"
 #include "engine/scene/LightComponent.hpp"
 #include "rendering/EditorPanelContentResolver.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/EditorHierarchyRowPicker.hpp"
 
+#include <algorithm>
 #include <optional>
 
 namespace kb::editor {
@@ -131,6 +133,22 @@ void EditorRightButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
     if (materialEditorContent.has_value() && x >= materialEditorContent->left && x < materialEditorContent->right && y >= materialEditorContent->top && y < materialEditorContent->bottom) {
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (MaterialEditorPanelPointInRect(layout.graphCanvas, x, y)) {
+            sceneContext_.AssetBrowser().ClearSelection();
+            sceneContext_.ClearHierarchySelection();
+            sceneContext_.FocusMaterialGraph(true);
+            EditorProjectFilesTransientUiController(sceneContext_).CloseTransientUi();
+            const kb::assets::AssetId materialId = sceneContext_.MaterialEditor().OpenAssetId();
+            const std::optional<kb::render::RenderMaterialAssetData> material = sceneContext_.MaterialEditor().WorkingCopy().has_value()
+                ? sceneContext_.MaterialEditor().WorkingCopy()
+                : sceneContext_.ReadMaterialDocumentAsset(materialId);
+            if (material.has_value()) {
+                if (const std::optional<std::uint32_t> nodeId = MaterialEditorPanelRenderer::GraphNodeAt(*materialEditorContent, material->graph, sceneContext_, materialId, x, y)) {
+                    static_cast<void>(sceneContext_.SelectMaterialGraphNode(*nodeId));
+                } else {
+                    static_cast<void>(sceneContext_.ClearMaterialGraphNodeSelection());
+                }
+            }
+            static_cast<void>(sceneContext_.CloseMaterialGraphContextMenu());
             static_cast<void>(sceneContext_.BeginMaterialGraphPan(x, y));
             SetCapture(messageWindow);
             EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
