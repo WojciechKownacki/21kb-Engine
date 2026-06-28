@@ -551,11 +551,35 @@ inline std::vector<std::string_view> MaterialEditorPanelInputPins(kb::render::Re
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
     case kb::render::RenderMaterialGraphNodeKind::Divide:
+    case kb::render::RenderMaterialGraphNodeKind::Minimum:
+    case kb::render::RenderMaterialGraphNodeKind::Maximum:
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+    case kb::render::RenderMaterialGraphNodeKind::Distance:
         return { "a", "b" };
     case kb::render::RenderMaterialGraphNodeKind::Power:
         return { "base", "exponent" };
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+    case kb::render::RenderMaterialGraphNodeKind::Absolute:
+    case kb::render::RenderMaterialGraphNodeKind::Saturate:
+    case kb::render::RenderMaterialGraphNodeKind::Floor:
+    case kb::render::RenderMaterialGraphNodeKind::Ceil:
+    case kb::render::RenderMaterialGraphNodeKind::Fraction:
+    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+    case kb::render::RenderMaterialGraphNodeKind::Sine:
+    case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+    case kb::render::RenderMaterialGraphNodeKind::Length:
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { "value" };
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+        return { "x", "y", "z", "w" };
+    case kb::render::RenderMaterialGraphNodeKind::Step:
+        return { "edge", "value" };
+    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+        return { "min", "max", "value" };
+    case kb::render::RenderMaterialGraphNodeKind::If:
+        return { "a", "b", "less", "equal", "greater" };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { "value", "min", "max" };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -586,9 +610,30 @@ inline std::vector<std::string_view> MaterialEditorPanelOutputPins(kb::render::R
     case kb::render::RenderMaterialGraphNodeKind::Divide:
     case kb::render::RenderMaterialGraphNodeKind::Power:
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+    case kb::render::RenderMaterialGraphNodeKind::Absolute:
+    case kb::render::RenderMaterialGraphNodeKind::Minimum:
+    case kb::render::RenderMaterialGraphNodeKind::Maximum:
+    case kb::render::RenderMaterialGraphNodeKind::Saturate:
+    case kb::render::RenderMaterialGraphNodeKind::Floor:
+    case kb::render::RenderMaterialGraphNodeKind::Ceil:
+    case kb::render::RenderMaterialGraphNodeKind::Fraction:
+    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+    case kb::render::RenderMaterialGraphNodeKind::Sine:
+    case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+    case kb::render::RenderMaterialGraphNodeKind::Length:
+    case kb::render::RenderMaterialGraphNodeKind::Distance:
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+    case kb::render::RenderMaterialGraphNodeKind::Step:
+    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+    case kb::render::RenderMaterialGraphNodeKind::If:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { "value" };
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
+        return { "x", "y", "z", "w" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return { "xyz" };
@@ -1066,11 +1111,33 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateDivide,
             MaterialEditorGraphMenuCommand::CreatePower,
             MaterialEditorGraphMenuCommand::CreateOneMinus,
+            MaterialEditorGraphMenuCommand::CreateMinimum,
+            MaterialEditorGraphMenuCommand::CreateMaximum,
+            MaterialEditorGraphMenuCommand::CreateDotProduct,
+            MaterialEditorGraphMenuCommand::CreateCrossProduct,
+            MaterialEditorGraphMenuCommand::CreateLength,
+            MaterialEditorGraphMenuCommand::CreateDistance,
+            MaterialEditorGraphMenuCommand::CreateMakeVector,
+            MaterialEditorGraphMenuCommand::CreateBreakVector,
+            MaterialEditorGraphMenuCommand::CreateStep,
+            MaterialEditorGraphMenuCommand::CreateSmoothStep,
+            MaterialEditorGraphMenuCommand::CreateIf,
             MaterialEditorGraphMenuCommand::CreateClamp,
             MaterialEditorGraphMenuCommand::CreateLerp,
         };
     case 6U:
-        return { MaterialEditorGraphMenuCommand::CreateNormalUnpack };
+        return {
+            MaterialEditorGraphMenuCommand::CreateAbsolute,
+            MaterialEditorGraphMenuCommand::CreateSaturate,
+            MaterialEditorGraphMenuCommand::CreateFloor,
+            MaterialEditorGraphMenuCommand::CreateCeil,
+            MaterialEditorGraphMenuCommand::CreateFraction,
+            MaterialEditorGraphMenuCommand::CreateSquareRoot,
+            MaterialEditorGraphMenuCommand::CreateSine,
+            MaterialEditorGraphMenuCommand::CreateCosine,
+            MaterialEditorGraphMenuCommand::CreateNormalize,
+            MaterialEditorGraphMenuCommand::CreateNormalUnpack,
+        };
     case 7U:
         return { MaterialEditorGraphMenuCommand::DisconnectSelected, MaterialEditorGraphMenuCommand::DeleteSelected };
     default:
@@ -1095,6 +1162,26 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateDivide: return "Divide";
     case MaterialEditorGraphMenuCommand::CreatePower: return "Power";
     case MaterialEditorGraphMenuCommand::CreateOneMinus: return "One Minus";
+    case MaterialEditorGraphMenuCommand::CreateAbsolute: return "Abs";
+    case MaterialEditorGraphMenuCommand::CreateMinimum: return "Min";
+    case MaterialEditorGraphMenuCommand::CreateMaximum: return "Max";
+    case MaterialEditorGraphMenuCommand::CreateSaturate: return "Saturate";
+    case MaterialEditorGraphMenuCommand::CreateFloor: return "Floor";
+    case MaterialEditorGraphMenuCommand::CreateCeil: return "Ceil";
+    case MaterialEditorGraphMenuCommand::CreateFraction: return "Frac";
+    case MaterialEditorGraphMenuCommand::CreateSquareRoot: return "Sqrt";
+    case MaterialEditorGraphMenuCommand::CreateSine: return "Sin";
+    case MaterialEditorGraphMenuCommand::CreateCosine: return "Cos";
+    case MaterialEditorGraphMenuCommand::CreateDotProduct: return "Dot Product";
+    case MaterialEditorGraphMenuCommand::CreateCrossProduct: return "Cross Product";
+    case MaterialEditorGraphMenuCommand::CreateNormalize: return "Normalize";
+    case MaterialEditorGraphMenuCommand::CreateLength: return "Length";
+    case MaterialEditorGraphMenuCommand::CreateDistance: return "Distance";
+    case MaterialEditorGraphMenuCommand::CreateBreakVector: return "Break Vector";
+    case MaterialEditorGraphMenuCommand::CreateMakeVector: return "Make Vector";
+    case MaterialEditorGraphMenuCommand::CreateStep: return "Step";
+    case MaterialEditorGraphMenuCommand::CreateSmoothStep: return "Smooth Step";
+    case MaterialEditorGraphMenuCommand::CreateIf: return "If";
     case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
