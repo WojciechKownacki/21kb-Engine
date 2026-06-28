@@ -819,10 +819,31 @@ private:
                 .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
                 .overrideSupported = true,
             };
-        case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Scalar",
+                .defaultValueHint = "0",
+                .hasRange = true,
+                .rangeMin = 0.0F,
+                .rangeMax = 1.0F,
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Vector",
+                .defaultValueHint = "0 0 0",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Color",
+                .defaultValueHint = "1 1 1 1",
+                .hasRange = true,
+                .rangeMin = 0.0F,
+                .rangeMax = 1.0F,
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         case kb::render::RenderMaterialGraphNodeKind::Add:
         case kb::render::RenderMaterialGraphNodeKind::Multiply:
         case kb::render::RenderMaterialGraphNodeKind::Clamp:

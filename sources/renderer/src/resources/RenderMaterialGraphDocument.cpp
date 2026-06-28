@@ -72,6 +72,41 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     return encoded;
 }
 
+[[nodiscard]] std::vector<float> ParseDefaultNumbers(std::string_view text) {
+    std::vector<float> values;
+    if (text.empty() || text == "_") {
+        return values;
+    }
+    std::istringstream input{ std::string{ text } };
+    float value = 0.0F;
+    while (input >> value) {
+        values.push_back(value);
+    }
+    return values;
+}
+
+[[nodiscard]] std::string FloatLiteral(float value) {
+    std::ostringstream output;
+    output << value;
+    std::string text = output.str();
+    if (text.find('.') == std::string::npos && text.find('e') == std::string::npos && text.find('E') == std::string::npos) {
+        text += ".0";
+    }
+    return text;
+}
+
+[[nodiscard]] bool IsRenderMaterialGraphConstantNode(RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == RenderMaterialGraphNodeKind::ConstantScalar ||
+        kind == RenderMaterialGraphNodeKind::ConstantVector ||
+        kind == RenderMaterialGraphNodeKind::ConstantColor;
+}
+
+[[nodiscard]] bool ShouldPersistGraphNodeMetadata(const RenderMaterialGraphNode& node) noexcept {
+    return IsRenderMaterialGraphParameterNode(node.kind) ||
+        IsRenderMaterialGraphConstantNode(node.kind) ||
+        (node.kind == RenderMaterialGraphNodeKind::TextureSample && !node.parameter.stableId.empty());
+}
+
 [[nodiscard]] std::string_view ParameterGroupName(RenderMaterialParameterGroup group) noexcept {
     switch (group) {
     case RenderMaterialParameterGroup::Core: return "Core";
@@ -339,6 +374,28 @@ void AddShaderGenerationDiagnostic(
     return "u_" + SanitizeShaderIdentifier(StableParameterId(node), "parameter" + std::to_string(node.id)) + std::string{ suffix };
 }
 
+[[nodiscard]] std::string ConstantScalarExpression(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+    return FloatLiteral(values.empty() ? 1.0F : values[0]);
+}
+
+[[nodiscard]] std::string ConstantVectorExpression(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+    const float x = values.size() > 0U ? values[0] : 1.0F;
+    const float y = values.size() > 1U ? values[1] : x;
+    const float z = values.size() > 2U ? values[2] : y;
+    return "vec3(" + FloatLiteral(x) + ", " + FloatLiteral(y) + ", " + FloatLiteral(z) + ")";
+}
+
+[[nodiscard]] std::string ConstantColorExpression(const RenderMaterialGraphNode& node) {
+    const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+    const float r = values.size() > 0U ? values[0] : 1.0F;
+    const float g = values.size() > 1U ? values[1] : r;
+    const float b = values.size() > 2U ? values[2] : g;
+    const float a = values.size() > 3U ? values[3] : 1.0F;
+    return "vec4(" + FloatLiteral(r) + ", " + FloatLiteral(g) + ", " + FloatLiteral(b) + ", " + FloatLiteral(a) + ")";
+}
+
 [[nodiscard]] std::string CompileTextureInputExpression(
     const RenderMaterialGraphDocument& graph,
     const RenderMaterialGraphNode& node,
@@ -370,13 +427,13 @@ void AddShaderGenerationDiagnostic(
     std::string expression;
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::ConstantScalar:
-        expression = "1.0";
+        expression = ConstantScalarExpression(node);
         break;
     case RenderMaterialGraphNodeKind::ConstantVector:
-        expression = "vec3(1.0, 1.0, 1.0)";
+        expression = ConstantVectorExpression(node);
         break;
     case RenderMaterialGraphNodeKind::ConstantColor:
-        expression = "vec4(1.0, 1.0, 1.0, 1.0)";
+        expression = ConstantColorExpression(node);
         break;
     case RenderMaterialGraphNodeKind::ParameterScalar:
         expression = ParameterUniformName(node, "");
@@ -823,8 +880,7 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
             << RenderMaterialGraphNodeKindName(node.kind) << ' '
             << node.positionX << ' '
             << node.positionY << '\n';
-        if (IsRenderMaterialGraphParameterNode(node.kind) ||
-            (node.kind == RenderMaterialGraphNodeKind::TextureSample && !node.parameter.stableId.empty())) {
+        if (ShouldPersistGraphNodeMetadata(node)) {
             output << "graphParameter "
                 << node.id << ' '
                 << (node.parameter.stableId.empty() ? "_" : EncodeToken(node.parameter.stableId)) << ' '

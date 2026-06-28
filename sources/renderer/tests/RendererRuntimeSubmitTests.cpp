@@ -432,6 +432,149 @@ void WriteGraphValidationMaterial(const std::filesystem::path& path, float red, 
     }
 }
 
+[[nodiscard]] RenderMaterialGraphNode MakeGraphNode(
+    std::uint32_t id,
+    RenderMaterialGraphNodeKind kind,
+    std::string stableId = {},
+    std::string defaultValueHint = {}) {
+    RenderMaterialGraphNode node{
+        .id = id,
+        .kind = kind,
+        .positionX = static_cast<std::int32_t>(id * 140U),
+        .positionY = 120,
+    };
+    node.parameter.stableId = std::move(stableId);
+    node.parameter.defaultValueHint = std::move(defaultValueHint);
+    return node;
+}
+
+[[nodiscard]] RenderMaterialGraphParameterValue MakeTextureGraphValue(std::string stableId, std::uint64_t assetId) {
+    return RenderMaterialGraphParameterValue{
+        .stableId = std::move(stableId),
+        .type = RenderMaterialParameterType::Texture,
+        .assetId = assetId,
+    };
+}
+
+void RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest() {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata materialMetadata{
+        .id = kb::assets::AssetId{ 71001U },
+        .type = "RenderMaterial",
+        .name = "GraphTextureMaterial",
+    };
+
+    RenderMaterialAssetData material{};
+    material.desc.baseColor[0] = 0.25F;
+    material.desc.baseColor[1] = 0.25F;
+    material.desc.baseColor[2] = 0.25F;
+    material.desc.baseColor[3] = 1.0F;
+    material.desc.roughnessFactor = 0.25F;
+    material.desc.metallicFactor = 0.0F;
+    material.desc.occlusionStrength = 0.5F;
+
+    material.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::NormalUnpack),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::TextureSample),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ParameterScalar, "opacity"),
+    };
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 2U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::NormalUnpack, 4U, "color"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::NormalUnpack, 4U, "normal", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 5U, "g", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 5U, "b", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 6U, "r", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 7U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    material.graphParameterValues = {
+        MakeTextureGraphValue("textureSample2", 101U),
+        MakeTextureGraphValue("textureSample3", 102U),
+        MakeTextureGraphValue("textureSample5", 103U),
+        MakeTextureGraphValue("textureSample6", 104U),
+        MakeTextureGraphValue("textureSample7", 105U),
+        RenderMaterialGraphParameterValue{
+            .stableId = "opacity",
+            .type = RenderMaterialParameterType::Scalar,
+            .numbers = { 0.42F, 0.0F, 0.0F, 0.0F },
+        },
+    };
+
+    const ResolvedRuntimeMaterialDesc resolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, material);
+    Require(resolved.desc.albedoTextureAssetId == 101U, "KBMAT-RUNTIME: Texture Sample Color did not drive Material Output Base Color texture");
+    Require(resolved.desc.normalTextureAssetId == 102U, "KBMAT-RUNTIME: Texture Sample through Normal Unpack did not drive Material Output Normal texture");
+    Require(resolved.desc.metallicRoughnessTextureAssetId == 103U, "KBMAT-RUNTIME: Texture Sample G/B did not drive metallic-roughness texture");
+    Require(resolved.desc.occlusionTextureAssetId == 104U, "KBMAT-RUNTIME: Texture Sample R did not drive occlusion texture");
+    Require(resolved.desc.emissiveTextureAssetId == 105U, "KBMAT-RUNTIME: Texture Sample Color did not drive emissive texture");
+    Require(NearlyEqual(resolved.desc.baseColor[0], 1.0F) && NearlyEqual(resolved.desc.baseColor[3], 0.42F), "KBMAT-RUNTIME: Material Output graph factors were not applied to base color/alpha");
+    Require(NearlyEqual(resolved.desc.roughnessFactor, 1.0F) && NearlyEqual(resolved.desc.metallicFactor, 1.0F), "KBMAT-RUNTIME: Material Output scalar channels were not evaluated");
+
+    RenderMaterialAssetData disconnected{};
+    disconnected.desc.baseColor[0] = 0.75F;
+    disconnected.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::TextureSample),
+    };
+    const ResolvedRuntimeMaterialDesc disconnectedResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, disconnected);
+    Require(
+        NearlyEqual(disconnectedResolved.desc.baseColor[0], 0.0F) &&
+            NearlyEqual(disconnectedResolved.desc.baseColor[1], 0.0F) &&
+            NearlyEqual(disconnectedResolved.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(disconnectedResolved.desc.baseColor[3], 1.0F),
+        "KBMAT-RUNTIME: Disconnected graph Base Color should resolve to black material output");
+}
+
+void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata materialMetadata{
+        .id = kb::assets::AssetId{ 71002U },
+        .type = "RenderMaterial",
+        .name = "GraphConstantMaterial",
+    };
+
+    RenderMaterialAssetData material{};
+    material.desc.baseColor[0] = 0.9F;
+    material.desc.baseColor[1] = 0.9F;
+    material.desc.baseColor[2] = 0.9F;
+    material.desc.baseColor[3] = 1.0F;
+    material.desc.roughnessFactor = 1.0F;
+    material.desc.metallicFactor = 0.0F;
+    material.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0 0 0 1"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.8 0.4 0.2 1"),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.25"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::Lerp),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.37"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.83"),
+    };
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::Lerp, 5U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::Lerp, 5U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Lerp, 5U, "t"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Lerp, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+    };
+
+    const ResolvedRuntimeMaterialDesc resolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, material);
+    Require(NearlyEqual(resolved.desc.baseColor[0], 0.2F) &&
+            NearlyEqual(resolved.desc.baseColor[1], 0.1F) &&
+            NearlyEqual(resolved.desc.baseColor[2], 0.05F) &&
+            NearlyEqual(resolved.desc.baseColor[3], 1.0F),
+        "KBMAT-RUNTIME: Constant Color through Lerp did not evaluate into Material Output Base Color");
+    Require(NearlyEqual(resolved.desc.roughnessFactor, 0.37F), "KBMAT-RUNTIME: Constant Scalar did not evaluate into Roughness");
+    Require(NearlyEqual(resolved.desc.metallicFactor, 0.83F), "KBMAT-RUNTIME: Constant Scalar did not evaluate into Metallic");
+}
+
 void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_missing_material_fallback";
     std::error_code error;
@@ -2086,6 +2229,8 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 
 void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
+    RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
+    RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
