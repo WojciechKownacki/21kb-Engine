@@ -24,6 +24,7 @@
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
 #include "kb/render/resources/RenderTextureAssetLoader.hpp"
+#include "kb/render/runtime/RuntimeMaterialResolver.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "scene/material/EditorEmbeddedMaterialAssetWriter.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
@@ -1047,6 +1048,8 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
 
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -240, 64, &colorNodeId), "KBMAT-GRAPH-0101: Graph editor should recreate a color node before Save");
     kb::editor::tests::Require(materialEditor.MoveGraphNode(colorNodeId, -160, 96), "KBMAT-GRAPH-0101: Graph editor should move recreated node before Save");
+    kb::editor::tests::Require(!materialEditor.SetGraphConstantValue(colorNodeId, "broken"), "KBMAT-GRAPH-0101: Constant Color should reject invalid authoring text");
+    kb::editor::tests::Require(materialEditor.SetGraphConstantValue(colorNodeId, "0.25, 0.5, 0.75, 1"), "KBMAT-GRAPH-0101: Constant Color should accept comma or space separated authoring text");
     kb::editor::tests::Require(materialEditor.ConnectGraphPins(colorNodeId, "rgba", 1U, "baseColor"), "KBMAT-GRAPH-0101: Graph editor should reconnect before Save");
     kb::editor::tests::Require(commandStack.Execute(kb::editor::EditorMaterialAssetEditCommand::CreateRecorded(scene, materialId, "Save Material Graph", *materialEditor.CleanSnapshot(), *materialEditor.WorkingCopy())),
         "KBMAT-GRAPH-0101: Graph working-copy Save should execute through material command stack");
@@ -1055,6 +1058,15 @@ void RunMaterialEditorGraphWorkingCopyRuntimeTest() {
     kb::editor::tests::Require(onDisk.has_value() && onDisk->graph.nodes.size() == 2U && onDisk->graph.links.size() == 1U, "KBMAT-GRAPH-0101: Saved graph should persist node and link");
     const kb::render::RenderMaterialGraphNode* savedNode = kb::render::FindRenderMaterialGraphNode(onDisk->graph, colorNodeId);
     kb::editor::tests::Require(savedNode != nullptr && savedNode->positionX == -160 && savedNode->positionY == 96, "KBMAT-GRAPH-0101: Saved graph should persist dragged node position");
+    kb::editor::tests::Require(savedNode != nullptr && savedNode->parameter.defaultValueHint == "0.25 0.5 0.75 1",
+        "KBMAT-GRAPH-0101: Saved graph should persist authored Constant Color value");
+    const kb::render::ResolvedRuntimeMaterialDesc resolvedConstant =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, *metadata, *onDisk);
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(resolvedConstant.desc.baseColor[0], 0.25F) &&
+            kb::editor::tests::NearlyEqual(resolvedConstant.desc.baseColor[1], 0.5F) &&
+            kb::editor::tests::NearlyEqual(resolvedConstant.desc.baseColor[2], 0.75F) &&
+            kb::editor::tests::NearlyEqual(resolvedConstant.desc.baseColor[3], 1.0F),
+        "KBMAT-GRAPH-0101: Authored Constant Color should drive Material Output Base Color at runtime");
 
     kb::editor::tests::Require(materialEditor.DeleteGraphNode(colorNodeId), "KBMAT-GRAPH-0101: Graph editor should delete non-output nodes");
     kb::editor::tests::Require(materialEditor.WorkingCopy()->graph.nodes.size() == 1U && materialEditor.WorkingCopy()->graph.links.empty(), "KBMAT-GRAPH-0101: Deleting a graph node should remove dependent links");
@@ -1379,7 +1391,16 @@ void RunGraphMaterialCreateEditAssignRenderE2ETest() {
 
     std::optional<kb::render::RenderMaterialAssetData> graphMaterial = kb::editor::EditorMaterialAssetGateway::Read(scene, graphMaterialId);
     kb::editor::tests::Require(graphMaterial.has_value(), "KBMAT-GRAPH-0501: generated graph-backed material could not be read");
-    graphMaterial->desc.albedoTextureAssetId = textureAssetId.value;
+    graphMaterial->desc.albedoTextureAssetId = 0U;
+    const auto oldAlbedo = std::remove_if(graphMaterial->graphParameterValues.begin(), graphMaterial->graphParameterValues.end(), [](const kb::render::RenderMaterialGraphParameterValue& value) {
+        return value.stableId == "albedo";
+    });
+    graphMaterial->graphParameterValues.erase(oldAlbedo, graphMaterial->graphParameterValues.end());
+    graphMaterial->graphParameterValues.push_back(kb::render::RenderMaterialGraphParameterValue{
+        .stableId = "albedo",
+        .type = kb::render::RenderMaterialParameterType::Texture,
+        .assetId = textureAssetId.value,
+    });
     kb::editor::tests::Require(kb::editor::EditorMaterialAssetGateway::WriteExisting(scene, graphMaterialId, *graphMaterial), "KBMAT-GRAPH-0501: edited graph-backed material texture parameter could not be saved");
     static_cast<void>(scene.Assets().Discover());
 

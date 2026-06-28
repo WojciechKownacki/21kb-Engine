@@ -1659,6 +1659,64 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(authoredConstantResult.shader.source.find("material.roughness = 0.42;") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantScalar values");
 
+    RenderMaterialGraphDocument mathGraph = MakeDefaultRenderMaterialGraphDocument();
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.8" },
+    });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.3" },
+    });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Subtract, .positionX = 300, .positionY = 120 });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 300,
+        .positionY = 240,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "2" },
+    });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::Power, .positionX = 460, .positionY = 120 });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::OneMinus, .positionX = 620, .positionY = 120 });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 8U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 460,
+        .positionY = 300,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.15" },
+    });
+    mathGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::Divide, .positionX = 620, .positionY = 300 });
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Subtract, 4U, "a"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Subtract, 4U, "b"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Subtract, 4U, "value", RenderMaterialGraphNodeKind::Power, 6U, "base"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::Power, 6U, "exponent"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Power, 6U, "value", RenderMaterialGraphNodeKind::OneMinus, 7U, "value"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::OneMinus, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::Divide, 9U, "a"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Divide, 9U, "b"));
+    mathGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Divide, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    const RenderMaterialGraphCompileResult mathResult = CompileRenderMaterialGraphToShaderSource(
+        mathGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledMath.kbmat",
+        });
+    Require(mathResult.Succeeded(), "KBMAT-GRAPH-0202: Math graph should compile to shader source");
+    Require(mathResult.shader.source.find(" - ") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Subtract expression");
+    Require(mathResult.shader.source.find("/ max(abs(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit guarded Divide expression");
+    Require(mathResult.shader.source.find("pow(max(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Power expression");
+    Require(mathResult.shader.source.find("vec4(1.0) -") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit OneMinus expression");
+
     RenderMaterialGraphDocument textureGraph = MakeDefaultRenderMaterialGraphDocument();
     textureGraph.nodes.push_back(RenderMaterialGraphNode{
         .id = 2U,
