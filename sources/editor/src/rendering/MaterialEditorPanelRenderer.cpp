@@ -225,11 +225,35 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
     case kb::render::RenderMaterialGraphNodeKind::Divide:
+    case kb::render::RenderMaterialGraphNodeKind::Minimum:
+    case kb::render::RenderMaterialGraphNodeKind::Maximum:
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+    case kb::render::RenderMaterialGraphNodeKind::Distance:
         return { { "a", "A" }, { "b", "B" } };
     case kb::render::RenderMaterialGraphNodeKind::Power:
         return { { "base", "Base" }, { "exponent", "Exponent" } };
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+    case kb::render::RenderMaterialGraphNodeKind::Absolute:
+    case kb::render::RenderMaterialGraphNodeKind::Saturate:
+    case kb::render::RenderMaterialGraphNodeKind::Floor:
+    case kb::render::RenderMaterialGraphNodeKind::Ceil:
+    case kb::render::RenderMaterialGraphNodeKind::Fraction:
+    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+    case kb::render::RenderMaterialGraphNodeKind::Sine:
+    case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+    case kb::render::RenderMaterialGraphNodeKind::Length:
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+        return { { "x", "X" }, { "y", "Y" }, { "z", "Z" }, { "w", "W" } };
+    case kb::render::RenderMaterialGraphNodeKind::Step:
+        return { { "edge", "Edge" }, { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+        return { { "min", "Min" }, { "max", "Max" }, { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::If:
+        return { { "a", "A" }, { "b", "B" }, { "less", "Less" }, { "equal", "Equal" }, { "greater", "Greater" } };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { { "value", "Value" }, { "min", "Min" }, { "max", "Max" } };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -260,9 +284,30 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Divide:
     case kb::render::RenderMaterialGraphNodeKind::Power:
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+    case kb::render::RenderMaterialGraphNodeKind::Absolute:
+    case kb::render::RenderMaterialGraphNodeKind::Minimum:
+    case kb::render::RenderMaterialGraphNodeKind::Maximum:
+    case kb::render::RenderMaterialGraphNodeKind::Saturate:
+    case kb::render::RenderMaterialGraphNodeKind::Floor:
+    case kb::render::RenderMaterialGraphNodeKind::Ceil:
+    case kb::render::RenderMaterialGraphNodeKind::Fraction:
+    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+    case kb::render::RenderMaterialGraphNodeKind::Sine:
+    case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+    case kb::render::RenderMaterialGraphNodeKind::Length:
+    case kb::render::RenderMaterialGraphNodeKind::Distance:
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+    case kb::render::RenderMaterialGraphNodeKind::Step:
+    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+    case kb::render::RenderMaterialGraphNodeKind::If:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
+        return { { "x", "X" }, { "y", "Y" }, { "z", "Z" }, { "w", "W" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
         return { { "xyz", "XYZ" } };
@@ -315,6 +360,46 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Power";
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
         return "One Minus";
+    case kb::render::RenderMaterialGraphNodeKind::Absolute:
+        return "Abs";
+    case kb::render::RenderMaterialGraphNodeKind::Minimum:
+        return "Min";
+    case kb::render::RenderMaterialGraphNodeKind::Maximum:
+        return "Max";
+    case kb::render::RenderMaterialGraphNodeKind::Saturate:
+        return "Saturate";
+    case kb::render::RenderMaterialGraphNodeKind::Floor:
+        return "Floor";
+    case kb::render::RenderMaterialGraphNodeKind::Ceil:
+        return "Ceil";
+    case kb::render::RenderMaterialGraphNodeKind::Fraction:
+        return "Frac";
+    case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
+        return "Sqrt";
+    case kb::render::RenderMaterialGraphNodeKind::Sine:
+        return "Sin";
+    case kb::render::RenderMaterialGraphNodeKind::Cosine:
+        return "Cos";
+    case kb::render::RenderMaterialGraphNodeKind::DotProduct:
+        return "Dot Product";
+    case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
+        return "Cross Product";
+    case kb::render::RenderMaterialGraphNodeKind::Normalize:
+        return "Normalize";
+    case kb::render::RenderMaterialGraphNodeKind::Length:
+        return "Length";
+    case kb::render::RenderMaterialGraphNodeKind::Distance:
+        return "Distance";
+    case kb::render::RenderMaterialGraphNodeKind::BreakVector:
+        return "Break Vector";
+    case kb::render::RenderMaterialGraphNodeKind::MakeVector:
+        return "Make Vector";
+    case kb::render::RenderMaterialGraphNodeKind::Step:
+        return "Step";
+    case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+        return "Smooth Step";
+    case kb::render::RenderMaterialGraphNodeKind::If:
+        return "If";
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case kb::render::RenderMaterialGraphNodeKind::Lerp:

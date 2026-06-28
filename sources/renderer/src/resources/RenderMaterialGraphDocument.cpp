@@ -187,13 +187,65 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "b", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Distance:
+        AppendIrPin(irNode, irNode.kind, "a", false);
+        AppendIrPin(irNode, irNode.kind, "b", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
     case RenderMaterialGraphNodeKind::Power:
         AppendIrPin(irNode, irNode.kind, "base", false);
         AppendIrPin(irNode, irNode.kind, "exponent", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
         AppendIrPin(irNode, irNode.kind, "value", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::BreakVector:
+        AppendIrPin(irNode, irNode.kind, "value", false);
+        AppendIrPin(irNode, irNode.kind, "x", true);
+        AppendIrPin(irNode, irNode.kind, "y", true);
+        AppendIrPin(irNode, irNode.kind, "z", true);
+        AppendIrPin(irNode, irNode.kind, "w", true);
+        break;
+    case RenderMaterialGraphNodeKind::MakeVector:
+        AppendIrPin(irNode, irNode.kind, "x", false);
+        AppendIrPin(irNode, irNode.kind, "y", false);
+        AppendIrPin(irNode, irNode.kind, "z", false);
+        AppendIrPin(irNode, irNode.kind, "w", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::Step:
+        AppendIrPin(irNode, irNode.kind, "edge", false);
+        AppendIrPin(irNode, irNode.kind, "value", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        AppendIrPin(irNode, irNode.kind, "min", false);
+        AppendIrPin(irNode, irNode.kind, "max", false);
+        AppendIrPin(irNode, irNode.kind, "value", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::If:
+        AppendIrPin(irNode, irNode.kind, "a", false);
+        AppendIrPin(irNode, irNode.kind, "b", false);
+        AppendIrPin(irNode, irNode.kind, "less", false);
+        AppendIrPin(irNode, irNode.kind, "equal", false);
+        AppendIrPin(irNode, irNode.kind, "greater", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::Clamp:
@@ -327,8 +379,17 @@ void AttachDiagnosticContext(
     if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Color) {
         return "vec4(" + expression + ", 1.0)";
     }
+    if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float4) {
+        return "vec4(" + expression + ", 1.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float3) {
+        return "(" + expression + ").xyz";
+    }
     if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float3) {
         return expression;
+    }
+    if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float4) {
+        return "vec4(" + expression + ", 1.0)";
     }
     if (from == RenderMaterialGraphPinType::Float && to == RenderMaterialGraphPinType::Float4) {
         return "vec4(" + expression + ")";
@@ -498,6 +559,143 @@ void AddShaderGenerationDiagnostic(
             CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
             ")";
         break;
+    case RenderMaterialGraphNodeKind::Absolute:
+        expression = "abs(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Minimum:
+        expression = "min(" +
+            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Maximum:
+        expression = "max(" +
+            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Saturate:
+        expression = "clamp(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", vec4(0.0), vec4(1.0))";
+        break;
+    case RenderMaterialGraphNodeKind::Floor:
+        expression = "floor(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Ceil:
+        expression = "ceil(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Fraction:
+        expression = "fract(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::SquareRoot:
+        expression = "sqrt(max(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", vec4(0.0)))";
+        break;
+    case RenderMaterialGraphNodeKind::Sine:
+        expression = "sin(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Cosine:
+        expression = "cos(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::DotProduct:
+        expression = "dot(" +
+            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::CrossProduct:
+        expression = "cross(" +
+            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 1.0, 0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Normalize: {
+        const std::string vector = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
+        expression = "((length(" + vector + ") > 0.0001) ? normalize(" + vector + ") : vec3(0.0, 0.0, 1.0))";
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Length:
+        expression = "length(" +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Distance:
+        expression = "distance(" +
+            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::BreakVector: {
+        const std::string value = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0, 0.0, 0.0, 1.0)", diagnostics, stack);
+        if (outputPin == "x") {
+            expression = "(" + value + ").x";
+        } else if (outputPin == "y") {
+            expression = "(" + value + ").y";
+        } else if (outputPin == "z") {
+            expression = "(" + value + ").z";
+        } else if (outputPin == "w") {
+            expression = "(" + value + ").w";
+        } else {
+            AddShaderGenerationDiagnostic(diagnostics, node, outputPin, "BreakVector output pin is not supported.");
+            expression = "0.0";
+        }
+        break;
+    }
+    case RenderMaterialGraphNodeKind::MakeVector:
+        expression = "vec4(" +
+            CompileInputExpression(graph, node, "x", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "y", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "z", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "w", RenderMaterialGraphPinType::Float, "1.0", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::Step:
+        expression = "step(" +
+            CompileInputExpression(graph, node, "edge", RenderMaterialGraphPinType::Float4, "vec4(0.5)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        expression = "smoothstep(" +
+            CompileInputExpression(graph, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            ", " +
+            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            ")";
+        break;
+    case RenderMaterialGraphNodeKind::If: {
+        const std::string lhs = CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
+        const std::string rhs = CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
+        const std::string less = CompileInputExpression(graph, node, "less", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack);
+        const std::string equal = CompileInputExpression(graph, node, "equal", RenderMaterialGraphPinType::Float4, "vec4(0.5)", diagnostics, stack);
+        const std::string greater = CompileInputExpression(graph, node, "greater", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack);
+        expression = "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
+        break;
+    }
     case RenderMaterialGraphNodeKind::Clamp:
         expression = "clamp(" +
             CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
@@ -572,6 +770,26 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -639,6 +857,26 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -665,6 +903,26 @@ void AddShaderGenerationDiagnostic(
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -786,6 +1044,46 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "Power";
     case RenderMaterialGraphNodeKind::OneMinus:
         return "OneMinus";
+    case RenderMaterialGraphNodeKind::Absolute:
+        return "Absolute";
+    case RenderMaterialGraphNodeKind::Minimum:
+        return "Minimum";
+    case RenderMaterialGraphNodeKind::Maximum:
+        return "Maximum";
+    case RenderMaterialGraphNodeKind::Saturate:
+        return "Saturate";
+    case RenderMaterialGraphNodeKind::Floor:
+        return "Floor";
+    case RenderMaterialGraphNodeKind::Ceil:
+        return "Ceil";
+    case RenderMaterialGraphNodeKind::Fraction:
+        return "Fraction";
+    case RenderMaterialGraphNodeKind::SquareRoot:
+        return "SquareRoot";
+    case RenderMaterialGraphNodeKind::Sine:
+        return "Sine";
+    case RenderMaterialGraphNodeKind::Cosine:
+        return "Cosine";
+    case RenderMaterialGraphNodeKind::DotProduct:
+        return "DotProduct";
+    case RenderMaterialGraphNodeKind::CrossProduct:
+        return "CrossProduct";
+    case RenderMaterialGraphNodeKind::Normalize:
+        return "Normalize";
+    case RenderMaterialGraphNodeKind::Length:
+        return "Length";
+    case RenderMaterialGraphNodeKind::Distance:
+        return "Distance";
+    case RenderMaterialGraphNodeKind::BreakVector:
+        return "BreakVector";
+    case RenderMaterialGraphNodeKind::MakeVector:
+        return "MakeVector";
+    case RenderMaterialGraphNodeKind::Step:
+        return "Step";
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        return "SmoothStep";
+    case RenderMaterialGraphNodeKind::If:
+        return "If";
     case RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case RenderMaterialGraphNodeKind::Lerp:
@@ -843,6 +1141,66 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "OneMinus") || EqualsIgnoreCase(text, "OneMinusNode")) {
         return RenderMaterialGraphNodeKind::OneMinus;
+    }
+    if (EqualsIgnoreCase(text, "Absolute") || EqualsIgnoreCase(text, "Abs")) {
+        return RenderMaterialGraphNodeKind::Absolute;
+    }
+    if (EqualsIgnoreCase(text, "Minimum") || EqualsIgnoreCase(text, "Min")) {
+        return RenderMaterialGraphNodeKind::Minimum;
+    }
+    if (EqualsIgnoreCase(text, "Maximum") || EqualsIgnoreCase(text, "Max")) {
+        return RenderMaterialGraphNodeKind::Maximum;
+    }
+    if (EqualsIgnoreCase(text, "Saturate")) {
+        return RenderMaterialGraphNodeKind::Saturate;
+    }
+    if (EqualsIgnoreCase(text, "Floor")) {
+        return RenderMaterialGraphNodeKind::Floor;
+    }
+    if (EqualsIgnoreCase(text, "Ceil") || EqualsIgnoreCase(text, "Ceiling")) {
+        return RenderMaterialGraphNodeKind::Ceil;
+    }
+    if (EqualsIgnoreCase(text, "Fraction") || EqualsIgnoreCase(text, "Frac")) {
+        return RenderMaterialGraphNodeKind::Fraction;
+    }
+    if (EqualsIgnoreCase(text, "SquareRoot") || EqualsIgnoreCase(text, "Sqrt")) {
+        return RenderMaterialGraphNodeKind::SquareRoot;
+    }
+    if (EqualsIgnoreCase(text, "Sine") || EqualsIgnoreCase(text, "Sin")) {
+        return RenderMaterialGraphNodeKind::Sine;
+    }
+    if (EqualsIgnoreCase(text, "Cosine") || EqualsIgnoreCase(text, "Cos")) {
+        return RenderMaterialGraphNodeKind::Cosine;
+    }
+    if (EqualsIgnoreCase(text, "DotProduct") || EqualsIgnoreCase(text, "Dot")) {
+        return RenderMaterialGraphNodeKind::DotProduct;
+    }
+    if (EqualsIgnoreCase(text, "CrossProduct") || EqualsIgnoreCase(text, "Cross")) {
+        return RenderMaterialGraphNodeKind::CrossProduct;
+    }
+    if (EqualsIgnoreCase(text, "Normalize") || EqualsIgnoreCase(text, "NormalizeVector")) {
+        return RenderMaterialGraphNodeKind::Normalize;
+    }
+    if (EqualsIgnoreCase(text, "Length")) {
+        return RenderMaterialGraphNodeKind::Length;
+    }
+    if (EqualsIgnoreCase(text, "Distance")) {
+        return RenderMaterialGraphNodeKind::Distance;
+    }
+    if (EqualsIgnoreCase(text, "BreakVector") || EqualsIgnoreCase(text, "BreakOutFloat4Components") || EqualsIgnoreCase(text, "ComponentMask")) {
+        return RenderMaterialGraphNodeKind::BreakVector;
+    }
+    if (EqualsIgnoreCase(text, "MakeVector") || EqualsIgnoreCase(text, "MakeFloat4") || EqualsIgnoreCase(text, "AppendVector")) {
+        return RenderMaterialGraphNodeKind::MakeVector;
+    }
+    if (EqualsIgnoreCase(text, "Step")) {
+        return RenderMaterialGraphNodeKind::Step;
+    }
+    if (EqualsIgnoreCase(text, "SmoothStep") || EqualsIgnoreCase(text, "Smoothstep")) {
+        return RenderMaterialGraphNodeKind::SmoothStep;
+    }
+    if (EqualsIgnoreCase(text, "If") || EqualsIgnoreCase(text, "Compare")) {
+        return RenderMaterialGraphNodeKind::If;
     }
     if (EqualsIgnoreCase(text, "Clamp")) {
         return RenderMaterialGraphNodeKind::Clamp;
@@ -1434,11 +1792,35 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
     case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Distance:
         return pin == "a" || pin == "b";
     case RenderMaterialGraphNodeKind::Power:
         return pin == "base" || pin == "exponent";
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::BreakVector:
         return pin == "value";
+    case RenderMaterialGraphNodeKind::MakeVector:
+        return pin == "x" || pin == "y" || pin == "z" || pin == "w";
+    case RenderMaterialGraphNodeKind::Step:
+        return pin == "edge" || pin == "value";
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        return pin == "min" || pin == "max" || pin == "value";
+    case RenderMaterialGraphNodeKind::If:
+        return pin == "a" || pin == "b" || pin == "less" || pin == "equal" || pin == "greater";
     case RenderMaterialGraphNodeKind::Clamp:
         return pin == "value" || pin == "min" || pin == "max";
     case RenderMaterialGraphNodeKind::Lerp:
@@ -1468,9 +1850,30 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
         return pin == "value";
+    case RenderMaterialGraphNodeKind::BreakVector:
+        return pin == "x" || pin == "y" || pin == "z" || pin == "w";
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ParameterVector:
         return pin == "xyz";
@@ -1546,13 +1949,52 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
     case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
         if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Power:
         if (!outputPin && (pin == "base" || pin == "exponent")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::Distance:
+        if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float3;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::CrossProduct:
+        if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float3;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Normalize:
+        if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Length:
+        if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float3;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::BreakVector:
+        if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
+        return outputPin && (pin == "x" || pin == "y" || pin == "z" || pin == "w") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::MakeVector:
+        if (!outputPin && (pin == "x" || pin == "y" || pin == "z" || pin == "w")) return RenderMaterialGraphPinType::Float;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Step:
+        if (!outputPin && (pin == "edge" || pin == "value")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        if (!outputPin && (pin == "min" || pin == "max" || pin == "value")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::If:
+        if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float;
+        if (!outputPin && (pin == "less" || pin == "equal" || pin == "greater")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Clamp:
         if (!outputPin && (pin == "value" || pin == "min" || pin == "max")) return RenderMaterialGraphPinType::Float4;
@@ -1583,6 +2025,13 @@ bool AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType from, Rende
     }
     if ((from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float3) ||
         (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Color)) {
+        return true;
+    }
+    if ((from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float3) ||
+        (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float4)) {
+        return true;
+    }
+    if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float4) {
         return true;
     }
     if ((from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float3) ||
@@ -1634,6 +2083,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
     case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Distance:
         if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
@@ -1644,7 +2098,48 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::BreakVector:
         if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "x") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "y") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "z") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "w") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::MakeVector:
+        if (!outputPin && pin == "x") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "y") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "z") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "w") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Step:
+        if (!outputPin && pin == "edge") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::SmoothStep:
+        if (!outputPin && pin == "min") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "max") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::If:
+        if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "less") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "equal") return PinId(nodeKind, direction, 4U);
+        if (!outputPin && pin == "greater") return PinId(nodeKind, direction, 5U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Clamp:
@@ -1715,6 +2210,26 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Power:
     case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:

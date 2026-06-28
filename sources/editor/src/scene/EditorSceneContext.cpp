@@ -2850,6 +2850,46 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Power, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateOneMinus:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::OneMinus, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateAbsolute:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Absolute, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateMinimum:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Minimum, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateMaximum:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Maximum, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSaturate:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Saturate, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateFloor:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Floor, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateCeil:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Ceil, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateFraction:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Fraction, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSquareRoot:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SquareRoot, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSine:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Sine, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateCosine:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Cosine, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDotProduct:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DotProduct, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateCrossProduct:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::CrossProduct, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateNormalize:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Normalize, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLength:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Length, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDistance:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Distance, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBreakVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::BreakVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateMakeVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::MakeVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateStep:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Step, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSmoothStep:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SmoothStep, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateIf:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::If, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateClamp:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Clamp, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateLerp:
