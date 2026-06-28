@@ -134,6 +134,13 @@ struct MaterialEditorGraphLinkHit {
     std::string toPin;
 };
 
+struct MaterialEditorGraphConstantValueHit {
+    std::uint32_t nodeId = 0U;
+    std::string displayName;
+    kb::render::RenderMaterialParameterType type = kb::render::RenderMaterialParameterType::Scalar;
+    MaterialEditorParameterValue value{};
+};
+
 enum class MaterialEditorGraphContextMenuHitKind : std::uint8_t {
     None,
     Category,
@@ -224,6 +231,13 @@ public:
         int x,
         int y) noexcept;
     [[nodiscard]] static std::optional<std::uint32_t> GraphTextureSampleAt(
+        const RECT& content,
+        const kb::render::RenderMaterialGraphDocument& graph,
+        const EditorSceneContext& sceneContext,
+        kb::assets::AssetId assetId,
+        int x,
+        int y) noexcept;
+    [[nodiscard]] static std::optional<MaterialEditorGraphConstantValueHit> GraphConstantValueAt(
         const RECT& content,
         const kb::render::RenderMaterialGraphDocument& graph,
         const EditorSceneContext& sceneContext,
@@ -534,8 +548,14 @@ inline std::vector<std::string_view> MaterialEditorPanelInputPins(kb::render::Re
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { "texture", "uv" };
     case kb::render::RenderMaterialGraphNodeKind::Add:
+    case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
+    case kb::render::RenderMaterialGraphNodeKind::Divide:
         return { "a", "b" };
+    case kb::render::RenderMaterialGraphNodeKind::Power:
+        return { "base", "exponent" };
+    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
+        return { "value" };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { "value", "min", "max" };
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
@@ -561,7 +581,11 @@ inline std::vector<std::string_view> MaterialEditorPanelOutputPins(kb::render::R
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
     case kb::render::RenderMaterialGraphNodeKind::Add:
+    case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
+    case kb::render::RenderMaterialGraphNodeKind::Divide:
+    case kb::render::RenderMaterialGraphNodeKind::Power:
+    case kb::render::RenderMaterialGraphNodeKind::OneMinus:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { "value" };
@@ -622,10 +646,136 @@ inline RECT MaterialEditorPanelTextureSamplePreviewRect(const RECT& node) noexce
     return RECT{ left, top, left + size, top + size };
 }
 
+inline bool MaterialEditorPanelIsConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
+}
+
+inline kb::render::RenderMaterialParameterType MaterialEditorPanelConstantParameterType(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+        return kb::render::RenderMaterialParameterType::Scalar;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+        return kb::render::RenderMaterialParameterType::Vec3;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+        return kb::render::RenderMaterialParameterType::Color;
+    default:
+        return kb::render::RenderMaterialParameterType::Scalar;
+    }
+}
+
+inline MaterialEditorParameterValue MaterialEditorPanelConstantParameterValue(
+    kb::render::RenderMaterialGraphNodeKind kind,
+    std::string_view defaultValueHint) {
+    std::string normalized{ defaultValueHint };
+    std::ranges::replace(normalized, ',', ' ');
+    std::istringstream input{ normalized };
+
+    MaterialEditorParameterValue value{};
+    switch (kind) {
+    case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+        value.kind = MaterialEditorParameterValueKind::Scalar;
+        if (!(input >> value.numbers[0])) {
+            value.numbers[0] = 0.0F;
+        }
+        break;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+        value.kind = MaterialEditorParameterValueKind::Vec3;
+        if (!(input >> value.numbers[0] >> value.numbers[1] >> value.numbers[2])) {
+            value.numbers = { 0.0F, 0.0F, 0.0F, 0.0F };
+        }
+        break;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+        value.kind = MaterialEditorParameterValueKind::Color;
+        if (!(input >> value.numbers[0] >> value.numbers[1] >> value.numbers[2])) {
+            value.numbers = { 1.0F, 1.0F, 1.0F, 1.0F };
+        } else if (!(input >> value.numbers[3])) {
+            value.numbers[3] = 1.0F;
+        }
+        break;
+    default:
+        break;
+    }
+    return value;
+}
+
+inline RECT MaterialEditorPanelConstantValueRect(const RECT& node) noexcept {
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+    const int left = node.left + MaterialEditorPanelScaled(26, scale);
+    const int top = node.top
+        + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale)
+        + MaterialEditorPanelScaled(54, scale);
+    const int right = node.right - MaterialEditorPanelScaled(56, scale);
+    const int bottom = top + MaterialEditorPanelScaled(58, scale);
+    return RECT{ left, top, right, bottom };
+}
+
+inline RECT MaterialEditorPanelTextureParameterRect(const RECT& node) noexcept {
+    const float scale = static_cast<float>(MaterialEditorPanelRectWidth(node)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+    const int left = node.left + MaterialEditorPanelScaled(26, scale);
+    const int top = node.top
+        + MaterialEditorPanelScaled(MaterialEditorPanelMetrics::GraphNodeHeaderHeight, scale)
+        + MaterialEditorPanelScaled(54, scale);
+    const int right = node.right - MaterialEditorPanelScaled(56, scale);
+    const int bottom = top + MaterialEditorPanelScaled(92, scale);
+    return RECT{ left, top, right, bottom };
+}
+
+inline std::uint32_t MaterialEditorPanelTextureValueNodeId(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const kb::render::RenderMaterialGraphNode& node) noexcept {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+        return node.id;
+    }
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        return 0U;
+    }
+    for (const kb::render::RenderMaterialGraphLink& link : graph.links) {
+        if (link.toNodeId != node.id || link.toPin != "texture") {
+            continue;
+        }
+        const kb::render::RenderMaterialGraphNode* source = kb::render::FindRenderMaterialGraphNode(graph, link.fromNodeId);
+        if (source != nullptr && source->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture && link.fromPin == "texture") {
+            return source->id;
+        }
+    }
+    return node.id;
+}
+
 inline bool MaterialEditorPanelPointNear(POINT point, int x, int y, int radius) noexcept {
     const int dx = x - point.x;
     const int dy = y - point.y;
     return (dx * dx) + (dy * dy) <= radius * radius;
+}
+
+inline std::optional<MaterialEditorGraphConstantValueHit> MaterialEditorPanelRenderer::GraphConstantValueAt(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    int x,
+    int y) noexcept {
+    const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
+        ? kb::render::MakeDefaultRenderMaterialGraphDocument()
+        : kb::render::RenderMaterialGraphDocument{};
+    const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+    for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
+        const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
+        if (!MaterialEditorPanelIsConstantNode(node.kind)) {
+            continue;
+        }
+        const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
+        if (rect.has_value() && MaterialEditorPanelPointInRect(MaterialEditorPanelConstantValueRect(*rect), x, y)) {
+            return MaterialEditorGraphConstantValueHit{
+                .nodeId = node.id,
+                .displayName = node.parameter.displayName.empty() ? std::string{ "Constant" } : node.parameter.displayName,
+                .type = MaterialEditorPanelConstantParameterType(node.kind),
+                .value = MaterialEditorPanelConstantParameterValue(node.kind, node.parameter.defaultValueHint),
+            };
+        }
+    }
+    return std::nullopt;
 }
 
 inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphTextureSampleAt(
@@ -641,11 +791,21 @@ inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphTextureSam
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
     for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
-        if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
+        if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
+            node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
             continue;
         }
         const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
-        if (rect.has_value() && MaterialEditorPanelPointInRect(MaterialEditorPanelTextureSamplePreviewRect(*rect), x, y)) {
+        if (!rect.has_value()) {
+            continue;
+        }
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample &&
+            MaterialEditorPanelPointInRect(MaterialEditorPanelTextureSamplePreviewRect(*rect), x, y)) {
+            const std::uint32_t textureNodeId = MaterialEditorPanelTextureValueNodeId(graphView, node);
+            return textureNodeId == 0U ? node.id : textureNodeId;
+        }
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
+            MaterialEditorPanelPointInRect(MaterialEditorPanelTextureParameterRect(*rect), x, y)) {
             return node.id;
         }
     }
@@ -899,7 +1059,16 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 4U:
         return { MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateTextureParameter };
     case 5U:
-        return { MaterialEditorGraphMenuCommand::CreateAdd, MaterialEditorGraphMenuCommand::CreateMultiply, MaterialEditorGraphMenuCommand::CreateClamp, MaterialEditorGraphMenuCommand::CreateLerp };
+        return {
+            MaterialEditorGraphMenuCommand::CreateAdd,
+            MaterialEditorGraphMenuCommand::CreateSubtract,
+            MaterialEditorGraphMenuCommand::CreateMultiply,
+            MaterialEditorGraphMenuCommand::CreateDivide,
+            MaterialEditorGraphMenuCommand::CreatePower,
+            MaterialEditorGraphMenuCommand::CreateOneMinus,
+            MaterialEditorGraphMenuCommand::CreateClamp,
+            MaterialEditorGraphMenuCommand::CreateLerp,
+        };
     case 6U:
         return { MaterialEditorGraphMenuCommand::CreateNormalUnpack };
     case 7U:
@@ -921,7 +1090,11 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateVectorParameter: return "Vector Parameter";
     case MaterialEditorGraphMenuCommand::CreateColorParameter: return "Color Parameter";
     case MaterialEditorGraphMenuCommand::CreateAdd: return "Add";
+    case MaterialEditorGraphMenuCommand::CreateSubtract: return "Subtract";
     case MaterialEditorGraphMenuCommand::CreateMultiply: return "Multiply";
+    case MaterialEditorGraphMenuCommand::CreateDivide: return "Divide";
+    case MaterialEditorGraphMenuCommand::CreatePower: return "Power";
+    case MaterialEditorGraphMenuCommand::CreateOneMinus: return "One Minus";
     case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";

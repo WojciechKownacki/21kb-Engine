@@ -334,6 +334,10 @@ public:
         std::string_view stableId,
         kb::render::RenderMaterialParameterType type,
         std::string_view valueText);
+    [[nodiscard]] bool SetMaterialGraphConstantValue(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        std::string_view valueText);
     [[nodiscard]] bool SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialMetallicFactor(kb::assets::AssetId id, float value);
