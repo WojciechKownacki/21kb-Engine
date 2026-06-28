@@ -1222,6 +1222,23 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
     Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse TextureCoordinate as UV node");
+    Require(ParseRenderMaterialGraphNodeKind("Abs") == RenderMaterialGraphNodeKind::Absolute, "Material graph utility math should parse Abs alias");
+    Require(ParseRenderMaterialGraphNodeKind("Min") == RenderMaterialGraphNodeKind::Minimum, "Material graph utility math should parse Min alias");
+    Require(ParseRenderMaterialGraphNodeKind("Max") == RenderMaterialGraphNodeKind::Maximum, "Material graph utility math should parse Max alias");
+    Require(ParseRenderMaterialGraphNodeKind("Frac") == RenderMaterialGraphNodeKind::Fraction, "Material graph utility math should parse Frac alias");
+    Require(ParseRenderMaterialGraphNodeKind("Sqrt") == RenderMaterialGraphNodeKind::SquareRoot, "Material graph utility math should parse Sqrt alias");
+    Require(ParseRenderMaterialGraphNodeKind("Sin") == RenderMaterialGraphNodeKind::Sine, "Material graph utility math should parse Sin alias");
+    Require(ParseRenderMaterialGraphNodeKind("Cos") == RenderMaterialGraphNodeKind::Cosine, "Material graph utility math should parse Cos alias");
+    Require(ParseRenderMaterialGraphNodeKind("Dot") == RenderMaterialGraphNodeKind::DotProduct, "Material graph vector math should parse Dot alias");
+    Require(ParseRenderMaterialGraphNodeKind("Cross") == RenderMaterialGraphNodeKind::CrossProduct, "Material graph vector math should parse Cross alias");
+    Require(ParseRenderMaterialGraphNodeKind("NormalizeVector") == RenderMaterialGraphNodeKind::Normalize, "Material graph vector math should parse NormalizeVector alias");
+    Require(ParseRenderMaterialGraphNodeKind("Length") == RenderMaterialGraphNodeKind::Length, "Material graph vector math should parse Length node");
+    Require(ParseRenderMaterialGraphNodeKind("Distance") == RenderMaterialGraphNodeKind::Distance, "Material graph vector math should parse Distance node");
+    Require(ParseRenderMaterialGraphNodeKind("ComponentMask") == RenderMaterialGraphNodeKind::BreakVector, "Material graph channel utility should parse ComponentMask alias");
+    Require(ParseRenderMaterialGraphNodeKind("AppendVector") == RenderMaterialGraphNodeKind::MakeVector, "Material graph channel utility should parse AppendVector alias");
+    Require(ParseRenderMaterialGraphNodeKind("Step") == RenderMaterialGraphNodeKind::Step, "Material graph conditional math should parse Step node");
+    Require(ParseRenderMaterialGraphNodeKind("SmoothStep") == RenderMaterialGraphNodeKind::SmoothStep, "Material graph conditional math should parse SmoothStep node");
+    Require(ParseRenderMaterialGraphNodeKind("Compare") == RenderMaterialGraphNodeKind::If, "Material graph conditional math should parse Compare alias");
 
     std::istringstream input{
         "version 1\n"
@@ -1716,6 +1733,337 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
         "KBMAT-GRAPH-0202: Shader compiler should emit Power expression");
     Require(mathResult.shader.source.find("vec4(1.0) -") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit OneMinus expression");
+
+    RenderMaterialGraphDocument utilityGraph = MakeDefaultRenderMaterialGraphDocument();
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "-0.25" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Absolute, .positionX = 280, .positionY = 80 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.4" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 240,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.8" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::Minimum, .positionX = 280, .positionY = 200 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::Maximum, .positionX = 440, .positionY = 140 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::Saturate, .positionX = 600, .positionY = 140 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 9U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 320,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1.75" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 10U, .kind = RenderMaterialGraphNodeKind::Fraction, .positionX = 280, .positionY = 320 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 11U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 400,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 12U, .kind = RenderMaterialGraphNodeKind::SquareRoot, .positionX = 280, .positionY = 400 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 13U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 480,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.9" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 14U, .kind = RenderMaterialGraphNodeKind::Floor, .positionX = 280, .positionY = 480 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 15U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 560,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.1" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 16U, .kind = RenderMaterialGraphNodeKind::Ceil, .positionX = 280, .positionY = 560 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 17U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 640,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0" },
+    });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 18U, .kind = RenderMaterialGraphNodeKind::Sine, .positionX = 280, .positionY = 640 });
+    utilityGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 19U, .kind = RenderMaterialGraphNodeKind::Cosine, .positionX = 440, .positionY = 640 });
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Absolute, 3U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Minimum, 6U, "a"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::Minimum, 6U, "b"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Absolute, 3U, "value", RenderMaterialGraphNodeKind::Maximum, 7U, "a"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Minimum, 6U, "value", RenderMaterialGraphNodeKind::Maximum, 7U, "b"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Maximum, 7U, "value", RenderMaterialGraphNodeKind::Saturate, 8U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Saturate, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::Fraction, 10U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Fraction, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 11U, "value", RenderMaterialGraphNodeKind::SquareRoot, 12U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SquareRoot, 12U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::Floor, 14U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Floor, 14U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 15U, "value", RenderMaterialGraphNodeKind::Ceil, 16U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Ceil, 16U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 17U, "value", RenderMaterialGraphNodeKind::Sine, 18U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Sine, 18U, "value", RenderMaterialGraphNodeKind::Cosine, 19U, "value"));
+    utilityGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Cosine, 19U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    const RenderMaterialGraphCompileResult utilityResult = CompileRenderMaterialGraphToShaderSource(
+        utilityGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledUtilityMath.kbmat",
+        });
+    Require(utilityResult.Succeeded(), "KBMAT-GRAPH-0202: Utility math graph should compile to shader source");
+    Require(utilityResult.shader.source.find("abs(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Abs expression");
+    Require(utilityResult.shader.source.find("min(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Min expression");
+    Require(utilityResult.shader.source.find("max(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Max expression");
+    Require(utilityResult.shader.source.find("clamp(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Saturate expression");
+    Require(utilityResult.shader.source.find("fract(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Frac expression");
+    Require(utilityResult.shader.source.find("sqrt(max(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Sqrt expression");
+    Require(utilityResult.shader.source.find("floor(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Floor expression");
+    Require(utilityResult.shader.source.find("ceil(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Ceil expression");
+    Require(utilityResult.shader.source.find("sin(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Sin expression");
+    Require(utilityResult.shader.source.find("cos(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Cos expression");
+
+    RenderMaterialGraphDocument vectorGraph = MakeDefaultRenderMaterialGraphDocument();
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5 0 0" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::DotProduct, .positionX = 300, .positionY = 120 });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 240,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 6U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 320,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::CrossProduct, .positionX = 300, .positionY = 280 });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::Normalize, .positionX = 460, .positionY = 280 });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::Length, .positionX = 620, .positionY = 280 });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 10U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 400,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 0" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 11U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 120,
+        .positionY = 480,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 0.25" },
+    });
+    vectorGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 12U, .kind = RenderMaterialGraphNodeKind::Distance, .positionX = 300, .positionY = 440 });
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::DotProduct, 4U, "a"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::DotProduct, 4U, "b"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::DotProduct, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 5U, "xyz", RenderMaterialGraphNodeKind::CrossProduct, 7U, "a"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 6U, "xyz", RenderMaterialGraphNodeKind::CrossProduct, 7U, "b"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::CrossProduct, 7U, "value", RenderMaterialGraphNodeKind::Normalize, 8U, "value"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Normalize, 8U, "value", RenderMaterialGraphNodeKind::Length, 9U, "value"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Length, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 10U, "xyz", RenderMaterialGraphNodeKind::Distance, 12U, "a"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 11U, "xyz", RenderMaterialGraphNodeKind::Distance, 12U, "b"));
+    vectorGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Distance, 12U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    const RenderMaterialGraphCompileResult vectorResult = CompileRenderMaterialGraphToShaderSource(
+        vectorGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledVectorMath.kbmat",
+        });
+    Require(vectorResult.Succeeded(), "KBMAT-GRAPH-0202: Vector math graph should compile to shader source");
+    Require(vectorResult.shader.source.find("dot(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit DotProduct expression");
+    Require(vectorResult.shader.source.find("cross(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit CrossProduct expression");
+    Require(vectorResult.shader.source.find("normalize(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Normalize expression");
+    Require(vectorResult.shader.source.find("length(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Length expression");
+    Require(vectorResult.shader.source.find("distance(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Distance expression");
+
+    RenderMaterialGraphDocument channelGraph = MakeDefaultRenderMaterialGraphDocument();
+    channelGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.2 0.4 0.6 0.8" },
+    });
+    channelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::BreakVector, .positionX = 300, .positionY = 80 });
+    channelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeVector, .positionX = 480, .positionY = 80 });
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::BreakVector, 3U, "value"));
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "z", RenderMaterialGraphNodeKind::MakeVector, 4U, "x"));
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "y", RenderMaterialGraphNodeKind::MakeVector, 4U, "y"));
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "x", RenderMaterialGraphNodeKind::MakeVector, 4U, "z"));
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "w", RenderMaterialGraphNodeKind::MakeVector, 4U, "w"));
+    channelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult channelResult = CompileRenderMaterialGraphToShaderSource(
+        channelGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledChannelUtility.kbmat",
+        });
+    Require(channelResult.Succeeded(), "KBMAT-GRAPH-0202: Channel utility graph should compile to shader source");
+    Require(channelResult.shader.source.find("vec4(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit MakeVector expression");
+    Require(channelResult.shader.source.find(".z") != std::string::npos &&
+            channelResult.shader.source.find(".y") != std::string::npos &&
+            channelResult.shader.source.find(".x") != std::string::npos &&
+            channelResult.shader.source.find(".w") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit BreakVector channel expressions");
+
+    RenderMaterialGraphDocument conditionalGraph = MakeDefaultRenderMaterialGraphDocument();
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 60,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 240,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.75" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::Step, .positionX = 320, .positionY = 180 });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 6U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 340,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 7U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 420,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 8U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 500,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::SmoothStep, .positionX = 320, .positionY = 420 });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 10U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 520,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.25" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 11U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 520,
+        .positionY = 240,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 12U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 520,
+        .positionY = 320,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.2" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 13U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 520,
+        .positionY = 400,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.4" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 14U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 520,
+        .positionY = 480,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.8" },
+    });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 15U, .kind = RenderMaterialGraphNodeKind::If, .positionX = 720, .positionY = 300 });
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Step, 5U, "edge"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Step, 5U, "value"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Step, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "min"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "max"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "value"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SmoothStep, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 10U, "value", RenderMaterialGraphNodeKind::If, 15U, "a"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 11U, "value", RenderMaterialGraphNodeKind::If, 15U, "b"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 12U, "value", RenderMaterialGraphNodeKind::If, 15U, "less"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::If, 15U, "equal"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::If, 15U, "greater"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::If, 15U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    const RenderMaterialGraphCompileResult conditionalResult = CompileRenderMaterialGraphToShaderSource(
+        conditionalGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/CompiledConditionalMath.kbmat",
+        });
+    Require(conditionalResult.Succeeded(), "KBMAT-GRAPH-0202: Conditional math graph should compile to shader source");
+    Require(conditionalResult.shader.source.find("step(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit Step expression");
+    Require(conditionalResult.shader.source.find("smoothstep(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit SmoothStep expression");
+    Require(conditionalResult.shader.source.find("abs(") != std::string::npos &&
+            conditionalResult.shader.source.find("?") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit If compare expression");
 
     RenderMaterialGraphDocument textureGraph = MakeDefaultRenderMaterialGraphDocument();
     textureGraph.nodes.push_back(RenderMaterialGraphNode{

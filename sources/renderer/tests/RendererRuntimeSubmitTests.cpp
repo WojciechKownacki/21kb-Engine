@@ -590,6 +590,197 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
         "KBMAT-RUNTIME: Constant Color through Lerp did not evaluate into Material Output Base Color");
     Require(NearlyEqual(resolved.desc.roughnessFactor, 0.75F), "KBMAT-RUNTIME: Subtract/Power/OneMinus graph did not evaluate into Roughness");
     Require(NearlyEqual(resolved.desc.metallicFactor, 0.5F), "KBMAT-RUNTIME: Divide graph did not evaluate into Metallic");
+
+    RenderMaterialAssetData utilityMaterial{};
+    utilityMaterial.desc.baseColor[0] = 1.0F;
+    utilityMaterial.desc.baseColor[1] = 1.0F;
+    utilityMaterial.desc.baseColor[2] = 1.0F;
+    utilityMaterial.desc.baseColor[3] = 1.0F;
+    utilityMaterial.desc.roughnessFactor = 1.0F;
+    utilityMaterial.desc.metallicFactor = 0.0F;
+    utilityMaterial.desc.occlusionStrength = 1.0F;
+    utilityMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "-0.25"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::Absolute),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.4"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.8"),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::Minimum),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::Maximum),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::Saturate),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1.75"),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::Fraction),
+        MakeGraphNode(11U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.25"),
+        MakeGraphNode(12U, RenderMaterialGraphNodeKind::SquareRoot),
+        MakeGraphNode(13U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.9"),
+        MakeGraphNode(14U, RenderMaterialGraphNodeKind::Floor),
+        MakeGraphNode(15U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.1"),
+        MakeGraphNode(16U, RenderMaterialGraphNodeKind::Ceil),
+        MakeGraphNode(17U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0"),
+        MakeGraphNode(18U, RenderMaterialGraphNodeKind::Sine),
+        MakeGraphNode(19U, RenderMaterialGraphNodeKind::Cosine),
+    };
+    utilityMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Absolute, 3U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Minimum, 6U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::Minimum, 6U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Absolute, 3U, "value", RenderMaterialGraphNodeKind::Maximum, 7U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Minimum, 6U, "value", RenderMaterialGraphNodeKind::Maximum, 7U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Maximum, 7U, "value", RenderMaterialGraphNodeKind::Saturate, 8U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Saturate, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::Fraction, 10U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Fraction, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 11U, "value", RenderMaterialGraphNodeKind::SquareRoot, 12U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::SquareRoot, 12U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::Floor, 14U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Floor, 14U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 15U, "value", RenderMaterialGraphNodeKind::Ceil, 16U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Ceil, 16U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 17U, "value", RenderMaterialGraphNodeKind::Sine, 18U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Sine, 18U, "value", RenderMaterialGraphNodeKind::Cosine, 19U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Cosine, 19U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"),
+    };
+    const ResolvedRuntimeMaterialDesc utilityResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, utilityMaterial);
+    Require(NearlyEqual(utilityResolved.desc.roughnessFactor, 0.4F), "KBMAT-RUNTIME: Abs/Min/Max/Saturate graph did not evaluate into Roughness");
+    Require(NearlyEqual(utilityResolved.desc.metallicFactor, 0.75F), "KBMAT-RUNTIME: Fraction graph did not evaluate into Metallic");
+    Require(NearlyEqual(utilityResolved.desc.occlusionStrength, 0.5F), "KBMAT-RUNTIME: SquareRoot graph did not evaluate into Occlusion");
+    Require(NearlyEqual(utilityResolved.desc.baseColor[0], 1.0F), "KBMAT-RUNTIME: Ceil graph did not evaluate into Base Color");
+    Require(NearlyEqual(utilityResolved.desc.baseColor[3], 0.0F), "KBMAT-RUNTIME: Floor graph did not evaluate into Alpha");
+    Require(NearlyEqual(utilityResolved.desc.emissiveColor[0], 1.0F), "KBMAT-RUNTIME: Sine/Cosine graph did not evaluate into Emissive");
+
+    RenderMaterialAssetData vectorMaterial{};
+    vectorMaterial.desc.baseColor[0] = 1.0F;
+    vectorMaterial.desc.baseColor[1] = 1.0F;
+    vectorMaterial.desc.baseColor[2] = 1.0F;
+    vectorMaterial.desc.baseColor[3] = 1.0F;
+    vectorMaterial.desc.roughnessFactor = 1.0F;
+    vectorMaterial.desc.metallicFactor = 0.0F;
+    vectorMaterial.desc.occlusionStrength = 1.0F;
+    vectorMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantVector, {}, "1 0 0"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantVector, {}, "0.5 0 0"),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::DotProduct),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ConstantVector, {}, "1 0 0"),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantVector, {}, "0 1 0"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::CrossProduct),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::Normalize),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::Length),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::ConstantVector, {}, "0 0 0"),
+        MakeGraphNode(11U, RenderMaterialGraphNodeKind::ConstantVector, {}, "0 0 0.25"),
+        MakeGraphNode(12U, RenderMaterialGraphNodeKind::Distance),
+        MakeGraphNode(13U, RenderMaterialGraphNodeKind::ConstantColor, {}, "1 1 1 1"),
+    };
+    vectorMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 13U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::DotProduct, 4U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::DotProduct, 4U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::DotProduct, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 5U, "xyz", RenderMaterialGraphNodeKind::CrossProduct, 7U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 6U, "xyz", RenderMaterialGraphNodeKind::CrossProduct, 7U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::CrossProduct, 7U, "value", RenderMaterialGraphNodeKind::Normalize, 8U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Normalize, 8U, "value", RenderMaterialGraphNodeKind::Length, 9U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Length, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 10U, "xyz", RenderMaterialGraphNodeKind::Distance, 12U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 11U, "xyz", RenderMaterialGraphNodeKind::Distance, 12U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Distance, 12U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+    };
+    const ResolvedRuntimeMaterialDesc vectorResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, vectorMaterial);
+    Require(NearlyEqual(vectorResolved.desc.roughnessFactor, 0.5F), "KBMAT-RUNTIME: DotProduct graph did not evaluate into Roughness");
+    Require(NearlyEqual(vectorResolved.desc.metallicFactor, 1.0F), "KBMAT-RUNTIME: CrossProduct/Normalize/Length graph did not evaluate into Metallic");
+    Require(NearlyEqual(vectorResolved.desc.occlusionStrength, 0.25F), "KBMAT-RUNTIME: Distance graph did not evaluate into Occlusion");
+
+    RenderMaterialAssetData channelMaterial{};
+    channelMaterial.desc.baseColor[0] = 1.0F;
+    channelMaterial.desc.baseColor[1] = 1.0F;
+    channelMaterial.desc.baseColor[2] = 1.0F;
+    channelMaterial.desc.baseColor[3] = 1.0F;
+    channelMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.2 0.4 0.6 0.8"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::BreakVector),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::MakeVector),
+    };
+    channelMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::BreakVector, 3U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "z", RenderMaterialGraphNodeKind::MakeVector, 4U, "x"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "y", RenderMaterialGraphNodeKind::MakeVector, 4U, "y"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "x", RenderMaterialGraphNodeKind::MakeVector, 4U, "z"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::BreakVector, 3U, "w", RenderMaterialGraphNodeKind::MakeVector, 4U, "w"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+    };
+    const ResolvedRuntimeMaterialDesc channelResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, channelMaterial);
+    Require(NearlyEqual(channelResolved.desc.baseColor[0], 0.6F) &&
+            NearlyEqual(channelResolved.desc.baseColor[1], 0.4F) &&
+            NearlyEqual(channelResolved.desc.baseColor[2], 0.2F) &&
+            NearlyEqual(channelResolved.desc.baseColor[3], 0.8F),
+        "KBMAT-RUNTIME: BreakVector/MakeVector graph did not remap Base Color channels");
+
+    RenderMaterialAssetData conditionalMaterial{};
+    conditionalMaterial.desc.baseColor[0] = 1.0F;
+    conditionalMaterial.desc.baseColor[1] = 1.0F;
+    conditionalMaterial.desc.baseColor[2] = 1.0F;
+    conditionalMaterial.desc.baseColor[3] = 1.0F;
+    conditionalMaterial.desc.roughnessFactor = 0.0F;
+    conditionalMaterial.desc.metallicFactor = 0.0F;
+    conditionalMaterial.desc.occlusionStrength = 1.0F;
+    conditionalMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "1 1 1 1"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.75"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::Step),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::SmoothStep),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.25"),
+        MakeGraphNode(11U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(12U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.2"),
+        MakeGraphNode(13U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.4"),
+        MakeGraphNode(14U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.8"),
+        MakeGraphNode(15U, RenderMaterialGraphNodeKind::If),
+        MakeGraphNode(16U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(17U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(18U, RenderMaterialGraphNodeKind::If),
+        MakeGraphNode(19U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.75"),
+        MakeGraphNode(20U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(21U, RenderMaterialGraphNodeKind::If),
+    };
+    conditionalMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Step, 5U, "edge"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Step, 5U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Step, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "min"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "max"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::SmoothStep, 9U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::SmoothStep, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 10U, "value", RenderMaterialGraphNodeKind::If, 15U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 11U, "value", RenderMaterialGraphNodeKind::If, 15U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 12U, "value", RenderMaterialGraphNodeKind::If, 15U, "less"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::If, 15U, "equal"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::If, 15U, "greater"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::If, 15U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 16U, "value", RenderMaterialGraphNodeKind::If, 18U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 17U, "value", RenderMaterialGraphNodeKind::If, 18U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 12U, "value", RenderMaterialGraphNodeKind::If, 18U, "less"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::If, 18U, "equal"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::If, 18U, "greater"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::If, 18U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 19U, "value", RenderMaterialGraphNodeKind::If, 21U, "a"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 20U, "value", RenderMaterialGraphNodeKind::If, 21U, "b"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 12U, "value", RenderMaterialGraphNodeKind::If, 21U, "less"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::If, 21U, "equal"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::If, 21U, "greater"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::If, 21U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"),
+    };
+    const ResolvedRuntimeMaterialDesc conditionalResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, conditionalMaterial);
+    Require(NearlyEqual(conditionalResolved.desc.roughnessFactor, 1.0F), "KBMAT-RUNTIME: Step graph did not evaluate into Roughness");
+    Require(NearlyEqual(conditionalResolved.desc.metallicFactor, 0.5F), "KBMAT-RUNTIME: SmoothStep graph did not evaluate into Metallic");
+    Require(NearlyEqual(conditionalResolved.desc.occlusionStrength, 0.2F), "KBMAT-RUNTIME: If less branch did not evaluate into Occlusion");
+    Require(NearlyEqual(conditionalResolved.desc.baseColor[3], 0.4F), "KBMAT-RUNTIME: If equal branch did not evaluate into Alpha");
+    Require(NearlyEqual(conditionalResolved.desc.emissiveColor[0], 0.8F), "KBMAT-RUNTIME: If greater branch did not evaluate into Emissive");
 }
 
 void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
