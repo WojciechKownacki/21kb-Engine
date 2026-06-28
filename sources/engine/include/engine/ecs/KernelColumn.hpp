@@ -55,7 +55,7 @@ public:
     constexpr RestrictPtr() noexcept = default;
     constexpr explicit RestrictPtr(T* pointer) noexcept : pointer_(pointer) {}
 
-    [[nodiscard]] constexpr T* KB_RESTRICT Get() const noexcept {
+    [[nodiscard]] constexpr T* Get() const noexcept {
         return pointer_;
     }
 
@@ -99,7 +99,7 @@ public:
     }
 
     // Returns the column base with the alignment assumption attached for codegen.
-    [[nodiscard]] T* KB_RESTRICT Data() const noexcept {
+    [[nodiscard]] T* Data() const noexcept {
         return AssumeAligned<Alignment>(data_);
     }
 
