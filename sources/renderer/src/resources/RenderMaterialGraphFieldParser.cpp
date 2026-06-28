@@ -338,6 +338,7 @@ void AddDiagnostic(
         (IsRenderMaterialGraphParameterNode(node->kind) ||
             node->kind == RenderMaterialGraphNodeKind::TextureSample ||
             node->kind == RenderMaterialGraphNodeKind::ConstantScalar ||
+            node->kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
             node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
             node->kind == RenderMaterialGraphNodeKind::ConstantColor);
     if (!supportsMetadata) {

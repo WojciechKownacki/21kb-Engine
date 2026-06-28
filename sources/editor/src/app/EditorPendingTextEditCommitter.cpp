@@ -11,7 +11,10 @@ EditorPendingTextEditCommitter::EditorPendingTextEditCommitter(EditorSceneContex
 bool EditorPendingTextEditCommitter::CommitPendingEdits() {
     const bool committedNewFolder = CommitPendingNewAssetFolder();
     const bool committedHierarchyRename = CommitPendingHierarchyRename();
-    return committedNewFolder || committedHierarchyRename;
+    const bool committedMaterialGraphConstant = sceneContext_.IsMaterialGraphConstantInlineEditing()
+        ? sceneContext_.CommitMaterialGraphConstantInlineEdit()
+        : false;
+    return committedNewFolder || committedHierarchyRename || committedMaterialGraphConstant;
 }
 
 bool EditorPendingTextEditCommitter::CommitPendingNewAssetFolder() {
