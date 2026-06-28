@@ -198,6 +198,17 @@ std::filesystem::path EngineModuleLoader::ResolveModulePath(const std::filesyste
         AppendCandidate(candidates, exeDir.parent_path().parent_path() / modulePath);
 
         if (modulePath.filename() == modulePath) {
+            const std::filesystem::path exeParent = exeDir.parent_path();
+            if (!exeParent.empty()) {
+                std::error_code iterError;
+                for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(exeParent, iterError)) {
+                    if (iterError || !entry.is_directory()) {
+                        continue;
+                    }
+                    AppendCandidate(candidates, entry.path() / modulePath.filename());
+                }
+            }
+
             const std::filesystem::path buildRoot = exeDir.parent_path().parent_path();
             const std::filesystem::path configDir = exeDir.filename();
             if (!buildRoot.empty() && !configDir.empty()) {
