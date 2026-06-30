@@ -19,6 +19,9 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
         .materialHandleValue = desc.material.value,
         .meshResourceVersion = desc.meshResourceVersion,
         .materialResourceVersion = desc.materialResourceVersion,
+        .materialProgramKey = (desc.materialResource != nullptr && desc.materialResource->graphProgram.active)
+            ? desc.materialResource->graphProgram.graphSourceHash
+            : 0U,
         .materialTextureDependencySignature = desc.materialTextureDependencySignature,
         .sectionIndex = desc.sectionIndex,
         .materialSlot = desc.materialSlot,
@@ -48,6 +51,7 @@ std::size_t SceneCachedDrawCommandKeyHash::operator()(const SceneCachedDrawComma
     HashCombine(seed, key.materialHandleValue);
     HashCombine(seed, key.meshResourceVersion);
     HashCombine(seed, key.materialResourceVersion);
+    HashCombine(seed, key.materialProgramKey);
     HashCombine(seed, key.materialTextureDependencySignature);
     HashCombine(seed, key.sectionIndex);
     HashCombine(seed, key.materialSlot);

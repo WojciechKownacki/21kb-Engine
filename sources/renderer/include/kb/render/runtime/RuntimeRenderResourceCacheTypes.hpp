@@ -51,6 +51,7 @@ struct RuntimeMaterialResource {
     std::uint64_t contentHash = 0;
     std::uint64_t lastReferencedFrame = 0;
     RuntimeMaterialResolveStatus status = RuntimeMaterialResolveStatus::Resolved;
+    RuntimeMaterialRenderMode renderMode = RuntimeMaterialRenderMode::BuiltinPbr;
     std::vector<RuntimeMaterialResolveDiagnostic> diagnostics{};
 };
 

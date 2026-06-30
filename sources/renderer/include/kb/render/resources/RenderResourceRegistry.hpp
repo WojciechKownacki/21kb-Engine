@@ -46,6 +46,7 @@ public:
     void DestroyMesh(RenderMeshHandle handle) noexcept;
 
     [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc);
+    [[nodiscard]] RenderMaterialHandle RegisterMaterial(const RenderMaterialDesc& desc, RenderMaterialGraphProgramBinding graphProgram);
     [[nodiscard]] const RenderMaterialResource* FindMaterial(RenderMaterialHandle handle) const noexcept;
     [[nodiscard]] bool ContainsMaterial(RenderMaterialHandle handle) const noexcept;
     void DestroyMaterial(RenderMaterialHandle handle) noexcept;

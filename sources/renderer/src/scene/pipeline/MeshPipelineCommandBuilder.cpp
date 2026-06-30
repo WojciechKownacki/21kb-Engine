@@ -20,11 +20,17 @@ namespace {
     MeshPassType pass,
     RenderMaterialHandle material,
     std::uint64_t materialAssetId,
+    const RenderMaterialResource* materialResource,
     RenderMeshHandle mesh,
     std::uint64_t meshAssetId,
     std::uint16_t depthBucket) noexcept {
     const std::uint64_t passKey = static_cast<std::uint64_t>(static_cast<std::uint8_t>(pass) & 0x0FU);
-    const std::uint64_t materialKey = ResourceKey20(material.IsValid() ? material.value : materialAssetId);
+    // Group graph-material draws by their GPU program (graph source hash) so the sort minimizes
+    // program switches; builtin materials keep grouping by their material handle.
+    const std::uint64_t programIdentity = (materialResource != nullptr && materialResource->graphProgram.active)
+        ? materialResource->graphProgram.graphSourceHash
+        : (material.IsValid() ? material.value : materialAssetId);
+    const std::uint64_t materialKey = ResourceKey20(programIdentity);
     const std::uint64_t meshKey = ResourceKey20(mesh.IsValid() ? mesh.value : meshAssetId);
     return (passKey << 60U) | (materialKey << 40U) | (meshKey << 20U) | static_cast<std::uint64_t>(SortDepthBucket(pass, depthBucket));
 }
@@ -67,7 +73,7 @@ void MeshPipelineCommandBuilder::FinalizeCommands(MeshPipelineBuildResult& resul
         command.depthBucket = command.instances.empty()
             ? 0U
             : static_cast<std::uint16_t>(command.sortKey / static_cast<std::uint64_t>(command.instances.size()));
-        command.sortKey = BuildSortKey(pass, command.material, command.materialAssetId, command.mesh, command.meshAssetId, command.depthBucket);
+        command.sortKey = BuildSortKey(pass, command.material, command.materialAssetId, command.materialResource, command.mesh, command.meshAssetId, command.depthBucket);
         result.stats.visibleMeshCount += static_cast<std::uint32_t>(command.instances.size());
         ++result.stats.visibleDrawGroupCount;
     }

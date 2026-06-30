@@ -1590,7 +1590,7 @@ void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error &&
             diagnostic.kind == RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput &&
             diagnostic.pin == "baseColor";
-    }), "KBMAT-GRAPH-0407: Disconnected Material Output Base Color should use black fallback instead of graph validation error");
+    }), "KBMAT-GRAPH-0407: Disconnected Material Output Base Color should use MaterialSurface default fallback instead of graph validation error");
     Require(RenderMaterialAssetWriter::Save(root / "disconnected_basecolor_preview.kbmat", disconnectedBaseColorMaterial),
         "KBMAT-GRAPH-0407: Disconnected BaseColor material could not be written");
     static_cast<void>(manager.DiscoverMountedAssets());
@@ -1599,12 +1599,12 @@ void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
         "KBMAT-GRAPH-0407: Disconnected BaseColor material metadata missing");
     const ResolvedRuntimeMaterialAsset disconnectedBaseColorResolved = RuntimeMaterialResolver{}.ResolveAsset(manager, disconnectedBaseColorMetadata->id);
     Require(disconnectedBaseColorResolved.resolved &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[0], 0.0F) &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[1], 0.0F) &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[0], 1.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[1], 1.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[2], 1.0F) &&
             NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[3], 1.0F) &&
             disconnectedBaseColorResolved.material.desc.albedoTextureAssetId == 0U,
-        "KBMAT-GRAPH-0407: Runtime resolver should preview disconnected Material Output Base Color as black material");
+        "KBMAT-GRAPH-0407: Runtime resolver should preview disconnected Material Output Base Color using MaterialSurface white default");
 
     RenderMaterialAssetData secondMaterial = *loaded;
     secondMaterial.desc.baseColor[0] = 0.9F;

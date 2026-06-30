@@ -20,6 +20,7 @@ struct SceneCachedDrawCommandKey {
     std::uint64_t materialHandleValue = 0;
     std::uint64_t meshResourceVersion = 0;
     std::uint64_t materialResourceVersion = 0;
+    std::uint64_t materialProgramKey = 0;
     std::uint64_t materialTextureDependencySignature = 0;
     std::uint32_t sectionIndex = 0;
     std::uint32_t materialSlot = 0;

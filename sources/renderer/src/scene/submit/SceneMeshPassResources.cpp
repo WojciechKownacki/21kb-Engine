@@ -4,6 +4,10 @@
 #include "scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -23,6 +27,86 @@ namespace {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
 }
 
+constexpr std::uint64_t kBuiltinMeshMaterialTypeId = 0x6275696C74696E70ULL; // "builtinp"
+constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
+
+[[nodiscard]] MaterialProgramKey BuiltinMeshProgramKey(std::string pass) {
+    return MaterialProgramKey{
+        .materialTypeId = kBuiltinMeshMaterialTypeId,
+        .materialTypeVersion = kBuiltinMeshMaterialTypeVersion,
+        .graphSourceHash = 0U,
+        .pass = std::move(pass),
+        .backend = 0U,
+        .pipelineStateKey = 0U,
+        .graphProgram = false,
+    };
+}
+
+[[nodiscard]] bgfx::ProgramHandle LoadBuiltinMeshProgram(const MaterialProgramKey& key) {
+    if (key.pass == "BaseOpaque") {
+        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
+    }
+    if (key.pass == "ShadowDepth") {
+        return ShaderLoader::LoadProgram("vs_mesh_shadow_instanced.sc", "fs_mesh_shadow_instanced.sc");
+    }
+    if (key.pass == "SelectionId") {
+        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_selection_instanced.sc");
+    }
+    return BGFX_INVALID_HANDLE;
+}
+
+[[nodiscard]] const char* GraphBackendDirectoryForRenderer(bgfx::RendererType::Enum renderer) noexcept {
+    switch (renderer) {
+    case bgfx::RendererType::Noop:
+    case bgfx::RendererType::Direct3D11:
+        return "dxbc";
+    case bgfx::RendererType::Direct3D12:
+        return "dxil";
+    case bgfx::RendererType::Vulkan:
+        return "spirv";
+    case bgfx::RendererType::OpenGL:
+        return "glsl";
+    case bgfx::RendererType::OpenGLES:
+        return "essl";
+    case bgfx::RendererType::Metal:
+        return "metal";
+    default:
+        return "dxbc";
+    }
+}
+
+[[nodiscard]] std::string GraphMeshPassName(MeshPassType pass) {
+    switch (pass) {
+    case MeshPassType::BaseTransparent:
+        return "BaseTransparent";
+    case MeshPassType::ShadowDepth:
+        return "ShadowDepth";
+    default:
+        return "BaseOpaque";
+    }
+}
+
+[[nodiscard]] bool IsGraphCapablePass(MeshPassType pass) noexcept {
+    return pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent || pass == MeshPassType::ShadowDepth;
+}
+
+[[nodiscard]] std::vector<std::uint8_t> ReadShaderBinaryFile(const std::filesystem::path& path) {
+    std::ifstream file{ path, std::ios::binary | std::ios::ate };
+    if (!file.is_open()) {
+        return {};
+    }
+    const std::streamsize size = file.tellg();
+    if (size <= 0) {
+        return {};
+    }
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+    if (!file.read(reinterpret_cast<char*>(bytes.data()), size)) {
+        return {};
+    }
+    return bytes;
+}
+
 } // namespace
 
 bool SceneMeshPassResources::Initialize() {
@@ -30,16 +114,21 @@ bool SceneMeshPassResources::Initialize() {
         return true;
     }
 
-    meshProgram_ = ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
+    programRegistry_.Configure(
+        [this](const MaterialProgramKey& key) { return LoadProgramForKey(key); },
+        [](bgfx::ProgramHandle handle) { bgfx::destroy(handle); });
+    ResetProgramBindStats();
+
+    meshProgram_ = programRegistry_.Acquire(BuiltinMeshProgramKey("BaseOpaque"));
     if (!bgfx::isValid(meshProgram_)) {
         return false;
     }
-    shadowProgram_ = ShaderLoader::LoadProgram("vs_mesh_shadow_instanced.sc", "fs_mesh_shadow_instanced.sc");
+    shadowProgram_ = programRegistry_.Acquire(BuiltinMeshProgramKey("ShadowDepth"));
     if (!bgfx::isValid(shadowProgram_)) {
         Shutdown();
         return false;
     }
-    selectionProgram_ = ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_selection_instanced.sc");
+    selectionProgram_ = programRegistry_.Acquire(BuiltinMeshProgramKey("SelectionId"));
     if (!bgfx::isValid(selectionProgram_)) {
         Shutdown();
         return false;
@@ -174,18 +263,10 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(normalSampler_);
         normalSampler_ = BGFX_INVALID_HANDLE;
     }
-    if (bgfx::isValid(meshProgram_)) {
-        bgfx::destroy(meshProgram_);
-        meshProgram_ = BGFX_INVALID_HANDLE;
-    }
-    if (bgfx::isValid(selectionProgram_)) {
-        bgfx::destroy(selectionProgram_);
-        selectionProgram_ = BGFX_INVALID_HANDLE;
-    }
-    if (bgfx::isValid(shadowProgram_)) {
-        bgfx::destroy(shadowProgram_);
-        shadowProgram_ = BGFX_INVALID_HANDLE;
-    }
+    programRegistry_.Shutdown();
+    meshProgram_ = BGFX_INVALID_HANDLE;
+    selectionProgram_ = BGFX_INVALID_HANDLE;
+    shadowProgram_ = BGFX_INVALID_HANDLE;
 }
 
 bool SceneMeshPassResources::IsInitialized() const noexcept {
@@ -218,12 +299,90 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(fallbackNormalTexture_);
 }
 
+bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProgramKey& key) const {
+    if (!key.graphProgram) {
+        return LoadBuiltinMeshProgram(key);
+    }
+    if (graphShaderCacheRoot_.empty()) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const std::filesystem::path fragmentPath = std::filesystem::path{ graphShaderCacheRoot_ } /
+        ("graph_" + std::to_string(key.graphSourceHash)) / key.pass /
+        GraphBackendDirectoryForRenderer(bgfx::getRendererType()) / "fs.bin";
+    const std::vector<std::uint8_t> fragmentBytes = ReadShaderBinaryFile(fragmentPath);
+    if (fragmentBytes.empty()) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const bgfx::ShaderHandle vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
+    if (!bgfx::isValid(vertex)) {
+        return BGFX_INVALID_HANDLE;
+    }
+    const bgfx::Memory* memory = bgfx::copy(fragmentBytes.data(), static_cast<std::uint32_t>(fragmentBytes.size()));
+    const bgfx::ShaderHandle fragment = bgfx::createShader(memory);
+    if (!bgfx::isValid(fragment)) {
+        bgfx::destroy(vertex);
+        return BGFX_INVALID_HANDLE;
+    }
+    return bgfx::createProgram(vertex, fragment, true);
+}
+
+void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
+    programBindStats_ = SceneMeshProgramBindStats{};
+    lastBoundProgram_ = BGFX_INVALID_HANDLE;
+}
+
+SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept {
+    SceneMeshPassProgramResolution resolution{};
+    if (IsSelectionPass(pass)) {
+        resolution.program = selectionProgram_;
+    } else {
+        resolution.program = pass == MeshPassType::ShadowDepth ? shadowProgram_ : meshProgram_;
+        if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
+            const MaterialProgramKey key{
+                .materialTypeId = material->graphProgram.materialTypeId,
+                .materialTypeVersion = material->graphProgram.materialTypeVersion,
+                .graphSourceHash = material->graphProgram.graphSourceHash,
+                .pass = GraphMeshPassName(pass),
+                .backend = static_cast<std::uint32_t>(bgfx::getRendererType()),
+                .pipelineStateKey = 0U,
+                .graphProgram = true,
+            };
+            bgfx::ProgramHandle graphHandle = programRegistry_.Find(key);
+            if (!bgfx::isValid(graphHandle)) {
+                graphHandle = programRegistry_.Acquire(key);
+            }
+            if (bgfx::isValid(graphHandle)) {
+                resolution.program = graphHandle;
+                resolution.graphProgram = true;
+            } else {
+                resolution.fellBackToBuiltin = true;
+            }
+        }
+    }
+
+    ++programBindStats_.totalBindCount;
+    if (resolution.graphProgram) {
+        ++programBindStats_.graphProgramBindCount;
+    } else {
+        ++programBindStats_.builtinProgramBindCount;
+    }
+    if (resolution.fellBackToBuiltin) {
+        ++programBindStats_.builtinFallbackBindCount;
+    }
+    if (!bgfx::isValid(lastBoundProgram_) || lastBoundProgram_.idx != resolution.program.idx) {
+        ++programBindStats_.programSwitchCount;
+        lastBoundProgram_ = resolution.program;
+    }
+    return resolution;
+}
+
 bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& desc) const noexcept {
     const RenderMaterialResource* material = desc.command.materialResource;
+    const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(material, desc.pass);
     if (IsSelectionPass(desc.pass)) {
         const std::array<float, 16> disabledShadowViewProj{};
         bgfx::setUniform(shadowViewProjUniform_, disabledShadowViewProj.data());
-        return selectionProgram_;
+        return resolution.program;
     }
 
     const SceneMeshMaterialBindingFallbacks fallbacks{
@@ -240,7 +399,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
         bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
         bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
-        return shadowProgram_;
+        return resolution.program;
     }
 
     const SceneMeshMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::Resolve(
@@ -272,7 +431,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowParams.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
-    return meshProgram_;
+    return resolution.program;
 }
 
 } // namespace kb::render
