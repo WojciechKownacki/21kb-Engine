@@ -3,6 +3,7 @@
 #include "engine/scene/Scene.hpp"
 #include "engine/scene/SceneEntity.hpp"
 #include "engine/scene/LightComponent.hpp"
+#include "engine/assets/AssetMetadata.hpp"
 #include "engine/project/ProjectDescriptor.hpp"
 #include "project/EditorProjectBootstrap.hpp"
 #include "assets/EditorAssetBrowserState.hpp"
@@ -301,10 +302,10 @@ public:
         std::string_view fromPin,
         std::uint32_t toNodeId,
         std::string_view toPin);
-    [[nodiscard]] bool DetachMaterialGraphOutputPinConnection(
+    [[nodiscard]] bool DetachMaterialGraphInputPinConnection(
         kb::assets::AssetId id,
-        std::uint32_t fromNodeId,
-        std::string_view fromPin,
+        std::uint32_t toNodeId,
+        std::string_view toPin,
         int x,
         int y);
     void CancelMaterialGraphPinConnection() noexcept;
@@ -338,6 +339,16 @@ public:
         kb::assets::AssetId id,
         std::uint32_t nodeId,
         std::string_view valueText);
+    [[nodiscard]] bool BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId);
+    [[nodiscard]] bool IsMaterialGraphConstantInlineEditing() const noexcept;
+    [[nodiscard]] bool BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x);
+    [[nodiscard]] bool DragMaterialGraphConstantSlider(int x);
+    [[nodiscard]] bool EndMaterialGraphConstantSliderDrag();
+    [[nodiscard]] bool IsMaterialGraphConstantSliderDragging() const noexcept;
+    void AppendMaterialGraphConstantInlineEditText(wchar_t character);
+    void BackspaceMaterialGraphConstantInlineEdit();
+    [[nodiscard]] bool CommitMaterialGraphConstantInlineEdit();
+    void CancelMaterialGraphConstantInlineEdit() noexcept;
     [[nodiscard]] bool SetMaterialBaseColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialEmissiveColor(kb::assets::AssetId id, int channel, float value);
     [[nodiscard]] bool SetMaterialMetallicFactor(kb::assets::AssetId id, float value);
@@ -424,6 +435,8 @@ private:
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> MaterialSourceForEdit(kb::assets::AssetId id) const;
     [[nodiscard]] bool ApplyPatchToMaterialEditorWorkingCopy(kb::assets::AssetId id, IEditorMaterialAssetPropertyEdit& edit);
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
+    void SyncMaterialEditorWorkingCopyRuntimePreview();
+    void ClearMaterialEditorWorkingCopyRuntimePreview();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
@@ -454,6 +467,10 @@ private:
     EditorSceneViewportStateStore viewportState_;
     InspectorPanelState inspector_;
     MaterialEditorState materialEditor_;
+    kb::assets::AssetId materialRuntimePreviewAssetId_{};
+    std::optional<kb::assets::AssetMetadata> materialRuntimePreviewSourceMetadata_;
+    std::filesystem::path materialRuntimePreviewPath_;
+    std::uint64_t materialRuntimePreviewContentHash_ = 0U;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
@@ -494,6 +511,16 @@ private:
     std::uint32_t materialGraphDragStartSelectedNodeId_ = 0U;
     bool materialGraphDragChanged_ = false;
     bool materialGraphNodeDragging_ = false;
+    kb::assets::AssetId materialGraphConstantSliderAssetId_{};
+    std::uint32_t materialGraphConstantSliderNodeId_ = 0U;
+    std::size_t materialGraphConstantSliderComponentIndex_ = 0U;
+    int materialGraphConstantSliderStartX_ = 0;
+    float materialGraphConstantSliderStartValue_ = 0.0F;
+    float materialGraphConstantSliderLastValue_ = 0.0F;
+    std::optional<kb::render::RenderMaterialAssetData> materialGraphConstantSliderStartDocument_;
+    std::uint32_t materialGraphConstantSliderStartSelectedNodeId_ = 0U;
+    bool materialGraphConstantSliderChanged_ = false;
+    bool materialGraphConstantSliderDragging_ = false;
     bool materialGraphFocused_ = false;
     int materialGraphPanStartX_ = 0;
     int materialGraphPanStartY_ = 0;

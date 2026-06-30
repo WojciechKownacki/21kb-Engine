@@ -75,12 +75,14 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 namespace kb::editor {
 namespace {
 
 constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
+constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverride";
 
 
 [[nodiscard]] bool ContainsEntity(std::span<const kb::scene::SceneEntity> entities, kb::scene::SceneEntity entity) noexcept {
@@ -138,6 +140,31 @@ constexpr std::string_view kSceneDocumentExtension = ".21kbscene";
         return metadata.physicalPath;
     }
     return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
+}
+
+[[nodiscard]] std::uint64_t HashBytes(std::string_view text) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const char ch : text) {
+        hash ^= static_cast<unsigned char>(ch);
+        hash *= 1099511628211ULL;
+    }
+    return hash == 0U ? 1U : hash;
+}
+
+[[nodiscard]] std::uint64_t MaterialWorkingCopyRuntimeContentHash(const kb::render::RenderMaterialAssetData& material) {
+    kb::render::RenderMaterialAssetData runtimeRelevant = material;
+    for (kb::render::RenderMaterialGraphNode& node : runtimeRelevant.graph.nodes) {
+        node.positionX = 0;
+        node.positionY = 0;
+    }
+
+    std::ostringstream output;
+    kb::render::RenderMaterialAssetWriter::Write(output, runtimeRelevant);
+    return HashBytes(output.str());
+}
+
+[[nodiscard]] std::filesystem::path SceneMaterialWorkingCopyRuntimePath(kb::assets::AssetId materialAssetId) {
+    return std::filesystem::temp_directory_path() / ("21kb_scene_material_working_" + std::to_string(materialAssetId.value) + ".kbmat");
 }
 
 [[nodiscard]] std::optional<kb::render::RenderMaterialTypeDocument> LoadMaterialTypeDocumentForMaterial(
@@ -1125,6 +1152,9 @@ bool EditorSceneContext::UndoSceneCommand() {
     const bool undone = SceneCommands().Undo();
     if (undone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource()) {
         RefreshOpenMaterialEditorFromSource();
+    } else if (undone && materialEditor_.OpenAssetId().IsValid()) {
+        SyncMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
     }
     return undone;
 }
@@ -1135,6 +1165,9 @@ bool EditorSceneContext::RedoSceneCommand() {
     const bool redone = SceneCommands().Redo();
     if (redone && commandStack_.LastCompletedCommandAffectsOpenMaterialSource()) {
         RefreshOpenMaterialEditorFromSource();
+    } else if (redone && materialEditor_.OpenAssetId().IsValid()) {
+        SyncMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
     }
     return redone;
 }
@@ -1982,6 +2015,7 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
     if (!PrepareMaterialAssetSelectionChange(id)) {
         return false;
     }
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::optional<kb::render::RenderMaterialAssetData> materialDocument = ReadMaterialDocumentAsset(id);
     std::optional<kb::render::RenderMaterialAssetData> refreshedMaterialDocument;
     std::optional<kb::render::RenderMaterialTypeSchema> schema;
@@ -2086,6 +2120,11 @@ bool EditorSceneContext::OpenMaterialEditorMaterialTypeAsset(kb::assets::AssetId
 }
 
 void EditorSceneContext::CloseMaterialEditorAsset() noexcept {
+    try {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        MarkSceneRenderDirty();
+    } catch (...) {
+    }
     materialEditor_.Close();
 }
 
@@ -2518,6 +2557,114 @@ bool EditorSceneContext::SetMaterialGraphConstantValue(
     return true;
 }
 
+bool EditorSceneContext::BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+    return materialEditor_.BeginGraphConstantInlineEdit(nodeId);
+}
+
+bool EditorSceneContext::IsMaterialGraphConstantInlineEditing() const noexcept {
+    return materialEditor_.IsGraphConstantInlineEditing();
+}
+
+bool EditorSceneContext::BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+    const std::optional<float> value = materialEditor_.GraphConstantComponentValue(nodeId, componentIndex);
+    if (!value.has_value()) {
+        return false;
+    }
+    materialGraphConstantSliderAssetId_ = id;
+    materialGraphConstantSliderNodeId_ = nodeId;
+    materialGraphConstantSliderComponentIndex_ = componentIndex;
+    materialGraphConstantSliderStartX_ = x;
+    materialGraphConstantSliderStartValue_ = *value;
+    materialGraphConstantSliderLastValue_ = *value;
+    materialGraphConstantSliderStartDocument_ = materialEditor_.WorkingCopy();
+    materialGraphConstantSliderStartSelectedNodeId_ = materialEditor_.SelectedNodeId();
+    materialGraphConstantSliderChanged_ = false;
+    materialGraphConstantSliderDragging_ = true;
+    return true;
+}
+
+bool EditorSceneContext::DragMaterialGraphConstantSlider(int x) {
+    if (!materialGraphConstantSliderDragging_ ||
+        materialEditor_.OpenAssetId() != materialGraphConstantSliderAssetId_ ||
+        !materialEditor_.WorkingCopy().has_value() ||
+        materialGraphConstantSliderNodeId_ == 0U) {
+        return false;
+    }
+    const float graphAdjustedDelta = static_cast<float>(x - materialGraphConstantSliderStartX_) / std::max(0.1F, materialGraphZoom_);
+    const float rawValue = materialGraphConstantSliderStartValue_ + (graphAdjustedDelta * 0.02F);
+    const float nextValue = std::clamp(std::round(rawValue * 10.0F) / 10.0F, 0.0F, 1.0F);
+    if (std::abs(nextValue - materialGraphConstantSliderLastValue_) < 0.0001F) {
+        return false;
+    }
+    if (!materialEditor_.SetGraphConstantComponentValue(materialGraphConstantSliderNodeId_, materialGraphConstantSliderComponentIndex_, nextValue)) {
+        return false;
+    }
+    materialGraphConstantSliderLastValue_ = nextValue;
+    materialGraphConstantSliderChanged_ = true;
+    materialEditor_.ClearDiagnostics();
+    return true;
+}
+
+bool EditorSceneContext::EndMaterialGraphConstantSliderDrag() {
+    if (!materialGraphConstantSliderDragging_) {
+        return false;
+    }
+    const bool shouldRecord = materialGraphConstantSliderChanged_ && materialGraphConstantSliderStartDocument_.has_value();
+    const kb::assets::AssetId assetId = materialGraphConstantSliderAssetId_;
+    std::optional<kb::render::RenderMaterialAssetData> before = std::move(materialGraphConstantSliderStartDocument_);
+    const std::uint32_t beforeSelectedNodeId = materialGraphConstantSliderStartSelectedNodeId_;
+    materialGraphConstantSliderDragging_ = false;
+    materialGraphConstantSliderAssetId_ = {};
+    materialGraphConstantSliderNodeId_ = 0U;
+    materialGraphConstantSliderComponentIndex_ = 0U;
+    materialGraphConstantSliderStartX_ = 0;
+    materialGraphConstantSliderStartValue_ = 0.0F;
+    materialGraphConstantSliderLastValue_ = 0.0F;
+    materialGraphConstantSliderStartSelectedNodeId_ = 0U;
+    materialGraphConstantSliderChanged_ = false;
+    if (shouldRecord) {
+        return RecordMaterialGraphWorkingCopyEdit(assetId, "Edit Material Graph Constant", std::move(*before), beforeSelectedNodeId);
+    }
+    return true;
+}
+
+bool EditorSceneContext::IsMaterialGraphConstantSliderDragging() const noexcept {
+    return materialGraphConstantSliderDragging_;
+}
+
+void EditorSceneContext::AppendMaterialGraphConstantInlineEditText(wchar_t character) {
+    materialEditor_.AppendGraphConstantInlineEditText(character);
+}
+
+void EditorSceneContext::BackspaceMaterialGraphConstantInlineEdit() {
+    materialEditor_.BackspaceGraphConstantInlineEdit();
+}
+
+bool EditorSceneContext::CommitMaterialGraphConstantInlineEdit() {
+    const kb::assets::AssetId id = materialEditor_.OpenAssetId();
+    const std::uint32_t nodeId = materialEditor_.GraphConstantInlineEditNodeId();
+    const std::string value{ materialEditor_.GraphConstantInlineEditBuffer() };
+    if (!id.IsValid() || nodeId == 0U) {
+        materialEditor_.CancelGraphConstantInlineEdit();
+        return false;
+    }
+    const bool committed = SetMaterialGraphConstantValue(id, nodeId, value);
+    if (committed) {
+        materialEditor_.CancelGraphConstantInlineEdit();
+    }
+    return committed;
+}
+
+void EditorSceneContext::CancelMaterialGraphConstantInlineEdit() noexcept {
+    materialEditor_.CancelGraphConstantInlineEdit();
+}
+
 bool EditorSceneContext::BeginMaterialGraphPinConnection(kb::assets::AssetId id, std::uint32_t nodeId, std::string pin) {
     return BeginMaterialGraphPinConnection(id, nodeId, std::move(pin), true, 0, 0);
 }
@@ -2664,10 +2811,10 @@ bool EditorSceneContext::DisconnectMaterialGraphLink(
     return true;
 }
 
-bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
+bool EditorSceneContext::DetachMaterialGraphInputPinConnection(
     kb::assets::AssetId id,
-    std::uint32_t fromNodeId,
-    std::string_view fromPin,
+    std::uint32_t toNodeId,
+    std::string_view toPin,
     int x,
     int y) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
@@ -2676,7 +2823,7 @@ bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
 
     const kb::render::RenderMaterialGraphLink* detachedLink = nullptr;
     for (const kb::render::RenderMaterialGraphLink& link : materialEditor_.WorkingCopy()->graph.links) {
-        if (link.fromNodeId == fromNodeId && link.fromPin == fromPin) {
+        if (link.toNodeId == toNodeId && link.toPin == toPin) {
             detachedLink = &link;
             break;
         }
@@ -2685,12 +2832,13 @@ bool EditorSceneContext::DetachMaterialGraphOutputPinConnection(
         return false;
     }
 
-    const std::uint32_t toNodeId = detachedLink->toNodeId;
-    const std::string toPin = detachedLink->toPin;
-    if (!DisconnectMaterialGraphLink(id, fromNodeId, fromPin, toNodeId, toPin)) {
+    const std::uint32_t fromNodeId = detachedLink->fromNodeId;
+    const std::string fromPin = detachedLink->fromPin;
+    const std::string inputPin{ toPin };
+    if (!DisconnectMaterialGraphLink(id, fromNodeId, fromPin, toNodeId, inputPin)) {
         return false;
     }
-    return BeginMaterialGraphPinConnection(id, toNodeId, toPin, false, x, y);
+    return BeginMaterialGraphPinConnection(id, fromNodeId, fromPin, true, x, y);
 }
 
 void EditorSceneContext::CancelMaterialGraphPinConnection() noexcept {
@@ -2828,6 +2976,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Uv, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScalar:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVector2:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector2, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVector:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateColor:
@@ -3098,6 +3248,7 @@ bool EditorSceneContext::RevertMaterialEditorAsset(kb::assets::AssetId id) {
     if (!HasActiveMaterialAssetEdit()) {
         if (materialEditor_.OpenAssetId() == id && materialEditor_.Dirty()) {
             materialEditor_.RevertToCleanSnapshot();
+            ClearMaterialEditorWorkingCopyRuntimePreview();
             MarkSceneRenderDirty();
             console_.Info("Materials", "Material working copy reverted.");
             return true;
@@ -3223,6 +3374,7 @@ bool EditorSceneContext::ApplyActiveMaterialAssetFloatEdit(float value) {
     edit->Apply(*current);
     if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
         materialEditor_.SetWorkingCopy(*current);
+        SyncMaterialEditorWorkingCopyRuntimePreview();
     } else if (!EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *current)) {
         return false;
     }
@@ -3243,6 +3395,9 @@ bool EditorSceneContext::CommitActiveMaterialAssetEdit() {
         return false;
     }
     const kb::render::RenderMaterialAssetData committed = *after;
+    if (materialEditor_.OpenAssetId() == editedAsset) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+    }
 
     std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
         *scene_,
@@ -3271,6 +3426,7 @@ void EditorSceneContext::CancelActiveMaterialAssetEdit() noexcept {
     }
     if (materialEditor_.OpenAssetId() == activeMaterialEditAsset_) {
         materialEditor_.SetWorkingCopy(*activeMaterialEditBefore_);
+        SyncMaterialEditorWorkingCopyRuntimePreview();
     } else {
         static_cast<void>(EditorMaterialAssetGateway::WriteExisting(*scene_, activeMaterialEditAsset_, *activeMaterialEditBefore_));
     }
@@ -4041,6 +4197,7 @@ bool EditorSceneContext::RecordMaterialGraphWorkingCopyEdit(
     }
 
     materialEditor_.ClearDiagnostics();
+    SyncMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return true;
 }
@@ -4062,8 +4219,92 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
     edit.Apply(working);
     materialEditor_.SetWorkingCopy(std::move(working));
     materialEditor_.ClearDiagnostics();
+    SyncMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return true;
+}
+
+void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
+    if (scene_ == nullptr || !materialEditor_.OpenAssetId().IsValid() || !materialEditor_.WorkingCopy().has_value() || !materialEditor_.Dirty()) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        return;
+    }
+
+    const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+    kb::assets::AssetManager& manager = scene_->Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(openAsset);
+    if (metadata == nullptr || metadata->type != "RenderMaterial") {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        return;
+    }
+
+    if (materialRuntimePreviewAssetId_.IsValid() && materialRuntimePreviewAssetId_ != openAsset) {
+        ClearMaterialEditorWorkingCopyRuntimePreview();
+        metadata = manager.Registry().Find(openAsset);
+        if (metadata == nullptr || metadata->type != "RenderMaterial") {
+            return;
+        }
+    }
+
+    const std::uint64_t runtimeContentHash = MaterialWorkingCopyRuntimeContentHash(*materialEditor_.WorkingCopy());
+    if (materialRuntimePreviewAssetId_ == openAsset && materialRuntimePreviewContentHash_ == runtimeContentHash) {
+        std::error_code existsError;
+        if (!materialRuntimePreviewPath_.empty() && std::filesystem::exists(materialRuntimePreviewPath_, existsError)) {
+            return;
+        }
+    }
+
+    if (!materialRuntimePreviewSourceMetadata_.has_value()) {
+        materialRuntimePreviewSourceMetadata_ = *metadata;
+    }
+
+    const std::filesystem::path runtimePath = materialRuntimePreviewPath_.empty()
+        ? SceneMaterialWorkingCopyRuntimePath(openAsset)
+        : materialRuntimePreviewPath_;
+    if (!kb::render::RenderMaterialAssetWriter::Save(runtimePath, *materialEditor_.WorkingCopy())) {
+        console_.Warning("Materials", "Material graph live preview could not write its runtime working copy.");
+        return;
+    }
+
+    kb::assets::AssetMetadata runtimeMetadata = *materialRuntimePreviewSourceMetadata_;
+    runtimeMetadata.id = openAsset;
+    runtimeMetadata.type = "RenderMaterial";
+    runtimeMetadata.importCategory = std::string{ kEditorLiveAssetOverrideCategory };
+    runtimeMetadata.physicalPath = runtimePath;
+    runtimeMetadata.contentHash = runtimeContentHash;
+    runtimeMetadata.runtimeLoadable = true;
+    if (runtimeMetadata.name.empty()) {
+        runtimeMetadata.name = "Material Working Copy";
+    }
+    if (runtimeMetadata.virtualPath.empty()) {
+        runtimeMetadata.virtualPath = std::filesystem::path{ "/Editor/Runtime" } / ("WorkingMaterial" + std::to_string(openAsset.value) + ".kbmat");
+    }
+
+    static_cast<void>(manager.RegisterAsset(std::move(runtimeMetadata)));
+    static_cast<void>(manager.Unload(openAsset));
+    materialRuntimePreviewAssetId_ = openAsset;
+    materialRuntimePreviewPath_ = runtimePath;
+    materialRuntimePreviewContentHash_ = runtimeContentHash;
+}
+
+void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
+    if (scene_ != nullptr && materialRuntimePreviewAssetId_.IsValid()) {
+        kb::assets::AssetManager& manager = scene_->Assets().Manager();
+        if (materialRuntimePreviewSourceMetadata_.has_value()) {
+            static_cast<void>(manager.RegisterAsset(*materialRuntimePreviewSourceMetadata_));
+        }
+        static_cast<void>(manager.Unload(materialRuntimePreviewAssetId_));
+    }
+
+    if (!materialRuntimePreviewPath_.empty()) {
+        std::error_code removeError;
+        static_cast<void>(std::filesystem::remove(materialRuntimePreviewPath_, removeError));
+    }
+
+    materialRuntimePreviewAssetId_ = {};
+    materialRuntimePreviewSourceMetadata_.reset();
+    materialRuntimePreviewPath_.clear();
+    materialRuntimePreviewContentHash_ = 0U;
 }
 
 bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
@@ -4083,6 +4324,7 @@ bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
     }
 
     kb::render::RenderMaterialAssetData after = *materialEditor_.WorkingCopy();
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::unique_ptr<EditorMaterialAssetEditCommand> command = EditorMaterialAssetEditCommand::CreateRecorded(
         *scene_,
         id,
@@ -4096,6 +4338,7 @@ bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
 
     materialEditor_.SetWorkingCopy(after);
     materialEditor_.MarkSaved();
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     MarkSceneRenderDirty();
     return ValidateMaterialEditorAsset(id);
 }
@@ -4105,6 +4348,7 @@ void EditorSceneContext::RefreshOpenMaterialEditorFromSource() {
     if (!openAsset.IsValid()) {
         return;
     }
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialDocumentAsset(openAsset);
     if (!material.has_value()) {
         materialEditor_.SetDiagnostics({ "Material source could not be reloaded after undo/redo." }, true);
@@ -4134,6 +4378,7 @@ void EditorSceneContext::RebuildHierarchyRowsIfNeeded() const {
 }
 
 void EditorSceneContext::ResetSceneEditState() {
+    ClearMaterialEditorWorkingCopyRuntimePreview();
     commandStack_.Clear();
     pendingSceneTransactionLabel_.reset();
     activeTransformEdit_.Clear();

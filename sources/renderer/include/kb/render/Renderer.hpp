@@ -1,6 +1,7 @@
 #pragma once
 
 #include "kb/render/DisplayConfig.hpp"
+#include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
@@ -74,6 +75,8 @@ public:
         std::uint32_t materialErrorCount = 0;
         std::uint32_t materialReloadCount = 0;
         std::uint32_t materialResolverDiagnosticCount = 0;
+        std::uint32_t graphMaterialCpuFallbackCount = 0;
+        std::uint32_t graphMaterialGpuCount = 0;
         std::uint32_t referencedMeshAssetCapacity = 0;
         std::uint32_t referencedMaterialAssetCapacity = 0;
         std::uint32_t referencedTextureAssetCapacity = 0;
@@ -184,6 +187,7 @@ public:
     [[nodiscard]] std::span<const SceneRenderExposureSubmitStats> LastSceneExposureStats() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastSceneDiagnostics() const noexcept;
     [[nodiscard]] RuntimeSceneResourceStats RuntimeResourceStats() const noexcept;
+    [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
     void ReserveRuntimeSceneResources(const RuntimeSceneResourceReserveDesc& desc);
     void SetDefaultSceneDrawBudget(SceneRenderDrawBudget drawBudget) noexcept;
     [[nodiscard]] SceneRenderDrawBudget DefaultSceneDrawBudget() const noexcept;
@@ -203,6 +207,8 @@ public:
     [[nodiscard]] std::span<const PostProcessPass> PostProcessPasses() const noexcept;
     void SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterval) noexcept;
     [[nodiscard]] std::uint64_t RuntimeAssetDiscoveryIntervalFrames() const noexcept;
+    void SetRuntimeAssetDiscoveryEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool RuntimeAssetDiscoveryEnabled() const noexcept;
     void ReleaseScene(const kb::scene::Scene& scene) noexcept;
     void ReleaseAllScenes() noexcept;
 
@@ -255,6 +261,8 @@ private:
     std::uint32_t lastMaterialErrorCount_ = 0;
     std::uint32_t lastMaterialReloadCount_ = 0;
     std::uint32_t lastMaterialResolverDiagnosticCount_ = 0;
+    std::uint32_t lastGraphMaterialCpuFallbackCount_ = 0;
+    std::uint32_t lastGraphMaterialGpuCount_ = 0;
     std::uint32_t lastCompletedFrame_ = 0;
     std::vector<TemporalViewportState> temporalViewportStates_;
     DisplayConfig displayConfig_{};

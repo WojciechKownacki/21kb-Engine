@@ -12,6 +12,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,6 +21,7 @@ namespace kb::editor {
 enum class MaterialEditorParameterValueKind : std::uint8_t {
     None,
     Scalar,
+    Vec2,
     Vec3,
     Vec4,
     Color,
@@ -41,6 +43,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateTextureParameter,
     CreateUv,
     CreateScalar,
+    CreateVector2,
     CreateVector,
     CreateColor,
     CreateScalarParameter,
@@ -143,6 +146,14 @@ public:
         return diagnosticsHaveError_;
     }
 
+    [[nodiscard]] kb::render::RenderMaterialGraphRuntimeState GraphRuntimeState() const noexcept {
+        return graphRuntimeState_;
+    }
+
+    [[nodiscard]] std::string_view GraphRuntimeStateName() const noexcept {
+        return kb::render::RenderMaterialGraphRuntimeStateName(graphRuntimeState_);
+    }
+
     [[nodiscard]] const std::vector<MaterialEditorParameter>& Parameters() const noexcept {
         return parameters_;
     }
@@ -157,6 +168,22 @@ public:
 
     [[nodiscard]] bool InfoPanelVisible() const noexcept {
         return infoPanelVisible_;
+    }
+
+    [[nodiscard]] bool IsGraphConstantInlineEditing() const noexcept {
+        return inlineConstantEditNodeId_ != 0U;
+    }
+
+    [[nodiscard]] bool IsGraphConstantInlineEditing(std::uint32_t nodeId) const noexcept {
+        return inlineConstantEditNodeId_ == nodeId && nodeId != 0U;
+    }
+
+    [[nodiscard]] std::uint32_t GraphConstantInlineEditNodeId() const noexcept {
+        return inlineConstantEditNodeId_;
+    }
+
+    [[nodiscard]] std::string_view GraphConstantInlineEditBuffer() const noexcept {
+        return inlineConstantEditBuffer_;
     }
 
     [[nodiscard]] bool AddGraphNode(
@@ -216,7 +243,8 @@ public:
             return false;
         }
 
-        node->parameter.defaultValueHint = ConstantDefaultValueHint(node->kind, *parsed);
+        const std::string nextValueHint = ConstantDefaultValueHint(node->kind, *parsed);
+        node->parameter.defaultValueHint = nextValueHint;
         node->parameter.overrideSupported = false;
         if (node->parameter.displayName.empty()) {
             node->parameter.displayName = ConstantDisplayName(node->kind);
@@ -229,8 +257,88 @@ public:
         }
 
         SetWorkingCopy(std::move(document));
+        if (inlineConstantEditNodeId_ == nodeId) {
+            inlineConstantEditBuffer_ = nextValueHint;
+        }
         SelectNode(nodeId);
         return true;
+    }
+
+    [[nodiscard]] std::optional<float> GraphConstantComponentValue(std::uint32_t nodeId, std::size_t componentIndex) const {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return std::nullopt;
+        }
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node == nullptr || !IsGraphConstantNode(node->kind)) {
+            return std::nullopt;
+        }
+        const std::size_t componentCount = ConstantComponentCount(node->kind);
+        if (componentIndex >= componentCount) {
+            return std::nullopt;
+        }
+        std::array<float, 4U> values{};
+        if (const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(node->kind, node->parameter.defaultValueHint)) {
+            values = *parsed;
+        }
+        return values[componentIndex];
+    }
+
+    [[nodiscard]] bool SetGraphConstantComponentValue(std::uint32_t nodeId, std::size_t componentIndex, float componentValue) {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return false;
+        }
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node == nullptr || !IsGraphConstantNode(node->kind)) {
+            return false;
+        }
+        const std::size_t componentCount = ConstantComponentCount(node->kind);
+        if (componentIndex >= componentCount) {
+            return false;
+        }
+        std::array<float, 4U> values{};
+        if (const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(node->kind, node->parameter.defaultValueHint)) {
+            values = *parsed;
+        }
+        values[componentIndex] = componentValue;
+        return SetGraphConstantValue(nodeId, ConstantDefaultValueHint(node->kind, values));
+    }
+
+    [[nodiscard]] bool BeginGraphConstantInlineEdit(std::uint32_t nodeId) {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return false;
+        }
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node == nullptr || !IsGraphConstantNode(node->kind)) {
+            return false;
+        }
+        inlineConstantEditNodeId_ = nodeId;
+        inlineConstantEditBuffer_ = node->parameter.defaultValueHint;
+        if (inlineConstantEditBuffer_.empty()) {
+            inlineConstantEditBuffer_ = ConstantDefaultValueHint(node->kind, {});
+        }
+        SelectNode(nodeId);
+        return true;
+    }
+
+    void AppendGraphConstantInlineEditText(wchar_t character) {
+        if (inlineConstantEditNodeId_ == 0U || character < 32 || character > 126) {
+            return;
+        }
+        const char ch = static_cast<char>(character);
+        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',' || ch == '-' || ch == '+' || ch == ' ') {
+            inlineConstantEditBuffer_.push_back(ch);
+        }
+    }
+
+    void BackspaceGraphConstantInlineEdit() {
+        if (inlineConstantEditNodeId_ != 0U && !inlineConstantEditBuffer_.empty()) {
+            inlineConstantEditBuffer_.pop_back();
+        }
+    }
+
+    void CancelGraphConstantInlineEdit() noexcept {
+        inlineConstantEditNodeId_ = 0U;
+        inlineConstantEditBuffer_.clear();
     }
 
     [[nodiscard]] bool DeleteGraphNode(std::uint32_t nodeId) {
@@ -440,6 +548,9 @@ public:
         if (selectedNodeId_ == nodeId) {
             return false;
         }
+        if (inlineConstantEditNodeId_ != 0U && inlineConstantEditNodeId_ != nodeId) {
+            CancelGraphConstantInlineEdit();
+        }
         selectedNodeId_ = nodeId;
         selectedParameter_ = InspectorPropertyId::None;
         return true;
@@ -546,6 +657,7 @@ private:
 
     [[nodiscard]] static bool IsGraphConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
         return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2 ||
             kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
             kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
     }
@@ -554,12 +666,29 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             return "Scalar";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            return "XY";
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
-            return "Vector";
+            return "RGB";
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
-            return "Color";
+            return "RGBA";
         default:
             return "Constant";
+        }
+    }
+
+    [[nodiscard]] static std::size_t ConstantComponentCount(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        switch (kind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            return 1U;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            return 2U;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return 3U;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return 4U;
+        default:
+            return 0U;
         }
     }
 
@@ -573,6 +702,11 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             if (input >> value[0]) {
+                return value;
+            }
+            return std::nullopt;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            if (input >> value[0] >> value[1]) {
                 return value;
             }
             return std::nullopt;
@@ -606,6 +740,8 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             return FloatText(value[0]);
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            return FloatText(value[0]) + " " + FloatText(value[1]);
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
             return FloatText(value[0]) + " " + FloatText(value[1]) + " " + FloatText(value[2]);
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
@@ -967,15 +1103,21 @@ private:
                 .rangeMax = 1.0F,
                 .overrideSupported = false,
             };
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "XY",
+                .defaultValueHint = "0 0",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "Vector",
+                .displayName = "RGB",
                 .defaultValueHint = "0 0 0",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
             return kb::render::RenderMaterialGraphParameterMetadata{
-                .displayName = "Color",
+                .displayName = "RGBA",
                 .defaultValueHint = "1 1 1 1",
                 .hasRange = true,
                 .rangeMin = 0.0F,
@@ -1033,6 +1175,7 @@ private:
         diagnostics_.clear();
         diagnosticsHaveError_ = false;
         if (!workingCopy_.has_value()) {
+            graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
             return;
         }
         const std::vector<kb::render::RenderMaterialGraphDiagnostic> graphDiagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(*workingCopy_);
@@ -1043,6 +1186,16 @@ private:
                 diagnosticsHaveError_ = true;
             }
         }
+        const bool valid = !diagnosticsHaveError_;
+        graphRuntimeState_ = kb::render::ResolveRenderMaterialGraphRuntimeState(kb::render::RenderMaterialGraphRuntimeStateInput{
+            .phase = kb::render::RenderMaterialGraphCompilePhase::Compiled,
+            .validationSucceeded = valid,
+            .compileSucceeded = valid,
+            .hasGpuProgram = valid,
+            .hasLastGood = workingCopy_->graph.lastGoodArtifact.IsValid(),
+            .fallbackApplied = true,
+            .failurePolicy = workingCopy_->graph.artifactFailurePolicy,
+        });
     }
 
     void RefreshParameters() {
@@ -1078,10 +1231,13 @@ private:
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
     bool diagnosticsHaveError_ = false;
+    kb::render::RenderMaterialGraphRuntimeState graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
     bool dirty_ = false;
     bool infoPanelVisible_ = false;
     std::uint32_t selectedNodeId_ = 0U;
     InspectorPropertyId selectedParameter_ = InspectorPropertyId::None;
+    std::uint32_t inlineConstantEditNodeId_ = 0U;
+    std::string inlineConstantEditBuffer_;
 };
 
 } // namespace kb::editor

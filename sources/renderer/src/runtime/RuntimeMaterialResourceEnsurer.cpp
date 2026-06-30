@@ -86,6 +86,11 @@ void EmitCachedRuntimeMaterialState(
     } else if (cached.status == RuntimeMaterialResolveStatus::LastGoodMaterial) {
         ++context.materialErrorCount;
     }
+    if (cached.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
+        ++context.graphMaterialCpuFallbackCount;
+    } else if (cached.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
+        ++context.graphMaterialGpuCount;
+    }
     ResolvedRuntimeMaterialAsset resolved{};
     resolved.diagnostics = cached.diagnostics;
     EmitRuntimeMaterialResolverDiagnostics(context, resolved, materialAssetId);
@@ -208,7 +213,7 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         const ResolvedRuntimeMaterialDesc materialDesc = resolvedAsset.material;
         context.unresolvedMaterialTexturePathCount += materialDesc.unresolvedTexturePathCount;
         EmitUnresolvedMaterialTexturePathDiagnostic(context.diagnostics, materialAssetId, materialDesc.unresolvedTexturePathCount);
-        const RenderMaterialHandle handle = context.sceneRenderer.Resources().RegisterMaterial(materialDesc.desc);
+        const RenderMaterialHandle handle = context.sceneRenderer.Resources().RegisterMaterial(materialDesc.desc, materialDesc.graphProgram);
         if (!handle.IsValid()) {
             context.sceneRenderer.ResourceMap().UnbindMaterial(materialAssetId);
             static_cast<void>(manager.Unload(assetId));
@@ -218,12 +223,18 @@ void RuntimeMaterialResourceEnsurer::Ensure(
         if (reloadsExistingMaterial) {
             ++context.materialReloadCount;
         }
+        if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) {
+            ++context.graphMaterialCpuFallbackCount;
+        } else if (resolvedAsset.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph) {
+            ++context.graphMaterialGpuCount;
+        }
 
         materials[runtimeKey] = RuntimeMaterialResource{
             .handle = handle,
             .contentHash = resolvedAsset.contentHash,
             .lastReferencedFrame = context.currentFrame,
             .status = resolvedAsset.status,
+            .renderMode = resolvedAsset.renderMode,
             .diagnostics = resolvedAsset.diagnostics,
         };
         context.sceneRenderer.ResourceMap().BindMaterial(materialAssetId, handle);

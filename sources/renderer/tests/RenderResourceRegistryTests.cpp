@@ -19,6 +19,7 @@
 #include "kb/render/scene/SceneRenderer.hpp"
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -431,6 +432,17 @@ void RunRenderMeshAssetLoaderLoadsWorkspaceImportedFbxCubeWhenPresentTest() {
     const kb::assets::AssetHandle<RenderMeshAssetData> loaded = manager.Load<RenderMeshAssetData>(metadata->id);
     Require(loaded.IsLoaded(), "Workspace Cube.21kb FBX payload did not load as RenderMeshAssetData");
     Require(loaded->desc.vertexCount > 0U && loaded->desc.indexCount > 0U, "Workspace Cube.21kb loaded an empty mesh");
+    Require(!loaded->tangentVertices.empty(), "Workspace Cube.21kb did not produce tangent vertex storage for material rendering");
+    bool hasReadableUv = false;
+    const float firstU = loaded->tangentVertices.front().u;
+    const float firstV = loaded->tangentVertices.front().v;
+    for (const RenderStaticMeshVertexP3N3T4UV2& vertex : loaded->tangentVertices) {
+        if (std::abs(vertex.u - firstU) > 0.0001F || std::abs(vertex.v - firstV) > 0.0001F) {
+            hasReadableUv = true;
+            break;
+        }
+    }
+    Require(hasReadableUv, "Workspace Cube.21kb FBX fallback UVs collapsed to a single texture sample");
 }
 
 void RunRenderMeshAssetLoaderDiscoversAndLoadsGltfThroughAssetManagerTest() {
@@ -1578,7 +1590,7 @@ void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error &&
             diagnostic.kind == RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput &&
             diagnostic.pin == "baseColor";
-    }), "KBMAT-GRAPH-0407: Disconnected Material Output Base Color should use black fallback instead of graph validation error");
+    }), "KBMAT-GRAPH-0407: Disconnected Material Output Base Color should use MaterialSurface default fallback instead of graph validation error");
     Require(RenderMaterialAssetWriter::Save(root / "disconnected_basecolor_preview.kbmat", disconnectedBaseColorMaterial),
         "KBMAT-GRAPH-0407: Disconnected BaseColor material could not be written");
     static_cast<void>(manager.DiscoverMountedAssets());
@@ -1587,12 +1599,12 @@ void RunMaterialCookPayloadContainsParamsTextureDepsTypeVersionAndHashTest() {
         "KBMAT-GRAPH-0407: Disconnected BaseColor material metadata missing");
     const ResolvedRuntimeMaterialAsset disconnectedBaseColorResolved = RuntimeMaterialResolver{}.ResolveAsset(manager, disconnectedBaseColorMetadata->id);
     Require(disconnectedBaseColorResolved.resolved &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[0], 0.0F) &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[1], 0.0F) &&
-            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[0], 1.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[1], 1.0F) &&
+            NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[2], 1.0F) &&
             NearlyEqual(disconnectedBaseColorResolved.material.desc.baseColor[3], 1.0F) &&
             disconnectedBaseColorResolved.material.desc.albedoTextureAssetId == 0U,
-        "KBMAT-GRAPH-0407: Runtime resolver should preview disconnected Material Output Base Color as black material");
+        "KBMAT-GRAPH-0407: Runtime resolver should preview disconnected Material Output Base Color using MaterialSurface white default");
 
     RenderMaterialAssetData secondMaterial = *loaded;
     secondMaterial.desc.baseColor[0] = 0.9F;

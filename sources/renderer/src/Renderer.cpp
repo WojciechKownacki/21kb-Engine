@@ -267,6 +267,8 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastMaterialErrorCount_ = 0U;
     lastMaterialReloadCount_ = 0U;
     lastMaterialResolverDiagnosticCount_ = 0U;
+    lastGraphMaterialCpuFallbackCount_ = 0U;
+    lastGraphMaterialGpuCount_ = 0U;
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
         return false;
@@ -376,6 +378,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .materialErrorCount = lastMaterialErrorCount_,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
+        .graphMaterialCpuFallbackCount = lastGraphMaterialCpuFallbackCount_,
+        .graphMaterialGpuCount = lastGraphMaterialGpuCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
     SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
@@ -619,6 +623,10 @@ const SceneRenderDiagnostics& Renderer::LastSceneDiagnostics() const noexcept {
     return lastSceneDiagnostics_;
 }
 
+MaterialProgramRegistryStats Renderer::MaterialProgramStats() const noexcept {
+    return sceneRenderer_ != nullptr ? sceneRenderer_->MaterialProgramStats() : MaterialProgramRegistryStats{};
+}
+
 Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexcept {
     RenderResourceRegistryStats resourceStats{};
     SceneRenderResourceMapStats resourceMapStats{};
@@ -647,6 +655,8 @@ Renderer::RuntimeSceneResourceStats Renderer::RuntimeResourceStats() const noexc
         .materialErrorCount = lastMaterialErrorCount_,
         .materialReloadCount = lastMaterialReloadCount_,
         .materialResolverDiagnosticCount = lastMaterialResolverDiagnosticCount_,
+        .graphMaterialCpuFallbackCount = lastGraphMaterialCpuFallbackCount_,
+        .graphMaterialGpuCount = lastGraphMaterialGpuCount_,
         .scenePassSubmitStatsCapacity = static_cast<std::uint32_t>(lastScenePassSubmitStats_.capacity()),
         .shadowMapSize = defaultShadowMap_.Size(),
         .shadowMapAllocationBytes = defaultShadowMap_.AllocationBytes(),
@@ -781,6 +791,14 @@ void Renderer::SetRuntimeAssetDiscoveryIntervalFrames(std::uint64_t frameInterva
 
 std::uint64_t Renderer::RuntimeAssetDiscoveryIntervalFrames() const noexcept {
     return runtimeAssetDiscovery_.DiscoveryIntervalFrames();
+}
+
+void Renderer::SetRuntimeAssetDiscoveryEnabled(bool enabled) noexcept {
+    runtimeAssetDiscovery_.SetDiscoveryEnabled(enabled);
+}
+
+bool Renderer::RuntimeAssetDiscoveryEnabled() const noexcept {
+    return runtimeAssetDiscovery_.DiscoveryEnabled();
 }
 
 void Renderer::ReleaseScene(const kb::scene::Scene& scene) noexcept {

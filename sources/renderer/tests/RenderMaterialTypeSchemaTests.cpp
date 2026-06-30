@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 #include "kb/render/resources/RenderMaterialTextureSlots.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
@@ -9,9 +10,11 @@
 #include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -1219,6 +1222,8 @@ void RunMaterialGraphLastGoodArtifactPolicyRoundTripAndDecisionTest() {
 
 void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Scalar") == RenderMaterialGraphNodeKind::ConstantScalar, "Material graph MVP should parse Scalar alias");
+    Require(ParseRenderMaterialGraphNodeKind("Constant2Vector") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse UE Constant2Vector alias");
+    Require(ParseRenderMaterialGraphNodeKind("XY") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse XY alias");
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
     Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse TextureCoordinate as UV node");
@@ -1346,6 +1351,7 @@ void RunMaterialGraphRejectsInvalidLinksTest() {
 void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantScalar, "value", true) == RenderMaterialGraphPinType::Float, "KBMAT-GRAPH-0103: Scalar output should be float");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Uv, "uv", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: UV output should be float2");
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: Constant2Vector output should be float2");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector, "xyz", true) == RenderMaterialGraphPinType::Float3, "KBMAT-GRAPH-0103: Vector output should be float3");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantColor, "rgba", true) == RenderMaterialGraphPinType::Color, "KBMAT-GRAPH-0103: Color output should be color");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ParameterTexture, "texture", true) == RenderMaterialGraphPinType::Texture2D, "KBMAT-GRAPH-0103: Texture parameter output should be texture2D");
@@ -1353,6 +1359,10 @@ void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Sampler) == "sampler", "KBMAT-GRAPH-0103: Pin type enum should expose sampler");
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Bool) == "bool", "KBMAT-GRAPH-0103: Pin type enum should expose bool");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Color, RenderMaterialGraphPinType::Float4), "KBMAT-GRAPH-0103: Color should feed float4 operator inputs");
+    Require(AreRenderMaterialGraphPinsCompatible(
+                RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true),
+                RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSample, "uv", false)),
+        "KBMAT-GRAPH-0103: Constant2Vector should feed TextureSample UV input");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Normal, RenderMaterialGraphPinType::Float3), "KBMAT-GRAPH-0103: Normal should feed float3-compatible inputs");
     Require(!AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Texture2D, RenderMaterialGraphPinType::Color), "KBMAT-GRAPH-0103: Texture2D should not feed color inputs directly");
 
@@ -1542,7 +1552,7 @@ void RunMaterialGraphRuntimeDiagnosticsTest() {
 
     const std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(graph);
     Require(!HasGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput),
-        "KBMAT-GRAPH-0106: Disconnected Material Output BaseColor should use runtime black fallback without a graph error");
+        "KBMAT-GRAPH-0106: Disconnected Material Output BaseColor should use MaterialSurface default fallback without a graph error");
     Require(HasGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::TypeMismatch),
         "KBMAT-GRAPH-0106: Graph diagnostics should report type mismatches");
     Require(HasGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::Cycle),
@@ -1647,8 +1657,14 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(result.Succeeded(), "KBMAT-GRAPH-0202: Constant color graph should compile to shader source");
     Require(result.shader.entryPoint == "EvaluateMaterialGraph", "KBMAT-GRAPH-0202: Shader compiler should expose the generated entry point");
     Require(result.shader.sourceHash != 0U, "KBMAT-GRAPH-0202: Shader compiler should hash generated source");
-    Require(result.shader.source.find("GraphMaterial EvaluateMaterialGraph()") != std::string::npos,
-        "KBMAT-GRAPH-0202: Shader compiler should generate a material graph entry function");
+    Require(result.shader.source.find("struct MaterialSurface") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should generate a MaterialSurface struct");
+    Require(result.shader.source.find("struct MaterialGraphContext") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should generate a MaterialGraphContext struct");
+    Require(result.shader.source.find("MaterialSurface EvaluateMaterialGraph(MaterialGraphContext ctx)") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should generate a material graph entry function with context parameter");
+    Require(result.shader.source.find("float alphaClipThreshold;") != std::string::npos,
+        "KBMAT-GRAPH-0202: MaterialSurface struct should include alphaClipThreshold field");
     Require(result.shader.source.find("material.baseColor = vec4(1.0, 1.0, 1.0, 1.0);") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit connected BaseColor expression");
     Require(result.shader.source.find("material.roughness = 1.0;") != std::string::npos,
@@ -1686,6 +1702,34 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
         "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantColor values");
     Require(authoredConstantResult.shader.source.find("material.roughness = 0.42;") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit authored ConstantScalar values");
+
+    RenderMaterialGraphDocument authoredUvGraph = MakeDefaultRenderMaterialGraphDocument();
+    authoredUvGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector2,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .defaultValueHint = "0.25 0.75",
+        },
+    });
+    authoredUvGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 320,
+        .positionY = 80,
+    });
+    authoredUvGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector2, 2U, "xy", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+    authoredUvGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult authoredUvResult = CompileRenderMaterialGraphToShaderSource(
+        authoredUvGraph,
+        RenderMaterialGraphBuildContext{
+            .assetId = 0x0202U,
+            .sourcePath = "/Game/Materials/AuthoredUvConstant.kbmat",
+        });
+    Require(authoredUvResult.Succeeded(), "KBMAT-GRAPH-0202: Constant2Vector UV graph should compile");
+    Require(authoredUvResult.shader.source.find("vec2(0.25, 0.75)") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit authored Constant2Vector values");
 
     RenderMaterialGraphDocument mathGraph = MakeDefaultRenderMaterialGraphDocument();
     mathGraph.nodes.push_back(RenderMaterialGraphNode{
@@ -2502,6 +2546,658 @@ void RunMaterialParserDiagnosticsCarrySourceContextTest() {
     std::filesystem::remove(path, error);
 }
 
+void RunMaterialGraphSurfaceContractDefaultsTest() {
+    const MaterialSurface s;
+    Require(NearlyEqual(s.baseColor[0], 1.0F) && NearlyEqual(s.baseColor[1], 1.0F) && NearlyEqual(s.baseColor[2], 1.0F) && NearlyEqual(s.baseColor[3], 1.0F),
+        "KBMAT-MAT01: MaterialSurface default baseColor must be white (1,1,1,1)");
+    Require(NearlyEqual(s.roughness, 1.0F), "KBMAT-MAT01: MaterialSurface default roughness must be 1.0");
+    Require(NearlyEqual(s.metallic, 0.0F), "KBMAT-MAT01: MaterialSurface default metallic must be 0.0");
+    Require(NearlyEqual(s.occlusion, 1.0F), "KBMAT-MAT01: MaterialSurface default occlusion must be 1.0");
+    Require(NearlyEqual(s.emissive[0], 0.0F) && NearlyEqual(s.emissive[1], 0.0F) && NearlyEqual(s.emissive[2], 0.0F),
+        "KBMAT-MAT01: MaterialSurface default emissive must be black");
+    Require(NearlyEqual(s.alpha, 1.0F), "KBMAT-MAT01: MaterialSurface default alpha must be 1.0");
+    Require(NearlyEqual(s.alphaClipThreshold, 0.5F), "KBMAT-MAT01: MaterialSurface default alphaClipThreshold must be 0.5");
+    Require(NearlyEqual(s.normal[0], 0.0F) && NearlyEqual(s.normal[1], 0.0F) && NearlyEqual(s.normal[2], 1.0F),
+        "KBMAT-MAT01: MaterialSurface default normal must be up (0,0,1)");
+    Require(s.alphaMode == MaterialSurfaceAlphaMode::Opaque, "KBMAT-MAT01: MaterialSurface default alphaMode must be Opaque");
+    Require(s.blendMode == MaterialSurfaceBlendMode::Opaque, "KBMAT-MAT01: MaterialSurface default blendMode must be Opaque");
+    Require(s.renderQueue == MaterialSurfaceRenderQueue::Opaque, "KBMAT-MAT01: MaterialSurface default renderQueue must be Opaque");
+    Require(!s.twoSided, "KBMAT-MAT01: MaterialSurface default twoSided must be false");
+    Require(s.depthWrite, "KBMAT-MAT01: MaterialSurface default depthWrite must be true");
+    Require(s.castShadow, "KBMAT-MAT01: MaterialSurface default castShadow must be true");
+
+    const MaterialSurface fromFunc = DefaultMaterialSurface();
+    Require(NearlyEqual(fromFunc.baseColor[0], s.baseColor[0]) && NearlyEqual(fromFunc.roughness, s.roughness),
+        "KBMAT-MAT01: DefaultMaterialSurface() must return values matching struct member initializers");
+}
+
+void RunMaterialGraphContextContractDefaultsTest() {
+    const MaterialGraphContext ctx;
+    Require(NearlyEqual(ctx.uv0[0], 0.0F) && NearlyEqual(ctx.uv0[1], 0.0F),
+        "KBMAT-MAT01: MaterialGraphContext default uv0 must be (0,0)");
+    Require(NearlyEqual(ctx.uv1[0], 0.0F) && NearlyEqual(ctx.uv1[1], 0.0F),
+        "KBMAT-MAT01: MaterialGraphContext default uv1 must be (0,0)");
+    Require(NearlyEqual(ctx.normal[0], 0.0F) && NearlyEqual(ctx.normal[1], 0.0F) && NearlyEqual(ctx.normal[2], 1.0F),
+        "KBMAT-MAT01: MaterialGraphContext default normal must be up (0,0,1)");
+    Require(NearlyEqual(ctx.tangent[0], 1.0F) && NearlyEqual(ctx.tangent[1], 0.0F) && NearlyEqual(ctx.tangent[2], 0.0F),
+        "KBMAT-MAT01: MaterialGraphContext default tangent must be (1,0,0)");
+    Require(NearlyEqual(ctx.bitangent[0], 0.0F) && NearlyEqual(ctx.bitangent[1], 1.0F) && NearlyEqual(ctx.bitangent[2], 0.0F),
+        "KBMAT-MAT01: MaterialGraphContext default bitangent must be (0,1,0)");
+    Require(NearlyEqual(ctx.worldPos[0], 0.0F) && NearlyEqual(ctx.worldPos[1], 0.0F) && NearlyEqual(ctx.worldPos[2], 0.0F),
+        "KBMAT-MAT01: MaterialGraphContext default worldPos must be origin");
+    Require(NearlyEqual(ctx.viewDir[0], 0.0F) && NearlyEqual(ctx.viewDir[1], 0.0F) && NearlyEqual(ctx.viewDir[2], 1.0F),
+        "KBMAT-MAT01: MaterialGraphContext default viewDir must be (0,0,1)");
+    Require(NearlyEqual(ctx.vertexColor[0], 1.0F) && NearlyEqual(ctx.vertexColor[1], 1.0F) && NearlyEqual(ctx.vertexColor[2], 1.0F) && NearlyEqual(ctx.vertexColor[3], 1.0F),
+        "KBMAT-MAT01: MaterialGraphContext default vertexColor must be white");
+    Require(NearlyEqual(ctx.time, 0.0F), "KBMAT-MAT01: MaterialGraphContext default time must be 0.0");
+
+    const MaterialGraphContext fromFunc = DefaultMaterialGraphContext();
+    Require(NearlyEqual(fromFunc.uv0[0], ctx.uv0[0]) && NearlyEqual(fromFunc.normal[2], ctx.normal[2]),
+        "KBMAT-MAT01: DefaultMaterialGraphContext() must return values matching struct member initializers");
+}
+
+void RunMaterialGraphAlphaClipThresholdPinTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.3" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 180,
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alphaClipThreshold"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphIrBuildResult ir = BuildRenderMaterialGraphIr(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0401U });
+    Require(ir.Succeeded(), "KBMAT-MAT01: Graph with alphaClipThreshold pin should build valid IR");
+
+    const RenderMaterialGraphIrNode* outputIr = nullptr;
+    for (const RenderMaterialGraphIrNode& node : ir.ir.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            outputIr = &node;
+            break;
+        }
+    }
+    Require(outputIr != nullptr, "KBMAT-MAT01: IR must contain a MaterialOutput node");
+    bool hasAlphaClipThresholdPin = false;
+    for (const RenderMaterialGraphIrPin& pin : outputIr->inputs) {
+        if (pin.name == "alphaClipThreshold") {
+            hasAlphaClipThresholdPin = true;
+            Require(pin.type == RenderMaterialGraphPinType::Float, "KBMAT-MAT01: alphaClipThreshold IR pin must have Float type");
+            Require(pin.stablePinId == RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "alphaClipThreshold", false),
+                "KBMAT-MAT01: alphaClipThreshold must have a non-zero stable pin id");
+            break;
+        }
+    }
+    Require(hasAlphaClipThresholdPin, "KBMAT-MAT01: MaterialOutput IR must include alphaClipThreshold input pin");
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0401U });
+    Require(compiled.Succeeded(), "KBMAT-MAT01: Graph with alphaClipThreshold should compile to shader source");
+    Require(compiled.shader.source.find("material.alphaClipThreshold = 0.3;") != std::string::npos,
+        "KBMAT-MAT01: Compiled shader should emit authored alphaClipThreshold value");
+}
+
+void RunMaterialGraphOutputPinTypeMismatchDiagnosticTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 120,
+        .positionY = 80,
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const std::vector<RenderMaterialGraphDiagnostic> diagnostics = ValidateRenderMaterialGraphDocument(graph);
+    const RenderMaterialGraphDiagnostic* mismatch = FindGraphDiagnostic(diagnostics, RenderMaterialGraphDiagnosticKind::TypeMismatch);
+    Require(mismatch != nullptr, "KBMAT-MAT01: Connecting Float to baseColor (Color) must produce TypeMismatch diagnostic");
+    Require(mismatch->pin == "baseColor", "KBMAT-MAT01: TypeMismatch diagnostic must identify the baseColor pin");
+}
+
+void RunMaterialGraphReflectionUniformAndTextureCountTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tintColor", .displayName = "Tint Color", .defaultValueHint = "1 1 1 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 120,
+        .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "roughnessScale", .displayName = "Roughness Scale", .defaultValueHint = "0.5" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 120,
+        .positionY = 280,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "albedoTex",
+            .displayName = "Albedo",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 4U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+
+    const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0210U, .sourcePath = "/Game/Materials/ReflectionCount.kbmat" });
+    Require(result.Succeeded(), "KBMAT-MAT02: Graph with parameter and texture nodes should compile");
+    Require(result.shader.reflection.uniforms.size() == 2U,
+        "KBMAT-MAT02: Reflection must describe both reachable parameter uniforms (color + scalar)");
+    Require(result.shader.reflection.textures.size() == 1U,
+        "KBMAT-MAT02: Reflection must describe the reachable inline TextureSample slot");
+    Require(result.shader.reflection.textures[0].stableId == "albedoTex",
+        "KBMAT-MAT02: Reflection texture stableId must match the node stableId");
+    Require(result.shader.reflection.textures[0].slot == 0U,
+        "KBMAT-MAT02: First texture slot must be assigned slot 0");
+    Require(result.shader.source.find("uniform vec4 u_tintColor_rgba;") != std::string::npos,
+        "KBMAT-MAT02: Compiled source must declare ParameterColor uniform");
+    Require(result.shader.source.find("uniform vec4 u_roughnessScale;") != std::string::npos,
+        "KBMAT-MAT02: Compiled source must declare ParameterScalar uniform");
+    Require(result.shader.source.find("SAMPLER2D(u_albedoTex_texture, 0);") != std::string::npos,
+        "KBMAT-MAT02: Compiled source must declare inline TextureSample sampler at slot 0");
+    Require(!result.shader.reflection.requiredVaryings.empty() &&
+            result.shader.reflection.requiredVaryings[0] == "uv0",
+        "KBMAT-MAT02: Reflection must list uv0 as required varying when TextureSample is present");
+}
+
+void RunMaterialGraphSourceHashStabilityTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .displayName = "Tint", .defaultValueHint = "1 0 0 1" },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult first = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0211U, .sourcePath = "/Game/Materials/HashStability.kbmat" });
+    const RenderMaterialGraphCompileResult second = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0211U, .sourcePath = "/Game/Materials/HashStability.kbmat" });
+    Require(first.Succeeded() && second.Succeeded(), "KBMAT-MAT02: Hash stability graph should compile twice");
+    Require(first.shader.sourceHash != 0U, "KBMAT-MAT02: Source hash must be non-zero");
+    Require(first.shader.sourceHash == second.shader.sourceHash,
+        "KBMAT-MAT02: Same graph compiled twice must produce identical sourceHash");
+    Require(first.shader.source == second.shader.source,
+        "KBMAT-MAT02: Same graph compiled twice must produce identical source string");
+}
+
+void RunMaterialGraphTopologyChangeChangesHashTest() {
+    RenderMaterialGraphDocument baseGraph = MakeDefaultRenderMaterialGraphDocument();
+    baseGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .displayName = "Tint", .defaultValueHint = "1 1 1 1" },
+    });
+    baseGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    RenderMaterialGraphDocument extendedGraph = baseGraph;
+    extendedGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 120,
+        .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "metallic", .displayName = "Metallic", .defaultValueHint = "0" },
+    });
+    extendedGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+
+    const RenderMaterialGraphCompileResult baseResult = CompileRenderMaterialGraphToShaderSource(
+        baseGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0212U });
+    const RenderMaterialGraphCompileResult extResult = CompileRenderMaterialGraphToShaderSource(
+        extendedGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0212U });
+    Require(baseResult.Succeeded() && extResult.Succeeded(), "KBMAT-MAT02: Topology change hash test graphs should compile");
+    Require(baseResult.shader.sourceHash != extResult.shader.sourceHash,
+        "KBMAT-MAT02: Adding a new parameter node must change the sourceHash");
+}
+
+void RunMaterialGraphDynamicParamDoesNotChangeHashTest() {
+    RenderMaterialGraphDocument graphA = MakeDefaultRenderMaterialGraphDocument();
+    graphA.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "roughness", .displayName = "Roughness", .defaultValueHint = "0.3" },
+    });
+    graphA.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+
+    RenderMaterialGraphDocument graphB = graphA;
+    graphB.nodes[1].parameter.defaultValueHint = "0.9";
+
+    const RenderMaterialGraphCompileResult resultA = CompileRenderMaterialGraphToShaderSource(
+        graphA, RenderMaterialGraphBuildContext{ .assetId = 0x0213U });
+    const RenderMaterialGraphCompileResult resultB = CompileRenderMaterialGraphToShaderSource(
+        graphB, RenderMaterialGraphBuildContext{ .assetId = 0x0213U });
+    Require(resultA.Succeeded() && resultB.Succeeded(), "KBMAT-MAT02: Dynamic param hash test graphs should compile");
+    Require(resultA.shader.sourceHash == resultB.shader.sourceHash,
+        "KBMAT-MAT02: Changing ParameterScalar defaultValueHint must NOT change sourceHash");
+    Require(resultA.shader.source == resultB.shader.source,
+        "KBMAT-MAT02: Changing ParameterScalar defaultValueHint must NOT change shader source");
+}
+
+void RunMaterialGraphDeadCodeEliminationTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "activeColor", .displayName = "Active Color", .defaultValueHint = "1 1 1 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 120,
+        .positionY = 200,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "unusedParam", .displayName = "Unused Param", .defaultValueHint = "0.5" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 120,
+        .positionY = 320,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "unusedTex",
+            .displayName = "Unused Tex",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0214U, .sourcePath = "/Game/Materials/DeadCode.kbmat" });
+    Require(result.Succeeded(), "KBMAT-MAT02: Dead code elimination graph should compile");
+    Require(result.shader.source.find("unusedParam") == std::string::npos,
+        "KBMAT-MAT02: Unreachable ParameterScalar must not appear in compiled shader source");
+    Require(result.shader.source.find("unusedTex") == std::string::npos,
+        "KBMAT-MAT02: Unreachable TextureSample must not appear in compiled shader source");
+    Require(result.shader.reflection.uniforms.size() == 1U,
+        "KBMAT-MAT02: Reflection uniforms must only include reachable nodes");
+    Require(result.shader.reflection.uniforms[0].stableId == "activeColor",
+        "KBMAT-MAT02: Reflection uniform stableId must match the reachable ParameterColor node");
+    Require(result.shader.reflection.textures.empty(),
+        "KBMAT-MAT02: Reflection textures must be empty when TextureSample is unreachable");
+}
+
+[[nodiscard]] std::size_t CountSubstringOccurrences(const std::string& haystack, std::string_view needle) {
+    std::size_t count = 0U;
+    std::size_t position = haystack.find(needle, 0U);
+    while (position != std::string::npos) {
+        ++count;
+        position = haystack.find(needle, position + needle.size());
+    }
+    return count;
+}
+
+void RunMaterialGraphTopologicalCseSharedNodeTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 120,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "shared",
+            .displayName = "Shared Texture",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    // The single TextureSample node fans out to two Material Output pins.
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 2U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 2U, "r", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+
+    const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0215U, .sourcePath = "/Game/Materials/SharedTextureCse.kbmat" });
+    Require(result.Succeeded(), "KBMAT-MAT02: Shared TextureSample graph should compile");
+
+    // Common-subexpression elimination: the shared node must be sampled exactly once.
+    Require(CountSubstringOccurrences(result.shader.source, "texture2D(") == 1U,
+        "KBMAT-MAT02: A TextureSample shared by multiple outputs must be sampled exactly once via a hoisted temporary");
+
+    const std::size_t tempDecl = result.shader.source.find("vec4 n2_v = texture2D(");
+    Require(tempDecl != std::string::npos,
+        "KBMAT-MAT02: Shared node must be emitted as a topologically-ordered temporary");
+    const std::size_t baseColorUse = result.shader.source.find("material.baseColor = n2_v;");
+    Require(baseColorUse != std::string::npos,
+        "KBMAT-MAT02: Material Output must reference the shared node temporary for baseColor");
+    Require(result.shader.source.find("material.roughness = (n2_v).r;") != std::string::npos,
+        "KBMAT-MAT02: Material Output must reference the shared node temporary channel for roughness");
+    Require(tempDecl < baseColorUse,
+        "KBMAT-MAT02: Topological ordering requires the temporary to be declared before it is used");
+
+    const RenderMaterialGraphCompileResult repeat = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0215U, .sourcePath = "/Game/Materials/SharedTextureCse.kbmat" });
+    Require(repeat.shader.source == result.shader.source && repeat.shader.sourceHash == result.shader.sourceHash,
+        "KBMAT-MAT02: Topologically-ordered codegen must be deterministic across compiles");
+    Require(result.shader.reflection.textures.size() == 1U && result.shader.reflection.textures[0].stableId == "shared",
+        "KBMAT-MAT02: Shared TextureSample must contribute exactly one reflection texture binding");
+}
+
+void RunMaterialGraphNodeSupportMatrixCoverageTest() {
+    const std::span<const RenderMaterialGraphNodeKind> kinds = AllRenderMaterialGraphNodeKinds();
+    Require(!kinds.empty(), "KBMAT-MAT03: Node support matrix must enumerate node kinds");
+
+    // Every enumerated node kind must carry an explicit, non-Unsupported authoring status.
+    for (const RenderMaterialGraphNodeKind kind : kinds) {
+        Require(RenderMaterialGraphNodeSupportStatus(kind) != RenderMaterialGraphNodeSupport::Unsupported,
+            "KBMAT-MAT03: Every enumerated node kind must have an explicit support matrix entry");
+    }
+
+    // Cross-check: a node kind is in the canonical list iff it has a known (non-Unsupported) status.
+    // This detects a node enum value that is missing from the support matrix.
+    for (std::uint32_t raw = 0U; raw < 256U; ++raw) {
+        const RenderMaterialGraphNodeKind kind = static_cast<RenderMaterialGraphNodeKind>(raw);
+        const bool inList = std::find(kinds.begin(), kinds.end(), kind) != kinds.end();
+        const bool statusKnown = RenderMaterialGraphNodeSupportStatus(kind) != RenderMaterialGraphNodeSupport::Unsupported;
+        Require(inList == statusKnown,
+            "KBMAT-MAT03: Canonical node-kind list and support matrix must agree on every enum value");
+    }
+
+    // An out-of-range node kind must be reported Unsupported with an explicit UI tag.
+    const RenderMaterialGraphNodeKind bogus = static_cast<RenderMaterialGraphNodeKind>(212U);
+    Require(RenderMaterialGraphNodeSupportStatus(bogus) == RenderMaterialGraphNodeSupport::Unsupported,
+        "KBMAT-MAT03: Unknown node kind must resolve to Unsupported");
+    Require(RenderMaterialGraphNodeSupportShortTag(bogus) == std::string_view{ "UNSUPPORTED" },
+        "KBMAT-MAT03: Unsupported node must expose an explicit UI tag");
+
+    // Production nodes carry no UI tag (no decoration on the supported common case).
+    Require(RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind::Multiply).empty(),
+        "KBMAT-MAT03: Production node must not be decorated with an unsupported/experimental UI tag");
+
+    // The path dimension must be live: a non-production render path downgrades supported nodes to FallbackOnly.
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Production,
+        "KBMAT-MAT03: Production node on the forward path must remain Production");
+    Require(IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath::GpuDeferred) == false,
+        "KBMAT-MAT03: Deferred render path must be reported as non-production");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::FallbackOnly,
+        "KBMAT-MAT03: Supported node on a non-production render path must downgrade to FallbackOnly");
+    Require(RenderMaterialGraphNodeSupportForPath(bogus, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Unsupported,
+        "KBMAT-MAT03: Unsupported node stays Unsupported on every render path");
+}
+
+void RunMaterialGraphUnsupportedNodeValidationTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::Multiply,
+        .positionX = 200,
+        .positionY = 120,
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 60,
+        .positionY = 120,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 1 1 1" },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::Multiply, 2U, "a"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Multiply, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    // Forward (production) path: no render-path support diagnostics.
+    const std::vector<RenderMaterialGraphDiagnostic> forwardDiagnostics =
+        ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuForward);
+    Require(!HasGraphDiagnostic(forwardDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "KBMAT-MAT03: Production nodes on the forward path must not raise render-path support diagnostics");
+
+    // Deferred (non-production) path: every supported node is flagged as a fallback warning, not silently dropped.
+    const std::vector<RenderMaterialGraphDiagnostic> deferredDiagnostics =
+        ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuDeferred);
+    const RenderMaterialGraphDiagnostic* pathDiagnostic = FindGraphDiagnostic(deferredDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode);
+    Require(pathDiagnostic != nullptr && pathDiagnostic->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
+        "KBMAT-MAT03: Nodes on a non-production render path must raise an explicit warning diagnostic");
+    Require(pathDiagnostic->message.find("GpuDeferred") != std::string::npos,
+        "KBMAT-MAT03: Render-path support diagnostic must name the active render path");
+
+    // Unknown node kind must still be rejected as an unsupported node.
+    RenderMaterialGraphDocument unknownGraph = MakeDefaultRenderMaterialGraphDocument();
+    unknownGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = static_cast<RenderMaterialGraphNodeKind>(231U),
+        .positionX = 100,
+        .positionY = 100,
+    });
+    const std::vector<RenderMaterialGraphDiagnostic> unknownDiagnostics = ValidateRenderMaterialGraphDocument(unknownGraph);
+    Require(HasGraphDiagnostic(unknownDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedNode),
+        "KBMAT-MAT03: Unknown node kind must produce an unsupported-node diagnostic");
+}
+
+void RunMaterialGraphProgramBindingResourceTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 80,
+        .positionY = 60,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .displayName = "Tint", .defaultValueHint = "1 1 1 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ParameterScalar,
+        .positionX = 80,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "rough", .displayName = "Rough", .defaultValueHint = "0.5" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 80,
+        .positionY = 260,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "albedoTex",
+            .displayName = "Albedo",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 4U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0601U });
+    Require(compiled.Succeeded(), "KBMAT-MAT06: Graph must compile before building program binding");
+
+    const std::array<RenderMaterialGraphParameterValue, 3U> values{
+        RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color, .numbers = { 0.2F, 0.4F, 0.6F, 1.0F } },
+        RenderMaterialGraphParameterValue{ .stableId = "rough", .type = RenderMaterialParameterType::Scalar, .numbers = { 0.25F, 0.0F, 0.0F, 0.0F } },
+        RenderMaterialGraphParameterValue{ .stableId = "albedoTex", .type = RenderMaterialParameterType::Texture, .assetId = 0xAAA1U },
+    };
+    const RenderMaterialGraphProgramBindingResult result = BuildRenderMaterialGraphProgramBinding(0x9911U, 2U, compiled.shader, values);
+
+    Require(result.binding.active, "KBMAT-MAT06: Graph material binding must be active");
+    Require(result.binding.graphSourceHash == compiled.shader.sourceHash, "KBMAT-MAT06: Binding must carry the graph program key (graph source hash)");
+    Require(result.binding.materialTypeId == 0x9911U && result.binding.materialTypeVersion == 2U, "KBMAT-MAT06: Binding must carry the material type id/version program key");
+    Require(result.binding.uniforms.size() == 2U, "KBMAT-MAT06: Binding must expose one dynamic uniform per reachable parameter");
+    Require(result.binding.textures.size() == 1U, "KBMAT-MAT06: Binding must expose one texture/sampler binding per TextureSample node");
+    Require(result.binding.textures[0].stableId == "albedoTex" && result.binding.textures[0].colorSpace == RenderTextureColorSpace::Srgb,
+        "KBMAT-MAT06: Texture binding must carry stable id and sRGB color space from reflection");
+    Require(result.binding.textures[0].textureAssetId == 0xAAA1U && result.binding.textures[0].resolved,
+        "KBMAT-MAT06: Texture binding must resolve the bound texture asset id");
+    Require(!result.binding.requiredVaryings.empty() && result.binding.requiredVaryings[0] == "uv0",
+        "KBMAT-MAT06: Binding must carry the required varyings from reflection");
+
+    const RenderMaterialGraphUniformBinding* tint = nullptr;
+    for (const RenderMaterialGraphUniformBinding& uniform : result.binding.uniforms) {
+        if (uniform.stableId == "tint") {
+            tint = &uniform;
+        }
+    }
+    Require(tint != nullptr && tint->type == RenderMaterialGraphUniformBindingType::Color && NearlyEqual(tint->value[0], 0.2F) && NearlyEqual(tint->value[2], 0.6F),
+        "KBMAT-MAT06: Dynamic uniform binding must capture the parameter value and type");
+
+    // Builtin PBR materials must keep working without graph program fields.
+    RenderResourceRegistry registry;
+    const RenderMaterialHandle builtin = registry.RegisterMaterial(RenderMaterialDesc{});
+    Require(builtin.IsValid() && registry.FindMaterial(builtin) != nullptr && !registry.FindMaterial(builtin)->graphProgram.active,
+        "KBMAT-MAT06: Builtin PBR material resource must remain valid with an inactive graph program binding");
+
+    // Graph material resource carries the program key and binding layout once registered.
+    const RenderMaterialHandle graphMaterial = registry.RegisterMaterial(RenderMaterialDesc{}, result.binding);
+    const RenderMaterialResource* graphResource = registry.FindMaterial(graphMaterial);
+    Require(graphResource != nullptr && graphResource->graphProgram.active &&
+            graphResource->graphProgram.graphSourceHash == compiled.shader.sourceHash &&
+            graphResource->graphProgram.textures.size() == 1U,
+        "KBMAT-MAT06: Registered graph material resource must own the program key and binding layout");
+}
+
+void RunMaterialGraphProgramBindingDynamicOverrideTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .positionX = 80,
+        .positionY = 60,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "tint", .displayName = "Tint", .defaultValueHint = "1 1 1 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::TextureSample,
+        .positionX = 80,
+        .positionY = 160,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "albedoTex",
+            .displayName = "Albedo",
+            .textureRole = "baseColor",
+            .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb,
+            .overrideSupported = true,
+        },
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0602U });
+    Require(compiled.Succeeded(), "KBMAT-MAT06: Override graph must compile");
+
+    // No bound texture asset -> missing-binding diagnostic + fallback (unresolved) binding.
+    const std::array<RenderMaterialGraphParameterValue, 1U> baseValues{
+        RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color, .numbers = { 1.0F, 1.0F, 1.0F, 1.0F } },
+    };
+    const RenderMaterialGraphProgramBindingResult missing = BuildRenderMaterialGraphProgramBinding(0x77U, 1U, compiled.shader, baseValues);
+    Require(HasGraphDiagnostic(missing.diagnostics, RenderMaterialGraphDiagnosticKind::MissingTexture),
+        "KBMAT-MAT06: A missing texture binding must produce a diagnostic");
+    Require(missing.binding.textures.size() == 1U && !missing.binding.textures[0].resolved,
+        "KBMAT-MAT06: A missing texture binding must remain unresolved for the runtime fallback");
+
+    // A dynamic override is only a change of parameter VALUES (not topology); it must keep the same
+    // graph program key while updating the uniform/texture bindings, with no shader recompilation.
+    const std::array<RenderMaterialGraphParameterValue, 2U> overridden{
+        RenderMaterialGraphParameterValue{ .stableId = "tint", .type = RenderMaterialParameterType::Color, .numbers = { 0.1F, 0.2F, 0.3F, 1.0F } },
+        RenderMaterialGraphParameterValue{ .stableId = "albedoTex", .type = RenderMaterialParameterType::Texture, .assetId = 0xBBB2U },
+    };
+    const std::uint64_t compileInvocationsBefore = RenderMaterialGraphCompileInvocationCount();
+    const RenderMaterialGraphProgramBindingResult after = BuildRenderMaterialGraphProgramBinding(0x77U, 1U, compiled.shader, overridden);
+    Require(RenderMaterialGraphCompileInvocationCount() == compileInvocationsBefore,
+        "KBMAT-MAT06: Re-binding dynamic parameter values must not recompile the graph shader");
+
+    Require(after.binding.graphSourceHash == missing.binding.graphSourceHash &&
+            after.binding.materialTypeId == missing.binding.materialTypeId &&
+            after.binding.materialTypeVersion == missing.binding.materialTypeVersion,
+        "KBMAT-MAT06: Dynamic override must NOT change the graph program key");
+    Require(NearlyEqual(after.binding.uniforms[0].value[0], 0.1F) && NearlyEqual(after.binding.uniforms[0].value[2], 0.3F),
+        "KBMAT-MAT06: Dynamic override must update the uniform binding value");
+    Require(after.binding.textures[0].textureAssetId == 0xBBB2U && after.binding.textures[0].resolved,
+        "KBMAT-MAT06: Dynamic override must update the texture binding without recompiling the shader");
+}
+
+void RunMaterialGraphRuntimeStateTransitionsTest() {
+    using State = RenderMaterialGraphRuntimeState;
+    using Phase = RenderMaterialGraphCompilePhase;
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{ .phase = Phase::Editing }) == State::Dirty,
+        "KBMAT-MAT14: An edited graph must report Dirty");
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{ .phase = Phase::Validating }) == State::Validating,
+        "KBMAT-MAT14: A validating graph must report Validating");
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{ .phase = Phase::Compiling }) == State::Compiling,
+        "KBMAT-MAT14: A compiling graph must report Compiling");
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{
+        .phase = Phase::Compiled, .validationSucceeded = true, .compileSucceeded = true, .hasGpuProgram = true }) == State::UsingGpuGraph,
+        "KBMAT-MAT14: A successfully compiled graph with a GPU program must report UsingGpuGraph");
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{
+        .phase = Phase::Compiled, .compileSucceeded = false, .fallbackApplied = false }) == State::CompileFailed,
+        "KBMAT-MAT14: A failed compile before fallback resolution must report CompileFailed");
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{
+        .phase = Phase::Compiled, .compileSucceeded = false, .hasLastGood = true, .fallbackApplied = true,
+        .failurePolicy = RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial }) == State::UsingLastGood,
+        "KBMAT-MAT14: A failed compile with a last-good artifact must keep the last-good program active");
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{
+        .phase = Phase::Compiled, .compileSucceeded = false, .hasLastGood = false, .fallbackApplied = true }) == State::UsingErrorMaterial,
+        "KBMAT-MAT14: A failed compile without a last-good artifact must fall back to the error material");
+
+    Require(ResolveRenderMaterialGraphRuntimeState(RenderMaterialGraphRuntimeStateInput{
+        .phase = Phase::Compiled, .compileSucceeded = false, .hasLastGood = true, .fallbackApplied = true,
+        .failurePolicy = RenderMaterialGraphArtifactFailurePolicy::ErrorMaterial }) == State::UsingErrorMaterial,
+        "KBMAT-MAT14: An explicit error-material policy must skip the last-good artifact");
+
+    Require(RenderMaterialGraphRuntimeStateName(State::UsingGpuGraph) == std::string_view{ "UsingGpuGraph" },
+        "KBMAT-MAT14: Runtime state names must be stable");
+    Require(RenderMaterialGraphRuntimeStateUsesFallback(State::UsingLastGood) && RenderMaterialGraphRuntimeStateUsesFallback(State::UsingErrorMaterial),
+        "KBMAT-MAT14: Last-good and error-material states must be reported as fallback");
+    Require(!RenderMaterialGraphRuntimeStateUsesFallback(State::UsingGpuGraph),
+        "KBMAT-MAT14: The GPU graph state must not be reported as fallback");
+}
+
+void RunMaterialGraphProductionNodeCompileTest() {
+    Require(RenderMaterialGraphNodeSupportStatus(RenderMaterialGraphNodeKind::Multiply) == RenderMaterialGraphNodeSupport::Production,
+        "KBMAT-MAT03: Multiply must be declared a production node");
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 60,
+        .positionY = 80,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5 0.25 0.75 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 60,
+        .positionY = 180,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "2 2 2 1" },
+    });
+    graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::Multiply,
+        .positionX = 240,
+        .positionY = 120,
+    });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::Multiply, 4U, "a"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::Multiply, 4U, "b"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Multiply, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(
+        graph, RenderMaterialGraphBuildContext{ .assetId = 0x0301U, .sourcePath = "/Game/Materials/ProductionNode.kbmat" });
+    Require(result.Succeeded(), "KBMAT-MAT03: Production node graph must compile to shader source");
+    Require(result.shader.source.find(" * ") != std::string::npos,
+        "KBMAT-MAT03: Production Multiply node must emit a GPU multiply expression");
+}
+
 } // namespace
 
 void RunRenderMaterialTypeSchemaTests() {
@@ -2549,6 +3245,22 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialGraphCompileArtifactCacheTest();
     RunMaterialGraphCompilerDiagnosticsCoverageTest();
     RunMaterialParserDiagnosticsCarrySourceContextTest();
+    RunMaterialGraphSurfaceContractDefaultsTest();
+    RunMaterialGraphContextContractDefaultsTest();
+    RunMaterialGraphAlphaClipThresholdPinTest();
+    RunMaterialGraphOutputPinTypeMismatchDiagnosticTest();
+    RunMaterialGraphReflectionUniformAndTextureCountTest();
+    RunMaterialGraphSourceHashStabilityTest();
+    RunMaterialGraphTopologyChangeChangesHashTest();
+    RunMaterialGraphDynamicParamDoesNotChangeHashTest();
+    RunMaterialGraphDeadCodeEliminationTest();
+    RunMaterialGraphTopologicalCseSharedNodeTest();
+    RunMaterialGraphNodeSupportMatrixCoverageTest();
+    RunMaterialGraphUnsupportedNodeValidationTest();
+    RunMaterialGraphProductionNodeCompileTest();
+    RunMaterialGraphProgramBindingResourceTest();
+    RunMaterialGraphProgramBindingDynamicOverrideTest();
+    RunMaterialGraphRuntimeStateTransitionsTest();
 }
 
 } // namespace kb::render::tests
