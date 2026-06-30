@@ -1337,7 +1337,13 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
     GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(18, 18, 18));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
 
-    const std::string title = GraphNodeTitle(node.kind);
+    std::string title = GraphNodeTitle(node.kind);
+    const std::string_view supportTag = kb::render::RenderMaterialGraphNodeSupportShortTag(node.kind);
+    if (!supportTag.empty()) {
+        title += "  [";
+        title += supportTag;
+        title += "]";
+    }
     DrawGraphText(dc, RECT{ rect.left + ScaleMetric(12, scale), rect.top, rect.right - ScaleMetric(12, scale), rect.top + headerHeight }, title.c_str(), RGB(242, 242, 242), ScaleMetric(kGraphTitleFontSize, scale), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
@@ -1637,11 +1643,18 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
 
     if (metadata.type == "RenderMaterial") {
         if (sceneContext.MaterialEditor().OpenAssetId() == metadata.id && sceneContext.MaterialEditor().WorkingCopy().has_value()) {
+            std::vector<std::string> diagnostics;
+            diagnostics.reserve(sceneContext.MaterialEditor().Diagnostics().size() + 1U);
+            diagnostics.push_back(std::string{ "Info graph.state " } + std::string{ sceneContext.MaterialEditor().GraphRuntimeStateName() } +
+                ": active material shader path.");
+            for (const std::string& diagnostic : sceneContext.MaterialEditor().Diagnostics()) {
+                diagnostics.push_back(diagnostic);
+            }
             return MaterialEditorDocumentView{
                 .material = sceneContext.MaterialEditor().WorkingCopy(),
                 .assetKind = "Material",
                 .parentMaterialAssetId = {},
-                .diagnostics = sceneContext.MaterialEditor().Diagnostics(),
+                .diagnostics = std::move(diagnostics),
                 .hasErrorDiagnostic = sceneContext.MaterialEditor().DiagnosticsHaveError(),
             };
         }

@@ -66,8 +66,13 @@ void RenderResourceRegistry::DestroyMesh(RenderMeshHandle handle) noexcept {
 }
 
 RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMaterialDesc& desc) {
+    return RegisterMaterial(desc, RenderMaterialGraphProgramBinding{});
+}
+
+RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMaterialDesc& desc, RenderMaterialGraphProgramBinding graphProgram) {
     const std::uint32_t slotIndex = materials_.Allocate();
     RenderMaterialResource resource = RenderMaterialResourceBuilder::Build(desc);
+    resource.graphProgram = std::move(graphProgram);
     resource.version = AllocateResourceVersion();
     materials_.Activate(slotIndex, std::move(resource));
     return RenderMaterialHandle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };

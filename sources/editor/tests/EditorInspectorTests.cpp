@@ -1262,6 +1262,66 @@ void RunMaterialValueFormatterTest() {
     kb::editor::tests::Require(rows[5].label == "Emissive" && rows[5].value.find("white fallback") != std::string::npos, "KBMAT-0611: emissive debug channel must report fallback source");
 }
 
+void RunMaterialPreviewGpuGraphParityTest() {
+    const auto makeLink = [](kb::render::RenderMaterialGraphNodeKind fromKind, std::uint32_t fromNode, std::string fromPin,
+        kb::render::RenderMaterialGraphNodeKind toKind, std::uint32_t toNode, std::string toPin) {
+        kb::render::RenderMaterialGraphLink link{
+            .fromNodeId = fromNode,
+            .fromPinId = kb::render::RenderMaterialGraphStablePinId(fromKind, fromPin, true),
+            .fromPin = std::move(fromPin),
+            .toNodeId = toNode,
+            .toPinId = kb::render::RenderMaterialGraphStablePinId(toKind, toPin, false),
+            .toPin = std::move(toPin),
+        };
+        link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+        return link;
+    };
+
+    kb::scene::Scene scene;
+    const kb::assets::AssetId materialId{ 0x1501U };
+    static_cast<void>(scene.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = materialId,
+        .type = "RenderMaterial",
+        .name = "GraphParity",
+        .virtualPath = "/Game/Materials/GraphParity.kbmat",
+        .contentHash = 1U,
+        .runtimeLoadable = true,
+    }));
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 2U, .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    material.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const kb::editor::EditorMaterialPreviewTelemetry telemetry =
+        kb::editor::EditorMaterialPreviewTelemetryBuilder::Build(scene.Assets().Manager(), materialId, &material, true);
+
+    // The scene submit (MAT-07) keys its program off the graph source hash; the preview must derive the same key.
+    const std::uint64_t sceneProgramKey = kb::render::CompileRenderMaterialGraphToShaderSource(
+        material.graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = materialId.value }).shader.sourceHash;
+
+    kb::editor::tests::Require(telemetry.graphBacked &&
+            telemetry.renderMode == kb::editor::MaterialPreviewRenderMode::GpuMaterialGraph &&
+            telemetry.graphRuntimeState == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
+        "KBMAT-MAT15: A valid graph material preview must report the GPU graph path, not the CPU resolver");
+    kb::editor::tests::Require(telemetry.graphProgramKey != 0U && telemetry.graphProgramKey == sceneProgramKey,
+        "KBMAT-MAT15: Preview and scene must use the same shader program key for the same material");
+    kb::editor::tests::Require(telemetry.compileDiagnostics.empty(),
+        "KBMAT-MAT15: A valid graph preview must not surface compile diagnostics");
+
+    // A broken graph (Float -> Color mismatch) must surface the error material + diagnostics, not a silent black state.
+    kb::render::RenderMaterialAssetData broken{};
+    broken.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    broken.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 2U, .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar, .positionX = -160, .positionY = 64 });
+    broken.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const kb::editor::EditorMaterialPreviewTelemetry brokenTelemetry =
+        kb::editor::EditorMaterialPreviewTelemetryBuilder::Build(scene.Assets().Manager(), materialId, &broken, true);
+    kb::editor::tests::Require(brokenTelemetry.renderMode == kb::editor::MaterialPreviewRenderMode::ErrorMaterial &&
+            brokenTelemetry.graphRuntimeState == kb::render::RenderMaterialGraphRuntimeState::UsingErrorMaterial &&
+            !brokenTelemetry.compileDiagnostics.empty(),
+        "KBMAT-MAT15: A broken graph preview must surface the error material and compile diagnostics, not hide the failure");
+}
+
 #if defined(_WIN32)
 void RunMaterialEditorGraphLayoutAndHitTestTest() {
     const RECT content{0, 0, 440, 540};
@@ -1402,6 +1462,7 @@ void RunEditorInspectorTests() {
     RunMaterialAssignmentUndoRedoTest();
     RunMaterialPreviewMeshFactoryTest();
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
+    RunMaterialPreviewGpuGraphParityTest();
     RunMaterialValueFormatterTest();
 #if defined(_WIN32)
     RunMaterialEditorGraphLayoutAndHitTestTest();

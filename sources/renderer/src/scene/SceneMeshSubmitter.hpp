@@ -43,6 +43,7 @@ public:
         std::span<const std::uint64_t> selectedEntityIds = {},
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
+    [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
 
 private:
     SceneMeshPassResources passResources_;

@@ -242,4 +242,8 @@ const SceneRenderDiagnostics& SceneRenderer::LastDiagnostics() const noexcept {
     return lastDiagnostics_;
 }
 
+MaterialProgramRegistryStats SceneRenderer::MaterialProgramStats() const noexcept {
+    return meshSubmitter_ != nullptr ? meshSubmitter_->ProgramRegistryStats() : MaterialProgramRegistryStats{};
+}
+
 } // namespace kb::render

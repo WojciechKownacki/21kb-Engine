@@ -112,6 +112,7 @@ add_library(kb_renderer STATIC
     src/SceneRenderTargetFormat.cpp
     src/ShaderManifest.cpp
     src/ShaderLoader.cpp
+    src/MaterialProgramRegistry.cpp
     src/frame/EditorRenderPassSubmitter.cpp
     src/frame/FinalCompositePass.cpp
     src/frame/FullscreenTexturePass.cpp
@@ -148,6 +149,8 @@ add_library(kb_renderer STATIC
     src/resources/RenderMaterialCookPayload.cpp
     src/resources/RenderMaterialGraphAssetLoader.cpp
     src/resources/RenderMaterialGraphDocument.cpp
+    src/resources/RenderMaterialGraphProgramBindingBuilder.cpp
+    src/resources/RenderMaterialGraphShaderArtifact.cpp
     src/resources/RenderMaterialGraphFieldParser.cpp
     src/resources/RenderMaterialGraphFieldParser.hpp
     src/resources/RenderMaterialInstanceAssetLoader.cpp
@@ -496,6 +499,10 @@ if(BUILD_TESTING)
         tests/RenderFramePipelineTests.cpp
         tests/RenderResourceRegistryTests.cpp
         tests/RenderMaterialTypeSchemaTests.cpp
+        tests/GraphShaderArtifactCookTests.cpp
+        tests/MaterialProgramRegistryTests.cpp
+        tests/SceneMeshPassProgramSelectionTests.cpp
+        tests/GraphForwardGpuRenderTests.cpp
         tests/RendererCapabilityReportTests.cpp
         tests/RendererRuntimeSubmitTests.cpp
         tests/MeshPipelineTests.cpp
@@ -513,8 +520,32 @@ if(BUILD_TESTING)
             kb_renderer
     )
 
+    target_include_directories(kb_renderer_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
     add_test(NAME kb_renderer_tests COMMAND $<TARGET_FILE:kb_renderer_tests>)
     set_tests_properties(kb_renderer_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+    set(KB_GRAPH_SHADERC_TOOL "" CACHE FILEPATH "Path to bgfx shaderc used by the graph shader cook tests")
+    set(_kb_graph_shaderc_tool "")
+    if(TARGET bgfx::shaderc)
+        set(_kb_graph_shaderc_tool "$<PATH:CMAKE_PATH,$<TARGET_FILE:bgfx::shaderc>>")
+        add_dependencies(kb_renderer_tests bgfx::shaderc)
+    elseif(KB_GRAPH_SHADERC_TOOL)
+        cmake_path(CONVERT "${KB_GRAPH_SHADERC_TOOL}" TO_CMAKE_PATH_LIST _kb_graph_shaderc_tool NORMALIZE)
+    endif()
+    if(_kb_graph_shaderc_tool)
+        target_compile_definitions(kb_renderer_tests
+            PRIVATE
+                KB_TEST_GRAPH_SHADERC_PATH="${_kb_graph_shaderc_tool}"
+                KB_TEST_GRAPH_SHADER_VARYING_DEF="${CMAKE_CURRENT_SOURCE_DIR}/shaders/varying.def.sc"
+                KB_TEST_GRAPH_SHADER_INCLUDE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+                KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/src"
+                KB_TEST_GRAPH_SHADER_CACHE_DIR="${CMAKE_BINARY_DIR}/graph_shader_cook_tests"
+        )
+    endif()
 
     kb_apply_quality_gates(kb_renderer_tests)
 endif()

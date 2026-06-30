@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace kb::render {
@@ -274,6 +275,44 @@ struct RenderMaterialDesc {
     RenderTextureHandle layerMaskTexture{};
 };
 
+enum class RenderTextureColorSpace : std::uint8_t {
+    Linear,
+    Srgb,
+};
+
+enum class RenderMaterialGraphUniformBindingType : std::uint8_t {
+    Scalar,
+    Vector,
+    Color,
+};
+
+struct RenderMaterialGraphUniformBinding {
+    std::string name;
+    std::string stableId;
+    RenderMaterialGraphUniformBindingType type = RenderMaterialGraphUniformBindingType::Scalar;
+    float value[4]{ 0.0F, 0.0F, 0.0F, 0.0F };
+};
+
+struct RenderMaterialGraphTextureBinding {
+    std::string samplerName;
+    std::string stableId;
+    std::uint32_t slot = 0U;
+    std::uint64_t textureAssetId = 0U;
+    RenderTextureHandle texture{};
+    RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
+    bool resolved = false;
+};
+
+struct RenderMaterialGraphProgramBinding {
+    bool active = false;
+    std::uint64_t materialTypeId = 0U;
+    std::uint32_t materialTypeVersion = 0U;
+    std::uint64_t graphSourceHash = 0U;
+    std::vector<RenderMaterialGraphUniformBinding> uniforms;
+    std::vector<RenderMaterialGraphTextureBinding> textures;
+    std::vector<std::string> requiredVaryings;
+};
+
 struct RenderMaterialResource {
     float baseColor[4]{ 1.0F, 1.0F, 1.0F, 1.0F };
     float emissiveColor[3]{ 0.0F, 0.0F, 0.0F };
@@ -328,12 +367,8 @@ struct RenderMaterialResource {
     RenderTextureHandle anisotropyTexture{};
     RenderTextureHandle decalTexture{};
     RenderTextureHandle layerMaskTexture{};
+    RenderMaterialGraphProgramBinding graphProgram{};
     std::uint64_t version = 0;
-};
-
-enum class RenderTextureColorSpace : std::uint8_t {
-    Linear,
-    Srgb,
 };
 
 struct RenderTextureDesc {

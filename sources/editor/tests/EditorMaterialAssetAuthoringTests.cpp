@@ -2238,6 +2238,55 @@ void RunExtractEmbeddedMaterialSanitizesMaterialNamesDeterministicallyTest() {
     std::filesystem::remove_all(TempRoot(), error);
 }
 
+void RunMaterialEditorGraphRuntimeStateTest() {
+    const auto makeLink = [](kb::render::RenderMaterialGraphNodeKind fromKind, std::uint32_t fromNode, std::string fromPin,
+        kb::render::RenderMaterialGraphNodeKind toKind, std::uint32_t toNode, std::string toPin) {
+        kb::render::RenderMaterialGraphLink link{
+            .fromNodeId = fromNode,
+            .fromPinId = kb::render::RenderMaterialGraphStablePinId(fromKind, fromPin, true),
+            .fromPin = std::move(fromPin),
+            .toNodeId = toNode,
+            .toPinId = kb::render::RenderMaterialGraphStablePinId(toKind, toPin, false),
+            .toPin = std::move(toPin),
+        };
+        link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+        return link;
+    };
+
+    // A valid graph (ConstantColor -> BaseColor) resolves to the GPU graph runtime state.
+    kb::render::RenderMaterialAssetData valid{};
+    valid.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    valid.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 2U, .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    valid.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    kb::editor::MaterialEditorState editor;
+    editor.Open(kb::assets::AssetId{ 0x1401U }, valid);
+    kb::editor::tests::Require(!editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
+        "KBMAT-MAT14: A valid graph working copy must report the GPU graph runtime state");
+
+    // An invalid graph (Float -> Color type mismatch) with no last-good artifact falls back to the error material.
+    kb::render::RenderMaterialAssetData invalid{};
+    invalid.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    invalid.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{ .id = 2U, .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar, .positionX = -160, .positionY = 64 });
+    invalid.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    editor.SetWorkingCopy(invalid);
+    kb::editor::tests::Require(editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingErrorMaterial,
+        "KBMAT-MAT14: An invalid graph without a last-good artifact must fall back to the error material");
+
+    // The same broken graph with a last-good artifact keeps serving the last-good program.
+    kb::render::RenderMaterialAssetData invalidWithLastGood = invalid;
+    invalidWithLastGood.graph.lastGoodArtifact = kb::render::RenderMaterialGraphLastGoodArtifact{ .assetId = 0x99U, .contentHash = 0xABU };
+    editor.SetWorkingCopy(invalidWithLastGood);
+    kb::editor::tests::Require(editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingLastGood,
+        "KBMAT-MAT14: A broken graph edit must keep the last-good program active instead of crashing");
+    kb::editor::tests::Require(!editor.Diagnostics().empty(), "KBMAT-MAT14: A broken graph must surface diagnostics, not a silent black state");
+
+    // Fixing the graph hot-reloads back to the GPU graph state without reopening.
+    editor.SetWorkingCopy(valid);
+    kb::editor::tests::Require(!editor.DiagnosticsHaveError() && editor.GraphRuntimeState() == kb::render::RenderMaterialGraphRuntimeState::UsingGpuGraph,
+        "KBMAT-MAT14: Fixing a broken graph must hot-reload back to the GPU graph state");
+}
+
 } // namespace
 
 namespace kb::editor::tests {
@@ -2255,6 +2304,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialAssetEditCommandUndoRedoTest();
     RunMaterialEditorWorkingCopySaveRevertUndoRedoTest();
     RunMaterialEditorGraphWorkingCopyRuntimeTest();
+    RunMaterialEditorGraphRuntimeStateTest();
     RunMaterialEditorGraphWorkingCopyCommandUndoRedoTest();
     RunProjectFilesMaterialEditorMeshRendererRenderPathE2ETest();
     RunGraphMaterialCreateEditAssignRenderE2ETest();

@@ -17,6 +17,7 @@
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
@@ -537,11 +538,11 @@ void RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest() {
     };
     const ResolvedRuntimeMaterialDesc disconnectedResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, disconnected);
     Require(
-        NearlyEqual(disconnectedResolved.desc.baseColor[0], 0.0F) &&
-            NearlyEqual(disconnectedResolved.desc.baseColor[1], 0.0F) &&
-            NearlyEqual(disconnectedResolved.desc.baseColor[2], 0.0F) &&
+        NearlyEqual(disconnectedResolved.desc.baseColor[0], 1.0F) &&
+            NearlyEqual(disconnectedResolved.desc.baseColor[1], 1.0F) &&
+            NearlyEqual(disconnectedResolved.desc.baseColor[2], 1.0F) &&
             NearlyEqual(disconnectedResolved.desc.baseColor[3], 1.0F),
-        "KBMAT-RUNTIME: Disconnected graph Base Color should resolve to black material output");
+        "KBMAT-RUNTIME: Disconnected graph Base Color should resolve using MaterialSurface white default");
 }
 
 void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
@@ -955,6 +956,148 @@ void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRuntimeGraphMaterialRenderModeReportingTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_runtime_graph_render_mode";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph render mode test could not create temp root");
+
+    RenderMaterialAssetData gpuMaterial{};
+    gpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    gpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    gpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    Require(RenderMaterialAssetWriter::Save(root / "gpu.kbmat", gpuMaterial), "Graph render mode test could not save GPU graph material");
+
+    RenderMaterialAssetData builtinMaterial{};
+    builtinMaterial.desc.baseColor[0] = 0.5F;
+    Require(RenderMaterialAssetWriter::Save(root / "builtin.kbmat", builtinMaterial), "Graph render mode test could not save builtin material");
+
+    // A valid MaterialOutput subgraph plus an orphan cycle: the runtime MaterialOutput subset stays valid (no error
+    // material), but the full shader compile rejects the cycle, so no GPU program is produced and the runtime must
+    // fall back to CPU PBR flattening with an explicit reason.
+    RenderMaterialAssetData cpuMaterial{};
+    cpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    cpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    cpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Add, .positionX = -360, .positionY = 200 });
+    cpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Add, .positionX = -360, .positionY = 320 });
+    cpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    cpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Add, 3U, "value", RenderMaterialGraphNodeKind::Add, 4U, "a"));
+    cpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::Add, 4U, "value", RenderMaterialGraphNodeKind::Add, 3U, "a"));
+    Require(RenderMaterialAssetWriter::Save(root / "cpu.kbmat", cpuMaterial), "Graph render mode test could not save CPU fallback material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph render mode test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph render mode test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 3U, "Graph render mode test did not discover three materials");
+
+    RuntimeMaterialResolver resolver;
+
+    const kb::assets::AssetMetadata* gpuMeta = manager.Registry().FindByPath("/Game/gpu.kbmat");
+    Require(gpuMeta != nullptr, "Graph render mode test did not find GPU material metadata");
+    const ResolvedRuntimeMaterialAsset gpu = resolver.ResolveAsset(manager, *gpuMeta);
+    Require(gpu.resolved && gpu.status == RuntimeMaterialResolveStatus::Resolved, "MAT-26: A valid graph material must resolve");
+    Require(gpu.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph, "MAT-26: A valid graph material must resolve to the GPU material graph path, not CPU flattening");
+    Require(gpu.material.graphProgram.active && gpu.material.graphProgram.graphSourceHash != 0U, "MAT-26: GPU graph program must be bound with a non-zero program key");
+    Require(gpu.cpuFallbackReason == RuntimeMaterialCpuFallbackReason::None, "MAT-26: A GPU graph material must not carry a CPU fallback reason");
+
+    const kb::assets::AssetMetadata* builtinMeta = manager.Registry().FindByPath("/Game/builtin.kbmat");
+    Require(builtinMeta != nullptr, "Graph render mode test did not find builtin material metadata");
+    const ResolvedRuntimeMaterialAsset builtin = resolver.ResolveAsset(manager, *builtinMeta);
+    Require(builtin.resolved && builtin.renderMode == RuntimeMaterialRenderMode::BuiltinPbr, "MAT-27: A non-graph material must keep the builtin PBR path working");
+    Require(!builtin.material.graphProgram.active, "MAT-27: A builtin PBR material must not bind a graph program");
+
+    const kb::assets::AssetMetadata* cpuMeta = manager.Registry().FindByPath("/Game/cpu.kbmat");
+    Require(cpuMeta != nullptr, "Graph render mode test did not find CPU fallback material metadata");
+    const ResolvedRuntimeMaterialAsset cpu = resolver.ResolveAsset(manager, *cpuMeta);
+    Require(cpu.resolved && cpu.status == RuntimeMaterialResolveStatus::Resolved, "MAT-27: A graph material without a GPU program must still resolve instead of erroring");
+    Require(cpu.renderMode == RuntimeMaterialRenderMode::CpuPbrFlatteningFallback, "MAT-27: A graph material without a GPU program must fall back to CPU PBR flattening");
+    Require(cpu.cpuFallbackReason == RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable, "MAT-27: CPU fallback must carry an explicit reason code");
+    Require(!cpu.material.graphProgram.active, "MAT-27: CPU fallback material must not advertise an active GPU program");
+    bool foundFallbackDiagnostic = false;
+    for (const RuntimeMaterialResolveDiagnostic& diagnostic : cpu.diagnostics) {
+        if (diagnostic.message.find("CPU PBR flattening") != std::string::npos) {
+            foundFallbackDiagnostic = true;
+        }
+    }
+    Require(foundFallbackDiagnostic, "MAT-27: CPU fallback must be reported through a resolver diagnostic, not hidden");
+
+    Require(std::string_view{ "GpuMaterialGraph" } == RuntimeMaterialRenderModeName(RuntimeMaterialRenderMode::GpuMaterialGraph) &&
+            std::string_view{ "CpuPbrFlatteningFallback" } == RuntimeMaterialRenderModeName(RuntimeMaterialRenderMode::CpuPbrFlatteningFallback) &&
+            std::string_view{ "BuiltinPbr" } == RuntimeMaterialRenderModeName(RuntimeMaterialRenderMode::BuiltinPbr),
+        "MAT-26: Render mode names must be stable for telemetry");
+    Require(std::string_view{ "GraphProgramUnavailable" } == RuntimeMaterialCpuFallbackReasonName(RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable),
+        "MAT-26: CPU fallback reason names must be stable for telemetry");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRendererBindsGraphMaterialGpuProgramTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_gpu_program";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph GPU program submit test could not create temp root");
+
+    WriteTriangleObj(root / "triangle.obj");
+
+    RenderMaterialAssetData gpuMaterial{};
+    gpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    gpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    gpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    Require(RenderMaterialAssetWriter::Save(root / "graph.kbmat", gpuMaterial), "Graph GPU program submit test could not save graph material");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph GPU program submit test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph GPU program submit test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph GPU program submit test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 2U, "Graph GPU program submit test did not discover mesh and material");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph.kbmat");
+    Require(meshMetadata != nullptr && materialMetadata != nullptr, "Graph GPU program submit test did not discover both assets");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = materialMetadata->id.value,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    Require(renderer.Initialize(surface, &config), "Graph GPU program submit test renderer did not initialize");
+    Require(renderer.BeginFrame(), "Graph GPU program submit test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "Graph GPU program submit test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.graphMaterialGpuCount == 1U, "MAT-26: Submitting a graph material must count one GPU material graph binding");
+    Require(runtimeStats.graphMaterialCpuFallbackCount == 0U, "MAT-26: A valid graph material must not count as a CPU fallback at submit");
+    Require(runtimeStats.materialErrorCount == 0U, "MAT-26: A valid graph material must not resolve to an error material");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
@@ -1058,6 +1201,15 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
         .syncTransformResolvingEntries = 32U,
     });
     Require(renderer.Initialize(surface, &config), "Renderer did not initialize in explicit headless Noop mode");
+
+    const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
+    Require(programStats.loads == 3U,
+        "KBMAT-MAT05: Renderer init must load the builtin mesh/shadow/selection programs through the MaterialProgramRegistry");
+    Require(programStats.liveProgramCount == 3U,
+        "KBMAT-MAT05: MaterialProgramRegistry stats must be exposed through renderer diagnostics with the live builtin programs");
+    Require(programStats.failures == 0U,
+        "KBMAT-MAT05: Builtin program loading must not report failures under the headless Noop backend");
+
     Require(renderer.BeginFrame(), "Renderer did not begin headless runtime frame");
 
     const RenderSceneSubmitDesc desc{
@@ -2476,6 +2628,131 @@ void RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_material_cpu_fallback_counter";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph material CPU fallback counter test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path graphMaterialPath = root / "graph_mat.kbmat";
+    const std::filesystem::path pbrMaterialPath = root / "pbr_mat.kbmat";
+    WriteTriangleObj(meshPath);
+    WriteGraphValidationMaterial(graphMaterialPath, 0.6F, true);
+    {
+        std::ofstream pbrOut{ pbrMaterialPath, std::ios::trunc };
+        pbrOut
+            << "version 1\n"
+            << "materialType builtin.pbr\n"
+            << "materialTypeVersion 1\n"
+            << "baseColor 0.3 0.4 0.5 1\n"
+            << "roughnessFactor 0.5\n"
+            << "alphaMode OPAQUE\n";
+    }
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph CPU fallback counter test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph CPU fallback counter test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph CPU fallback counter test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Graph CPU fallback counter test did not discover assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* graphMaterialMetadata = manager.Registry().FindByPath("/Game/graph_mat.kbmat");
+    const kb::assets::AssetMetadata* pbrMaterialMetadata = manager.Registry().FindByPath("/Game/pbr_mat.kbmat");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Graph CPU fallback counter test discovered wrong mesh");
+    Require(graphMaterialMetadata != nullptr && graphMaterialMetadata->type == "RenderMaterial", "Graph CPU fallback counter test discovered wrong graph material");
+    Require(pbrMaterialMetadata != nullptr && pbrMaterialMetadata->type == "RenderMaterial", "Graph CPU fallback counter test discovered wrong PBR material");
+
+    const kb::scene::SceneEntity graphEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(graphEntity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = graphMaterialMetadata->id.value,
+    });
+
+    const kb::scene::SceneEntity pbrEntity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "PBR Material Mesh",
+        .transform = TransformAt(1.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(pbrEntity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = pbrMaterialMetadata->id.value,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 2U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 2U,
+        .scenePassSubmitStats = 2U,
+        .renderSceneMeshProxies = 4U,
+        .renderSceneDrawGroupKeys = 4U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 2U,
+        .meshBindings = 1U,
+        .materialBindings = 2U,
+        .syncMeshProxies = 4U,
+        .syncTransformCacheEntries = 4U,
+        .syncTransformResolvingEntries = 4U,
+    });
+    Require(renderer.Initialize(surface, &config), "Graph CPU fallback counter test did not initialize renderer");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 8U,
+            .maxVisibleInstances = 8U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Graph GPU material mode test did not begin first frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph GPU material mode test did not submit first frame");
+    const Renderer::RuntimeSceneResourceStats firstStats = renderer.RuntimeResourceStats();
+    Require(firstStats.graphMaterialGpuCount == 1U,
+        "MAT-27: first frame did not report exactly one graph material using the GPU material graph path");
+    Require(firstStats.graphMaterialCpuFallbackCount == 0U,
+        "MAT-27: first frame fell back a valid graph material to CPU PBR flattening instead of the GPU path");
+    Require(firstStats.materialLoadedCount == 2U,
+        "MAT-27: first frame did not load exactly two materials (graph + builtin PBR)");
+    renderer.EndFrame();
+
+    Require(renderer.BeginFrame(), "Graph GPU material mode test did not begin steady frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph GPU material mode test did not submit steady frame");
+    const Renderer::RuntimeSceneResourceStats steadyStats = renderer.RuntimeResourceStats();
+    Require(steadyStats.graphMaterialGpuCount == 1U,
+        "MAT-27: steady frame did not retain the GPU material graph render mode from cache");
+    Require(steadyStats.graphMaterialCpuFallbackCount == 0U,
+        "MAT-27: steady frame fell back the cached graph material to CPU PBR flattening");
+    Require(steadyStats.materialLoadedCount == 0U,
+        "MAT-27: steady frame reloaded materials unexpectedly");
+    renderer.EndFrame();
+
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
     kb::scene::Scene scene;
 
@@ -2540,6 +2817,8 @@ void RunRendererRuntimeSubmitTests() {
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
+    RunRuntimeGraphMaterialRenderModeReportingTest();
+    RunRendererBindsGraphMaterialGpuProgramTest();
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();
@@ -2549,6 +2828,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererReloadsMaterialInstanceWhenParentMaterialChangesTest();
     RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
+    RunGraphMaterialReportsGpuMaterialGraphModeTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 

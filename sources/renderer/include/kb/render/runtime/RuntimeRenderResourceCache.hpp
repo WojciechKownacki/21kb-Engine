@@ -50,6 +50,8 @@ struct RuntimeRenderResourceEnsureContext {
     std::uint32_t& materialErrorCount;
     std::uint32_t& materialReloadCount;
     std::uint32_t& materialResolverDiagnosticCount;
+    std::uint32_t& graphMaterialCpuFallbackCount;
+    std::uint32_t& graphMaterialGpuCount;
     std::uint64_t currentFrame = 0;
 };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
@@ -56,6 +57,7 @@ public:
     [[nodiscard]] SceneRenderDiagnostics ValidateSceneDiagnostics(const RenderScene& renderScene, MeshPassType pass) const;
     [[nodiscard]] SceneRenderSubmitStats LastSubmitStats() const noexcept;
     [[nodiscard]] const SceneRenderDiagnostics& LastDiagnostics() const noexcept;
+    [[nodiscard]] MaterialProgramRegistryStats MaterialProgramStats() const noexcept;
 
 private:
     RenderResourceRegistry resources_;

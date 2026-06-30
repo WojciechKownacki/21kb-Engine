@@ -4,6 +4,7 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 
 #include <algorithm>
 #include <array>
@@ -263,8 +264,6 @@ void ApplyGraphParameterValuesToPbrDesc(RenderMaterialDesc& desc, const std::vec
         }
     }
 }
-
-[[nodiscard]] bool HasGraphAuthoringData(const RenderMaterialGraphDocument& graph) noexcept;
 
 void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const RenderMaterialAssetData& materialAsset) {
     if (!HasGraphAuthoringData(materialAsset.graph) || materialAsset.graphParameterValues.empty()) {
@@ -1181,17 +1180,15 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
         return;
     }
 
+    const MaterialSurface surfaceDefaults;
     const std::optional<MaterialGraphRuntimeValue> baseColor = EvaluateMaterialOutputInput(materialAsset, *output, "baseColor");
     if (!baseColor.has_value()) {
-        desc.baseColor[0] = 0.0F;
-        desc.baseColor[1] = 0.0F;
-        desc.baseColor[2] = 0.0F;
-        desc.baseColor[3] = 1.0F;
+        desc.baseColor[0] = surfaceDefaults.baseColor[0];
+        desc.baseColor[1] = surfaceDefaults.baseColor[1];
+        desc.baseColor[2] = surfaceDefaults.baseColor[2];
+        desc.baseColor[3] = surfaceDefaults.baseColor[3];
         desc.albedoTextureAssetId = 0U;
-        return;
-    }
-
-    if (baseColor->authored) {
+    } else if (baseColor->authored) {
         desc.baseColor[0] = Clamp01(baseColor->value[0]);
         desc.baseColor[1] = Clamp01(baseColor->value[1]);
         desc.baseColor[2] = Clamp01(baseColor->value[2]);
@@ -1203,58 +1200,61 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
         normal.has_value() && normal->authored && normal->textureAssetId != 0U) {
         desc.normalTextureAssetId = normal->textureAssetId;
     }
-    if (const std::optional<MaterialGraphRuntimeValue> roughness = EvaluateMaterialOutputInput(materialAsset, *output, "roughness");
-        roughness.has_value() && roughness->authored) {
-        desc.roughnessFactor = Clamp01(roughness->value[0]);
-        if (roughness->textureAssetId != 0U) {
-            desc.metallicRoughnessTextureAssetId = roughness->textureAssetId;
+    if (const std::optional<MaterialGraphRuntimeValue> roughness = EvaluateMaterialOutputInput(materialAsset, *output, "roughness")) {
+        if (roughness->authored) {
+            desc.roughnessFactor = Clamp01(roughness->value[0]);
+            if (roughness->textureAssetId != 0U) {
+                desc.metallicRoughnessTextureAssetId = roughness->textureAssetId;
+            }
         }
+    } else {
+        desc.roughnessFactor = surfaceDefaults.roughness;
     }
-    if (const std::optional<MaterialGraphRuntimeValue> metallic = EvaluateMaterialOutputInput(materialAsset, *output, "metallic");
-        metallic.has_value() && metallic->authored) {
-        desc.metallicFactor = Clamp01(metallic->value[0]);
-        if (metallic->textureAssetId != 0U) {
-            desc.metallicRoughnessTextureAssetId = metallic->textureAssetId;
+    if (const std::optional<MaterialGraphRuntimeValue> metallic = EvaluateMaterialOutputInput(materialAsset, *output, "metallic")) {
+        if (metallic->authored) {
+            desc.metallicFactor = Clamp01(metallic->value[0]);
+            if (metallic->textureAssetId != 0U) {
+                desc.metallicRoughnessTextureAssetId = metallic->textureAssetId;
+            }
         }
+    } else {
+        desc.metallicFactor = surfaceDefaults.metallic;
     }
-    if (const std::optional<MaterialGraphRuntimeValue> occlusion = EvaluateMaterialOutputInput(materialAsset, *output, "occlusion");
-        occlusion.has_value() && occlusion->authored) {
-        desc.occlusionStrength = Clamp01(occlusion->value[0]);
-        if (occlusion->textureAssetId != 0U) {
-            desc.occlusionTextureAssetId = occlusion->textureAssetId;
+    if (const std::optional<MaterialGraphRuntimeValue> occlusion = EvaluateMaterialOutputInput(materialAsset, *output, "occlusion")) {
+        if (occlusion->authored) {
+            desc.occlusionStrength = Clamp01(occlusion->value[0]);
+            if (occlusion->textureAssetId != 0U) {
+                desc.occlusionTextureAssetId = occlusion->textureAssetId;
+            }
         }
+    } else {
+        desc.occlusionStrength = surfaceDefaults.occlusion;
     }
-    if (const std::optional<MaterialGraphRuntimeValue> emissive = EvaluateMaterialOutputInput(materialAsset, *output, "emissive");
-        emissive.has_value() && emissive->authored) {
-        desc.emissiveColor[0] = std::max(emissive->value[0], 0.0F);
-        desc.emissiveColor[1] = std::max(emissive->value[1], 0.0F);
-        desc.emissiveColor[2] = std::max(emissive->value[2], 0.0F);
-        if (emissive->textureAssetId != 0U) {
-            desc.emissiveTextureAssetId = emissive->textureAssetId;
+    if (const std::optional<MaterialGraphRuntimeValue> emissive = EvaluateMaterialOutputInput(materialAsset, *output, "emissive")) {
+        if (emissive->authored) {
+            desc.emissiveColor[0] = std::max(emissive->value[0], 0.0F);
+            desc.emissiveColor[1] = std::max(emissive->value[1], 0.0F);
+            desc.emissiveColor[2] = std::max(emissive->value[2], 0.0F);
+            if (emissive->textureAssetId != 0U) {
+                desc.emissiveTextureAssetId = emissive->textureAssetId;
+            }
         }
+    } else {
+        desc.emissiveColor[0] = surfaceDefaults.emissive[0];
+        desc.emissiveColor[1] = surfaceDefaults.emissive[1];
+        desc.emissiveColor[2] = surfaceDefaults.emissive[2];
     }
     if (const std::optional<MaterialGraphRuntimeValue> alpha = EvaluateMaterialOutputInput(materialAsset, *output, "alpha");
         alpha.has_value() && alpha->authored) {
         desc.baseColor[3] = Clamp01(alpha->value[0]);
     }
-}
-
-[[nodiscard]] bool IsImplicitDefaultGraphOutput(const RenderMaterialGraphNode& node) noexcept {
-    return node.id == 1U &&
-        node.kind == RenderMaterialGraphNodeKind::MaterialOutput &&
-        node.positionX == 640 &&
-        node.positionY == 240 &&
-        node.parameter.stableId.empty() &&
-        node.parameter.displayName.empty();
-}
-
-[[nodiscard]] bool HasGraphAuthoringData(const RenderMaterialGraphDocument& graph) noexcept {
-    if (!graph.links.empty()) {
-        return true;
+    if (const std::optional<MaterialGraphRuntimeValue> alphaClipThreshold = EvaluateMaterialOutputInput(materialAsset, *output, "alphaClipThreshold")) {
+        if (alphaClipThreshold->authored) {
+            desc.alphaCutoff = Clamp01(alphaClipThreshold->value[0]);
+        }
+    } else {
+        desc.alphaCutoff = surfaceDefaults.alphaClipThreshold;
     }
-    return std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const RenderMaterialGraphNode& node) {
-        return !IsImplicitDefaultGraphOutput(node);
-    });
 }
 
 void InheritMissingTextureAssetIds(RenderMaterialDesc& material, const RenderMaterialDesc& parent) noexcept {
@@ -1397,6 +1397,23 @@ RuntimeFallbackMaterialProfile RuntimeMaterialResolver::FallbackMaterialProfile(
     return FallbackMaterialProfile(RuntimeFallbackMaterialKind::Error);
 }
 
+std::string_view RuntimeMaterialRenderModeName(RuntimeMaterialRenderMode mode) noexcept {
+    switch (mode) {
+    case RuntimeMaterialRenderMode::BuiltinPbr: return "BuiltinPbr";
+    case RuntimeMaterialRenderMode::CpuPbrFlatteningFallback: return "CpuPbrFlatteningFallback";
+    case RuntimeMaterialRenderMode::GpuMaterialGraph: return "GpuMaterialGraph";
+    }
+    return "BuiltinPbr";
+}
+
+std::string_view RuntimeMaterialCpuFallbackReasonName(RuntimeMaterialCpuFallbackReason reason) noexcept {
+    switch (reason) {
+    case RuntimeMaterialCpuFallbackReason::None: return "None";
+    case RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable: return "GraphProgramUnavailable";
+    }
+    return "None";
+}
+
 RenderMaterialDesc RuntimeMaterialResolver::DefaultMaterialDesc() noexcept {
     return FallbackMaterialProfile(RuntimeFallbackMaterialKind::Default).desc;
 }
@@ -1488,6 +1505,28 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     ApplyGraphParameterValuesToPbrDesc(resolved.desc, materialAsset.graphParameterValues);
     ApplyGraphTextureSlotValuesToPbrDesc(resolved.desc, materialAsset);
     ApplyMaterialOutputGraphToPbrDesc(resolved.desc, materialAsset);
+
+    if (HasGraphAuthoringData(materialAsset.graph)) {
+        const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
+            materialAsset.graph,
+            RenderMaterialGraphBuildContext{
+                .assetId = materialMetadata.id.value,
+                .sourcePath = materialMetadata.virtualPath.generic_string(),
+            });
+        if (graphCompile.Succeeded()) {
+            std::uint64_t materialTypeId = 1469598103934665603ULL;
+            for (const char ch : materialAsset.materialType) {
+                materialTypeId ^= static_cast<unsigned char>(ch);
+                materialTypeId *= 1099511628211ULL;
+            }
+            RenderMaterialGraphProgramBindingResult bindingResult = BuildRenderMaterialGraphProgramBinding(
+                materialTypeId,
+                materialAsset.materialTypeVersion == 0U ? 1U : materialAsset.materialTypeVersion,
+                graphCompile.shader,
+                materialAsset.graphParameterValues);
+            resolved.graphProgram = std::move(bindingResult.binding);
+        }
+    }
     return resolved;
 }
 
@@ -1577,8 +1616,24 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
             .material = ResolveLoadedMaterial(manager, metadata, *loaded.asset),
             .contentHash = runtimeContentHash,
             .status = RuntimeMaterialResolveStatus::Resolved,
+            .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
             .resolved = true,
         };
+        if (HasGraphAuthoringData(loaded.asset->graph)) {
+            if (resolved.material.graphProgram.active) {
+                resolved.renderMode = RuntimeMaterialRenderMode::GpuMaterialGraph;
+            } else {
+                resolved.renderMode = RuntimeMaterialRenderMode::CpuPbrFlatteningFallback;
+                resolved.cpuFallbackReason = RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable;
+                resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                    .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
+                    .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                    .assetId = metadata.id,
+                    .path = path,
+                    .message = "Material graph has no GPU program; falling back to CPU PBR flattening.",
+                });
+            }
+        }
         AppendParseDiagnostics(resolved, loaded, metadata.id);
         return resolved;
     }
@@ -1695,8 +1750,25 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         .diagnostics = std::move(parent.diagnostics),
         .contentHash = runtimeContentHash,
         .status = parent.status,
+        .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
         .resolved = true,
     };
+    if (HasGraphAuthoringData(instanceMaterial.graph)) {
+        if (resolved.material.graphProgram.active) {
+            resolved.renderMode = RuntimeMaterialRenderMode::GpuMaterialGraph;
+        } else {
+            resolved.renderMode = RuntimeMaterialRenderMode::CpuPbrFlatteningFallback;
+            resolved.cpuFallbackReason = RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable;
+            resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
+                .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                .assetId = metadata.id,
+                .parentAssetId = parentMetadata->id,
+                .path = ResolveAssetPhysicalPath(manager, metadata),
+                .message = "Material instance graph has no GPU program; falling back to CPU PBR flattening.",
+            });
+        }
+    }
     for (RuntimeMaterialResolveDiagnostic& diagnostic : resolved.diagnostics) {
         if (!diagnostic.parentAssetId.IsValid()) {
             diagnostic.parentAssetId = parentMetadata->id;

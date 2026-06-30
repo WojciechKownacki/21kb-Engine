@@ -12,6 +12,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -143,6 +144,14 @@ public:
 
     [[nodiscard]] bool DiagnosticsHaveError() const noexcept {
         return diagnosticsHaveError_;
+    }
+
+    [[nodiscard]] kb::render::RenderMaterialGraphRuntimeState GraphRuntimeState() const noexcept {
+        return graphRuntimeState_;
+    }
+
+    [[nodiscard]] std::string_view GraphRuntimeStateName() const noexcept {
+        return kb::render::RenderMaterialGraphRuntimeStateName(graphRuntimeState_);
     }
 
     [[nodiscard]] const std::vector<MaterialEditorParameter>& Parameters() const noexcept {
@@ -1166,6 +1175,7 @@ private:
         diagnostics_.clear();
         diagnosticsHaveError_ = false;
         if (!workingCopy_.has_value()) {
+            graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
             return;
         }
         const std::vector<kb::render::RenderMaterialGraphDiagnostic> graphDiagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(*workingCopy_);
@@ -1176,6 +1186,16 @@ private:
                 diagnosticsHaveError_ = true;
             }
         }
+        const bool valid = !diagnosticsHaveError_;
+        graphRuntimeState_ = kb::render::ResolveRenderMaterialGraphRuntimeState(kb::render::RenderMaterialGraphRuntimeStateInput{
+            .phase = kb::render::RenderMaterialGraphCompilePhase::Compiled,
+            .validationSucceeded = valid,
+            .compileSucceeded = valid,
+            .hasGpuProgram = valid,
+            .hasLastGood = workingCopy_->graph.lastGoodArtifact.IsValid(),
+            .fallbackApplied = true,
+            .failurePolicy = workingCopy_->graph.artifactFailurePolicy,
+        });
     }
 
     void RefreshParameters() {
@@ -1211,6 +1231,7 @@ private:
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
     bool diagnosticsHaveError_ = false;
+    kb::render::RenderMaterialGraphRuntimeState graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
     bool dirty_ = false;
     bool infoPanelVisible_ = false;
     std::uint32_t selectedNodeId_ = 0U;
