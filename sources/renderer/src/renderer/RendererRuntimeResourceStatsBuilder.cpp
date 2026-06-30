@@ -23,6 +23,8 @@ Renderer::RuntimeSceneResourceStats RendererRuntimeResourceStatsBuilder::Build(c
         .materialErrorCount = desc.materialErrorCount,
         .materialReloadCount = desc.materialReloadCount,
         .materialResolverDiagnosticCount = desc.materialResolverDiagnosticCount,
+        .graphMaterialCpuFallbackCount = desc.graphMaterialCpuFallbackCount,
+        .graphMaterialGpuCount = desc.graphMaterialGpuCount,
         .referencedMeshAssetCapacity = desc.referenceStats.meshCapacity,
         .referencedMaterialAssetCapacity = desc.referenceStats.materialCapacity,
         .referencedTextureAssetCapacity = desc.referenceStats.textureCapacity,
