@@ -20,6 +20,7 @@ namespace kb::render {
 struct ResolvedRuntimeMaterialDesc {
     RenderMaterialDesc desc{};
     std::uint32_t unresolvedTexturePathCount = 0;
+    RenderMaterialGraphProgramBinding graphProgram{};
 };
 
 enum class RuntimeMaterialResolveStatus : std::uint8_t {
@@ -33,6 +34,20 @@ enum class RuntimeFallbackMaterialKind : std::uint8_t {
     Default,
     Error,
 };
+
+enum class RuntimeMaterialRenderMode : std::uint8_t {
+    BuiltinPbr,
+    CpuPbrFlatteningFallback,
+    GpuMaterialGraph,
+};
+
+enum class RuntimeMaterialCpuFallbackReason : std::uint8_t {
+    None,
+    GraphProgramUnavailable,
+};
+
+[[nodiscard]] std::string_view RuntimeMaterialRenderModeName(RuntimeMaterialRenderMode mode) noexcept;
+[[nodiscard]] std::string_view RuntimeMaterialCpuFallbackReasonName(RuntimeMaterialCpuFallbackReason reason) noexcept;
 
 struct RuntimeFallbackMaterialProfile {
     RuntimeFallbackMaterialKind kind = RuntimeFallbackMaterialKind::Default;
@@ -73,6 +88,8 @@ struct ResolvedRuntimeMaterialAsset {
     std::vector<RuntimeMaterialResolveDiagnostic> diagnostics;
     std::uint64_t contentHash = 0;
     RuntimeMaterialResolveStatus status = RuntimeMaterialResolveStatus::Resolved;
+    RuntimeMaterialRenderMode renderMode = RuntimeMaterialRenderMode::BuiltinPbr;
+    RuntimeMaterialCpuFallbackReason cpuFallbackReason = RuntimeMaterialCpuFallbackReason::None;
     bool resolved = false;
 };
 

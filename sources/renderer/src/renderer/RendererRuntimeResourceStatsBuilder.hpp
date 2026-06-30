@@ -30,6 +30,8 @@ struct RendererRuntimeResourceStatsBuildDesc {
     std::uint32_t materialErrorCount = 0;
     std::uint32_t materialReloadCount = 0;
     std::uint32_t materialResolverDiagnosticCount = 0;
+    std::uint32_t graphMaterialCpuFallbackCount = 0;
+    std::uint32_t graphMaterialGpuCount = 0;
     std::uint32_t scenePassSubmitStatsCapacity = 0;
     std::uint32_t shadowMapSize = 0;
     std::uint64_t shadowMapAllocationBytes = 0;

@@ -69,6 +69,21 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     ConstantVector2,
 };
 
+enum class RenderMaterialGraphRenderPath : std::uint8_t {
+    GpuForward,
+    GpuShadow,
+    GpuDeferred,
+    CpuFallback,
+    Preview,
+};
+
+enum class RenderMaterialGraphNodeSupport : std::uint8_t {
+    Production,
+    Experimental,
+    FallbackOnly,
+    Unsupported,
+};
+
 enum class RenderMaterialGraphArtifactFailurePolicy : std::uint8_t {
     LastGoodThenErrorMaterial,
     ErrorMaterial,
@@ -84,6 +99,33 @@ enum class RenderMaterialGraphArtifactDecisionKind : std::uint8_t {
     UseCurrentArtifact,
     UseLastGoodArtifact,
     UseErrorMaterial,
+};
+
+enum class RenderMaterialGraphRuntimeState : std::uint8_t {
+    Dirty,
+    Validating,
+    Compiling,
+    CompileFailed,
+    UsingLastGood,
+    UsingErrorMaterial,
+    UsingGpuGraph,
+};
+
+enum class RenderMaterialGraphCompilePhase : std::uint8_t {
+    Editing,
+    Validating,
+    Compiling,
+    Compiled,
+};
+
+struct RenderMaterialGraphRuntimeStateInput {
+    RenderMaterialGraphCompilePhase phase = RenderMaterialGraphCompilePhase::Editing;
+    bool validationSucceeded = true;
+    bool compileSucceeded = false;
+    bool hasGpuProgram = false;
+    bool hasLastGood = false;
+    bool fallbackApplied = false;
+    RenderMaterialGraphArtifactFailurePolicy failurePolicy = RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial;
 };
 
 enum class RenderMaterialGraphPinType : std::uint8_t {
@@ -114,6 +156,7 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     UnsupportedBlendMode,
     ShaderGenerationFailed,
     DuplicateParameterStableId,
+    UnsupportedRenderPathNode,
 };
 
 struct RenderMaterialGraphParameterMetadata {
@@ -192,6 +235,8 @@ struct RenderMaterialGraphDiagnostic {
     std::uint32_t linkId = 0U;
     std::uint32_t pinId = 0U;
     std::string pin;
+    std::string pass;
+    std::string backend;
     std::string message;
 };
 
@@ -257,10 +302,30 @@ struct RenderMaterialGraphIrBuildResult {
     [[nodiscard]] bool Succeeded() const noexcept;
 };
 
+struct RenderMaterialGraphReflectionUniform {
+    std::string name;
+    std::string stableId;
+    RenderMaterialGraphNodeKind kind = RenderMaterialGraphNodeKind::ParameterScalar;
+};
+
+struct RenderMaterialGraphReflectionTexture {
+    std::string samplerName;
+    std::string stableId;
+    std::uint32_t slot = 0U;
+    RenderMaterialTextureColorSpace colorSpace = RenderMaterialTextureColorSpace::Unknown;
+};
+
+struct RenderMaterialGraphReflection {
+    std::vector<RenderMaterialGraphReflectionUniform> uniforms;
+    std::vector<RenderMaterialGraphReflectionTexture> textures;
+    std::vector<std::string> requiredVaryings;
+};
+
 struct RenderMaterialGraphShaderSource {
     std::string entryPoint = "EvaluateMaterialGraph";
     std::string source;
     std::uint64_t sourceHash = 0U;
+    RenderMaterialGraphReflection reflection;
 };
 
 struct RenderMaterialGraphCompileResult {
@@ -322,6 +387,13 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
 [[nodiscard]] std::optional<RenderMaterialGraphArtifactFailurePolicy> ParseRenderMaterialGraphArtifactFailurePolicy(std::string_view text) noexcept;
 [[nodiscard]] std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagnosticKind kind) noexcept;
 [[nodiscard]] std::string_view RenderMaterialGraphDiagnosticSeverityName(RenderMaterialGraphDiagnosticSeverity severity) noexcept;
+[[nodiscard]] std::string_view RenderMaterialGraphRenderPathName(RenderMaterialGraphRenderPath path) noexcept;
+[[nodiscard]] std::string_view RenderMaterialGraphNodeSupportName(RenderMaterialGraphNodeSupport support) noexcept;
+[[nodiscard]] RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMaterialGraphNodeKind kind) noexcept;
+[[nodiscard]] bool IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath path) noexcept;
+[[nodiscard]] RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind kind, RenderMaterialGraphRenderPath path) noexcept;
+[[nodiscard]] std::string_view RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind kind) noexcept;
+[[nodiscard]] std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() noexcept;
 [[nodiscard]] RenderMaterialGraphDocument MakeDefaultRenderMaterialGraphDocument();
 void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterialGraphDocument& graph);
 [[nodiscard]] RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
@@ -341,7 +413,9 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     RenderMaterialGraphBuildContext context = {},
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies = {},
     std::uint64_t shaderIncludeHash = 0U);
-[[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(const RenderMaterialGraphDocument& graph);
+[[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphRenderPath renderPath = RenderMaterialGraphRenderPath::GpuForward);
 [[nodiscard]] const RenderMaterialGraphNode* FindRenderMaterialGraphNode(const RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept;
 [[nodiscard]] const RenderMaterialGraphLink* FindRenderMaterialGraphLink(const RenderMaterialGraphDocument& graph, std::uint32_t linkId) noexcept;
 [[nodiscard]] bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept;
@@ -373,5 +447,58 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     const RenderMaterialGraphDocument& graph,
     const RenderMaterialGraphArtifactState& state,
     RenderMaterialGraphBuildContext context = {});
+[[nodiscard]] bool HasGraphAuthoringData(const RenderMaterialGraphDocument& graph) noexcept;
+[[nodiscard]] RenderMaterialGraphRuntimeState ResolveRenderMaterialGraphRuntimeState(const RenderMaterialGraphRuntimeStateInput& input) noexcept;
+[[nodiscard]] std::string_view RenderMaterialGraphRuntimeStateName(RenderMaterialGraphRuntimeState state) noexcept;
+[[nodiscard]] bool RenderMaterialGraphRuntimeStateUsesFallback(RenderMaterialGraphRuntimeState state) noexcept;
+
+enum class MaterialSurfaceAlphaMode : std::uint8_t {
+    Opaque,
+    Mask,
+    Blend,
+};
+
+enum class MaterialSurfaceBlendMode : std::uint8_t {
+    Opaque,
+    AlphaBlend,
+    Additive,
+};
+
+enum class MaterialSurfaceRenderQueue : std::uint8_t {
+    Opaque,
+    Transparent,
+};
+
+struct MaterialSurface {
+    float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float normal[3] = {0.0f, 0.0f, 1.0f};
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    float occlusion = 1.0f;
+    float emissive[3] = {0.0f, 0.0f, 0.0f};
+    float alpha = 1.0f;
+    float alphaClipThreshold = 0.5f;
+    MaterialSurfaceAlphaMode alphaMode = MaterialSurfaceAlphaMode::Opaque;
+    MaterialSurfaceBlendMode blendMode = MaterialSurfaceBlendMode::Opaque;
+    bool twoSided = false;
+    bool depthWrite = true;
+    bool castShadow = true;
+    MaterialSurfaceRenderQueue renderQueue = MaterialSurfaceRenderQueue::Opaque;
+};
+
+struct MaterialGraphContext {
+    float uv0[2] = {0.0f, 0.0f};
+    float uv1[2] = {0.0f, 0.0f};
+    float normal[3] = {0.0f, 0.0f, 1.0f};
+    float tangent[3] = {1.0f, 0.0f, 0.0f};
+    float bitangent[3] = {0.0f, 1.0f, 0.0f};
+    float worldPos[3] = {0.0f, 0.0f, 0.0f};
+    float viewDir[3] = {0.0f, 0.0f, 1.0f};
+    float vertexColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float time = 0.0f;
+};
+
+[[nodiscard]] MaterialSurface DefaultMaterialSurface() noexcept;
+[[nodiscard]] MaterialGraphContext DefaultMaterialGraphContext() noexcept;
 
 } // namespace kb::render

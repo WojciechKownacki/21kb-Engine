@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/resources/RenderResourceRegistry.hpp"
 #include "kb/render/scene/MeshPipeline.hpp"
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
@@ -8,6 +9,7 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <string>
 
 namespace kb::render {
 
@@ -21,14 +23,40 @@ struct SceneMeshPassBindDesc {
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
 };
 
+struct SceneMeshProgramBindStats {
+    std::uint32_t totalBindCount = 0U;
+    std::uint32_t graphProgramBindCount = 0U;
+    std::uint32_t builtinProgramBindCount = 0U;
+    std::uint32_t builtinFallbackBindCount = 0U;
+    std::uint32_t programSwitchCount = 0U;
+};
+
+struct SceneMeshPassProgramResolution {
+    bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    bool graphProgram = false;
+    bool fellBackToBuiltin = false;
+};
+
 class SceneMeshPassResources {
 public:
     [[nodiscard]] bool Initialize();
     void Shutdown();
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] bgfx::ProgramHandle Bind(const SceneMeshPassBindDesc& desc) const noexcept;
+    [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return programRegistry_.Stats(); }
+
+    void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
+    [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept;
+    void ResetProgramBindStats() const noexcept;
+    [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
 
 private:
+    [[nodiscard]] bgfx::ProgramHandle LoadProgramForKey(const MaterialProgramKey& key) const;
+
+    std::string graphShaderCacheRoot_;
+    mutable MaterialProgramRegistry programRegistry_;
+    mutable SceneMeshProgramBindStats programBindStats_{};
+    mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;

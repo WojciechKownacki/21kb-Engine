@@ -170,6 +170,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "emissive", false);
         AppendIrPin(irNode, irNode.kind, "occlusion", false);
         AppendIrPin(irNode, irNode.kind, "alpha", false);
+        AppendIrPin(irNode, irNode.kind, "alphaClipThreshold", false);
         break;
     case RenderMaterialGraphNodeKind::TextureSample:
         AppendIrPin(irNode, irNode.kind, "texture", false);
@@ -432,32 +433,89 @@ void AttachDiagnosticContext(
     return expression;
 }
 
-[[nodiscard]] std::string CompileNodeOutputExpression(
-    const RenderMaterialGraphDocument& graph,
-    const RenderMaterialGraphNode& node,
-    std::string_view outputPin,
-    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
-    std::vector<std::uint32_t>& stack);
+struct GraphCodegen {
+    const RenderMaterialGraphDocument& graph;
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics;
+    std::vector<std::uint32_t> stack;
+    std::unordered_map<std::uint32_t, std::uint32_t> fanOut;
+    std::unordered_map<std::uint32_t, std::string> emittedTemp;
+    std::string statements;
+};
+
+[[nodiscard]] std::string GraphCodegenGlslType(RenderMaterialGraphPinType type) {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+        return "float";
+    case RenderMaterialGraphPinType::Float2:
+        return "vec2";
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Normal:
+        return "vec3";
+    case RenderMaterialGraphPinType::Float4:
+    case RenderMaterialGraphPinType::Color:
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::Bool:
+        return "vec4";
+    }
+    return "vec4";
+}
+
+[[nodiscard]] RenderMaterialGraphPinType GraphNodeCanonicalType(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::TextureSample:
+        return RenderMaterialGraphPinType::Color;
+    case RenderMaterialGraphNodeKind::BreakVector:
+        return RenderMaterialGraphPinType::Float4;
+    case RenderMaterialGraphNodeKind::Desaturate:
+        return RenderMaterialGraphPinDataType(kind, "color", true);
+    case RenderMaterialGraphNodeKind::NormalUnpack:
+        return RenderMaterialGraphPinDataType(kind, "normal", true);
+    default:
+        return RenderMaterialGraphPinDataType(kind, "value", true);
+    }
+}
+
+[[nodiscard]] bool IsGraphCseCandidate(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::MaterialOutput:
+    case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+    case RenderMaterialGraphNodeKind::ConstantVector:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+    case RenderMaterialGraphNodeKind::ParameterVector:
+    case RenderMaterialGraphNodeKind::ParameterColor:
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::Uv:
+        return false;
+    default:
+        return true;
+    }
+}
+
+[[nodiscard]] std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node, std::string_view outputPin);
+[[nodiscard]] std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node);
+[[nodiscard]] std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNode& node, const std::string& baseRef, std::string_view outputPin);
 
 [[nodiscard]] std::string CompileInputExpression(
-    const RenderMaterialGraphDocument& graph,
+    GraphCodegen& cg,
     const RenderMaterialGraphNode& node,
     std::string_view inputPin,
     RenderMaterialGraphPinType expectedType,
-    std::string fallback,
-    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
-    std::vector<std::uint32_t>& stack) {
-    const RenderMaterialGraphLink* link = FindInputLink(graph, node.id, inputPin);
+    std::string fallback) {
+    const RenderMaterialGraphLink* link = FindInputLink(cg.graph, node.id, inputPin);
     if (link == nullptr) {
         return fallback;
     }
-    const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link->fromNodeId);
+    const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(cg.graph, link->fromNodeId);
     if (fromNode == nullptr) {
         return fallback;
     }
     const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, link->fromPin, true);
     return CoerceExpression(
-        CompileNodeOutputExpression(graph, *fromNode, link->fromPin, diagnostics, stack),
+        CompileNodeOutputExpression(cg, *fromNode, link->fromPin),
         fromType,
         expectedType);
 }
@@ -526,317 +584,284 @@ void AddShaderGenerationDiagnostic(
     return ParameterUniformName(*fromNode, "_texture");
 }
 
-[[nodiscard]] std::string CompileNodeOutputExpression(
-    const RenderMaterialGraphDocument& graph,
-    const RenderMaterialGraphNode& node,
-    std::string_view outputPin,
-    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
-    std::vector<std::uint32_t>& stack) {
-    if (ContainsNode(stack, node.id)) {
-        AddShaderGenerationDiagnostic(diagnostics, node, outputPin, "Material graph shader generation hit a recursive node dependency.");
-        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, outputPin, true));
-    }
-    stack.push_back(node.id);
-
-    std::string expression;
+std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::ConstantScalar:
-        expression = ConstantScalarExpression(node);
-        break;
+        return ConstantScalarExpression(node);
     case RenderMaterialGraphNodeKind::ConstantVector2:
-        expression = ConstantVector2Expression(node);
-        break;
+        return ConstantVector2Expression(node);
     case RenderMaterialGraphNodeKind::ConstantVector:
-        expression = ConstantVectorExpression(node);
-        break;
+        return ConstantVectorExpression(node);
     case RenderMaterialGraphNodeKind::ConstantColor:
-        expression = ConstantColorExpression(node);
-        break;
+        return ConstantColorExpression(node);
     case RenderMaterialGraphNodeKind::ParameterScalar:
-        expression = ParameterUniformName(node, "");
-        break;
+        return ParameterUniformName(node, "") + ".x";
     case RenderMaterialGraphNodeKind::ParameterVector:
-        expression = ParameterUniformName(node, "_xyz");
-        break;
+        return ParameterUniformName(node, "_xyz") + ".xyz";
     case RenderMaterialGraphNodeKind::ParameterColor:
-        expression = ParameterUniformName(node, "_rgba");
-        break;
+        return ParameterUniformName(node, "_rgba");
     case RenderMaterialGraphNodeKind::Add:
-        expression = "(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             " + " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Subtract:
-        expression = "(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             " - " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Multiply:
-        expression = "(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+        return "(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             " * " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Divide:
-        expression = "(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+        return "(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             " / max(abs(" +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             "), vec4(0.0001)))";
-        break;
     case RenderMaterialGraphNodeKind::Power:
-        expression = "pow(max(" +
-            CompileInputExpression(graph, node, "base", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "pow(max(" +
+            CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", vec4(0.0)), " +
-            CompileInputExpression(graph, node, "exponent", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::OneMinus:
-        expression = "(vec4(1.0) - " +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "(vec4(1.0) - " +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Absolute:
-        expression = "abs(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "abs(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Minimum:
-        expression = "min(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "min(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Maximum:
-        expression = "max(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "max(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Saturate:
-        expression = "clamp(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "clamp(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", vec4(0.0), vec4(1.0))";
-        break;
     case RenderMaterialGraphNodeKind::Floor:
-        expression = "floor(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "floor(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Ceil:
-        expression = "ceil(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "ceil(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Fraction:
-        expression = "fract(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "fract(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::SquareRoot:
-        expression = "sqrt(max(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "sqrt(max(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", vec4(0.0)))";
-        break;
     case RenderMaterialGraphNodeKind::Sine:
-        expression = "sin(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "sin(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Cosine:
-        expression = "cos(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "cos(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::DotProduct:
-        expression = "dot(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+        return "dot(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::CrossProduct:
-        expression = "cross(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)", diagnostics, stack) +
+        return "cross(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 1.0, 0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 1.0, 0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Normalize: {
-        const std::string vector = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
-        expression = "((length(" + vector + ") > 0.0001) ? normalize(" + vector + ") : vec3(0.0, 0.0, 1.0))";
-        break;
+        const std::string vector = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
+        return "((length(" + vector + ") > 0.0001) ? normalize(" + vector + ") : vec3(0.0, 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Length:
-        expression = "length(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+        return "length(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Distance:
-        expression = "distance(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+        return "distance(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ")";
-        break;
-    case RenderMaterialGraphNodeKind::BreakVector: {
-        const std::string value = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0, 0.0, 0.0, 1.0)", diagnostics, stack);
-        if (outputPin == "x") {
-            expression = "(" + value + ").x";
-        } else if (outputPin == "y") {
-            expression = "(" + value + ").y";
-        } else if (outputPin == "z") {
-            expression = "(" + value + ").z";
-        } else if (outputPin == "w") {
-            expression = "(" + value + ").w";
-        } else {
-            AddShaderGenerationDiagnostic(diagnostics, node, outputPin, "BreakVector output pin is not supported.");
-            expression = "0.0";
-        }
-        break;
-    }
+    case RenderMaterialGraphNodeKind::BreakVector:
+        return CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0, 0.0, 0.0, 1.0)");
     case RenderMaterialGraphNodeKind::MakeVector:
-        expression = "vec4(" +
-            CompileInputExpression(graph, node, "x", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+        return "vec4(" +
+            CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float, "0.0") +
             ", " +
-            CompileInputExpression(graph, node, "y", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float, "0.0") +
             ", " +
-            CompileInputExpression(graph, node, "z", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            CompileInputExpression(cg, node, "z", RenderMaterialGraphPinType::Float, "0.0") +
             ", " +
-            CompileInputExpression(graph, node, "w", RenderMaterialGraphPinType::Float, "1.0", diagnostics, stack) +
+            CompileInputExpression(cg, node, "w", RenderMaterialGraphPinType::Float, "1.0") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Step:
-        expression = "step(" +
-            CompileInputExpression(graph, node, "edge", RenderMaterialGraphPinType::Float4, "vec4(0.5)", diagnostics, stack) +
+        return "step(" +
+            CompileInputExpression(cg, node, "edge", RenderMaterialGraphPinType::Float4, "vec4(0.5)") +
             ", " +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::SmoothStep:
-        expression = "smoothstep(" +
-            CompileInputExpression(graph, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "smoothstep(" +
+            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ", " +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::If: {
-        const std::string lhs = CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
-        const std::string rhs = CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
-        const std::string less = CompileInputExpression(graph, node, "less", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack);
-        const std::string equal = CompileInputExpression(graph, node, "equal", RenderMaterialGraphPinType::Float4, "vec4(0.5)", diagnostics, stack);
-        const std::string greater = CompileInputExpression(graph, node, "greater", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack);
-        expression = "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
-        break;
+        const std::string lhs = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float, "0.0");
+        const std::string rhs = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "0.0");
+        const std::string less = CompileInputExpression(cg, node, "less", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string equal = CompileInputExpression(cg, node, "equal", RenderMaterialGraphPinType::Float4, "vec4(0.5)");
+        const std::string greater = CompileInputExpression(cg, node, "greater", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
+        return "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
     }
     case RenderMaterialGraphNodeKind::Desaturate: {
-        const std::string color = CompileInputExpression(graph, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)", diagnostics, stack);
-        const std::string fraction = CompileInputExpression(graph, node, "fraction", RenderMaterialGraphPinType::Float, "1.0", diagnostics, stack);
+        const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
+        const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, "1.0");
         const std::string luma = "dot((" + color + ").rgb, vec3(0.299, 0.587, 0.114))";
-        expression = "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
-        break;
+        return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
-        const std::string normal = CompileInputExpression(graph, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
-        const std::string view = CompileInputExpression(graph, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)", diagnostics, stack);
-        const std::string exponent = CompileInputExpression(graph, node, "exponent", RenderMaterialGraphPinType::Float, "5.0", diagnostics, stack);
-        const std::string base = CompileInputExpression(graph, node, "base", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack);
+        const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
+        const std::string view = CompileInputExpression(cg, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
+        const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, "5.0");
+        const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, "0.0");
         const std::string facing = "clamp(dot(normalize(" + normal + "), normalize(" + view + ")), 0.0, 1.0)";
-        expression = "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
-        break;
+        return "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Negate:
-        expression = "-(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
-        break;
+        return "-(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Sign:
-        expression = "sign(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
-        break;
+        return "sign(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Round:
-        expression = "round(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
-        break;
+        return "round(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Truncate: {
-        const std::string value = CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack);
-        expression = "sign(" + value + ") * floor(abs(" + value + "))";
-        break;
+        const std::string value = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "sign(" + value + ") * floor(abs(" + value + "))";
     }
     case RenderMaterialGraphNodeKind::Tangent:
-        expression = "tan(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
-        break;
+        return "tan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
     case RenderMaterialGraphNodeKind::ArcSine:
-        expression = "asin(clamp(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ", vec4(-1.0), vec4(1.0)))";
-        break;
+        return "asin(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ", vec4(-1.0), vec4(1.0)))";
     case RenderMaterialGraphNodeKind::ArcCosine:
-        expression = "acos(clamp(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) + ", vec4(-1.0), vec4(1.0)))";
-        break;
+        return "acos(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(-1.0), vec4(1.0)))";
     case RenderMaterialGraphNodeKind::ArcTangent:
-        expression = "atan(" + CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) + ")";
-        break;
+        return "atan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
     case RenderMaterialGraphNodeKind::ArcTangent2:
-        expression = "atan(" +
-            CompileInputExpression(graph, node, "y", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "atan(" +
+            CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "x", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Clamp:
-        expression = "clamp(" +
-            CompileInputExpression(graph, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "clamp(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::Lerp:
-        expression = "mix(" +
-            CompileInputExpression(graph, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)", diagnostics, stack) +
+        return "mix(" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ", " +
-            CompileInputExpression(graph, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)", diagnostics, stack) +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
             ", " +
-            CompileInputExpression(graph, node, "t", RenderMaterialGraphPinType::Float, "0.0", diagnostics, stack) +
+            CompileInputExpression(cg, node, "t", RenderMaterialGraphPinType::Float, "0.0") +
             ")";
-        break;
     case RenderMaterialGraphNodeKind::NormalUnpack:
-        expression = "normalize((" +
-            CompileInputExpression(graph, node, "color", RenderMaterialGraphPinType::Color, "vec4(0.5, 0.5, 1.0, 1.0)", diagnostics, stack) +
+        return "normalize((" +
+            CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(0.5, 0.5, 1.0, 1.0)") +
             ").rgb * 2.0 - vec3(1.0, 1.0, 1.0))";
-        break;
     case RenderMaterialGraphNodeKind::Uv:
-        expression = "v_texcoord0";
-        break;
-    case RenderMaterialGraphNodeKind::TextureSample: {
-        const std::string sampled = "texture2D(" +
-            CompileTextureInputExpression(graph, node, diagnostics) +
+        return "ctx.uv0";
+    case RenderMaterialGraphNodeKind::TextureSample:
+        return "texture2D(" +
+            CompileTextureInputExpression(cg.graph, node, cg.diagnostics) +
             ", " +
-            CompileInputExpression(graph, node, "uv", RenderMaterialGraphPinType::Float2, "v_texcoord0", diagnostics, stack) +
+            CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
             ")";
-        if (outputPin == "r" || outputPin == "g" || outputPin == "b" || outputPin == "a") {
-            expression = "(" + sampled + ")." + std::string{ outputPin };
-        } else {
-            expression = sampled;
-        }
-        break;
-    }
     case RenderMaterialGraphNodeKind::ParameterTexture:
-        AddShaderGenerationDiagnostic(diagnostics, node, outputPin, "Texture parameter cannot be emitted as a numeric shader expression without a TextureSample node.");
-        expression = DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, outputPin, true));
-        break;
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "texture", "Texture parameter cannot be emitted as a numeric shader expression without a TextureSample node.");
+        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, "texture", true));
     case RenderMaterialGraphNodeKind::MaterialOutput:
-        expression = DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, outputPin, true));
-        break;
+        return DefaultExpressionForType(RenderMaterialGraphPinType::Unknown);
+    }
+    return DefaultExpressionForType(RenderMaterialGraphPinType::Unknown);
+}
+
+std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNode& node, const std::string& baseRef, std::string_view outputPin) {
+    switch (node.kind) {
+    case RenderMaterialGraphNodeKind::BreakVector:
+        if (outputPin == "x") {
+            return "(" + baseRef + ").x";
+        }
+        if (outputPin == "y") {
+            return "(" + baseRef + ").y";
+        }
+        if (outputPin == "z") {
+            return "(" + baseRef + ").z";
+        }
+        if (outputPin == "w") {
+            return "(" + baseRef + ").w";
+        }
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "BreakVector output pin is not supported.");
+        return "0.0";
+    case RenderMaterialGraphNodeKind::TextureSample:
+        if (outputPin == "r" || outputPin == "g" || outputPin == "b" || outputPin == "a") {
+            return "(" + baseRef + ")." + std::string{ outputPin };
+        }
+        return baseRef;
+    default:
+        return baseRef;
+    }
+}
+
+std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node, std::string_view outputPin) {
+    if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
+        return SelectGraphPinFromBase(cg, node, it->second, outputPin);
+    }
+    if (ContainsNode(cg.stack, node.id)) {
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material graph shader generation hit a recursive node dependency.");
+        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, outputPin, true));
     }
 
-    stack.pop_back();
-    return expression;
+    cg.stack.push_back(node.id);
+    std::string base = CompileNodeBaseExpression(cg, node);
+    cg.stack.pop_back();
+
+    const auto fanOutIt = cg.fanOut.find(node.id);
+    const std::uint32_t fanOut = fanOutIt == cg.fanOut.end() ? 0U : fanOutIt->second;
+    if (IsGraphCseCandidate(node.kind) && fanOut > 1U) {
+        std::string tempName = "n" + std::to_string(node.id) + "_v";
+        cg.statements += "    " + GraphCodegenGlslType(GraphNodeCanonicalType(node.kind)) + " " + tempName + " = " + base + ";\n";
+        cg.emittedTemp.emplace(node.id, tempName);
+        return SelectGraphPinFromBase(cg, node, tempName, outputPin);
+    }
+    return SelectGraphPinFromBase(cg, node, base, outputPin);
 }
 
 [[nodiscard]] std::string DefaultStableParameterId(const RenderMaterialGraphNode& node) {
@@ -1444,8 +1469,193 @@ std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagno
         return "shader_generation_failed";
     case RenderMaterialGraphDiagnosticKind::DuplicateParameterStableId:
         return "duplicate_parameter_stable_id";
+    case RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode:
+        return "unsupported_render_path_node";
     }
     return "unsupported_node";
+}
+
+std::string_view RenderMaterialGraphRenderPathName(RenderMaterialGraphRenderPath path) noexcept {
+    switch (path) {
+    case RenderMaterialGraphRenderPath::GpuForward:
+        return "GpuForward";
+    case RenderMaterialGraphRenderPath::GpuShadow:
+        return "GpuShadow";
+    case RenderMaterialGraphRenderPath::GpuDeferred:
+        return "GpuDeferred";
+    case RenderMaterialGraphRenderPath::CpuFallback:
+        return "CpuFallback";
+    case RenderMaterialGraphRenderPath::Preview:
+        return "Preview";
+    }
+    return "GpuForward";
+}
+
+std::string_view RenderMaterialGraphNodeSupportName(RenderMaterialGraphNodeSupport support) noexcept {
+    switch (support) {
+    case RenderMaterialGraphNodeSupport::Production:
+        return "Production";
+    case RenderMaterialGraphNodeSupport::Experimental:
+        return "Experimental";
+    case RenderMaterialGraphNodeSupport::FallbackOnly:
+        return "FallbackOnly";
+    case RenderMaterialGraphNodeSupport::Unsupported:
+        return "Unsupported";
+    }
+    return "Unsupported";
+}
+
+RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::MaterialOutput:
+    case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantVector2:
+    case RenderMaterialGraphNodeKind::ConstantVector:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::ParameterScalar:
+    case RenderMaterialGraphNodeKind::ParameterVector:
+    case RenderMaterialGraphNodeKind::ParameterColor:
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::Add:
+    case RenderMaterialGraphNodeKind::Subtract:
+    case RenderMaterialGraphNodeKind::Multiply:
+    case RenderMaterialGraphNodeKind::Divide:
+    case RenderMaterialGraphNodeKind::Power:
+    case RenderMaterialGraphNodeKind::OneMinus:
+    case RenderMaterialGraphNodeKind::Absolute:
+    case RenderMaterialGraphNodeKind::Minimum:
+    case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Saturate:
+    case RenderMaterialGraphNodeKind::Floor:
+    case RenderMaterialGraphNodeKind::Ceil:
+    case RenderMaterialGraphNodeKind::Fraction:
+    case RenderMaterialGraphNodeKind::SquareRoot:
+    case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Cosine:
+    case RenderMaterialGraphNodeKind::DotProduct:
+    case RenderMaterialGraphNodeKind::CrossProduct:
+    case RenderMaterialGraphNodeKind::Normalize:
+    case RenderMaterialGraphNodeKind::Length:
+    case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::BreakVector:
+    case RenderMaterialGraphNodeKind::MakeVector:
+    case RenderMaterialGraphNodeKind::Step:
+    case RenderMaterialGraphNodeKind::SmoothStep:
+    case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::Desaturate:
+    case RenderMaterialGraphNodeKind::Fresnel:
+    case RenderMaterialGraphNodeKind::Negate:
+    case RenderMaterialGraphNodeKind::Sign:
+    case RenderMaterialGraphNodeKind::Round:
+    case RenderMaterialGraphNodeKind::Truncate:
+    case RenderMaterialGraphNodeKind::Tangent:
+    case RenderMaterialGraphNodeKind::ArcSine:
+    case RenderMaterialGraphNodeKind::ArcCosine:
+    case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::Clamp:
+    case RenderMaterialGraphNodeKind::Lerp:
+    case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Uv:
+        return RenderMaterialGraphNodeSupport::Production;
+    }
+    return RenderMaterialGraphNodeSupport::Unsupported;
+}
+
+bool IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath path) noexcept {
+    switch (path) {
+    case RenderMaterialGraphRenderPath::GpuForward:
+    case RenderMaterialGraphRenderPath::GpuShadow:
+    case RenderMaterialGraphRenderPath::CpuFallback:
+    case RenderMaterialGraphRenderPath::Preview:
+        return true;
+    case RenderMaterialGraphRenderPath::GpuDeferred:
+        return false;
+    }
+    return false;
+}
+
+RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind kind, RenderMaterialGraphRenderPath path) noexcept {
+    const RenderMaterialGraphNodeSupport status = RenderMaterialGraphNodeSupportStatus(kind);
+    if (status == RenderMaterialGraphNodeSupport::Unsupported) {
+        return RenderMaterialGraphNodeSupport::Unsupported;
+    }
+    if (!IsRenderMaterialGraphRenderPathProduction(path)) {
+        return RenderMaterialGraphNodeSupport::FallbackOnly;
+    }
+    return status;
+}
+
+std::string_view RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (RenderMaterialGraphNodeSupportStatus(kind)) {
+    case RenderMaterialGraphNodeSupport::Production:
+        return "";
+    case RenderMaterialGraphNodeSupport::Experimental:
+        return "EXP";
+    case RenderMaterialGraphNodeSupport::FallbackOnly:
+        return "FALLBACK";
+    case RenderMaterialGraphNodeSupport::Unsupported:
+        return "UNSUPPORTED";
+    }
+    return "UNSUPPORTED";
+}
+
+std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() noexcept {
+    static constexpr RenderMaterialGraphNodeKind kKinds[] = {
+        RenderMaterialGraphNodeKind::MaterialOutput,
+        RenderMaterialGraphNodeKind::ConstantScalar,
+        RenderMaterialGraphNodeKind::ConstantVector,
+        RenderMaterialGraphNodeKind::ConstantColor,
+        RenderMaterialGraphNodeKind::TextureSample,
+        RenderMaterialGraphNodeKind::ParameterScalar,
+        RenderMaterialGraphNodeKind::ParameterVector,
+        RenderMaterialGraphNodeKind::ParameterColor,
+        RenderMaterialGraphNodeKind::ParameterTexture,
+        RenderMaterialGraphNodeKind::Add,
+        RenderMaterialGraphNodeKind::Subtract,
+        RenderMaterialGraphNodeKind::Multiply,
+        RenderMaterialGraphNodeKind::Divide,
+        RenderMaterialGraphNodeKind::Power,
+        RenderMaterialGraphNodeKind::OneMinus,
+        RenderMaterialGraphNodeKind::Clamp,
+        RenderMaterialGraphNodeKind::Lerp,
+        RenderMaterialGraphNodeKind::NormalUnpack,
+        RenderMaterialGraphNodeKind::Uv,
+        RenderMaterialGraphNodeKind::Absolute,
+        RenderMaterialGraphNodeKind::Minimum,
+        RenderMaterialGraphNodeKind::Maximum,
+        RenderMaterialGraphNodeKind::Saturate,
+        RenderMaterialGraphNodeKind::Floor,
+        RenderMaterialGraphNodeKind::Ceil,
+        RenderMaterialGraphNodeKind::Fraction,
+        RenderMaterialGraphNodeKind::SquareRoot,
+        RenderMaterialGraphNodeKind::Sine,
+        RenderMaterialGraphNodeKind::Cosine,
+        RenderMaterialGraphNodeKind::DotProduct,
+        RenderMaterialGraphNodeKind::CrossProduct,
+        RenderMaterialGraphNodeKind::Normalize,
+        RenderMaterialGraphNodeKind::Length,
+        RenderMaterialGraphNodeKind::Distance,
+        RenderMaterialGraphNodeKind::BreakVector,
+        RenderMaterialGraphNodeKind::MakeVector,
+        RenderMaterialGraphNodeKind::Step,
+        RenderMaterialGraphNodeKind::SmoothStep,
+        RenderMaterialGraphNodeKind::If,
+        RenderMaterialGraphNodeKind::Desaturate,
+        RenderMaterialGraphNodeKind::Fresnel,
+        RenderMaterialGraphNodeKind::Negate,
+        RenderMaterialGraphNodeKind::Sign,
+        RenderMaterialGraphNodeKind::Round,
+        RenderMaterialGraphNodeKind::Truncate,
+        RenderMaterialGraphNodeKind::Tangent,
+        RenderMaterialGraphNodeKind::ArcSine,
+        RenderMaterialGraphNodeKind::ArcCosine,
+        RenderMaterialGraphNodeKind::ArcTangent,
+        RenderMaterialGraphNodeKind::ArcTangent2,
+        RenderMaterialGraphNodeKind::ConstantVector2,
+    };
+    return std::span<const RenderMaterialGraphNodeKind>{ kKinds };
 }
 
 std::string_view RenderMaterialGraphDiagnosticSeverityName(RenderMaterialGraphDiagnosticSeverity severity) noexcept {
@@ -1770,13 +1980,93 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         return result;
     }
 
-    std::vector<std::uint32_t> stack;
-    const auto compileOutput = [&graph, outputNode, &result, &stack](std::string_view outputPin, RenderMaterialGraphPinType outputType, std::string fallback) {
-        return CompileInputExpression(graph, *outputNode, outputPin, outputType, std::move(fallback), result.diagnostics, stack);
+    std::vector<std::uint32_t> reachable;
+    reachable.push_back(outputNode->id);
+    for (std::size_t i = 0U; i < reachable.size(); ++i) {
+        const std::uint32_t currentId = reachable[i];
+        for (const RenderMaterialGraphLink& link : graph.links) {
+            if (link.toNodeId == currentId) {
+                if (std::find(reachable.begin(), reachable.end(), link.fromNodeId) == reachable.end()) {
+                    reachable.push_back(link.fromNodeId);
+                }
+            }
+        }
+    }
+
+    struct ReflectionUniformEntry {
+        std::string name;
+        std::string stableId;
+        RenderMaterialGraphNodeKind kind;
+    };
+    struct ReflectionTextureEntry {
+        std::string samplerName;
+        std::string stableId;
+        RenderMaterialTextureColorSpace colorSpace;
     };
 
+    std::vector<ReflectionUniformEntry> uniformEntries;
+    std::vector<ReflectionTextureEntry> textureEntries;
+    bool needsUv0 = false;
+
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (std::find(reachable.begin(), reachable.end(), node.id) == reachable.end()) {
+            continue;
+        }
+        switch (node.kind) {
+        case RenderMaterialGraphNodeKind::ParameterScalar:
+            uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind });
+            break;
+        case RenderMaterialGraphNodeKind::ParameterVector:
+            uniformEntries.push_back({ ParameterUniformName(node, "_xyz"), StableParameterId(node), node.kind });
+            break;
+        case RenderMaterialGraphNodeKind::ParameterColor:
+            uniformEntries.push_back({ ParameterUniformName(node, "_rgba"), StableParameterId(node), node.kind });
+            break;
+        case RenderMaterialGraphNodeKind::TextureSample:
+            if (!HasInputLink(graph, node.id, "texture")) {
+                const std::string textureRole = EffectiveTextureRoleForNode(node);
+                textureEntries.push_back({ ParameterUniformName(node, "_texture"), StableParameterId(node), EffectiveTextureColorSpaceForNode(node, textureRole) });
+            }
+            needsUv0 = true;
+            break;
+        case RenderMaterialGraphNodeKind::Uv:
+            needsUv0 = true;
+            break;
+        default:
+            break;
+        }
+    }
+
+    std::sort(uniformEntries.begin(), uniformEntries.end(), [](const ReflectionUniformEntry& a, const ReflectionUniformEntry& b) {
+        return a.stableId < b.stableId;
+    });
+    std::sort(textureEntries.begin(), textureEntries.end(), [](const ReflectionTextureEntry& a, const ReflectionTextureEntry& b) {
+        return a.stableId < b.stableId;
+    });
+
     std::string source;
-    source += "struct GraphMaterial {\n";
+    for (const ReflectionUniformEntry& u : uniformEntries) {
+        source += "uniform vec4 " + u.name + ";\n";
+    }
+    for (std::uint32_t slot = 0U; slot < static_cast<std::uint32_t>(textureEntries.size()); ++slot) {
+        source += "SAMPLER2D(" + textureEntries[slot].samplerName + ", " + std::to_string(slot) + ");\n";
+    }
+    if (!uniformEntries.empty() || !textureEntries.empty()) {
+        source += "\n";
+    }
+
+    source += "struct MaterialGraphContext {\n";
+    source += "    vec2 uv0;\n";
+    source += "    vec2 uv1;\n";
+    source += "    vec3 normal;\n";
+    source += "    vec3 tangent;\n";
+    source += "    vec3 bitangent;\n";
+    source += "    vec3 worldPos;\n";
+    source += "    vec3 viewDir;\n";
+    source += "    vec4 vertexColor;\n";
+    source += "    float time;\n";
+    source += "};\n\n";
+    source += "struct MaterialSurface {\n";
     source += "    vec4 baseColor;\n";
     source += "    float metallic;\n";
     source += "    float roughness;\n";
@@ -1784,16 +2074,37 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float occlusion;\n";
     source += "    vec3 emissive;\n";
     source += "    float alpha;\n";
+    source += "    float alphaClipThreshold;\n";
     source += "};\n\n";
-    source += "GraphMaterial EvaluateMaterialGraph() {\n";
-    source += "    GraphMaterial material;\n";
-    source += "    material.baseColor = " + compileOutput("baseColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ";\n";
-    source += "    material.metallic = " + compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
-    source += "    material.roughness = " + compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
-    source += "    material.normal = " + compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
-    source += "    material.occlusion = " + compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
-    source += "    material.emissive = " + compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ".rgb;\n";
-    source += "    material.alpha = " + compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a") + ";\n";
+
+    GraphCodegen cg{ .graph = graph, .diagnostics = result.diagnostics };
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        ++cg.fanOut[link.fromNodeId];
+    }
+    const auto compileOutput = [&cg, outputNode](std::string_view outputPin, RenderMaterialGraphPinType outputType, std::string fallback) {
+        return CompileInputExpression(cg, *outputNode, outputPin, outputType, std::move(fallback));
+    };
+
+    const std::string baseColorExpr = compileOutput("baseColor", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
+    const std::string metallicExpr = compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0");
+    const std::string roughnessExpr = compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0");
+    const std::string normalExpr = compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+    const std::string occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
+    const std::string emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
+    const std::string alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
+    const std::string alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
+
+    source += "MaterialSurface EvaluateMaterialGraph(MaterialGraphContext ctx) {\n";
+    source += "    MaterialSurface material;\n";
+    source += cg.statements;
+    source += "    material.baseColor = " + baseColorExpr + ";\n";
+    source += "    material.metallic = " + metallicExpr + ";\n";
+    source += "    material.roughness = " + roughnessExpr + ";\n";
+    source += "    material.normal = " + normalExpr + ";\n";
+    source += "    material.occlusion = " + occlusionExpr + ";\n";
+    source += "    material.emissive = " + emissiveExpr + ".rgb;\n";
+    source += "    material.alpha = " + alphaExpr + ";\n";
+    source += "    material.alphaClipThreshold = " + alphaClipThresholdExpr + ";\n";
     source += "    return material;\n";
     source += "}\n";
 
@@ -1804,10 +2115,32 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
 
     std::uint64_t hash = 1469598103934665603ULL;
     HashString64(hash, source);
+
+    RenderMaterialGraphReflection reflection;
+    for (const ReflectionUniformEntry& u : uniformEntries) {
+        reflection.uniforms.push_back(RenderMaterialGraphReflectionUniform{
+            .name = u.name,
+            .stableId = u.stableId,
+            .kind = u.kind,
+        });
+    }
+    for (std::uint32_t slot = 0U; slot < static_cast<std::uint32_t>(textureEntries.size()); ++slot) {
+        reflection.textures.push_back(RenderMaterialGraphReflectionTexture{
+            .samplerName = textureEntries[slot].samplerName,
+            .stableId = textureEntries[slot].stableId,
+            .slot = slot,
+            .colorSpace = textureEntries[slot].colorSpace,
+        });
+    }
+    if (needsUv0) {
+        reflection.requiredVaryings.push_back("uv0");
+    }
+
     result.shader = RenderMaterialGraphShaderSource{
         .entryPoint = "EvaluateMaterialGraph",
         .source = std::move(source),
         .sourceHash = hash,
+        .reflection = std::move(reflection),
     };
     return result;
 }
@@ -1816,7 +2149,9 @@ std::uint64_t RenderMaterialGraphCompileInvocationCount() noexcept {
     return g_renderMaterialGraphCompileInvocationCount.load(std::memory_order_relaxed);
 }
 
-std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(const RenderMaterialGraphDocument& graph) {
+std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphRenderPath renderPath) {
     std::vector<RenderMaterialGraphDiagnostic> diagnostics;
     const RenderMaterialGraphNode* outputNode = nullptr;
     std::unordered_map<std::string, std::uint32_t> parameterStableIds;
@@ -1831,6 +2166,26 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(c
                 {},
                 "Material graph contains an unsupported node kind.");
             continue;
+        }
+        const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(node.kind, renderPath);
+        if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported) {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode,
+                node.id,
+                0U,
+                {},
+                "Material graph node '" + std::string{ RenderMaterialGraphNodeKindName(node.kind) } + "' is unsupported on the " + std::string{ RenderMaterialGraphRenderPathName(renderPath) } + " render path.");
+        } else if (pathSupport == RenderMaterialGraphNodeSupport::Experimental || pathSupport == RenderMaterialGraphNodeSupport::FallbackOnly) {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Warning,
+                RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode,
+                node.id,
+                0U,
+                {},
+                "Material graph node '" + std::string{ RenderMaterialGraphNodeKindName(node.kind) } + "' is " + std::string{ RenderMaterialGraphNodeSupportName(pathSupport) } + " on the " + std::string{ RenderMaterialGraphRenderPathName(renderPath) } + " render path.");
         }
         if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput && outputNode == nullptr) {
             outputNode = &node;
@@ -1972,7 +2327,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
             pin == "normal" ||
             pin == "emissive" ||
             pin == "occlusion" ||
-            pin == "alpha";
+            pin == "alpha" ||
+            pin == "alphaClipThreshold";
     case RenderMaterialGraphNodeKind::TextureSample:
         return pin == "texture" || pin == "uv";
     case RenderMaterialGraphNodeKind::Add:
@@ -2143,7 +2499,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (outputPin) return RenderMaterialGraphPinType::Unknown;
         if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha") return RenderMaterialGraphPinType::Float;
+        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2D;
@@ -2309,6 +2665,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "emissive") return PinId(nodeKind, direction, 5U);
         if (!outputPin && pin == "occlusion") return PinId(nodeKind, direction, 6U);
         if (!outputPin && pin == "alpha") return PinId(nodeKind, direction, 7U);
+        if (!outputPin && pin == "alphaClipThreshold") return PinId(nodeKind, direction, 8U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -2680,6 +3037,83 @@ RenderMaterialGraphArtifactRuntimeDecision ResolveRenderMaterialGraphArtifactRun
             : "Material graph compile failed or is pending and no last-good artifact is available; using the explicit error material.",
     };
     return runtime;
+}
+
+RenderMaterialGraphRuntimeState ResolveRenderMaterialGraphRuntimeState(const RenderMaterialGraphRuntimeStateInput& input) noexcept {
+    switch (input.phase) {
+    case RenderMaterialGraphCompilePhase::Editing:
+        return RenderMaterialGraphRuntimeState::Dirty;
+    case RenderMaterialGraphCompilePhase::Validating:
+        return RenderMaterialGraphRuntimeState::Validating;
+    case RenderMaterialGraphCompilePhase::Compiling:
+        return RenderMaterialGraphRuntimeState::Compiling;
+    case RenderMaterialGraphCompilePhase::Compiled:
+        break;
+    }
+
+    const bool succeeded = input.validationSucceeded && input.compileSucceeded && input.hasGpuProgram;
+    if (succeeded) {
+        return RenderMaterialGraphRuntimeState::UsingGpuGraph;
+    }
+    if (!input.fallbackApplied) {
+        return RenderMaterialGraphRuntimeState::CompileFailed;
+    }
+    if (input.failurePolicy == RenderMaterialGraphArtifactFailurePolicy::LastGoodThenErrorMaterial && input.hasLastGood) {
+        return RenderMaterialGraphRuntimeState::UsingLastGood;
+    }
+    return RenderMaterialGraphRuntimeState::UsingErrorMaterial;
+}
+
+std::string_view RenderMaterialGraphRuntimeStateName(RenderMaterialGraphRuntimeState state) noexcept {
+    switch (state) {
+    case RenderMaterialGraphRuntimeState::Dirty:
+        return "Dirty";
+    case RenderMaterialGraphRuntimeState::Validating:
+        return "Validating";
+    case RenderMaterialGraphRuntimeState::Compiling:
+        return "Compiling";
+    case RenderMaterialGraphRuntimeState::CompileFailed:
+        return "CompileFailed";
+    case RenderMaterialGraphRuntimeState::UsingLastGood:
+        return "UsingLastGood";
+    case RenderMaterialGraphRuntimeState::UsingErrorMaterial:
+        return "UsingErrorMaterial";
+    case RenderMaterialGraphRuntimeState::UsingGpuGraph:
+        return "UsingGpuGraph";
+    }
+    return "Dirty";
+}
+
+bool RenderMaterialGraphRuntimeStateUsesFallback(RenderMaterialGraphRuntimeState state) noexcept {
+    return state == RenderMaterialGraphRuntimeState::UsingLastGood ||
+        state == RenderMaterialGraphRuntimeState::UsingErrorMaterial ||
+        state == RenderMaterialGraphRuntimeState::CompileFailed;
+}
+
+bool HasGraphAuthoringData(const RenderMaterialGraphDocument& graph) noexcept {
+    if (!graph.links.empty()) {
+        return true;
+    }
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        const bool isImplicitDefault = node.id == 1U &&
+            node.kind == RenderMaterialGraphNodeKind::MaterialOutput &&
+            node.positionX == 640 &&
+            node.positionY == 240 &&
+            node.parameter.stableId.empty() &&
+            node.parameter.displayName.empty();
+        if (!isImplicitDefault) {
+            return true;
+        }
+    }
+    return false;
+}
+
+MaterialSurface DefaultMaterialSurface() noexcept {
+    return {};
+}
+
+MaterialGraphContext DefaultMaterialGraphContext() noexcept {
+    return {};
 }
 
 } // namespace kb::render
