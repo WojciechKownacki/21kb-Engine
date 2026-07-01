@@ -51,17 +51,16 @@ void EmitInstanceDiagnostic(
     return true;
 }
 
-[[nodiscard]] bool PassReportsDisabledAlphaBlend(MeshPassType pass) noexcept {
-    return pass == MeshPassType::BaseOpaque;
-}
 
 [[nodiscard]] bool PassDisablesAlphaBlend(MeshPassType pass) noexcept {
     switch (pass) {
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
-    case MeshPassType::BaseTransparent:
     case MeshPassType::ShadowDepth:
         return true;
+    case MeshPassType::BaseTransparent:
+        // The transparent pass IS the alpha-blend pass (MAT-80); it must not skip blended materials.
+        return false;
     case MeshPassType::SelectionId:
     case MeshPassType::EditorSelection:
     case MeshPassType::Gizmo:
@@ -140,9 +139,8 @@ void MeshPassProcessor::BuildCommandsInto(const MeshPassProcessorDesc& desc, Mes
                     MeshPipelineResourceResolver::ValidateMaterialTextureOrFallback(instance, materialAssetId, materialResource, *desc.resources, *desc.resourceMap, result.stats, desc.diagnostics);
                 }
                 if (PassDisablesAlphaBlend(desc.pass) && MeshPipelinePassPolicy::UsesDisabledAlphaBlend(materialResource)) {
-                    if (PassReportsDisabledAlphaBlend(desc.pass)) {
-                        EmitInstanceDiagnostic(desc.diagnostics, SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend, SceneRenderDiagnosticSeverity::Warning, instance, materialAssetId);
-                    }
+                    // Blended materials are skipped from opaque/depth/shadow and render in the transparent
+                    // pass instead (MAT-80); this is correct routing, not an unsupported-material error.
                     continue;
                 }
                 if (!MeshPipelinePassPolicy::Accepts(desc.pass, instance, materialResource, desc.selectedEntityIds)) {

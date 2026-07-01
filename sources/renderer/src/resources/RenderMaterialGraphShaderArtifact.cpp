@@ -156,17 +156,20 @@ std::string BuildGraphFragmentWrapperSource(
     const bool shadowPass = pass == "ShadowDepth";
 
     std::string wrapper;
-    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent\n\n";
+    wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos\n\n";
     wrapper += "#include <bgfx_shader.sh>\n";
     if (!shadowPass) {
         wrapper += "#include \"pbr_graph_forward.sh\"\n";
     }
+    // MAT-72 frame time constants (x=time seconds, y=deltaTime, z=frameIndex). Bound per frame by
+    // SceneMeshPassResources so graph Time/animation nodes read real engine time.
+    wrapper += "uniform vec4 u_time;\n";
     wrapper += "\n// pass:" + std::string{ pass } + "\n\n";
     wrapper += shader.source;
     wrapper += "\nvoid main()\n{\n";
     wrapper += "    MaterialGraphContext ctx;\n";
     wrapper += "    ctx.uv0 = v_texcoord0;\n";
-    wrapper += "    ctx.uv1 = v_texcoord0;\n";
+    wrapper += "    ctx.uv1 = v_shadowFlags.zw;\n";
     wrapper += "    ctx.normal = normalize(v_normal);\n";
     wrapper += "    ctx.tangent = normalize(v_tangent);\n";
     wrapper += "    ctx.bitangent = normalize(v_bitangent);\n";
@@ -177,18 +180,47 @@ std::string BuildGraphFragmentWrapperSource(
         wrapper += "    ctx.viewDir = normalize(u_cameraPosition.xyz - v_worldPos);\n";
     }
     wrapper += "    ctx.vertexColor = v_color0;\n";
-    wrapper += "    ctx.time = 0.0;\n";
+    wrapper += "    ctx.time = u_time.x;\n";
+    // MAT-75 screen-space coordinate (0..1) from the fragment position and bgfx viewport rect.
+    wrapper += "    ctx.screenPosition = gl_FragCoord.xy / max(u_viewRect.zw, vec2(1.0, 1.0));\n";
+    // MAT-76 object-space inputs interpolated from the vertex shader.
+    wrapper += "    ctx.localPosition = v_objectLocalPos.xyz;\n";
+    wrapper += "    ctx.objectPosition = v_objectWorldPos.xyz;\n";
+    // MAT-77 per-instance scalars carried in the free .w lanes of the object-space varyings.
+    wrapper += "    ctx.perInstanceRandom = v_objectLocalPos.w;\n";
+    wrapper += "    ctx.objectRadius = v_objectWorldPos.w;\n";
+    // MAT-46: world-space view/light inputs. The shadow pass has no lighting uniforms, so it uses safe
+    // placeholders; only the forward pass reads the real camera/light/viewport state.
+    wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    if (shadowPass) {
+        wrapper += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
+        wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
+    } else {
+        wrapper += "    ctx.cameraPosition = u_cameraPosition.xyz;\n";
+        wrapper += "    ctx.lightVector = (u_lightParams.x > 0.5) ? normalize(-u_lightDirKind[0].xyz) : vec3(0.0, 1.0, 0.0);\n";
+    }
     wrapper += "    MaterialSurface surface = EvaluateMaterialGraph(ctx);\n";
     if (shadowPass) {
         wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         wrapper += "    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);\n";
     } else {
-        wrapper += "    vec3 worldNormal = normalize(v_tangent * surface.normal.x + v_bitangent * surface.normal.y + v_normal * surface.normal.z);\n";
-        wrapper += "    float metallic = clamp(surface.metallic, 0.0, 1.0);\n";
-        wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
-        wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
-        wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, occlusion);\n";
-        wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+        // MAT-38 Masked: clip fragments whose alpha is below the clip threshold so the background shows
+        // through (binary opacity). The transparent modes keep every fragment and blend at the ROP stage.
+        if (shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked) {
+            wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
+        }
+        if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
+            // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
+            wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
+        } else {
+            // MAT-37 DefaultLit: the metallic-roughness forward PBR path.
+            wrapper += "    vec3 worldNormal = normalize(v_tangent * surface.normal.x + v_bitangent * surface.normal.y + v_normal * surface.normal.z);\n";
+            wrapper += "    float metallic = clamp(surface.metallic, 0.0, 1.0);\n";
+            wrapper += "    float roughness = clamp(surface.roughness, 0.04, 1.0);\n";
+            wrapper += "    float occlusion = clamp(surface.occlusion, 0.0, 1.0);\n";
+            wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, occlusion);\n";
+            wrapper += "    gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);\n";
+        }
     }
     wrapper += "}\n";
     return wrapper;
@@ -210,6 +242,10 @@ std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraph
     for (const std::string& varying : reflection.requiredVaryings) {
         HashString64(hash, varying);
     }
+    // MAT-37: the shading model selects the fragment wrapper lighting branch, so it is part of program identity.
+    HashU64(hash, static_cast<std::uint64_t>(reflection.shadingModel));
+    // MAT-38: the blend mode changes the wrapper (masked clip) and the cooked pass, so it is part of identity.
+    HashU64(hash, static_cast<std::uint64_t>(reflection.blendMode));
     return hash;
 }
 

@@ -21,6 +21,7 @@ struct SceneMeshDrawCommandSubmitDesc {
     const SceneRenderResourceMap& resourceMap;
     const PackedSceneLighting& lighting;
     const std::array<float, 4>& cameraPosition;
+    const std::array<float, 4>& frameTime;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
     const SceneMeshPassResources& passResources;
     SceneRenderDiagnostics* diagnostics = nullptr;

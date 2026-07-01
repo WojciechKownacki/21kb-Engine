@@ -66,6 +66,9 @@ bool SceneRenderer::Initialize() {
         meshSubmitter_.reset();
         return false;
     }
+    if (!graphShaderCacheRoot_.empty()) {
+        meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
 
     initialized_ = true;
     return true;
@@ -141,7 +144,8 @@ void SceneRenderer::SubmitMeshPass(
             effectiveLightingConfig,
             shadowMap,
             selectedEntityIds,
-            gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride);
+            gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride,
+            FrameTimeConstants());
     }
 }
 
@@ -167,6 +171,27 @@ void SceneRenderer::SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport supp
 
 SceneGpuDrivenFeatureSupport SceneRenderer::GpuDrivenRuntimeSupport() const noexcept {
     return gpuDrivenRuntimeSupport_;
+}
+
+void SceneRenderer::SetGraphShaderCacheRoot(std::string root) {
+    graphShaderCacheRoot_ = std::move(root);
+    if (meshSubmitter_ != nullptr) {
+        meshSubmitter_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
+}
+
+const std::string& SceneRenderer::GraphShaderCacheRoot() const noexcept {
+    return graphShaderCacheRoot_;
+}
+
+void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
+    frameDeltaSeconds_ = deltaSeconds;
+    frameTimeSeconds_ += deltaSeconds;
+    ++frameTimeIndex_;
+}
+
+std::array<float, 4> SceneRenderer::FrameTimeConstants() const noexcept {
+    return { frameTimeSeconds_, frameDeltaSeconds_, static_cast<float>(frameTimeIndex_), 0.0F };
 }
 
 void SceneRenderer::TickFrame() noexcept {

@@ -14,6 +14,7 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -80,6 +81,9 @@ public:
 
     void Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept;
     void SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept;
+    // Point this viewport's renderer at the per-project graph shader cache so authored material
+    // graphs render through their cooked GPU program instead of the CPU PBR fallback (MAT-31).
+    void SetGraphShaderCacheRoot(std::string root);
     [[nodiscard]] const char* ActiveBackendLabel() const noexcept;
     void RequestPresent() noexcept;
     [[nodiscard]] bool PresentRequested() const noexcept;
@@ -275,8 +279,13 @@ private:
     bool presentRequested_ = true;
     bool renderFailed_ = false;
     bool renderFailureReported_ = false;
+    // MAT-72: wall-clock between submitted frames so animated graph materials (Time / Panner / Rotator)
+    // advance u_time in the live editor, not only in tests.
+    std::chrono::steady_clock::time_point lastFrameClock_{};
+    bool hasLastFrameClock_ = false;
     std::function<void(std::string_view)> errorReporter_{};
     std::string failureDetail_{};
+    std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;
     ViewportSessionStore sessionStore_;
     HostSurfaceStore hostSurfaceStore_;

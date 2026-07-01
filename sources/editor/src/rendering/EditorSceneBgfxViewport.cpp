@@ -194,6 +194,16 @@ void EditorSceneBgfxViewport::SetErrorReporter(std::function<void(std::string_vi
     errorReporter_ = std::move(reporter);
 }
 
+void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
+    if (graphShaderCacheRoot_ == root) {
+        return;
+    }
+    graphShaderCacheRoot_ = std::move(root);
+    if (renderer_.IsInitialized()) {
+        renderer_.SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
+}
+
 const char* EditorSceneBgfxViewport::ActiveBackendLabel() const noexcept {
     if (!renderer_.IsInitialized()) {
         return "Not initialized";
@@ -612,6 +622,9 @@ bool EditorSceneBgfxViewport::EnsureRenderer() {
     }
 
     renderer_.SetRuntimeAssetDiscoveryEnabled(false);
+    if (!graphShaderCacheRoot_.empty()) {
+        renderer_.SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
     rendererBackendGeneration_ = backendSettings_ == nullptr ? 0U : backendSettings_->BackendGeneration();
     return true;
 }
@@ -681,6 +694,20 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
     pendingSubmissions_.clear();
     if (pendingPresents_.empty()) {
         return true;
+    }
+
+    // MAT-72: advance the renderer clock by real elapsed time so time-driven graph nodes animate live in
+    // the editor (u_time was previously only set by tests, so Panner/Time/Rotator stayed frozen at t=0).
+    if (renderer_.IsInitialized()) {
+        const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        float deltaSeconds = 0.0F;
+        if (hasLastFrameClock_) {
+            deltaSeconds = std::chrono::duration<float>(now - lastFrameClock_).count();
+            deltaSeconds = std::clamp(deltaSeconds, 0.0F, 0.25F);
+        }
+        lastFrameClock_ = now;
+        hasLastFrameClock_ = true;
+        renderer_.SetFrameDeltaSeconds(deltaSeconds);
     }
 
     PendingPaintSubmitter submitter(*this);

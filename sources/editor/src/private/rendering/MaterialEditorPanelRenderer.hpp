@@ -622,7 +622,7 @@ inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRendere
     return std::nullopt;
 }
 
-inline std::vector<std::string_view> MaterialEditorPanelInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
+inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return { "baseColor", "normal", "roughness", "metallic", "emissive", "occlusion", "alpha" };
@@ -693,11 +693,15 @@ inline std::vector<std::string_view> MaterialEditorPanelInputPins(kb::render::Re
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return {};
+    default:
+        break;
     }
-    return {};
+    // Hit-testing falls back to the renderer's authoritative pin schema for any node not listed above,
+    // so every node's pins are connectable (not just drawn).
+    return kb::render::RenderMaterialGraphNodeInputPinNames(kind);
 }
 
-inline std::vector<std::string_view> MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
+inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
@@ -761,8 +765,10 @@ inline std::vector<std::string_view> MaterialEditorPanelOutputPins(kb::render::R
         return { "uv" };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return {};
+    default:
+        break;
     }
-    return {};
+    return kb::render::RenderMaterialGraphNodeOutputPinNames(kind);
 }
 
 inline POINT MaterialEditorPanelInputPinPoint(const RECT& node, std::size_t index) noexcept {
@@ -1267,27 +1273,29 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
         }
         const float scale = static_cast<float>(MaterialEditorPanelRectWidth(*rect)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
         const int radius = std::max(14, MaterialEditorPanelScaled(18, scale));
-        const std::vector<std::string_view> inputPins = MaterialEditorPanelInputPins(node.kind);
+        // Pick the NEAREST pin within the hit radius (not the first), so closely-spaced pins — e.g. a
+        // texture node's Tex./UV inputs — resolve to the one actually under the cursor.
+        std::optional<MaterialEditorGraphPinHit> best;
+        long long bestDistanceSq = static_cast<long long>(radius) * static_cast<long long>(radius);
+        const auto consider = [&](const POINT& pinPoint, MaterialEditorGraphPinDirection direction, const std::string& pin) {
+            const long long dx = static_cast<long long>(pinPoint.x) - static_cast<long long>(x);
+            const long long dy = static_cast<long long>(pinPoint.y) - static_cast<long long>(y);
+            const long long distanceSq = (dx * dx) + (dy * dy);
+            if (distanceSq <= bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                best = MaterialEditorGraphPinHit{ .nodeId = node.id, .direction = direction, .pin = pin };
+            }
+        };
+        const std::vector<std::string> inputPins = MaterialEditorPanelInputPins(node.kind);
         for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
-            const POINT pinPoint = MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex);
-            if (MaterialEditorPanelPointNear(pinPoint, x, y, radius)) {
-                return MaterialEditorGraphPinHit{
-                    .nodeId = node.id,
-                    .direction = MaterialEditorGraphPinDirection::Input,
-                    .pin = std::string{ inputPins[pinIndex] },
-                };
-            }
+            consider(MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex), MaterialEditorGraphPinDirection::Input, inputPins[pinIndex]);
         }
-        const std::vector<std::string_view> outputPins = MaterialEditorPanelOutputPins(node.kind);
+        const std::vector<std::string> outputPins = MaterialEditorPanelOutputPins(node.kind);
         for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
-            const POINT pinPoint = MaterialEditorPanelOutputPinPoint(*rect, node.kind, pinIndex, outputPins.size());
-            if (MaterialEditorPanelPointNear(pinPoint, x, y, radius)) {
-                return MaterialEditorGraphPinHit{
-                    .nodeId = node.id,
-                    .direction = MaterialEditorGraphPinDirection::Output,
-                    .pin = std::string{ outputPins[pinIndex] },
-                };
-            }
+            consider(MaterialEditorPanelOutputPinPoint(*rect, node.kind, pinIndex, outputPins.size()), MaterialEditorGraphPinDirection::Output, outputPins[pinIndex]);
+        }
+        if (best.has_value()) {
+            return best;
         }
     }
     return std::nullopt;
@@ -1327,7 +1335,7 @@ inline constexpr int kMaterialEditorGraphMenuCommandHeight = 22;
 inline constexpr int kMaterialEditorGraphMenuPadding = 8;
 
 inline constexpr std::size_t MaterialEditorGraphContextMenuCategoryCount() noexcept {
-    return 8U;
+    return 10U;
 }
 
 inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) noexcept {
@@ -1339,7 +1347,9 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
     case 4U: return "Parameters";
     case 5U: return "Math";
     case 6U: return "Utility";
-    case 7U: return "Actions";
+    case 7U: return "Material";
+    case 8U: return "Static";
+    case 9U: return "Actions";
     default: return "";
     }
 }
@@ -1349,7 +1359,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 0U:
         return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter };
     case 1U:
-        return { MaterialEditorGraphMenuCommand::CreateUv };
+        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize };
     case 2U:
         return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter };
     case 3U:
@@ -1403,6 +1413,10 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
         };
     case 7U:
+        return { MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes, MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes, MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes, MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes, MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes };
+    case 8U:
+        return { MaterialEditorGraphMenuCommand::CreateStaticBoolParameter, MaterialEditorGraphMenuCommand::CreateStaticSwitch, MaterialEditorGraphMenuCommand::CreateStaticComponentMask };
+    case 9U:
         return { MaterialEditorGraphMenuCommand::DisconnectSelected, MaterialEditorGraphMenuCommand::DeleteSelected };
     default:
         return {};
@@ -1461,6 +1475,38 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
+    case MaterialEditorGraphMenuCommand::CreateTime: return "Time";
+    case MaterialEditorGraphMenuCommand::CreateVertexColor: return "Vertex Color";
+    case MaterialEditorGraphMenuCommand::CreateScreenPosition: return "Screen Position";
+    case MaterialEditorGraphMenuCommand::CreateLocalPosition: return "Local Position";
+    case MaterialEditorGraphMenuCommand::CreateObjectPosition: return "Object Position";
+    case MaterialEditorGraphMenuCommand::CreateWorldPosition: return "World Position";
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return "Per Instance Random";
+    case MaterialEditorGraphMenuCommand::CreateObjectRadius: return "Object Radius";
+    case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return "Make Material Attributes";
+    case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return "Break Material Attributes";
+    case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return "Blend Material Attributes";
+    case MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes: return "Get Material Attributes";
+    case MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes: return "Set Material Attributes";
+    case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter: return "Static Bool Parameter";
+    case MaterialEditorGraphMenuCommand::CreateStaticSwitch: return "Static Switch";
+    case MaterialEditorGraphMenuCommand::CreateStaticComponentMask: return "Static Component Mask";
+    case MaterialEditorGraphMenuCommand::CreateTextureCoordinate: return "Texture Coordinate";
+    case MaterialEditorGraphMenuCommand::CreatePanner: return "Panner";
+    case MaterialEditorGraphMenuCommand::CreateRotator: return "Rotator";
+    case MaterialEditorGraphMenuCommand::CreateBumpOffset: return "Bump Offset";
+    case MaterialEditorGraphMenuCommand::CreateConstantBiasScale: return "Constant Bias Scale";
+    case MaterialEditorGraphMenuCommand::CreateRotateAboutAxis: return "Rotate About Axis";
+    case MaterialEditorGraphMenuCommand::CreateViewportUV: return "Viewport UV";
+    case MaterialEditorGraphMenuCommand::CreateCameraPosition: return "Camera Position";
+    case MaterialEditorGraphMenuCommand::CreateCameraVector: return "Camera Vector";
+    case MaterialEditorGraphMenuCommand::CreateReflectionVector: return "Reflection Vector";
+    case MaterialEditorGraphMenuCommand::CreateLightVector: return "Light Vector";
+    case MaterialEditorGraphMenuCommand::CreatePixelNormalWS: return "Pixel Normal WS";
+    case MaterialEditorGraphMenuCommand::CreateVertexNormalWS: return "Vertex Normal WS";
+    case MaterialEditorGraphMenuCommand::CreateVertexTangentWS: return "Vertex Tangent WS";
+    case MaterialEditorGraphMenuCommand::CreateViewProperty: return "View Property";
+    case MaterialEditorGraphMenuCommand::CreateViewSize: return "View Size";
     case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
     case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected Node";
     case MaterialEditorGraphMenuCommand::None: return "";

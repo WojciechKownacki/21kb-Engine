@@ -10,6 +10,10 @@
 
 namespace kb::render {
 
+// Converts a graph sampler state into bgfx sampler flags (filter + wrap). Linear/Repeat resolves to 0
+// (bgfx defaults). Returned value is OR-able into bgfx::setTexture's flags argument.
+[[nodiscard]] std::uint32_t RenderMaterialGraphSamplerBgfxFlags(const RenderMaterialGraphSamplerState& state) noexcept;
+
 struct RenderMaterialGraphProgramBindingResult {
     RenderMaterialGraphProgramBinding binding;
     std::vector<RenderMaterialGraphDiagnostic> diagnostics;

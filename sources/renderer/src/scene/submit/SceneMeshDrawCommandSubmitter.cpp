@@ -95,6 +95,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .pass = desc.pass,
             .lighting = desc.lighting,
             .cameraPosition = desc.cameraPosition,
+            .frameTime = desc.frameTime,
             .shadowMap = desc.shadowMap,
         });
         bgfx::setState(command.state);

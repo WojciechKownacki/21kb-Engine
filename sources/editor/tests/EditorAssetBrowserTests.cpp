@@ -584,7 +584,10 @@ void RunMaterialContextMenuCommandTest() {
     const bool backgroundHasMaterialType = std::ranges::any_of(backgroundItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterialType;
     });
-    kb::editor::tests::Require(backgroundHasMaterialGraph && backgroundHasMaterialType, "Asset browser background context menu should expose Material Graph and Material Type creation");
+    // New Material is the single graph-backed material entry (UE-style: double-click opens the graph editor);
+    // the standalone "New Material Graph" creation entry was removed to avoid a dead double-click.
+    kb::editor::tests::Require(!backgroundHasMaterialGraph, "Asset browser background context menu must not expose the standalone New Material Graph creation entry");
+    kb::editor::tests::Require(backgroundHasMaterialType, "Asset browser background context menu should expose Material Type creation");
 
     kb::editor::tests::Require(state.OpenContextMenuForFolder(220, 70, "/Game/Environment", manager), "Asset browser should open a folder context menu for registered virtual folders");
     const std::vector<kb::editor::EditorAssetContextMenuItem> folderItems = state.ContextMenuItems(manager);
@@ -592,12 +595,14 @@ void RunMaterialContextMenuCommandTest() {
         return item.command == kb::editor::EditorAssetContextCommand::NewMaterial;
     });
     kb::editor::tests::Require(folderHasMaterial, "Asset browser folder context menu should expose New Material");
-    kb::editor::tests::Require(std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+    kb::editor::tests::Require(std::ranges::none_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
             return item.command == kb::editor::EditorAssetContextCommand::NewMaterialGraph;
-        }) && std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
+        }),
+        "Asset browser folder context menu must not expose the standalone New Material Graph creation entry");
+    kb::editor::tests::Require(std::ranges::any_of(folderItems, [](const kb::editor::EditorAssetContextMenuItem& item) {
             return item.command == kb::editor::EditorAssetContextCommand::NewMaterialType;
         }),
-        "Asset browser folder context menu should expose Material Graph and Material Type creation");
+        "Asset browser folder context menu should expose Material Type creation");
 
     static_cast<void>(manager.RegisterAsset(Metadata("Paint", "RenderMaterial", "/Game/Environment/Paint.kbmat")));
     const kb::assets::AssetMetadata* material = manager.Registry().FindByPath("/Game/Environment/Paint.kbmat");

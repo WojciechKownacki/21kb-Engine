@@ -32,7 +32,9 @@ RenderMaterialResource RenderMaterialResourceBuilder::Build(const RenderMaterial
     resource.alphaMode = desc.alphaMode;
     resource.decalBlendMode = desc.decalBlendMode;
     resource.layerBlendMode = desc.layerBlendMode;
+    resource.translucencyBlend = desc.translucencyBlend;
     resource.doubleSided = desc.doubleSided;
+    resource.writesDepth = desc.writesDepth;
     resource.albedoTextureAssetId = desc.albedoTextureAssetId;
     resource.normalTextureAssetId = desc.normalTextureAssetId;
     resource.metallicRoughnessTextureAssetId = desc.metallicRoughnessTextureAssetId;

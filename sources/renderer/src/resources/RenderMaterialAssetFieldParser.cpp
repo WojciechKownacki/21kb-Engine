@@ -142,6 +142,31 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool ParseTranslucencyBlend(std::string_view rest, RenderMaterialTranslucencyBlend& output) noexcept {
+    rest = Trim(rest);
+    if (EqualsIgnoreCase(rest, "ALPHA")) {
+        output = RenderMaterialTranslucencyBlend::Alpha;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "ADDITIVE")) {
+        output = RenderMaterialTranslucencyBlend::Additive;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "MODULATE")) {
+        output = RenderMaterialTranslucencyBlend::Modulate;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "PREMULTIPLIED_ALPHA")) {
+        output = RenderMaterialTranslucencyBlend::PreMultipliedAlpha;
+        return true;
+    }
+    if (EqualsIgnoreCase(rest, "ALPHA_HOLDOUT")) {
+        output = RenderMaterialTranslucencyBlend::AlphaHoldout;
+        return true;
+    }
+    return false;
+}
+
 [[nodiscard]] bool ParseBool(std::string_view rest, bool& output) noexcept {
     rest = Trim(rest);
     if (EqualsIgnoreCase(rest, "true") || EqualsIgnoreCase(rest, "1") || EqualsIgnoreCase(rest, "yes")) {
@@ -187,7 +212,9 @@ bool RenderMaterialAssetFieldParser::IsKnown(std::string_view keyword) noexcept 
         keyword == "alphaMode" ||
         keyword == "decalBlendMode" ||
         keyword == "layerBlendMode" ||
-        keyword == "doubleSided";
+        keyword == "translucencyBlend" ||
+        keyword == "doubleSided" ||
+        keyword == "writesDepth";
 }
 
 bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string_view rest, RenderMaterialAssetData& asset) {
@@ -274,8 +301,14 @@ bool RenderMaterialAssetFieldParser::Apply(std::string_view keyword, std::string
     if (keyword == "layerBlendMode") {
         return ParseLayerBlendMode(rest, asset.desc.layerBlendMode);
     }
+    if (keyword == "translucencyBlend") {
+        return ParseTranslucencyBlend(rest, asset.desc.translucencyBlend);
+    }
     if (keyword == "doubleSided") {
         return ParseBool(rest, asset.desc.doubleSided);
+    }
+    if (keyword == "writesDepth") {
+        return ParseBool(rest, asset.desc.writesDepth);
     }
     return false;
 }

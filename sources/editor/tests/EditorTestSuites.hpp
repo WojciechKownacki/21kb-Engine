@@ -7,6 +7,7 @@ void RunEditorAssetBrowserTests();
 void RunEditorCommandStackTests();
 void RunEditorPlayModeSceneSessionTests();
 void RunEditorViewportPreviewTests();
+void RunEditorMaterialGraphCookServiceTests();
 void RunEditorDockingTests();
 void RunEditorProjectTests();
 void RunEditorInspectorTests();

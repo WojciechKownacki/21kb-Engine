@@ -16,9 +16,11 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
@@ -30,6 +32,7 @@
 #include <bgfx/bgfx.h>
 
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -1098,6 +1101,197 @@ void RunRendererBindsGraphMaterialGpuProgramTest() {
     std::filesystem::remove_all(root, error);
 }
 
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// MAT-31: the public Renderer::SetGraphShaderCacheRoot must reach the mesh pass resources so a
+// cooked graph binary is loaded as the bound program (not the builtin fallback). This proves the
+// full forwarding chain Renderer -> SceneRenderer -> SceneMeshSubmitter -> SceneMeshPassResources.
+void RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_public_cache_root";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-31 public cache root test could not create temp root");
+
+    WriteTriangleObj(root / "triangle.obj");
+
+    RenderMaterialAssetData gpuMaterial{};
+    gpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    gpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    gpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    Require(RenderMaterialAssetWriter::Save(root / "graph.kbmat", gpuMaterial), "MAT-31 public cache root test could not save graph material");
+
+    // Cook the graph's BaseOpaque binary for the headless Noop renderer (dxbc directory) into a
+    // dedicated cache root that we will hand to the renderer through its public setter.
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(gpuMaterial.graph, RenderMaterialGraphBuildContext{ .assetId = 0x3100U });
+    Require(compiled.Succeeded(), "MAT-31 public cache root test graph must compile");
+    RenderMaterialGraphShaderArtifactRequest request{};
+    request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+    request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+    request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+    request.cacheRoot = cacheRoot.generic_string();
+    request.pass = "BaseOpaque";
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+        "MAT-31 public cache root test must cook a DXBC graph binary");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-31 public cache root test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-31 public cache root test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-31 public cache root test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "MAT-31 public cache root test did not discover mesh and material");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph.kbmat");
+    Require(meshMetadata != nullptr && materialMetadata != nullptr, "MAT-31 public cache root test did not discover both assets");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Cooked Graph Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = materialMetadata->id.value,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    // Set the cache root BEFORE Initialize to exercise the deferred-apply path added in MAT-31.
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
+    Require(renderer.GraphShaderCacheRoot() == cacheRoot.generic_string(),
+        "MAT-31: Renderer must retain the graph shader cache root through its public setter");
+    Require(renderer.Initialize(surface, &config), "MAT-31 public cache root test renderer did not initialize");
+    Require(renderer.BeginFrame(), "MAT-31 public cache root test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "MAT-31 public cache root test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.graphMaterialGpuCount == 1U, "MAT-31: A cooked graph material must resolve to the GPU graph path");
+    const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
+    Require(programStats.loads >= 1U,
+        "MAT-31: Setting the cache root through the public renderer must load the cooked graph program from disk");
+    Require(programStats.failures == 0U,
+        "MAT-31: A present cooked graph binary must load without a program failure/fallback");
+    Require(programStats.liveProgramCount >= 1U,
+        "MAT-31: The cooked graph program must be retained live in the material program registry");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// MAT-84/85: a scene that references several distinct graph materials (none of them "open" in an
+// editor) must render each through its own cooked GPU program once the cache root is supplied.
+void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_scene_multi_graph";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-84 scene multi-graph test could not create temp root");
+
+    WriteTriangleObj(root / "triangle.obj");
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+
+    const std::array<std::string_view, 3U> colors{ "0.9 0.1 0.1 1", "0.1 0.9 0.1 1", "0.1 0.1 0.9 1" };
+    std::array<std::string, 3U> materialFiles{ "red.kbmat", "green.kbmat", "blue.kbmat" };
+    for (std::size_t index = 0U; index < colors.size(); ++index) {
+        RenderMaterialAssetData material{};
+        material.graph = MakeDefaultRenderMaterialGraphDocument();
+        material.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+        material.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        material.graph.nodes[1].parameter.defaultValueHint = std::string{ colors[index] };
+        Require(RenderMaterialAssetWriter::Save(root / materialFiles[index], material), "MAT-84 scene multi-graph test could not save a graph material");
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(material.graph, RenderMaterialGraphBuildContext{ .assetId = 0x8400U + index });
+        Require(compiled.Succeeded(), "MAT-84 scene multi-graph test material must compile");
+        RenderMaterialGraphShaderArtifactRequest request{};
+        request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+        request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+        request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+        request.cacheRoot = cacheRoot.generic_string();
+        request.pass = "BaseOpaque";
+        const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+        Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+            "MAT-84 scene multi-graph test must cook each graph material");
+    }
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-84 scene multi-graph test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-84 scene multi-graph test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-84 scene multi-graph test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 4U, "MAT-84 scene multi-graph test did not discover mesh and materials");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr, "MAT-84 scene multi-graph test did not discover the mesh");
+
+    for (std::size_t index = 0U; index < materialFiles.size(); ++index) {
+        const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath(std::string{ "/Game/" } + materialFiles[index]);
+        Require(materialMetadata != nullptr, "MAT-84 scene multi-graph test did not discover a graph material");
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Graph Mesh " + std::to_string(index),
+            .transform = TransformAt(static_cast<float>(index) * 2.0F, 0.0F, 0.0F),
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = meshMetadata->id.value,
+            .materialAssetId = materialMetadata->id.value,
+        });
+    }
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
+    Require(renderer.Initialize(surface, &config), "MAT-84 scene multi-graph test renderer did not initialize");
+    Require(renderer.BeginFrame(), "MAT-84 scene multi-graph test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "MAT-84 scene multi-graph test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.graphMaterialGpuCount == 3U,
+        "MAT-84: A scene with three distinct graph materials must bind three GPU graph programs without opening them");
+    Require(runtimeStats.graphMaterialCpuFallbackCount == 0U,
+        "MAT-84: Cooked scene graph materials must not fall back to CPU flattening");
+    const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
+    Require(programStats.liveProgramCount >= 3U,
+        "MAT-85: Three distinct cooked graph materials must retain three distinct live programs");
+    Require(programStats.failures == 0U,
+        "MAT-85: Present cooked scene graph binaries must all load without a program failure");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+#endif
+
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
     std::error_code error;
@@ -1231,9 +1425,13 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(renderer.SubmitScene(scene, desc), "Renderer did not submit runtime mesh asset scene");
 
     const SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
-    Require(submitStats.visibleMeshCount == instanceCount * 2U, "Runtime submit did not keep shadow and opaque mesh instances visible while disabling blend");
-    Require(submitStats.submittedMeshCount == instanceCount * 2U, "Runtime submit did not submit shadow and opaque mesh instances while disabling blend");
-    Require(submitStats.submittedDrawCallCount == 2U, "Runtime submit should not draw disabled blend materials");
+    // 16 opaque instances render in the opaque + shadow passes (32); the 1 blended instance renders in
+    // the now-active transparent pass (MAT-80), so the visible/submitted totals are instanceCount*2 + 1.
+    Require(submitStats.visibleMeshCount == instanceCount * 2U + 1U, "Runtime submit did not keep opaque (opaque+shadow) and blended (transparent) mesh instances visible");
+    Require(submitStats.submittedMeshCount == instanceCount * 2U + 1U, "Runtime submit did not submit opaque (opaque+shadow) and blended (transparent) mesh instances");
+    // Opaque instances = 1 instanced draw in the opaque pass + 1 in the shadow pass; the blended instance
+    // adds 1 draw in the transparent pass (MAT-80) = 3 draw calls.
+    Require(submitStats.submittedDrawCallCount == 3U, "Runtime submit must draw opaque (opaque+shadow) and blended (transparent) materials");
     Require(submitStats.shadowCasterCount == instanceCount, "Runtime submit did not count shadow casters");
     Require(submitStats.submittedShadowCasterCount == instanceCount, "Runtime submit did not submit shadow casters");
     Require(submitStats.submittedShadowDrawCallCount == 1U, "Runtime submit did not draw one shadow caster batch");
@@ -1251,7 +1449,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(passStats[0].stats.shadowLightEntityId == light.Id(), "Runtime submit shadow pass did not report selected shadow light entity");
     Require(passStats[0].stats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit shadow pass did not report shadow map allocation bytes");
     Require(passStats[1].pass == MeshPassType::BaseOpaque && passStats[1].stats.submittedMeshCount == instanceCount, "Runtime submit opaque pass stats are wrong");
-    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 0U, "Runtime submit transparent pass should not submit disabled blend materials");
+    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 1U, "Runtime submit transparent pass must submit the blended material (MAT-80)");
     Require(renderer.LastSceneExposureStats().empty(), "Runtime submit without post-process unexpectedly reported exposure stats");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
@@ -1280,15 +1478,14 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
             event.instanceCount == 1U) {
             foundUnresolvedTexturePathDiagnostic = true;
         }
-        if (event.severity == SceneRenderDiagnosticSeverity::Warning &&
-            event.kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend &&
-            event.materialAssetId == transparentMaterialMetadata->id.value &&
-            event.instanceCount == 1U) {
+        if (event.kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend) {
             foundDisabledBlendDiagnostic = true;
         }
     }
     Require(foundUnresolvedTexturePathDiagnostic, "Runtime submit did not emit unresolved material texture path diagnostic");
-    Require(foundDisabledBlendDiagnostic, "Runtime submit did not emit disabled blend material diagnostic");
+    // MAT-80: blended materials are now supported via the transparent pass, so they must NOT raise the
+    // "unsupported alpha blend" diagnostic anymore.
+    Require(!foundDisabledBlendDiagnostic, "Runtime submit must not flag blended materials as unsupported once the transparent pass is active");
     Require(runtimeStats.renderSceneMeshProxyCount == instanceCount + 1U, "Runtime submit did not keep scene mesh proxies");
     Require(runtimeStats.meshResourceSlotCapacity >= 4U, "Runtime submit did not apply mesh resource slot reserve");
     Require(runtimeStats.materialResourceSlotCapacity >= 4U, "Runtime submit did not apply material resource slot reserve");
@@ -2811,7 +3008,26 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 
 } // namespace
 
+// MAT-72: material frame time accumulates and is exposed as the u_time vec4 (time, delta, frameIndex).
+void RunMaterialFrameTimeAdvanceTest() {
+    const auto nearly = [](float a, float b) noexcept { return std::fabs(a - b) <= 0.0005F; };
+
+    SceneRenderer sceneRenderer;
+    Require(nearly(sceneRenderer.FrameTimeConstants()[0], 0.0F), "MAT-72: Frame time must start at zero seconds");
+    sceneRenderer.AdvanceFrameTime(0.5F);
+    sceneRenderer.AdvanceFrameTime(0.25F);
+    const std::array<float, 4> constants = sceneRenderer.FrameTimeConstants();
+    Require(nearly(constants[0], 0.75F), "MAT-72: Frame seconds must accumulate across advances");
+    Require(nearly(constants[1], 0.25F), "MAT-72: Frame delta must reflect the most recent advance");
+    Require(nearly(constants[2], 2.0F), "MAT-72: Frame index must increment per advance");
+
+    Renderer renderer;
+    renderer.SetFrameDeltaSeconds(1.0F / 30.0F);
+    Require(nearly(renderer.FrameDeltaSeconds(), 1.0F / 30.0F), "MAT-72: Renderer must retain the per-frame delta seconds");
+}
+
 void RunRendererRuntimeSubmitTests() {
+    RunMaterialFrameTimeAdvanceTest();
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
@@ -2819,6 +3035,10 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();
     RunRendererBindsGraphMaterialGpuProgramTest();
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest();
+    RunRendererSceneRendersMultipleCookedGraphMaterialsTest();
+#endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();

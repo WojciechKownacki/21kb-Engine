@@ -545,6 +545,7 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorEmbeddedMaterialExtractionTypes.hpp
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
     src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
+    src/private/scene/material_preview/EditorMaterialGraphCookService.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
     src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
@@ -736,6 +737,7 @@ add_executable(kb_editor WIN32
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+    src/scene/material_preview/EditorMaterialGraphCookService.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
     src/scene/material_preview/EditorMaterialPreviewScene.cpp
@@ -877,6 +879,34 @@ endif()
 
 target_link_libraries(kb_editor PRIVATE user32 gdi32 gdiplus ole32 dwmapi msimg32 comdlg32 shell32 xinput)
 
+# MAT-30: graph shader cook toolchain (shaderc + engine shader sources) wired into the editor so
+# EditorMaterialGraphCookService can cook authored graphs into per-backend binaries at runtime.
+set(KB_GRAPH_SHADERC_TOOL "" CACHE FILEPATH "Path to bgfx shaderc used by the editor graph shader cook service")
+set(_kb_editor_graph_shaderc_tool "")
+if(TARGET bgfx::shaderc)
+    set(_kb_editor_graph_shaderc_tool "$<PATH:CMAKE_PATH,$<TARGET_FILE:bgfx::shaderc>>")
+    add_dependencies(kb_editor bgfx::shaderc)
+elseif(KB_GRAPH_SHADERC_TOOL)
+    cmake_path(CONVERT "${KB_GRAPH_SHADERC_TOOL}" TO_CMAKE_PATH_LIST _kb_editor_graph_shaderc_tool NORMALIZE)
+endif()
+
+function(kb_apply_editor_graph_cook_defs _target)
+    # The engine shader-source paths are always known at configure time, so bake them unconditionally.
+    # (Previously they were gated behind the shaderc tool, so when shaderc was not a CMake target NONE of
+    # them were defined and the cook wrote an empty varying def -> "No input/output semantic".)
+    target_compile_definitions(${_target}
+        PRIVATE
+            KB_EDITOR_GRAPH_SHADER_VARYING_DEF="${CMAKE_SOURCE_DIR}/sources/renderer/shaders/varying.def.sc"
+            KB_EDITOR_GRAPH_SHADER_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/sources/renderer/shaders"
+            KB_EDITOR_GRAPH_BGFX_SHADER_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/src"
+    )
+    if(_kb_editor_graph_shaderc_tool)
+        target_compile_definitions(${_target} PRIVATE KB_EDITOR_GRAPH_SHADERC_PATH="${_kb_editor_graph_shaderc_tool}")
+    endif()
+endfunction()
+
+kb_apply_editor_graph_cook_defs(kb_editor)
+
 kb_target_copy_bgfx_runtime_shaders(kb_editor)
 kb_apply_quality_gates(kb_editor)
 
@@ -885,6 +915,7 @@ if(BUILD_TESTING)
         tests/EditorHierarchyTests.cpp
         tests/EditorAssetBrowserTests.cpp
         tests/EditorViewportPreviewTests.cpp
+        tests/EditorMaterialGraphCookServiceTests.cpp
         tests/EditorDockingTests.cpp
         tests/EditorProjectTests.cpp
         tests/EditorInspectorTests.cpp
@@ -991,6 +1022,7 @@ if(BUILD_TESTING)
     src/scene/material/EditorEmbeddedMaterialAssetWriter.cpp
     src/scene/material/EditorEmbeddedMaterialExtractor.cpp
     src/scene/material/EditorEmbeddedMaterialTextureResolver.cpp
+    src/scene/material_preview/EditorMaterialGraphCookService.cpp
     src/scene/material_preview/EditorMaterialPreviewMeshFactory.cpp
         src/scene/material_preview/EditorMaterialPreviewMeshLoader.cpp
         src/scene/material_preview/EditorMaterialPreviewScene.cpp
@@ -1025,6 +1057,15 @@ if(BUILD_TESTING)
         PRIVATE
             kb_engine
             kb_renderer
+    )
+
+    kb_apply_editor_graph_cook_defs(kb_editor_tests)
+    if(TARGET bgfx::shaderc)
+        add_dependencies(kb_editor_tests bgfx::shaderc)
+    endif()
+    target_compile_definitions(kb_editor_tests
+        PRIVATE
+            KB_EDITOR_GRAPH_SHADER_CACHE_DIR="${CMAKE_BINARY_DIR}/editor_graph_cook_tests"
     )
 
     add_test(NAME kb_editor_tests COMMAND $<TARGET_FILE:kb_editor_tests>)
