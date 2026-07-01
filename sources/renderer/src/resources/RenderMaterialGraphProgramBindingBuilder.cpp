@@ -1,6 +1,31 @@
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 
 namespace kb::render {
+
+std::uint32_t RenderMaterialGraphSamplerBgfxFlags(const RenderMaterialGraphSamplerState& state) noexcept {
+    std::uint32_t flags = 0U;
+    if (state.minFilter == RenderMaterialGraphSamplerFilter::Point) {
+        flags |= BGFX_SAMPLER_MIN_POINT;
+    }
+    if (state.magFilter == RenderMaterialGraphSamplerFilter::Point) {
+        flags |= BGFX_SAMPLER_MAG_POINT;
+    }
+    if (state.mipFilter == RenderMaterialGraphSamplerFilter::Point) {
+        flags |= BGFX_SAMPLER_MIP_POINT;
+    }
+    switch (state.wrapU) {
+    case RenderMaterialGraphSamplerWrap::Clamp: flags |= BGFX_SAMPLER_U_CLAMP; break;
+    case RenderMaterialGraphSamplerWrap::Mirror: flags |= BGFX_SAMPLER_U_MIRROR; break;
+    case RenderMaterialGraphSamplerWrap::Repeat: break;
+    }
+    switch (state.wrapV) {
+    case RenderMaterialGraphSamplerWrap::Clamp: flags |= BGFX_SAMPLER_V_CLAMP; break;
+    case RenderMaterialGraphSamplerWrap::Mirror: flags |= BGFX_SAMPLER_V_MIRROR; break;
+    case RenderMaterialGraphSamplerWrap::Repeat: break;
+    }
+    return flags;
+}
+
 namespace {
 
 [[nodiscard]] RenderMaterialGraphUniformBindingType UniformBindingTypeForKind(RenderMaterialGraphNodeKind kind) noexcept {
@@ -69,6 +94,7 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
             .stableId = texture.stableId,
             .slot = texture.slot,
             .colorSpace = TextureBindingColorSpace(texture.colorSpace),
+            .samplerFlags = RenderMaterialGraphSamplerBgfxFlags(texture.samplerState),
         };
         if (const RenderMaterialGraphParameterValue* value = FindParameterValue(parameterValues, texture.stableId)) {
             textureBinding.textureAssetId = value->assetId;

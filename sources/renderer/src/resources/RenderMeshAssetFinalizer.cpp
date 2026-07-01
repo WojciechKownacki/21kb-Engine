@@ -249,9 +249,12 @@ void RenderMeshAssetFinalizer::EnsureTangentVertexStorage(RenderMeshAssetData& a
             .tw = tangent[3],
             .u = vertex.u,
             .v = vertex.v,
+            .u1 = vertex.u1,
+            .v1 = vertex.v1,
             .r = vertex.r,
             .g = vertex.g,
             .b = vertex.b,
+            .a = vertex.a,
         });
     }
     asset.vertices.clear();

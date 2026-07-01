@@ -29,9 +29,12 @@ struct RenderStaticMeshVertexP3N3UV2 {
     float nz = 0.0F;
     float u = 0.0F;
     float v = 0.0F;
+    float u1 = 0.0F;
+    float v1 = 0.0F;
     float r = 1.0F;
     float g = 1.0F;
     float b = 1.0F;
+    float a = 1.0F;
 };
 
 struct RenderStaticMeshVertexP3N3T4UV2 {
@@ -47,9 +50,12 @@ struct RenderStaticMeshVertexP3N3T4UV2 {
     float tw = 1.0F;
     float u = 0.0F;
     float v = 0.0F;
+    float u1 = 0.0F;
+    float v1 = 0.0F;
     float r = 1.0F;
     float g = 1.0F;
     float b = 1.0F;
+    float a = 1.0F;
 };
 
 struct RenderStaticMeshVertexSkinned {
@@ -91,6 +97,16 @@ enum class RenderMaterialAlphaMode : std::uint8_t {
     Opaque,
     Mask,
     Blend,
+};
+
+// Blend function applied when a material renders translucently (alphaMode == Blend) in the transparent
+// pass. Mirrors UE's translucent blend modes; opaque/masked materials ignore it (MAT-79).
+enum class RenderMaterialTranslucencyBlend : std::uint8_t {
+    Alpha,
+    Additive,
+    Modulate,
+    PreMultipliedAlpha,
+    AlphaHoldout,
 };
 
 enum class RenderMaterialDecalBlendMode : std::uint8_t {
@@ -246,7 +262,9 @@ struct RenderMaterialDesc {
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
     RenderMaterialDecalBlendMode decalBlendMode = RenderMaterialDecalBlendMode::Disabled;
     RenderMaterialLayerBlendMode layerBlendMode = RenderMaterialLayerBlendMode::Replace;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
+    bool writesDepth = true;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -300,6 +318,8 @@ struct RenderMaterialGraphTextureBinding {
     std::uint64_t textureAssetId = 0U;
     RenderTextureHandle texture{};
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
+    // Resolved bgfx sampler flags (filter/wrap) from the graph sampler state; UINT32_MAX = texture default.
+    std::uint32_t samplerFlags = UINT32_MAX;
     bool resolved = false;
 };
 
@@ -340,7 +360,9 @@ struct RenderMaterialResource {
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
     RenderMaterialDecalBlendMode decalBlendMode = RenderMaterialDecalBlendMode::Disabled;
     RenderMaterialLayerBlendMode layerBlendMode = RenderMaterialLayerBlendMode::Replace;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
+    bool writesDepth = true;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;

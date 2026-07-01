@@ -20,7 +20,8 @@ bgfx::VertexLayout RenderStaticMeshVertexLayout(RenderVertexFormat format) {
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 3, bgfx::AttribType::Float);
+            .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float);
         break;
     case RenderVertexFormat::P3N3T4UV2:
         layout
@@ -28,7 +29,8 @@ bgfx::VertexLayout RenderStaticMeshVertexLayout(RenderVertexFormat format) {
             .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
             .add(bgfx::Attrib::Tangent, 4, bgfx::AttribType::Float)
             .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
-            .add(bgfx::Attrib::Color0, 3, bgfx::AttribType::Float);
+            .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Float);
         break;
     case RenderVertexFormat::SkinnedP3N3T4UV2J4W4:
         layout
