@@ -148,6 +148,34 @@ void RunMaterialHandlesAreGenerationalTest() {
     Require(secondMaterial->version != firstVersion, "RenderResourceRegistry reused a material resource version after slot reuse");
 }
 
+void RunGraphBlendModeDrivesResourceRenderStateTest() {
+    // #25d: an active graph program's resolved blend mode overrides the resource render state so the
+    // scene submits a translucent graph material in the transparent pass with the authored blend equation.
+    RenderResourceRegistry registry;
+    RenderMaterialDesc desc{};
+    desc.alphaMode = RenderMaterialAlphaMode::Opaque; // desc is opaque; the graph blend mode must win.
+
+    RenderMaterialGraphProgramBinding binding{};
+    binding.active = true;
+    binding.alphaMode = RenderMaterialAlphaMode::Blend;
+    binding.translucencyBlend = RenderMaterialTranslucencyBlend::Additive;
+
+    const RenderMaterialHandle handle = registry.RegisterMaterial(desc, std::move(binding));
+    const RenderMaterialResource* material = registry.FindMaterial(handle);
+    Require(material != nullptr, "#25d: graph material must register");
+    Require(material->alphaMode == RenderMaterialAlphaMode::Blend,
+        "#25d: an active graph program's blend mode must drive the resource alpha mode (transparent pass)");
+    Require(material->translucencyBlend == RenderMaterialTranslucencyBlend::Additive,
+        "#25d: an active graph program's blend equation must drive the resource translucency blend");
+
+    RenderMaterialDesc opaqueDesc{};
+    opaqueDesc.alphaMode = RenderMaterialAlphaMode::Opaque;
+    const RenderMaterialHandle opaqueHandle = registry.RegisterMaterial(opaqueDesc);
+    const RenderMaterialResource* opaque = registry.FindMaterial(opaqueHandle);
+    Require(opaque != nullptr && opaque->alphaMode == RenderMaterialAlphaMode::Opaque,
+        "#25d: a non-graph material must keep its authored alpha mode");
+}
+
 void RunMaterialReloadInvalidatesStaleSceneBindingTest() {
     RenderResourceRegistry registry;
     SceneRenderResourceMap resourceMap;
@@ -2287,6 +2315,7 @@ void RunSceneRendererTicksRegistryDeferredDestroyTest() {
 
 void RunRenderResourceRegistryTests() {
     RunMaterialHandlesAreGenerationalTest();
+    RunGraphBlendModeDrivesResourceRenderStateTest();
     RunMaterialReloadInvalidatesStaleSceneBindingTest();
     RunInvalidHandlesAreIgnoredTest();
     RunShutdownInvalidatesLiveHandlesTest();

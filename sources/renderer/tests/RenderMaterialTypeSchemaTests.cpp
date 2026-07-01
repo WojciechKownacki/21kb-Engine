@@ -2934,6 +2934,43 @@ void RunMaterialGraphBlendModeTest() {
     Require(parsed.has_value() && parsed->graph.blendMode == "additive", "KBMAT-MAT38: graphBlendMode must parse into the graph document");
 }
 
+void RunMaterialGraphBlendSceneStateTest() {
+    // #25d: the graph blend mode resolves into the program binding's scene render state (alpha mode +
+    // translucency blend), which drives the transparent pass + blend equation for graph materials.
+    struct Case {
+        const char* token;
+        RenderMaterialAlphaMode alphaMode;
+        RenderMaterialTranslucencyBlend translucencyBlend;
+    };
+    const std::array<Case, 7U> cases{ {
+        { "opaque", RenderMaterialAlphaMode::Opaque, RenderMaterialTranslucencyBlend::Alpha },
+        { "masked", RenderMaterialAlphaMode::Mask, RenderMaterialTranslucencyBlend::Alpha },
+        { "translucent", RenderMaterialAlphaMode::Blend, RenderMaterialTranslucencyBlend::Alpha },
+        { "additive", RenderMaterialAlphaMode::Blend, RenderMaterialTranslucencyBlend::Additive },
+        { "modulate", RenderMaterialAlphaMode::Blend, RenderMaterialTranslucencyBlend::Modulate },
+        { "alphaComposite", RenderMaterialAlphaMode::Blend, RenderMaterialTranslucencyBlend::PreMultipliedAlpha },
+        { "alphaHoldout", RenderMaterialAlphaMode::Blend, RenderMaterialTranslucencyBlend::AlphaHoldout },
+    } };
+
+    for (const Case& testCase : cases) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.blendMode = testCase.token;
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 0.5" } });
+        graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0385U });
+        Require(compiled.Succeeded(), "KBMAT-MAT38-25d: blend-mode graph must compile");
+        const RenderMaterialGraphProgramBindingResult bindingResult =
+            BuildRenderMaterialGraphProgramBinding(0x1234U, 1U, compiled.shader, std::span<const RenderMaterialGraphParameterValue>{});
+        Require(bindingResult.binding.alphaMode == testCase.alphaMode,
+            "KBMAT-MAT38-25d: graph blend mode must resolve to the matching scene alpha mode");
+        if (testCase.alphaMode == RenderMaterialAlphaMode::Blend) {
+            Require(bindingResult.binding.translucencyBlend == testCase.translucencyBlend,
+                "KBMAT-MAT38-25d: a translucent graph blend mode must resolve to the matching bgfx blend equation");
+        }
+    }
+}
+
 void RunMaterialStaticPermutationTest() {
     // A StaticBoolParameter selects which constant a StaticSwitch routes into MaterialOutput.baseColor.
     const auto buildSwitchGraph = [](const char* boolHint) {
@@ -3675,6 +3712,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialDomainGatingTest();
     RunMaterialShadingModelGatingTest();
     RunMaterialGraphBlendModeTest();
+    RunMaterialGraphBlendSceneStateTest();
     RunMaterialStaticPermutationTest();
     RunMaterialCoordinateNodeCodegenTest();
     RunMaterialWorldSpaceNodeCodegenTest();

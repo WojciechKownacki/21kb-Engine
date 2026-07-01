@@ -63,8 +63,15 @@ struct RenderMaterialGraphShaderArtifact {
     std::vector<RenderMaterialGraphShaderBinary> binaries;
     std::vector<RenderMaterialGraphArtifactDependency> dependencies;
     bool graphGenerated = true;
+    // MAT-81/#19: when the graph drives WorldPositionOffset it also cooks a generated vertex shader (the
+    // mesh VS with the graph WPO offset applied) so the scene moves real geometry instead of using the
+    // fixed VS. Empty when the graph has no vertex-domain output.
+    bool hasVertexShader = false;
+    std::string vertexWrapperSource;
+    std::vector<RenderMaterialGraphShaderBinary> vertexBinaries;
 
     [[nodiscard]] const RenderMaterialGraphShaderBinary* FindBinary(RenderMaterialGraphShaderBackend backend) const noexcept;
+    [[nodiscard]] const RenderMaterialGraphShaderBinary* FindVertexBinary(RenderMaterialGraphShaderBackend backend) const noexcept;
 };
 
 struct RenderMaterialGraphShaderArtifactResult {

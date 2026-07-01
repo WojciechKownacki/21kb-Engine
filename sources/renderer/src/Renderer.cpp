@@ -332,6 +332,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
     RendererViewConfigurator::ConfigureSceneNoClear(viewportPlan.viewIds.transparentScene, desc, "KB Scene Transparent");
 
+    // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
+    // (SceneDepth / DepthFade) read real geometry depth.
+    sceneRenderer_->SetSceneDepthTexture(desc.target.depthTexture);
+
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     if (renderSceneSynchronizer_ == nullptr) {
