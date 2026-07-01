@@ -1209,6 +1209,125 @@ void RunMaterialGraphRoundTripTest() {
     Require(result.asset->graph.links[0].fromPin == "rgba" && result.asset->graph.links[0].toPin == "baseColor", "Material graph round-trip changed link pins");
 }
 
+void RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest() {
+    // Regression: RenderMaterialGraphNodeKindName is used both for serialization (graphNode <id> <kind> ...)
+    // and the parser reads the kind as a SINGLE whitespace token. Every multi-word node kind therefore has
+    // to serialize as a single token or it silently collapses / fails on reload. These kinds all used to
+    // emit spaced names ("Vertex Color", "Camera Vector", "Scene Depth", "Texture Coordinate", ...) and could
+    // not round-trip; SrgbToLinear/Exponential2 are the newest math/color nodes. Assert the whole set survives.
+    const RenderMaterialGraphNodeKind kinds[] = {
+        RenderMaterialGraphNodeKind::VertexColor,
+        RenderMaterialGraphNodeKind::CameraVector,
+        RenderMaterialGraphNodeKind::SceneDepth,
+        RenderMaterialGraphNodeKind::TextureCoordinate,
+        RenderMaterialGraphNodeKind::MakeMaterialAttributes,
+        RenderMaterialGraphNodeKind::SrgbToLinear,
+        RenderMaterialGraphNodeKind::Exponential2,
+    };
+
+    RenderMaterialAssetData original{};
+    original.graph = MakeDefaultRenderMaterialGraphDocument();
+    std::uint32_t nextId = 2U;
+    for (const RenderMaterialGraphNodeKind kind : kinds) {
+        original.graph.nodes.push_back(RenderMaterialGraphNode{
+            .id = nextId,
+            .kind = kind,
+            .positionX = static_cast<int>(120 + nextId * 40U),
+            .positionY = 200,
+        });
+        ++nextId;
+    }
+
+    std::ostringstream output;
+    RenderMaterialAssetWriter::Write(output, original);
+    // Serialized kind tokens must contain no spaces (a spaced kind would be truncated by the parser).
+    Require(output.str().find("graphNode 2 VertexColor ") != std::string::npos, "VertexColor must serialize as a single token");
+    Require(output.str().find("graphNode 3 CameraVector ") != std::string::npos, "CameraVector must serialize as a single token");
+    Require(output.str().find("graphNode 4 SceneDepth ") != std::string::npos, "SceneDepth must serialize as a single token");
+    Require(output.str().find("graphNode 5 TextureCoordinate ") != std::string::npos, "TextureCoordinate must serialize as a single token");
+    Require(output.str().find("graphNode 7 SrgbToLinear ") != std::string::npos, "SrgbToLinear must serialize as a single token");
+    Require(output.str().find("graphNode 8 Exponential2 ") != std::string::npos, "Exponential2 must serialize as a single token");
+
+    std::istringstream input{ output.str() };
+    const RenderMaterialAssetParseResult result = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(result.asset.has_value(), "Multi-word node graph should parse");
+    Require(result.Succeeded(), "Multi-word node graph round-trip should have no diagnostics");
+    Require(result.asset->graph.nodes.size() == std::size(kinds) + 1U, "Multi-word node round-trip lost nodes");
+    for (std::size_t i = 0U; i < std::size(kinds); ++i) {
+        Require(result.asset->graph.nodes[i + 1U].kind == kinds[i], "Multi-word node round-trip changed a node kind");
+    }
+}
+
+void RunMaterialGraphEveryShaderNodeKindHasCodegenTest() {
+    // MAT-50 gate: every graph node kind must lower to real shader code (no missing codegen, no fallback).
+    // Route each value-producing node's first output into a type-compatible MaterialOutput input and require
+    // the whole graph to compile with zero diagnostics. Texture outputs are fed through a TextureSample.
+    for (const RenderMaterialGraphNodeKind kind : AllRenderMaterialGraphNodeKinds()) {
+        if (kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            continue;
+        }
+        const std::vector<std::string> outputs = RenderMaterialGraphNodeOutputPinNames(kind);
+        if (outputs.empty()) {
+            continue;  // a pure sink with no value to route
+        }
+        const std::string outPin = outputs.front();
+        const RenderMaterialGraphPinType outType = RenderMaterialGraphPinDataType(kind, outPin, true);
+        const std::string kindName{ RenderMaterialGraphNodeKindName(kind) };
+
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        RenderMaterialGraphNode subject{ .id = 2U, .kind = kind };
+        if (kind == RenderMaterialGraphNodeKind::ParameterTexture) {
+            subject.parameter.textureRole = "baseColor";  // a texture parameter must declare its role
+        }
+        graph.nodes.push_back(subject);
+        // Route the node's output into a MaterialOutput input whose type matches, so the compile exercises the
+        // node's codegen without tripping the link type validator. Texture/UV outputs feed a TextureSample.
+        switch (outType) {
+        case RenderMaterialGraphPinType::Texture2D:
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::TextureSample });
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::TextureSample, 3U, "texture"));
+            graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U,
+                RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::TextureSample).front(),
+                RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+            break;
+        case RenderMaterialGraphPinType::Float2:
+            graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::TextureSample });
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+            graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U,
+                RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::TextureSample).front(),
+                RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+            break;
+        case RenderMaterialGraphPinType::MaterialAttributes:
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "attributes"));
+            break;
+        case RenderMaterialGraphPinType::Float:
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
+            break;
+        case RenderMaterialGraphPinType::Normal:
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
+            break;
+        case RenderMaterialGraphPinType::Float3:
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+            break;
+        case RenderMaterialGraphPinType::Float4:
+        case RenderMaterialGraphPinType::Color:
+        case RenderMaterialGraphPinType::Unknown:
+        default:
+            graph.links.push_back(MakeGraphLink(kind, 2U, outPin, RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+            break;
+        }
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(
+            graph, RenderMaterialGraphBuildContext{ .assetId = 0x9000U + static_cast<std::uint32_t>(kind) });
+        std::string failure = "KBMAT-MAT50: node kind '" + kindName + "' must lower to shader code with no diagnostics";
+        if (!compiled.Succeeded() && !compiled.diagnostics.empty()) {
+            failure += " (first diagnostic: " + compiled.diagnostics.front().message + ")";
+        }
+        Require(compiled.Succeeded(), failure.c_str());
+        Require(!compiled.shader.source.empty(), ("KBMAT-MAT50: node kind '" + kindName + "' must emit non-empty shader source").c_str());
+    }
+}
+
 void RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest() {
     std::istringstream input{
         "version 1\n"
@@ -1305,7 +1424,8 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("XY") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse XY alias");
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
-    Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse TextureCoordinate as UV node");
+    Require(ParseRenderMaterialGraphNodeKind("UV") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse UV token as the UV node");
+    Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::TextureCoordinate, "MAT-45 TextureCoordinate is a distinct tiling node and must round-trip to itself, not collapse to UV");
     Require(ParseRenderMaterialGraphNodeKind("Abs") == RenderMaterialGraphNodeKind::Absolute, "Material graph utility math should parse Abs alias");
     Require(ParseRenderMaterialGraphNodeKind("Min") == RenderMaterialGraphNodeKind::Minimum, "Material graph utility math should parse Min alias");
     Require(ParseRenderMaterialGraphNodeKind("Max") == RenderMaterialGraphNodeKind::Maximum, "Material graph utility math should parse Max alias");
@@ -1318,8 +1438,8 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("NormalizeVector") == RenderMaterialGraphNodeKind::Normalize, "Material graph vector math should parse NormalizeVector alias");
     Require(ParseRenderMaterialGraphNodeKind("Length") == RenderMaterialGraphNodeKind::Length, "Material graph vector math should parse Length node");
     Require(ParseRenderMaterialGraphNodeKind("Distance") == RenderMaterialGraphNodeKind::Distance, "Material graph vector math should parse Distance node");
-    Require(ParseRenderMaterialGraphNodeKind("ComponentMask") == RenderMaterialGraphNodeKind::BreakVector, "Material graph channel utility should parse ComponentMask alias");
-    Require(ParseRenderMaterialGraphNodeKind("AppendVector") == RenderMaterialGraphNodeKind::MakeVector, "Material graph channel utility should parse AppendVector alias");
+    Require(ParseRenderMaterialGraphNodeKind("ComponentMask") == RenderMaterialGraphNodeKind::StaticComponentMask, "MAT-50 ComponentMask must map to the swizzle-mask node (StaticComponentMask), not BreakVector");
+    Require(ParseRenderMaterialGraphNodeKind("AppendVector") == RenderMaterialGraphNodeKind::AppendVector, "MAT-50 AppendVector is a distinct concatenation node and must round-trip to itself, not MakeVector");
     Require(ParseRenderMaterialGraphNodeKind("Step") == RenderMaterialGraphNodeKind::Step, "Material graph conditional math should parse Step node");
     Require(ParseRenderMaterialGraphNodeKind("SmoothStep") == RenderMaterialGraphNodeKind::SmoothStep, "Material graph conditional math should parse SmoothStep node");
     Require(ParseRenderMaterialGraphNodeKind("Compare") == RenderMaterialGraphNodeKind::If, "Material graph conditional math should parse Compare alias");
@@ -3687,6 +3807,8 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialTypeMigrationTableAppliesLegacyFieldsTest();
     RunMaterialAssetTilingOffsetRoundTripTest();
     RunMaterialGraphRoundTripTest();
+    RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest();
+    RunMaterialGraphEveryShaderNodeKindHasCodegenTest();
     RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest();
     RunMaterialGraphLastGoodArtifactPolicyRoundTripAndDecisionTest();
     RunMaterialGraphMvpNodeKindsAndPinsTest();
