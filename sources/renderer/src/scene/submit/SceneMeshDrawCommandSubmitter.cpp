@@ -97,6 +97,7 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .cameraPosition = desc.cameraPosition,
             .frameTime = desc.frameTime,
             .shadowMap = desc.shadowMap,
+            .sceneDepthTexture = desc.sceneDepthTexture,
         });
         bgfx::setState(command.state);
         bgfx::submit(desc.viewId, program);

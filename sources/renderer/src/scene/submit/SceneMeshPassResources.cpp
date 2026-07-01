@@ -323,7 +323,20 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     if (fragmentBytes.empty()) {
         return BGFX_INVALID_HANDLE;
     }
-    const bgfx::ShaderHandle vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
+    // MAT-81/#19: a world-position-offset graph cooks its own vertex shader (vs.bin) next to the fragment
+    // shader. When present, pair it with the graph fragment shader so the scene moves real geometry;
+    // otherwise use the fixed instanced mesh vertex shader.
+    const std::filesystem::path vertexPath = std::filesystem::path{ graphShaderCacheRoot_ } /
+        ("graph_" + std::to_string(key.graphSourceHash)) / key.pass /
+        GraphBackendDirectoryForRenderer(bgfx::getRendererType()) / "vs.bin";
+    const std::vector<std::uint8_t> vertexBytes = ReadShaderBinaryFile(vertexPath);
+    bgfx::ShaderHandle vertex = BGFX_INVALID_HANDLE;
+    if (!vertexBytes.empty()) {
+        const bgfx::Memory* vertexMemory = bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size()));
+        vertex = bgfx::createShader(vertexMemory);
+    } else {
+        vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
+    }
     if (!bgfx::isValid(vertex)) {
         return BGFX_INVALID_HANDLE;
     }
@@ -459,6 +472,16 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                 sampler = bgfx::createUniform(graphTexture.samplerName.c_str(), bgfx::UniformType::Sampler);
             }
             bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
+        }
+
+        // MAT-80/#18b: bind the opaque scene depth at the reserved slot 5 for graphs that sample it, so
+        // SceneDepth / DepthFade read real geometry depth in the transparent pass.
+        if (material->graphProgram.usesSceneDepth && bgfx::isValid(desc.sceneDepthTexture)) {
+            bgfx::UniformHandle& depthSampler = graphSamplerUniforms_["s_kbSceneDepth"];
+            if (!bgfx::isValid(depthSampler)) {
+                depthSampler = bgfx::createUniform("s_kbSceneDepth", bgfx::UniformType::Sampler);
+            }
+            bgfx::setTexture(5U, depthSampler, desc.sceneDepthTexture);
         }
     }
     return resolution.program;

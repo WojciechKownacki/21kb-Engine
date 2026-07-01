@@ -277,6 +277,11 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::DepthFade:
+        AppendIrPin(irNode, irNode.kind, "fadeDistance", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::TextureSample:
@@ -651,6 +656,8 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         return false;
     default:
         return true;
@@ -841,6 +848,16 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::ViewProperty:
         return "ctx.viewSize";
+    case RenderMaterialGraphNodeKind::SceneDepth:
+        // MAT-80/#18b: the opaque scene device depth at this fragment's screen position.
+        return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
+    case RenderMaterialGraphNodeKind::DepthFade: {
+        // MAT-80/#18b: soft fade (0 at the opaque surface, 1 further in front). abs() of the device-depth
+        // separation is projection-convention robust; the transparent fragment already passed the depth
+        // test so it lies in front of the sampled opaque depth.
+        const std::string fadeDistance = CompileInputExpression(cg, node, "fadeDistance", RenderMaterialGraphPinType::Float, "0.01");
+        return "clamp(abs(texture2D(s_kbSceneDepth, ctx.screenPosition).x - ctx.fragmentDepth) / max(" + fadeDistance + ", 0.0001), 0.0, 1.0)";
+    }
     case RenderMaterialGraphNodeKind::Panner: {
         // MAT-45: scroll the coordinate by time * speed (hint = "speedU speedV").
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
@@ -1413,6 +1430,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         break;
     }
     return "parameter" + std::to_string(node.id);
@@ -1544,6 +1563,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         break;
     }
     return RenderMaterialParameterType::Scalar;
@@ -1634,6 +1655,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         return true;
     }
     return false;
@@ -1909,6 +1932,10 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "View Property";
     case RenderMaterialGraphNodeKind::ViewSize:
         return "View Size";
+    case RenderMaterialGraphNodeKind::SceneDepth:
+        return "Scene Depth";
+    case RenderMaterialGraphNodeKind::DepthFade:
+        return "Depth Fade";
     }
     return "MaterialOutput";
 }
@@ -2163,6 +2190,12 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "ViewSize")) {
         return RenderMaterialGraphNodeKind::ViewSize;
     }
+    if (EqualsIgnoreCase(text, "SceneDepth")) {
+        return RenderMaterialGraphNodeKind::SceneDepth;
+    }
+    if (EqualsIgnoreCase(text, "DepthFade")) {
+        return RenderMaterialGraphNodeKind::DepthFade;
+    }
     return std::nullopt;
 }
 
@@ -2327,6 +2360,8 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         return RenderMaterialGraphNodeSupport::Production;
     }
     return RenderMaterialGraphNodeSupport::Unsupported;
@@ -2529,6 +2564,8 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::VertexTangentWS,
         RenderMaterialGraphNodeKind::ViewProperty,
         RenderMaterialGraphNodeKind::ViewSize,
+        RenderMaterialGraphNodeKind::SceneDepth,
+        RenderMaterialGraphNodeKind::DepthFade,
     };
     return std::span<const RenderMaterialGraphNodeKind>{ kKinds };
 }
@@ -2933,12 +2970,19 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::vector<ReflectionUniformEntry> uniformEntries;
     std::vector<ReflectionTextureEntry> textureEntries;
     bool needsUv0 = false;
+    bool usesSceneDepth = false;
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (std::find(reachable.begin(), reachable.end(), node.id) == reachable.end()) {
             continue;
         }
         switch (node.kind) {
+        case RenderMaterialGraphNodeKind::SceneDepth:
+        case RenderMaterialGraphNodeKind::DepthFade:
+            // MAT-80/#18b: these nodes sample the opaque scene depth (screen-space) which the scene binds
+            // into the graph fragment shader for the transparent pass.
+            usesSceneDepth = true;
+            break;
         case RenderMaterialGraphNodeKind::ParameterScalar:
             uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind });
             break;
@@ -2999,7 +3043,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         const std::uint32_t stage = kRenderMaterialGraphTextureBaseSlot + index;
         source += "SAMPLER2D(" + textureEntries[index].samplerName + ", " + std::to_string(stage) + ");\n";
     }
-    if (!uniformEntries.empty() || !textureEntries.empty()) {
+    if (usesSceneDepth) {
+        // MAT-80/#18b: the opaque scene depth is bound by the scene at the reserved slot 5 (a graph fragment
+        // shader does not use the builtin PBR sampler slots 0-5; 6+ are the graph's own textures).
+        source += "SAMPLER2D(s_kbSceneDepth, 5);\n";
+    }
+    if (!uniformEntries.empty() || !textureEntries.empty() || usesSceneDepth) {
         source += "\n";
     }
 
@@ -3022,6 +3071,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 cameraPosition;\n";
     source += "    vec3 lightVector;\n";
     source += "    vec2 viewSize;\n";
+    // MAT-80/#18b: this fragment's device depth (gl_FragCoord.z), so DepthFade can compare it against the
+    // sampled opaque scene depth for a soft edge where translucency meets solid geometry.
+    source += "    float fragmentDepth;\n";
     source += "};\n\n";
     source += "struct MaterialSurface {\n";
     source += "    vec4 baseColor;\n";
@@ -3147,6 +3199,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     reflection.hasWorldPositionOffset = hasWorldPositionOffset;
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
+    reflection.usesSceneDepth = usesSceneDepth;
 
     result.shader = RenderMaterialGraphShaderSource{
         .entryPoint = "EvaluateMaterialGraph",
@@ -3376,6 +3429,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "input";
     case RenderMaterialGraphNodeKind::RotateAboutAxis:
         return pin == "axis" || pin == "angle" || pin == "position";
+    case RenderMaterialGraphNodeKind::DepthFade:
+        return pin == "fadeDistance";
     case RenderMaterialGraphNodeKind::TextureSample:
         return pin == "texture" || pin == "uv";
     case RenderMaterialGraphNodeKind::Add:
@@ -3562,6 +3617,8 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
     case RenderMaterialGraphNodeKind::MaterialOutput:
         return false;
@@ -3681,6 +3738,12 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::SceneDepth:
+        return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::DepthFade:
+        if (outputPin) return pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+        if (pin == "fadeDistance") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2D;
         if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
@@ -4099,7 +4162,12 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::SceneDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::DepthFade:
+        if (!outputPin && pin == "fadeDistance") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 2U);
         return 0U;
     case RenderMaterialGraphNodeKind::VertexColor:
         if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
