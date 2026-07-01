@@ -218,6 +218,8 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
     case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
     case kb::render::RenderMaterialGraphNodeKind::Distance:
+    case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+    case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         return SIZE{ 150, 62 };
     case kb::render::RenderMaterialGraphNodeKind::Power:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
@@ -232,6 +234,25 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
     case kb::render::RenderMaterialGraphNodeKind::Sine:
     case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential2:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
+    case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
+    case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
+    case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
+    case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
+    case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case kb::render::RenderMaterialGraphNodeKind::BlackBody:
+    case kb::render::RenderMaterialGraphNodeKind::Noise:
+    case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+    case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+    case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case kb::render::RenderMaterialGraphNodeKind::Transform:
+    case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
     case kb::render::RenderMaterialGraphNodeKind::Normalize:
     case kb::render::RenderMaterialGraphNodeKind::Length:
     case kb::render::RenderMaterialGraphNodeKind::Negate:
@@ -247,6 +268,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
+    case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
         return SIZE{ 168, 92 };
     case kb::render::RenderMaterialGraphNodeKind::MakeVector:
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
@@ -1400,6 +1422,29 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateSquareRoot,
             MaterialEditorGraphMenuCommand::CreateSine,
             MaterialEditorGraphMenuCommand::CreateCosine,
+            MaterialEditorGraphMenuCommand::CreateExponential,
+            MaterialEditorGraphMenuCommand::CreateExponential2,
+            MaterialEditorGraphMenuCommand::CreateLogarithm,
+            MaterialEditorGraphMenuCommand::CreateLogarithm2,
+            MaterialEditorGraphMenuCommand::CreateSrgbToLinear,
+            MaterialEditorGraphMenuCommand::CreateLinearToSrgb,
+            MaterialEditorGraphMenuCommand::CreateLogarithm10,
+            MaterialEditorGraphMenuCommand::CreateHsvToRgb,
+            MaterialEditorGraphMenuCommand::CreateRgbToHsv,
+            MaterialEditorGraphMenuCommand::CreateDeriveNormalZ,
+            MaterialEditorGraphMenuCommand::CreateFmod,
+            MaterialEditorGraphMenuCommand::CreateInverseLerp,
+            MaterialEditorGraphMenuCommand::CreatePartialDerivativeX,
+            MaterialEditorGraphMenuCommand::CreatePartialDerivativeY,
+            MaterialEditorGraphMenuCommand::CreateSphereMask,
+            MaterialEditorGraphMenuCommand::CreateBlackBody,
+            MaterialEditorGraphMenuCommand::CreateNoise,
+            MaterialEditorGraphMenuCommand::CreateVectorNoise,
+            MaterialEditorGraphMenuCommand::CreateAppendVector,
+            MaterialEditorGraphMenuCommand::CreateColorRamp,
+            MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask,
+            MaterialEditorGraphMenuCommand::CreateTransform,
+            MaterialEditorGraphMenuCommand::CreateTransformPosition,
             MaterialEditorGraphMenuCommand::CreateNegate,
             MaterialEditorGraphMenuCommand::CreateSign,
             MaterialEditorGraphMenuCommand::CreateRound,
@@ -1451,6 +1496,29 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateSquareRoot: return "Sqrt";
     case MaterialEditorGraphMenuCommand::CreateSine: return "Sin";
     case MaterialEditorGraphMenuCommand::CreateCosine: return "Cos";
+    case MaterialEditorGraphMenuCommand::CreateExponential: return "Exp";
+    case MaterialEditorGraphMenuCommand::CreateExponential2: return "Exp2";
+    case MaterialEditorGraphMenuCommand::CreateLogarithm: return "Log";
+    case MaterialEditorGraphMenuCommand::CreateLogarithm2: return "Log2";
+    case MaterialEditorGraphMenuCommand::CreateSrgbToLinear: return "sRGB to Linear";
+    case MaterialEditorGraphMenuCommand::CreateLinearToSrgb: return "Linear to sRGB";
+    case MaterialEditorGraphMenuCommand::CreateLogarithm10: return "Log10";
+    case MaterialEditorGraphMenuCommand::CreateHsvToRgb: return "HSV to RGB";
+    case MaterialEditorGraphMenuCommand::CreateRgbToHsv: return "RGB to HSV";
+    case MaterialEditorGraphMenuCommand::CreateDeriveNormalZ: return "Derive Normal Z";
+    case MaterialEditorGraphMenuCommand::CreateFmod: return "Fmod";
+    case MaterialEditorGraphMenuCommand::CreateInverseLerp: return "Inverse Lerp";
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeX: return "DDX";
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeY: return "DDY";
+    case MaterialEditorGraphMenuCommand::CreateSphereMask: return "Sphere Mask";
+    case MaterialEditorGraphMenuCommand::CreateBlackBody: return "Black Body";
+    case MaterialEditorGraphMenuCommand::CreateNoise: return "Noise";
+    case MaterialEditorGraphMenuCommand::CreateVectorNoise: return "Vector Noise";
+    case MaterialEditorGraphMenuCommand::CreateAppendVector: return "Append Vector";
+    case MaterialEditorGraphMenuCommand::CreateColorRamp: return "Color Ramp";
+    case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return "Antialiased Mask";
+    case MaterialEditorGraphMenuCommand::CreateTransform: return "Transform";
+    case MaterialEditorGraphMenuCommand::CreateTransformPosition: return "Transform Position";
     case MaterialEditorGraphMenuCommand::CreateDotProduct: return "Dot Product";
     case MaterialEditorGraphMenuCommand::CreateCrossProduct: return "Cross Product";
     case MaterialEditorGraphMenuCommand::CreateNormalize: return "Normalize";
