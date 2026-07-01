@@ -23,6 +23,9 @@ struct SceneMeshPassBindDesc {
     const std::array<float, 4>& cameraPosition;
     const std::array<float, 4>& frameTime;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
+    // MAT-80/#18b: the resolved opaque scene depth texture, bound to graph fragment shaders that sample it
+    // (SceneDepth / DepthFade) in the transparent pass. Invalid when unavailable.
+    bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
 };
 
 struct SceneMeshProgramBindStats {

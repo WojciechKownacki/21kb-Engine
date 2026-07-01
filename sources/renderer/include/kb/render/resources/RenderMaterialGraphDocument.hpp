@@ -99,6 +99,8 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     VertexTangentWS,
     ViewProperty,
     ViewSize,
+    SceneDepth,
+    DepthFade,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {
@@ -399,6 +401,9 @@ struct RenderMaterialGraphReflection {
     // transparent modes select the BaseTransparent cook and the scene blend equation, and contribute to
     // the program key.
     RenderMaterialGraphBlendMode blendMode = RenderMaterialGraphBlendMode::Opaque;
+    // MAT-80/#18b: the graph samples the opaque scene depth (SceneDepth / DepthFade), so the scene binds
+    // the resolved opaque depth texture to the graph fragment shader in the transparent pass.
+    bool usesSceneDepth = false;
 };
 
 struct RenderMaterialGraphShaderSource {

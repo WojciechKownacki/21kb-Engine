@@ -331,6 +331,13 @@ struct RenderMaterialGraphProgramBinding {
     std::vector<RenderMaterialGraphUniformBinding> uniforms;
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
+    // MAT-38/#25d: scene render state resolved from the graph blend mode, so a translucent graph material
+    // is submitted in the transparent pass with the correct blend equation (not just previewed).
+    RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
+    // MAT-80/#18b: the graph samples the opaque scene depth, so the scene binds the resolved depth texture
+    // to the graph fragment shader in the transparent pass.
+    bool usesSceneDepth = false;
 };
 
 struct RenderMaterialResource {

@@ -70,6 +70,38 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.materialTypeVersion = materialTypeVersion;
     binding.graphSourceHash = shader.sourceHash;
     binding.requiredVaryings = shader.reflection.requiredVaryings;
+    binding.usesSceneDepth = shader.reflection.usesSceneDepth;
+
+    // MAT-38/#25d: resolve the scene render state from the graph blend mode so the scene submits a
+    // translucent graph material in the transparent pass with the matching blend equation.
+    switch (shader.reflection.blendMode) {
+    case RenderMaterialGraphBlendMode::Opaque:
+        binding.alphaMode = RenderMaterialAlphaMode::Opaque;
+        break;
+    case RenderMaterialGraphBlendMode::Masked:
+        binding.alphaMode = RenderMaterialAlphaMode::Mask;
+        break;
+    case RenderMaterialGraphBlendMode::Translucent:
+        binding.alphaMode = RenderMaterialAlphaMode::Blend;
+        binding.translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
+        break;
+    case RenderMaterialGraphBlendMode::Additive:
+        binding.alphaMode = RenderMaterialAlphaMode::Blend;
+        binding.translucencyBlend = RenderMaterialTranslucencyBlend::Additive;
+        break;
+    case RenderMaterialGraphBlendMode::Modulate:
+        binding.alphaMode = RenderMaterialAlphaMode::Blend;
+        binding.translucencyBlend = RenderMaterialTranslucencyBlend::Modulate;
+        break;
+    case RenderMaterialGraphBlendMode::AlphaComposite:
+        binding.alphaMode = RenderMaterialAlphaMode::Blend;
+        binding.translucencyBlend = RenderMaterialTranslucencyBlend::PreMultipliedAlpha;
+        break;
+    case RenderMaterialGraphBlendMode::AlphaHoldout:
+        binding.alphaMode = RenderMaterialAlphaMode::Blend;
+        binding.translucencyBlend = RenderMaterialTranslucencyBlend::AlphaHoldout;
+        break;
+    }
 
     binding.uniforms.reserve(shader.reflection.uniforms.size());
     for (const RenderMaterialGraphReflectionUniform& uniform : shader.reflection.uniforms) {
