@@ -1,6 +1,7 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -306,8 +307,17 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
     case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         AppendIrPin(irNode, irNode.kind, "a", false);
         AppendIrPin(irNode, irNode.kind, "b", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        AppendIrPin(irNode, irNode.kind, "a", false);
+        AppendIrPin(irNode, irNode.kind, "b", false);
+        AppendIrPin(irNode, irNode.kind, "value", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::Power:
@@ -323,6 +333,25 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::Normalize:
     case RenderMaterialGraphNodeKind::Length:
@@ -1123,6 +1152,151 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "cos(" +
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
             ")";
+    case RenderMaterialGraphNodeKind::Exponential:
+        return "exp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+    case RenderMaterialGraphNodeKind::Exponential2:
+        return "exp2(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+    case RenderMaterialGraphNodeKind::Logarithm:
+        return "log(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(0.0001)))";
+    case RenderMaterialGraphNodeKind::Logarithm2:
+        return "log2(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(0.0001)))";
+    case RenderMaterialGraphNodeKind::SrgbToLinear: {
+        // Gamma-decode the RGB channels (alpha is linear); pow keeps the standard 2.2 approximation.
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "vec4(pow(max((" + v + ").rgb, vec3(0.0, 0.0, 0.0)), vec3(2.2, 2.2, 2.2)), (" + v + ").a)";
+    }
+    case RenderMaterialGraphNodeKind::LinearToSrgb: {
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "vec4(pow(max((" + v + ").rgb, vec3(0.0, 0.0, 0.0)), vec3(0.454545, 0.454545, 0.454545)), (" + v + ").a)";
+    }
+    case RenderMaterialGraphNodeKind::Logarithm10:
+        // log10(x) = ln(x) * (1/ln(10)); clamp the argument away from zero to keep the result finite.
+        return "(log(max(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            ", vec4(0.0001))) * vec4(0.434294, 0.434294, 0.434294, 0.434294))";
+    case RenderMaterialGraphNodeKind::HsvToRgb: {
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "vec4(kbHsvToRgb((" + v + ").rgb), (" + v + ").a)";
+    }
+    case RenderMaterialGraphNodeKind::RgbToHsv: {
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "vec4(kbRgbToHsv((" + v + ").rgb), (" + v + ").a)";
+    }
+    case RenderMaterialGraphNodeKind::DeriveNormalZ: {
+        // Reconstruct the tangent-space normal's Z from its XY and renormalize (UE DeriveNormalZ).
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        return "vec4(normalize(vec3((" + v + ").xy, sqrt(clamp(1.0 - dot((" + v + ").xy, (" + v + ").xy), 0.0, 1.0)))), 1.0)";
+    }
+    case RenderMaterialGraphNodeKind::Fmod: {
+        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
+        // Guard each component's divisor so a zero denominator falls back to 1.0 instead of producing NaN.
+        return "mod(" + a + ", mix(" + b + ", vec4(1.0), step(abs(" + b + "), vec4(0.0001))))";
+    }
+    case RenderMaterialGraphNodeKind::InverseLerp: {
+        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
+        const std::string t = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        // (value - a) / (b - a) with a guarded denominator so coincident endpoints don't divide by zero.
+        const std::string den = "(" + b + " - " + a + ")";
+        return "((" + t + " - " + a + ") / mix(" + den + ", vec4(1.0), step(abs(" + den + "), vec4(0.0001))))";
+    }
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+        // bgfx maps dFdx to ddx/ddFdx per backend; valid in the fragment stage where the graph FS runs.
+        return "dFdx(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+        return "dFdy(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+    case RenderMaterialGraphNodeKind::SphereMask: {
+        // MAT-50 SphereMask(A, B, Radius, Hardness): a soft radial mask of the distance between A and B.
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float radius = values.size() > 0U && values[0] > 0.0001F ? values[0] : 1.0F;
+        float hardness = values.size() > 1U ? values[1] : 0.5F;
+        hardness = hardness < 0.0F ? 0.0F : (hardness > 0.999F ? 0.999F : hardness);
+        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
+        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
+        const std::string inner = FloatLiteral(radius * (1.0F - hardness));
+        return "vec4(1.0 - smoothstep(" + inner + ", " + FloatLiteral(radius) + ", distance(" + a + ", " + b + ")))";
+    }
+    case RenderMaterialGraphNodeKind::BlackBody:
+        // MAT-50: map a Kelvin temperature (scalar) to the Planckian-locus RGB via the shared prelude helper.
+        return "vec4(kbBlackBody((" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(6500.0)") +
+            ").x), 1.0)";
+    case RenderMaterialGraphNodeKind::Noise:
+        // MAT-50: smooth value noise of the input position, broadcast to all channels.
+        return "vec4(kbValueNoise((" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") +
+            ").xyz))";
+    case RenderMaterialGraphNodeKind::VectorNoise:
+        // MAT-50: three decorrelated value-noise channels for a vector perturbation field.
+        return "vec4(kbVectorNoise((" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") +
+            ").xyz), 1.0)";
+    case RenderMaterialGraphNodeKind::AppendVector:
+        // MAT-50: concatenate a 3-component vector with a scalar into a float4 (UE's common rgb + a append).
+        return "vec4((" +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
+            ").xyz, (" +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "vec4(1.0)") +
+            ").x)";
+    case RenderMaterialGraphNodeKind::ColorRamp: {
+        // MAT-50: map the scalar "value" through a gradient of colour stops (hint = "pos r g b" per stop).
+        // Consecutive stops are blended with smoothstep; the shader compiler CSEs the repeated position term.
+        const std::vector<float> numbers = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        std::vector<std::array<float, 4>> stops;  // { position, r, g, b }
+        for (std::size_t i = 0U; i + 3U < numbers.size(); i += 4U) {
+            stops.push_back({ numbers[i], numbers[i + 1U], numbers[i + 2U], numbers[i + 3U] });
+        }
+        if (stops.size() < 2U) {
+            stops = { { 0.0F, 0.0F, 0.0F, 0.0F }, { 1.0F, 1.0F, 1.0F, 1.0F } };
+        }
+        const std::string t = "(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(0.0)") + ").x";
+        const auto colorLiteral = [](const std::array<float, 4>& stop) {
+            return "vec3(" + FloatLiteral(stop[1]) + ", " + FloatLiteral(stop[2]) + ", " + FloatLiteral(stop[3]) + ")";
+        };
+        std::string expr = colorLiteral(stops[0]);
+        for (std::size_t i = 1U; i < stops.size(); ++i) {
+            expr = "mix(" + expr + ", " + colorLiteral(stops[i]) + ", smoothstep(" +
+                FloatLiteral(stops[i - 1U][0]) + ", " + FloatLiteral(stops[i][0]) + ", " + t + "))";
+        }
+        return "vec4(" + expr + ", 1.0)";
+    }
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask: {
+        // MAT-50: threshold the scalar "value" into a 0/1 mask whose edge is one screen-space pixel wide
+        // (fwidth = |dFdx| + |dFdy|), so masks stay crisp without shimmering. hint = "threshold".
+        const std::vector<float> numbers = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float threshold = numbers.empty() ? 0.5F : numbers[0];
+        const std::string v = "(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(0.0)") + ").x";
+        const std::string width = "(abs(dFdx(" + v + ")) + abs(dFdy(" + v + ")) + 0.00001)";
+        return "vec4(smoothstep(" + FloatLiteral(threshold) + " - " + width + ", " + FloatLiteral(threshold) + " + " + width + ", " + v + "))";
+    }
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition: {
+        // MAT-50/#14: transform the input vector/point between coordinate spaces (hint = "from to", spaces:
+        // tangent | world | view). Tangent<->world uses the interpolated TBN; world<->view uses the bgfx
+        // view matrix. Positions carry translation (w=1), directions do not (w=0).
+        const bool isPosition = node.kind == RenderMaterialGraphNodeKind::TransformPosition;
+        std::istringstream spaceStream{ node.parameter.defaultValueHint };
+        std::string fromSpace;
+        std::string toSpace;
+        spaceStream >> fromSpace >> toSpace;
+        if (fromSpace.empty()) fromSpace = "tangent";
+        if (toSpace.empty()) toSpace = "world";
+        const std::string w = isPosition ? "1.0" : "0.0";
+        const std::string tbn = "mat3(ctx.tangent, ctx.bitangent, ctx.normal)";
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
+        const auto toWorld = [&](const std::string& e, const std::string& space) -> std::string {
+            if (EqualsIgnoreCase(space, "tangent")) return "(" + tbn + " * (" + e + "))";
+            if (EqualsIgnoreCase(space, "view")) return "(mul(u_invView, vec4((" + e + "), " + w + ")).xyz)";
+            return e;  // world (or unknown) is the canonical space
+        };
+        const auto fromWorld = [&](const std::string& e, const std::string& space) -> std::string {
+            if (EqualsIgnoreCase(space, "tangent")) return "((" + e + ") * " + tbn + ")";
+            if (EqualsIgnoreCase(space, "view")) return "(mul(u_view, vec4((" + e + "), " + w + ")).xyz)";
+            return e;
+        };
+        return "vec4(" + fromWorld(toWorld(v, fromSpace), toSpace) + ", 1.0)";
+    }
     case RenderMaterialGraphNodeKind::DotProduct:
         return "dot(" +
             CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
@@ -1372,6 +1546,25 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1432,6 +1625,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::InverseLerp:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         break;
     }
     return "parameter" + std::to_string(node.id);
@@ -1505,6 +1702,25 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1565,6 +1781,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::InverseLerp:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         break;
     }
     return RenderMaterialParameterType::Scalar;
@@ -1597,6 +1817,25 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1657,6 +1896,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::InverseLerp:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         return true;
     }
     return false;
@@ -1818,6 +2061,52 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "Sine";
     case RenderMaterialGraphNodeKind::Cosine:
         return "Cosine";
+    case RenderMaterialGraphNodeKind::Exponential:
+        return "Exponential";
+    case RenderMaterialGraphNodeKind::Exponential2:
+        return "Exponential2";
+    case RenderMaterialGraphNodeKind::Logarithm:
+        return "Logarithm";
+    case RenderMaterialGraphNodeKind::Logarithm2:
+        return "Logarithm2";
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+        return "SrgbToLinear";
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+        return "LinearToSrgb";
+    case RenderMaterialGraphNodeKind::Logarithm10:
+        return "Logarithm10";
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+        return "HsvToRgb";
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+        return "RgbToHsv";
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+        return "DeriveNormalZ";
+    case RenderMaterialGraphNodeKind::Fmod:
+        return "Fmod";
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        return "InverseLerp";
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+        return "PartialDerivativeX";
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+        return "PartialDerivativeY";
+    case RenderMaterialGraphNodeKind::SphereMask:
+        return "SphereMask";
+    case RenderMaterialGraphNodeKind::BlackBody:
+        return "BlackBody";
+    case RenderMaterialGraphNodeKind::Noise:
+        return "Noise";
+    case RenderMaterialGraphNodeKind::VectorNoise:
+        return "VectorNoise";
+    case RenderMaterialGraphNodeKind::AppendVector:
+        return "AppendVector";
+    case RenderMaterialGraphNodeKind::ColorRamp:
+        return "ColorRamp";
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+        return "AntialiasedTextureMask";
+    case RenderMaterialGraphNodeKind::Transform:
+        return "Transform";
+    case RenderMaterialGraphNodeKind::TransformPosition:
+        return "TransformPosition";
     case RenderMaterialGraphNodeKind::DotProduct:
         return "DotProduct";
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1871,71 +2160,71 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
     case RenderMaterialGraphNodeKind::Time:
         return "Time";
     case RenderMaterialGraphNodeKind::VertexColor:
-        return "Vertex Color";
+        return "VertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
-        return "Screen Position";
+        return "ScreenPosition";
     case RenderMaterialGraphNodeKind::LocalPosition:
-        return "Local Position";
+        return "LocalPosition";
     case RenderMaterialGraphNodeKind::ObjectPosition:
-        return "Object Position";
+        return "ObjectPosition";
     case RenderMaterialGraphNodeKind::WorldPosition:
-        return "World Position";
+        return "WorldPosition";
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
-        return "Per Instance Random";
+        return "PerInstanceRandom";
     case RenderMaterialGraphNodeKind::ObjectRadius:
-        return "Object Radius";
+        return "ObjectRadius";
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
-        return "Make Material Attributes";
+        return "MakeMaterialAttributes";
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
-        return "Break Material Attributes";
+        return "BreakMaterialAttributes";
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
-        return "Blend Material Attributes";
+        return "BlendMaterialAttributes";
     case RenderMaterialGraphNodeKind::GetMaterialAttributes:
-        return "Get Material Attributes";
+        return "GetMaterialAttributes";
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
-        return "Set Material Attributes";
+        return "SetMaterialAttributes";
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
-        return "Static Bool Parameter";
+        return "StaticBoolParameter";
     case RenderMaterialGraphNodeKind::StaticSwitch:
-        return "Static Switch";
+        return "StaticSwitch";
     case RenderMaterialGraphNodeKind::StaticComponentMask:
-        return "Static Component Mask";
+        return "StaticComponentMask";
     case RenderMaterialGraphNodeKind::TextureCoordinate:
-        return "Texture Coordinate";
+        return "TextureCoordinate";
     case RenderMaterialGraphNodeKind::Panner:
         return "Panner";
     case RenderMaterialGraphNodeKind::Rotator:
         return "Rotator";
     case RenderMaterialGraphNodeKind::BumpOffset:
-        return "Bump Offset";
+        return "BumpOffset";
     case RenderMaterialGraphNodeKind::ConstantBiasScale:
-        return "Constant Bias Scale";
+        return "ConstantBiasScale";
     case RenderMaterialGraphNodeKind::RotateAboutAxis:
-        return "Rotate About Axis";
+        return "RotateAboutAxis";
     case RenderMaterialGraphNodeKind::ViewportUV:
-        return "Viewport UV";
+        return "ViewportUV";
     case RenderMaterialGraphNodeKind::CameraPosition:
-        return "Camera Position";
+        return "CameraPosition";
     case RenderMaterialGraphNodeKind::CameraVector:
-        return "Camera Vector";
+        return "CameraVector";
     case RenderMaterialGraphNodeKind::ReflectionVector:
-        return "Reflection Vector";
+        return "ReflectionVector";
     case RenderMaterialGraphNodeKind::LightVector:
-        return "Light Vector";
+        return "LightVector";
     case RenderMaterialGraphNodeKind::PixelNormalWS:
-        return "Pixel Normal WS";
+        return "PixelNormalWS";
     case RenderMaterialGraphNodeKind::VertexNormalWS:
-        return "Vertex Normal WS";
+        return "VertexNormalWS";
     case RenderMaterialGraphNodeKind::VertexTangentWS:
-        return "Vertex Tangent WS";
+        return "VertexTangentWS";
     case RenderMaterialGraphNodeKind::ViewProperty:
-        return "View Property";
+        return "ViewProperty";
     case RenderMaterialGraphNodeKind::ViewSize:
-        return "View Size";
+        return "ViewSize";
     case RenderMaterialGraphNodeKind::SceneDepth:
-        return "Scene Depth";
+        return "SceneDepth";
     case RenderMaterialGraphNodeKind::DepthFade:
-        return "Depth Fade";
+        return "DepthFade";
     }
     return "MaterialOutput";
 }
@@ -2034,11 +2323,26 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "Distance")) {
         return RenderMaterialGraphNodeKind::Distance;
     }
-    if (EqualsIgnoreCase(text, "BreakVector") || EqualsIgnoreCase(text, "BreakOutFloat4Components") || EqualsIgnoreCase(text, "ComponentMask")) {
+    if (EqualsIgnoreCase(text, "BreakVector") || EqualsIgnoreCase(text, "BreakOutFloat4Components")) {
         return RenderMaterialGraphNodeKind::BreakVector;
     }
-    if (EqualsIgnoreCase(text, "MakeVector") || EqualsIgnoreCase(text, "MakeFloat4") || EqualsIgnoreCase(text, "AppendVector")) {
+    if (EqualsIgnoreCase(text, "MakeVector") || EqualsIgnoreCase(text, "MakeFloat4")) {
         return RenderMaterialGraphNodeKind::MakeVector;
+    }
+    if (EqualsIgnoreCase(text, "AppendVector")) {
+        return RenderMaterialGraphNodeKind::AppendVector;
+    }
+    if (EqualsIgnoreCase(text, "ColorRamp") || EqualsIgnoreCase(text, "Gradient")) {
+        return RenderMaterialGraphNodeKind::ColorRamp;
+    }
+    if (EqualsIgnoreCase(text, "AntialiasedTextureMask") || EqualsIgnoreCase(text, "AAMask")) {
+        return RenderMaterialGraphNodeKind::AntialiasedTextureMask;
+    }
+    if (EqualsIgnoreCase(text, "Transform") || EqualsIgnoreCase(text, "TransformVector")) {
+        return RenderMaterialGraphNodeKind::Transform;
+    }
+    if (EqualsIgnoreCase(text, "TransformPosition")) {
+        return RenderMaterialGraphNodeKind::TransformPosition;
     }
     if (EqualsIgnoreCase(text, "Step")) {
         return RenderMaterialGraphNodeKind::Step;
@@ -2091,7 +2395,7 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "NormalUnpack")) {
         return RenderMaterialGraphNodeKind::NormalUnpack;
     }
-    if (EqualsIgnoreCase(text, "UV") || EqualsIgnoreCase(text, "Uv") || EqualsIgnoreCase(text, "TextureCoordinate")) {
+    if (EqualsIgnoreCase(text, "UV") || EqualsIgnoreCase(text, "Uv")) {
         return RenderMaterialGraphNodeKind::Uv;
     }
     if (EqualsIgnoreCase(text, "Time")) {
@@ -2139,7 +2443,7 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "StaticSwitch")) {
         return RenderMaterialGraphNodeKind::StaticSwitch;
     }
-    if (EqualsIgnoreCase(text, "StaticComponentMask")) {
+    if (EqualsIgnoreCase(text, "StaticComponentMask") || EqualsIgnoreCase(text, "ComponentMask") || EqualsIgnoreCase(text, "Mask")) {
         return RenderMaterialGraphNodeKind::StaticComponentMask;
     }
     if (EqualsIgnoreCase(text, "TextureCoordinate")) {
@@ -2195,6 +2499,60 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "DepthFade")) {
         return RenderMaterialGraphNodeKind::DepthFade;
+    }
+    if (EqualsIgnoreCase(text, "Exponential") || EqualsIgnoreCase(text, "Exp")) {
+        return RenderMaterialGraphNodeKind::Exponential;
+    }
+    if (EqualsIgnoreCase(text, "Exponential2") || EqualsIgnoreCase(text, "Exp2")) {
+        return RenderMaterialGraphNodeKind::Exponential2;
+    }
+    if (EqualsIgnoreCase(text, "Logarithm") || EqualsIgnoreCase(text, "Log")) {
+        return RenderMaterialGraphNodeKind::Logarithm;
+    }
+    if (EqualsIgnoreCase(text, "Logarithm2") || EqualsIgnoreCase(text, "Log2")) {
+        return RenderMaterialGraphNodeKind::Logarithm2;
+    }
+    if (EqualsIgnoreCase(text, "SrgbToLinear")) {
+        return RenderMaterialGraphNodeKind::SrgbToLinear;
+    }
+    if (EqualsIgnoreCase(text, "LinearToSrgb")) {
+        return RenderMaterialGraphNodeKind::LinearToSrgb;
+    }
+    if (EqualsIgnoreCase(text, "Logarithm10") || EqualsIgnoreCase(text, "Log10")) {
+        return RenderMaterialGraphNodeKind::Logarithm10;
+    }
+    if (EqualsIgnoreCase(text, "HsvToRgb")) {
+        return RenderMaterialGraphNodeKind::HsvToRgb;
+    }
+    if (EqualsIgnoreCase(text, "RgbToHsv")) {
+        return RenderMaterialGraphNodeKind::RgbToHsv;
+    }
+    if (EqualsIgnoreCase(text, "DeriveNormalZ")) {
+        return RenderMaterialGraphNodeKind::DeriveNormalZ;
+    }
+    if (EqualsIgnoreCase(text, "Fmod") || EqualsIgnoreCase(text, "Modulo")) {
+        return RenderMaterialGraphNodeKind::Fmod;
+    }
+    if (EqualsIgnoreCase(text, "InverseLerp")) {
+        return RenderMaterialGraphNodeKind::InverseLerp;
+    }
+    if (EqualsIgnoreCase(text, "PartialDerivativeX") || EqualsIgnoreCase(text, "DDX")) {
+        return RenderMaterialGraphNodeKind::PartialDerivativeX;
+    }
+    if (EqualsIgnoreCase(text, "PartialDerivativeY") || EqualsIgnoreCase(text, "DDY")) {
+        return RenderMaterialGraphNodeKind::PartialDerivativeY;
+    }
+    if (EqualsIgnoreCase(text, "SphereMask")) {
+        return RenderMaterialGraphNodeKind::SphereMask;
+    }
+    if (EqualsIgnoreCase(text, "BlackBody") || EqualsIgnoreCase(text, "BlackbodyRadiation")) {
+        return RenderMaterialGraphNodeKind::BlackBody;
+    }
+    if (EqualsIgnoreCase(text, "Noise")) {
+        return RenderMaterialGraphNodeKind::Noise;
+    }
+    if (EqualsIgnoreCase(text, "VectorNoise")) {
+        return RenderMaterialGraphNodeKind::VectorNoise;
     }
     return std::nullopt;
 }
@@ -2302,6 +2660,25 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -2362,6 +2739,10 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::InverseLerp:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         return RenderMaterialGraphNodeSupport::Production;
     }
     return RenderMaterialGraphNodeSupport::Unsupported;
@@ -2566,6 +2947,29 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ViewSize,
         RenderMaterialGraphNodeKind::SceneDepth,
         RenderMaterialGraphNodeKind::DepthFade,
+        RenderMaterialGraphNodeKind::Exponential,
+        RenderMaterialGraphNodeKind::Exponential2,
+        RenderMaterialGraphNodeKind::Logarithm,
+        RenderMaterialGraphNodeKind::Logarithm2,
+        RenderMaterialGraphNodeKind::SrgbToLinear,
+        RenderMaterialGraphNodeKind::LinearToSrgb,
+        RenderMaterialGraphNodeKind::Logarithm10,
+        RenderMaterialGraphNodeKind::HsvToRgb,
+        RenderMaterialGraphNodeKind::RgbToHsv,
+        RenderMaterialGraphNodeKind::DeriveNormalZ,
+        RenderMaterialGraphNodeKind::Fmod,
+        RenderMaterialGraphNodeKind::InverseLerp,
+        RenderMaterialGraphNodeKind::PartialDerivativeX,
+        RenderMaterialGraphNodeKind::PartialDerivativeY,
+        RenderMaterialGraphNodeKind::SphereMask,
+        RenderMaterialGraphNodeKind::BlackBody,
+        RenderMaterialGraphNodeKind::Noise,
+        RenderMaterialGraphNodeKind::VectorNoise,
+        RenderMaterialGraphNodeKind::AppendVector,
+        RenderMaterialGraphNodeKind::ColorRamp,
+        RenderMaterialGraphNodeKind::AntialiasedTextureMask,
+        RenderMaterialGraphNodeKind::Transform,
+        RenderMaterialGraphNodeKind::TransformPosition,
     };
     return std::span<const RenderMaterialGraphNodeKind>{ kKinds };
 }
@@ -2971,6 +3375,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::vector<ReflectionTextureEntry> textureEntries;
     bool needsUv0 = false;
     bool usesSceneDepth = false;
+    bool usesHsv = false;
+    bool usesBlackBody = false;
+    bool usesNoise = false;
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (std::find(reachable.begin(), reachable.end(), node.id) == reachable.end()) {
@@ -2982,6 +3389,20 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             // MAT-80/#18b: these nodes sample the opaque scene depth (screen-space) which the scene binds
             // into the graph fragment shader for the transparent pass.
             usesSceneDepth = true;
+            break;
+        case RenderMaterialGraphNodeKind::HsvToRgb:
+        case RenderMaterialGraphNodeKind::RgbToHsv:
+            // MAT-50: the HSV<->RGB conversions call shared helper functions emitted into the shader prelude.
+            usesHsv = true;
+            break;
+        case RenderMaterialGraphNodeKind::BlackBody:
+            // MAT-50: BlackBody calls a shared Planckian-locus helper emitted into the shader prelude.
+            usesBlackBody = true;
+            break;
+        case RenderMaterialGraphNodeKind::Noise:
+        case RenderMaterialGraphNodeKind::VectorNoise:
+            // MAT-50: the noise nodes share hash + value-noise helpers emitted into the shader prelude.
+            usesNoise = true;
             break;
         case RenderMaterialGraphNodeKind::ParameterScalar:
             uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind });
@@ -3093,6 +3514,64 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float refraction;\n";
     source += "    float surfaceThickness;\n";
     source += "};\n\n";
+
+    if (usesHsv) {
+        // MAT-50: branchless HSV<->RGB helpers (Sam Hocevar's formulation) shared by the HsvToRgb/RgbToHsv nodes.
+        source += "vec3 kbHsvToRgb(vec3 c) {\n";
+        source += "    vec4 K = vec4(1.0, 0.666666, 0.333333, 3.0);\n";
+        source += "    vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);\n";
+        source += "    return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);\n";
+        source += "}\n\n";
+        source += "vec3 kbRgbToHsv(vec3 c) {\n";
+        source += "    vec4 K = vec4(0.0, -0.333333, 0.666666, -1.0);\n";
+        source += "    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));\n";
+        source += "    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));\n";
+        source += "    float d = q.x - min(q.w, q.y);\n";
+        source += "    float e = 1.0e-10;\n";
+        source += "    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);\n";
+        source += "}\n\n";
+    }
+
+    if (usesBlackBody) {
+        // MAT-50: Tanner Helland's blackbody approximation, normalized to [0,1]; bases are guarded so the
+        // unselected ternary branch can never feed pow()/log() a negative argument.
+        source += "vec3 kbBlackBody(float kelvin) {\n";
+        source += "    float t = clamp(kelvin, 1000.0, 40000.0) / 100.0;\n";
+        source += "    float r = t <= 66.0 ? 1.0 : clamp(1.29293618606 * pow(max(t - 60.0, 0.0001), -0.1332047592), 0.0, 1.0);\n";
+        source += "    float g = t <= 66.0\n";
+        source += "        ? clamp(0.39008157876 * log(max(t, 0.0001)) - 0.63184144378, 0.0, 1.0)\n";
+        source += "        : clamp(1.12989086089 * pow(max(t - 60.0, 0.0001), -0.0755148492), 0.0, 1.0);\n";
+        source += "    float b = t >= 66.0 ? 1.0 : (t <= 19.0 ? 0.0 : clamp(0.54320678911 * log(max(t - 10.0, 0.0001)) - 1.19625408914, 0.0, 1.0));\n";
+        source += "    return vec3(r, g, b);\n";
+        source += "}\n\n";
+    }
+
+    if (usesNoise) {
+        // MAT-50: integer-lattice hash + trilinearly interpolated value noise (deterministic, no textures).
+        source += "float kbHash(vec3 p) {\n";
+        source += "    p = fract(p * 0.3183099 + vec3(0.1, 0.1, 0.1));\n";
+        source += "    p *= 17.0;\n";
+        source += "    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));\n";
+        source += "}\n\n";
+        source += "float kbValueNoise(vec3 x) {\n";
+        source += "    vec3 i = floor(x);\n";
+        source += "    vec3 f = fract(x);\n";
+        source += "    f = f * f * (vec3(3.0, 3.0, 3.0) - 2.0 * f);\n";
+        source += "    float n000 = kbHash(i + vec3(0.0, 0.0, 0.0));\n";
+        source += "    float n100 = kbHash(i + vec3(1.0, 0.0, 0.0));\n";
+        source += "    float n010 = kbHash(i + vec3(0.0, 1.0, 0.0));\n";
+        source += "    float n110 = kbHash(i + vec3(1.0, 1.0, 0.0));\n";
+        source += "    float n001 = kbHash(i + vec3(0.0, 0.0, 1.0));\n";
+        source += "    float n101 = kbHash(i + vec3(1.0, 0.0, 1.0));\n";
+        source += "    float n011 = kbHash(i + vec3(0.0, 1.0, 1.0));\n";
+        source += "    float n111 = kbHash(i + vec3(1.0, 1.0, 1.0));\n";
+        source += "    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),\n";
+        source += "               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);\n";
+        source += "}\n\n";
+        source += "vec3 kbVectorNoise(vec3 x) {\n";
+        source += "    return vec3(kbValueNoise(x), kbValueNoise(x + vec3(31.416, 47.853, 12.793)), kbValueNoise(x + vec3(57.719, 93.981, 74.321)));\n";
+        source += "}\n\n";
+    }
 
     GraphCodegen cg{ .graph = graph, .diagnostics = result.diagnostics };
     for (const RenderMaterialGraphLink& link : graph.links) {
@@ -3442,7 +3921,12 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
     case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         return pin == "a" || pin == "b";
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        return pin == "a" || pin == "b" || pin == "value";
     case RenderMaterialGraphNodeKind::Power:
         return pin == "base" || pin == "exponent";
     case RenderMaterialGraphNodeKind::OneMinus:
@@ -3453,6 +3937,25 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::Normalize:
     case RenderMaterialGraphNodeKind::Length:
@@ -3528,6 +4031,25 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -3550,6 +4072,10 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ArcTangent2:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::InverseLerp:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         return pin == "value";
     case RenderMaterialGraphNodeKind::Desaturate:
         return pin == "color";
@@ -3769,7 +4295,16 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::Divide:
     case RenderMaterialGraphNodeKind::Minimum:
     case RenderMaterialGraphNodeKind::Maximum:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::SphereMask:
         if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::AppendVector:
+        if (!outputPin && pin == "a") return RenderMaterialGraphPinType::Float3;
+        if (!outputPin && pin == "b") return RenderMaterialGraphPinType::Float;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        if (!outputPin && (pin == "a" || pin == "b" || pin == "value")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Power:
         if (!outputPin && (pin == "base" || pin == "exponent")) return RenderMaterialGraphPinType::Float4;
@@ -3782,6 +4317,25 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
@@ -3969,6 +4523,25 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::Normalize:
     case RenderMaterialGraphNodeKind::Length:
@@ -4228,6 +4801,25 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::Fraction:
     case RenderMaterialGraphNodeKind::SquareRoot:
     case RenderMaterialGraphNodeKind::Sine:
+    case RenderMaterialGraphNodeKind::Exponential:
+    case RenderMaterialGraphNodeKind::Exponential2:
+    case RenderMaterialGraphNodeKind::Logarithm:
+    case RenderMaterialGraphNodeKind::Logarithm2:
+    case RenderMaterialGraphNodeKind::SrgbToLinear:
+    case RenderMaterialGraphNodeKind::LinearToSrgb:
+    case RenderMaterialGraphNodeKind::Logarithm10:
+    case RenderMaterialGraphNodeKind::HsvToRgb:
+    case RenderMaterialGraphNodeKind::RgbToHsv:
+    case RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case RenderMaterialGraphNodeKind::BlackBody:
+    case RenderMaterialGraphNodeKind::Noise:
+    case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::ColorRamp:
+    case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case RenderMaterialGraphNodeKind::Transform:
+    case RenderMaterialGraphNodeKind::TransformPosition:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:

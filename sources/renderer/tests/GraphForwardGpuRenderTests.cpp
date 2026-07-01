@@ -1001,6 +1001,97 @@ void RunForwardGraphSceneDepthCooksTest() {
     Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT18B: the scene-depth shader must cook to a real binary");
 }
 
+// MAT-50: the exp/log/sRGB unary math nodes must each emit their real GLSL intrinsic and cook to a
+// binary. A white constant is routed through the node into emissive; we assert the generated source
+// carries the expected intrinsic and that the fragment shader cooks to a real DXBC binary.
+void RunForwardGraphExpLogSrgbNodesCookTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_explogsrgb";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    struct Case {
+        RenderMaterialGraphNodeKind kind;
+        const char* intrinsic;
+        const char* inputPin;
+        std::uint32_t assetId;
+    };
+    const Case cases[] = {
+        { RenderMaterialGraphNodeKind::Exponential, "exp(", "value", 0x5000U },
+        { RenderMaterialGraphNodeKind::Exponential2, "exp2(", "value", 0x5001U },
+        { RenderMaterialGraphNodeKind::Logarithm, "log(", "value", 0x5002U },
+        { RenderMaterialGraphNodeKind::Logarithm2, "log2(", "value", 0x5003U },
+        // sRGB<->linear are pow() gamma curves; the decode exponent 2.2 vs encode 0.454545 disambiguates them.
+        { RenderMaterialGraphNodeKind::SrgbToLinear, "2.2", "value", 0x5004U },
+        { RenderMaterialGraphNodeKind::LinearToSrgb, "0.454545", "value", 0x5005U },
+        { RenderMaterialGraphNodeKind::Logarithm10, "0.434294", "value", 0x5006U },
+        // HSV<->RGB call the shared prelude helpers emitted only when those nodes are present.
+        { RenderMaterialGraphNodeKind::HsvToRgb, "kbHsvToRgb(", "value", 0x5007U },
+        { RenderMaterialGraphNodeKind::RgbToHsv, "kbRgbToHsv(", "value", 0x5008U },
+        { RenderMaterialGraphNodeKind::DeriveNormalZ, "normalize(", "value", 0x5009U },
+        { RenderMaterialGraphNodeKind::Fmod, "mod(", "a", 0x500AU },
+        { RenderMaterialGraphNodeKind::InverseLerp, "mix(", "a", 0x500BU },
+        { RenderMaterialGraphNodeKind::PartialDerivativeX, "dFdx(", "value", 0x500CU },
+        { RenderMaterialGraphNodeKind::PartialDerivativeY, "dFdy(", "value", 0x500DU },
+        { RenderMaterialGraphNodeKind::SphereMask, "smoothstep(", "a", 0x500EU },
+        { RenderMaterialGraphNodeKind::BlackBody, "kbBlackBody(", "value", 0x500FU },
+        { RenderMaterialGraphNodeKind::Noise, "kbValueNoise(", "value", 0x5010U },
+        { RenderMaterialGraphNodeKind::VectorNoise, "kbVectorNoise(", "value", 0x5011U },
+        // AppendVector concatenates its float3 "a" with scalar "b" -> vec4(a.xyz, b.x); the grey feeds "a".
+        { RenderMaterialGraphNodeKind::AppendVector, ".xyz, (", "a", 0x5012U },
+        // ColorRamp blends gradient stops with smoothstep; AntialiasedTextureMask uses screen-space derivatives.
+        { RenderMaterialGraphNodeKind::ColorRamp, "smoothstep(", "value", 0x5013U },
+        { RenderMaterialGraphNodeKind::AntialiasedTextureMask, "dFdx(", "value", 0x5014U },
+        // Transform/TransformPosition default to tangent->world, which multiplies by the interpolated TBN.
+        { RenderMaterialGraphNodeKind::Transform, "mat3(ctx.tangent", "value", 0x5015U },
+        { RenderMaterialGraphNodeKind::TransformPosition, "mat3(ctx.tangent", "value", 0x5016U },
+    };
+
+    for (const Case& testCase : cases) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        RenderMaterialGraphNode grey{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+        grey.parameter.defaultValueHint = "0.5 0.5 0.5 1";
+        graph.nodes.push_back(grey);
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = testCase.kind });
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", testCase.kind, 3U, testCase.inputPin));
+        graph.links.push_back(MakeLink(testCase.kind, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = testCase.assetId });
+        Require(compiled.Succeeded(), "KBMAT-MAT50: exp/log/sRGB math graph must compile");
+        Require(compiled.shader.source.find(testCase.intrinsic) != std::string::npos, "KBMAT-MAT50: math node must emit its GLSL intrinsic in the generated source");
+
+        const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: exp/log/sRGB math graph must cook");
+        const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+        Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT50: the math node shader must cook to a real binary");
+    }
+
+    // MAT-50/#14: the world->view Transform path multiplies by the bgfx view matrix (u_view), which had not
+    // been exercised by any graph node before. Prove it references u_view AND cooks to a real binary.
+    {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        RenderMaterialGraphNode grey{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+        grey.parameter.defaultValueHint = "0.5 0.5 0.5 1";
+        graph.nodes.push_back(grey);
+        RenderMaterialGraphNode xform{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Transform };
+        xform.parameter.defaultValueHint = "world view";
+        graph.nodes.push_back(xform);
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::Transform, 3U, "value"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Transform, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5017U });
+        Require(compiled.Succeeded(), "KBMAT-MAT50: world->view Transform graph must compile");
+        Require(compiled.shader.source.find("u_view") != std::string::npos, "KBMAT-MAT50: world->view Transform must multiply by the bgfx view matrix");
+        const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+        Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: world->view Transform must cook (u_view available in the graph FS)");
+        const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+        Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT50: the world->view Transform shader must cook to a real binary");
+    }
+}
+
 // MAT-36: a Make->Break MaterialAttributes round-trip must preserve channel values. A blue base color
 // packed into MaterialAttributes then unpacked and routed to MaterialOutput must still render blue.
 void RunForwardGraphMaterialAttributesTest() {
@@ -1598,6 +1689,65 @@ void RunForwardGraphWorldSpaceNodesTest() {
 
     harness.Shutdown();
 }
+
+// MAT-50: the Noise node must produce real spatial variation on the GPU. World position (scaled up so the
+// harness quad spans several noise cells) feeds Noise -> baseColor (unlit); pixels sampled across the surface
+// must span a meaningful brightness range, proving the value-noise field actually varies per fragment.
+void RunForwardGraphNoiseRendersTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_noise";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT50: Harness vertex shader must cook to a DXBC binary");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::WorldPosition });
+    RenderMaterialGraphNode scale{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    scale.parameter.defaultValueHint = "24 24 24 1";
+    graph.nodes.push_back(scale);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Multiply });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::Noise });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::WorldPosition, 2U, "value", RenderMaterialGraphNodeKind::Multiply, 4U, "a"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::Multiply, 4U, "b"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Multiply, 4U, "value", RenderMaterialGraphNodeKind::Noise, 5U, "value"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Noise, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5100U });
+    Require(compiled.Succeeded(), "KBMAT-MAT50: noise graph must compile");
+    Require(compiled.shader.source.find("kbValueNoise(") != std::string::npos, "KBMAT-MAT50: Noise node must call the value-noise helper");
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: noise graph must cook");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT50: Direct3D11 device unavailable; cannot run GPU noise proof\n");
+        Require(false, "KBMAT-MAT50: A real GPU device is required to prove the noise field varies");
+        return;
+    }
+
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
+    Require(bgfx::isValid(program), "KBMAT-MAT50: noise program must link on the real GPU backend");
+
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const std::uint32_t samples[][2] = { { 8U, 8U }, { 24U, 16U }, { 40U, 24U }, { 56U, 40U }, { 16U, 48U }, { 48U, 56U } };
+    int minLum = 1000;
+    int maxLum = -1;
+    for (const auto& s : samples) {
+        const ForwardRenderProbe p = ForwardRenderHarness::ProbeAt(pixels, s[0], s[1]);
+        const int lum = static_cast<int>(p.r) + static_cast<int>(p.g) + static_cast<int>(p.b);
+        minLum = lum < minLum ? lum : minLum;
+        maxLum = lum > maxLum ? lum : maxLum;
+    }
+    Require(maxLum - minLum > 30,
+        "KBMAT-MAT50: the Noise field must produce visibly different brightness across the surface (spatial variation)");
+
+    harness.Shutdown();
+}
 #endif
 
 } // namespace
@@ -1625,6 +1775,8 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphStaticSwitchTest();
     RunForwardGraphCoordinateNodesTest();
     RunForwardGraphWorldSpaceNodesTest();
+    RunForwardGraphExpLogSrgbNodesCookTest();
+    RunForwardGraphNoiseRendersTest();
 #endif
 }
 
