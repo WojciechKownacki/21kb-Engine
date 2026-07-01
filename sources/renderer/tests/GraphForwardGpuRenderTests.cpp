@@ -928,6 +928,14 @@ void RunForwardGraphWorldPositionOffsetTest() {
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
     Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT81: world-position-offset graph must cook");
 
+    // MAT-19/#19: the WPO cook also produces a real generated vertex-shader binary (compiled by shaderc,
+    // proven by the cook succeeding and the binary existing on disk); the scene loader pairs it with the
+    // graph fragment shader to move real scene geometry.
+    Require(result.artifact->hasVertexShader, "KBMAT-MAT19: a world-position-offset graph must cook a generated vertex shader");
+    const RenderMaterialGraphShaderBinary* cookedWpoVs = result.artifact->FindVertexBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(cookedWpoVs != nullptr && cookedWpoVs->byteSize > 0U, "KBMAT-MAT19: the WPO cook must produce a real vertex binary");
+    Require(std::filesystem::exists(std::filesystem::path{ cookedWpoVs->binaryPath }), "KBMAT-MAT19: the cooked WPO vs.bin must exist on disk");
+
     const std::filesystem::path fixedVsBin = cacheDir / "vs_fixed.bin";
     const std::filesystem::path wpoVsBin = cacheDir / "vs_wpo.bin";
     Require(CookHarnessVertexShader(fixedVsBin), "KBMAT-MAT81: fixed harness vertex shader must cook");
@@ -956,6 +964,41 @@ void RunForwardGraphWorldPositionOffsetTest() {
         "KBMAT-MAT81: WorldPositionOffset must move geometry — the offset uncovers the left-edge pixel (background shows)");
 
     harness.Shutdown();
+}
+
+// MAT-80/#18b: a graph that samples the opaque scene depth (SceneDepth / DepthFade) declares the scene
+// depth sampler and cooks to a real binary; the scene binds the opaque depth to that sampler in the
+// transparent pass so soft-depth effects read real geometry depth.
+void RunForwardGraphSceneDepthCooksTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat80_scenedepth";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    // DepthFade drives the surface alpha for a soft edge; a white base color keeps the surface visible.
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.blendMode = "translucent";
+    RenderMaterialGraphNode white{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    white.parameter.defaultValueHint = "1 1 1 1";
+    graph.nodes.push_back(white);
+    RenderMaterialGraphNode fade{ .id = 3U, .kind = RenderMaterialGraphNodeKind::DepthFade };
+    fade.parameter.defaultValueHint = "0.02";
+    graph.nodes.push_back(fade);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::DepthFade, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x8B00U });
+    Require(compiled.Succeeded(), "KBMAT-MAT18B: scene-depth graph must compile");
+    Require(compiled.shader.reflection.usesSceneDepth, "KBMAT-MAT18B: reflection must flag scene-depth usage");
+    Require(compiled.shader.source.find("SAMPLER2D(s_kbSceneDepth, 5)") != std::string::npos, "KBMAT-MAT18B: the shader must declare the scene depth sampler at slot 5");
+    Require(compiled.shader.source.find("ctx.fragmentDepth") != std::string::npos, "KBMAT-MAT18B: DepthFade must compare against the fragment depth");
+
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT18B: scene-depth graph must cook");
+    const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT18B: the scene-depth shader must cook to a real binary");
 }
 
 // MAT-36: a Make->Break MaterialAttributes round-trip must preserve channel values. A blue base color
@@ -1571,6 +1614,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphSamplerStateTest();
     RunForwardGraphTransparentBlendTest();
     RunForwardGraphWorldPositionOffsetTest();
+    RunForwardGraphSceneDepthCooksTest();
     RunForwardGraphMaterialAttributesTest();
     RunForwardGraphBlendAttributesTest();
     RunForwardGraphGetSetAttributesTest();

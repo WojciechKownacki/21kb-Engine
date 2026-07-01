@@ -54,6 +54,9 @@ public:
     // expose it as the u_time vec4 (time, deltaTime, frameIndex, 0) bound during mesh submit.
     void AdvanceFrameTime(float deltaSeconds) noexcept;
     [[nodiscard]] std::array<float, 4> FrameTimeConstants() const noexcept;
+    // MAT-80/#18b: the opaque scene depth texture the transparent pass binds to depth-sampling graph
+    // materials (SceneDepth / DepthFade). Set by the renderer before submitting the scene.
+    void SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept;
     void TickFrame() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
@@ -79,6 +82,7 @@ private:
     SceneRenderLightingConfig defaultLightingConfig_{};
     SceneGpuDrivenFeatureSupport gpuDrivenRuntimeSupport_{};
     std::string graphShaderCacheRoot_;
+    bgfx::TextureHandle sceneDepthTexture_ = BGFX_INVALID_HANDLE;
     float frameTimeSeconds_ = 0.0F;
     float frameDeltaSeconds_ = 0.0F;
     std::uint32_t frameTimeIndex_ = 0U;

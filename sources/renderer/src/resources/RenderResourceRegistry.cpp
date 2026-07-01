@@ -73,6 +73,13 @@ RenderMaterialHandle RenderResourceRegistry::RegisterMaterial(const RenderMateri
     const std::uint32_t slotIndex = materials_.Allocate();
     RenderMaterialResource resource = RenderMaterialResourceBuilder::Build(desc);
     resource.graphProgram = std::move(graphProgram);
+    if (resource.graphProgram.active) {
+        // MAT-38/#25d: a graph material's blend mode (resolved by the binding builder) drives the scene
+        // render state, so a translucent graph material is submitted in the transparent pass with the
+        // authored blend equation instead of rendering opaque.
+        resource.alphaMode = resource.graphProgram.alphaMode;
+        resource.translucencyBlend = resource.graphProgram.translucencyBlend;
+    }
     resource.version = AllocateResourceVersion();
     materials_.Activate(slotIndex, std::move(resource));
     return RenderMaterialHandle{ detail::MakeRenderHandleValue(slotIndex, materials_.Generation(slotIndex)) };

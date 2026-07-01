@@ -121,6 +121,8 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateVertexTangentWS,
     CreateViewProperty,
     CreateViewSize,
+    CreateSceneDepth,
+    CreateDepthFade,
     DisconnectSelected,
     DeleteSelected,
 };

@@ -145,7 +145,8 @@ void SceneRenderer::SubmitMeshPass(
             shadowMap,
             selectedEntityIds,
             gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride,
-            FrameTimeConstants());
+            FrameTimeConstants(),
+            pass == MeshPassType::BaseTransparent ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle });
     }
 }
 
@@ -192,6 +193,10 @@ void SceneRenderer::AdvanceFrameTime(float deltaSeconds) noexcept {
 
 std::array<float, 4> SceneRenderer::FrameTimeConstants() const noexcept {
     return { frameTimeSeconds_, frameDeltaSeconds_, static_cast<float>(frameTimeIndex_), 0.0F };
+}
+
+void SceneRenderer::SetSceneDepthTexture(bgfx::TextureHandle texture) noexcept {
+    sceneDepthTexture_ = texture;
 }
 
 void SceneRenderer::TickFrame() noexcept {

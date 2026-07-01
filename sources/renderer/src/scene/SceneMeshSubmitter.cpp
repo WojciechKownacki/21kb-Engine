@@ -124,7 +124,8 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     const SceneRenderShadowMapBinding* shadowMap,
     std::span<const std::uint64_t> selectedEntityIds,
     SceneGpuDrivenFeatureSupport gpuDrivenSupport,
-    std::array<float, 4> frameTime) const {
+    std::array<float, 4> frameTime,
+    bgfx::TextureHandle sceneDepthTexture) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -195,6 +196,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .cameraPosition = cameraPosition,
         .frameTime = frameTime,
         .shadowMap = shadowMap,
+        .sceneDepthTexture = sceneDepthTexture,
         .passResources = passResources_,
         .diagnostics = diagnostics,
         .stats = stats,

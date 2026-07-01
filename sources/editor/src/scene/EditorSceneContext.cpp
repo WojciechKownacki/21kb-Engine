@@ -3184,6 +3184,10 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewProperty, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateViewSize:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewSize, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSceneDepth:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SceneDepth, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDepthFade:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DepthFade, graphX, graphY);
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return DisconnectSelectedMaterialGraphNodeLinks(id);
     case MaterialEditorGraphMenuCommand::DeleteSelected:

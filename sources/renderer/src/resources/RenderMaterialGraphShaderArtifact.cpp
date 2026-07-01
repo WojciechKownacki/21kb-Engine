@@ -129,6 +129,15 @@ const RenderMaterialGraphShaderBinary* RenderMaterialGraphShaderArtifact::FindBi
     return nullptr;
 }
 
+const RenderMaterialGraphShaderBinary* RenderMaterialGraphShaderArtifact::FindVertexBinary(RenderMaterialGraphShaderBackend backend) const noexcept {
+    for (const RenderMaterialGraphShaderBinary& binary : vertexBinaries) {
+        if (binary.backend == backend) {
+            return &binary;
+        }
+    }
+    return nullptr;
+}
+
 bool RenderMaterialGraphShaderArtifactResult::Succeeded() const noexcept {
     if (!artifact.has_value()) {
         return false;
@@ -192,6 +201,8 @@ std::string BuildGraphFragmentWrapperSource(
     // MAT-46: world-space view/light inputs. The shadow pass has no lighting uniforms, so it uses safe
     // placeholders; only the forward pass reads the real camera/light/viewport state.
     wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    // MAT-80/#18b: this fragment's device depth, so DepthFade can compare against the sampled scene depth.
+    wrapper += "    ctx.fragmentDepth = gl_FragCoord.z;\n";
     if (shadowPass) {
         wrapper += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
         wrapper += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
@@ -224,6 +235,65 @@ std::string BuildGraphFragmentWrapperSource(
     }
     wrapper += "}\n";
     return wrapper;
+}
+
+std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource& shader) {
+    // MAT-81/#19: the instanced mesh vertex shader with the graph's WorldPositionOffset applied to the
+    // world position before projection, so the scene (and shadows/lighting via v_worldPos) see moved
+    // geometry. Mirrors vs_mesh_instanced.sc; the graph source supplies EvaluateWorldPositionOffset.
+    std::string vs;
+    vs += "$input a_position, a_normal, a_tangent, a_texcoord0, a_texcoord1, a_color0, i_data0, i_data1, i_data2, i_data3, i_data4\n";
+    vs += "$output v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos\n\n";
+    vs += "#include <bgfx_shader.sh>\n";
+    vs += "uniform mat4 u_shadowViewProj;\n";
+    vs += "uniform vec4 u_time;\n\n";
+    vs += shader.source;
+    vs += "\nvoid main()\n{\n";
+    vs += "    float instanceRandom = i_data0.w;\n";
+    vs += "    float instanceRadius = i_data1.w;\n";
+    vs += "    mat4 model = mtxFromCols(vec4(i_data0.xyz, 0.0), vec4(i_data1.xyz, 0.0), vec4(i_data2.xyz, 0.0), i_data3);\n";
+    vs += "    vec4 worldPos = mul(model, vec4(a_position, 1.0));\n";
+    vs += "    vec3 objectWorldPos = mul(model, vec4(0.0, 0.0, 0.0, 1.0)).xyz;\n";
+    vs += "    vec3 vsNormal = normalize(mul(model, vec4(a_normal, 0.0)).xyz);\n";
+    vs += "    vec3 vsTangent = mul(model, vec4(a_tangent.xyz, 0.0)).xyz;\n";
+    vs += "    vec3 fallbackAxis = abs(vsNormal.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);\n";
+    vs += "    vsTangent = dot(vsTangent, vsTangent) > 0.0001 ? normalize(vsTangent) : normalize(cross(fallbackAxis, vsNormal));\n";
+    vs += "    vsTangent = normalize(vsTangent - vsNormal * dot(vsNormal, vsTangent));\n";
+    vs += "    float handedness = abs(a_tangent.w) > 0.0001 ? a_tangent.w : 1.0;\n";
+    vs += "    vec3 vsBitangent = normalize(cross(vsNormal, vsTangent) * handedness);\n";
+    vs += "    MaterialGraphContext ctx;\n";
+    vs += "    ctx.uv0 = a_texcoord0;\n";
+    vs += "    ctx.uv1 = a_texcoord1;\n";
+    vs += "    ctx.normal = vsNormal;\n";
+    vs += "    ctx.tangent = vsTangent;\n";
+    vs += "    ctx.bitangent = vsBitangent;\n";
+    vs += "    ctx.worldPos = worldPos.xyz;\n";
+    vs += "    ctx.viewDir = vec3(0.0, 0.0, 1.0);\n";
+    vs += "    ctx.vertexColor = a_color0 * vec4(i_data4.rgb, abs(i_data4.w));\n";
+    vs += "    ctx.time = u_time.x;\n";
+    vs += "    ctx.screenPosition = vec2(0.0, 0.0);\n";
+    vs += "    ctx.localPosition = a_position;\n";
+    vs += "    ctx.objectPosition = objectWorldPos;\n";
+    vs += "    ctx.perInstanceRandom = instanceRandom;\n";
+    vs += "    ctx.objectRadius = instanceRadius;\n";
+    vs += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
+    vs += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
+    vs += "    ctx.viewSize = vec2(0.0, 0.0);\n";
+    vs += "    ctx.fragmentDepth = 0.0;\n";
+    vs += "    worldPos.xyz += EvaluateWorldPositionOffset(ctx);\n";
+    vs += "    gl_Position = mul(u_viewProj, worldPos);\n";
+    vs += "    v_worldPos = worldPos.xyz;\n";
+    vs += "    v_objectLocalPos = vec4(a_position, instanceRandom);\n";
+    vs += "    v_objectWorldPos = vec4(objectWorldPos, instanceRadius);\n";
+    vs += "    v_shadowPos = mul(u_shadowViewProj, worldPos);\n";
+    vs += "    v_shadowFlags = vec4(i_data4.w >= 0.0 ? 1.0 : 0.0, 0.0, a_texcoord1.x, a_texcoord1.y);\n";
+    vs += "    v_normal = vsNormal;\n";
+    vs += "    v_tangent = vsTangent;\n";
+    vs += "    v_bitangent = vsBitangent;\n";
+    vs += "    v_texcoord0 = a_texcoord0;\n";
+    vs += "    v_color0 = ctx.vertexColor;\n";
+    vs += "}\n";
+    return vs;
 }
 
 std::uint64_t ComputeRenderMaterialGraphReflectionHash(const RenderMaterialGraphReflection& reflection) noexcept {
@@ -396,6 +466,106 @@ RenderMaterialGraphShaderArtifactResult CookRenderMaterialGraphShaderArtifact(
         AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
             "Material graph shader cook produced no backend binaries.");
         return result;
+    }
+
+    // MAT-81/#19: when the graph drives WorldPositionOffset, cook the generated vertex shader too so the
+    // scene program pairs it with the graph fragment shader and moves real geometry (shadow depth keeps
+    // the fixed shadow VS, so this only applies to the visible base passes).
+    if (shader.reflection.hasWorldPositionOffset && request.pass != "ShadowDepth") {
+        artifact.hasVertexShader = true;
+        artifact.vertexWrapperSource = BuildGraphVertexWrapperSource(shader);
+        const std::filesystem::path vsWrapperPath = passRoot / "vs_graph.sc";
+        {
+            std::ofstream vsWrapperOut{ vsWrapperPath, std::ios::binary | std::ios::trunc };
+            if (!vsWrapperOut) {
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph shader cook could not write the vertex wrapper to " + vsWrapperPath.generic_string() + ".");
+                return result;
+            }
+            vsWrapperOut << artifact.vertexWrapperSource;
+        }
+
+        std::uint64_t vsCookKey = 1469598103934665603ULL;
+        HashString64(vsCookKey, artifact.vertexWrapperSource);
+        HashU64(vsCookKey, artifact.dependencyHash);
+        HashU64(vsCookKey, artifact.materialTypeVersion);
+
+        for (const RenderMaterialGraphShaderBackend backend : backends) {
+            const std::filesystem::path backendDir = passRoot / std::string{ RenderMaterialGraphShaderBackendDirectory(backend) };
+            std::filesystem::create_directories(backendDir, error);
+            const std::filesystem::path vsBinaryPath = backendDir / "vs.bin";
+            const std::filesystem::path vsHashPath = backendDir / "vs.bin.hash";
+
+            const std::string cachedVsHash = TrimDiagnosticText(ReadTextFile(vsHashPath));
+            const bool cached = !cachedVsHash.empty() &&
+                cachedVsHash == std::to_string(vsCookKey) &&
+                std::filesystem::exists(vsBinaryPath, error) &&
+                std::filesystem::file_size(vsBinaryPath, error) > 0U;
+            if (cached) {
+                artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
+                    .backend = backend,
+                    .binaryPath = vsBinaryPath.generic_string(),
+                    .byteSize = std::filesystem::file_size(vsBinaryPath, error),
+                    .cacheHit = true,
+                });
+                continue;
+            }
+
+            const std::filesystem::path vsErrorPath = backendDir / "vs.shaderc.log";
+            const std::string shadercExe = std::filesystem::path{ request.shadercPath }.make_preferred().string();
+            std::string command = QuotePath(shadercExe);
+            command += " --type vertex";
+            command += " --platform " + std::string{ RenderMaterialGraphShaderBackendPlatform(backend) };
+            command += " --profile " + std::string{ RenderMaterialGraphShaderBackendProfile(backend) };
+            command += " -f " + QuotePath(vsWrapperPath.generic_string());
+            command += " -o " + QuotePath(vsBinaryPath.generic_string());
+            if (!request.varyingDefPath.empty()) {
+                command += " --varyingdef " + QuotePath(request.varyingDefPath);
+            }
+            for (const std::string& includeDir : request.includeDirs) {
+                command += " -i " + QuotePath(includeDir);
+            }
+            command += request.debug ? " -O 0 --debug" : " -O 3";
+            command += " > " + QuotePath(vsErrorPath.generic_string()) + " 2>&1";
+
+            std::filesystem::remove(vsBinaryPath, error);
+            const std::string shellCommand = "\"" + command + "\"";
+            const int exitCode = std::system(shellCommand.c_str());
+
+            const bool produced = std::filesystem::exists(vsBinaryPath, error) &&
+                std::filesystem::file_size(vsBinaryPath, error) > 0U;
+            if (exitCode != 0 || !produced) {
+                std::string log = TrimDiagnosticText(ReadTextFile(vsErrorPath));
+                if (log.empty()) {
+                    log = "shaderc exited with code " + std::to_string(exitCode) + " without producing a vertex binary.";
+                }
+                AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                    "Material graph vertex shader cook failed for backend '" + std::string{ RenderMaterialGraphShaderBackendName(backend) } +
+                    "' (pass '" + request.pass + "'): " + log,
+                    request.pass,
+                    std::string{ RenderMaterialGraphShaderBackendName(backend) });
+                return result;
+            }
+
+            {
+                std::ofstream vsHashOut{ vsHashPath, std::ios::binary | std::ios::trunc };
+                if (vsHashOut) {
+                    vsHashOut << vsCookKey;
+                }
+            }
+            artifact.vertexBinaries.push_back(RenderMaterialGraphShaderBinary{
+                .backend = backend,
+                .binaryPath = vsBinaryPath.generic_string(),
+                .byteSize = std::filesystem::file_size(vsBinaryPath, error),
+                .cacheHit = false,
+            });
+        }
+
+        if (artifact.vertexBinaries.empty()) {
+            AddArtifactDiagnostic(result.diagnostics, RenderMaterialGraphDiagnosticSeverity::Error,
+                "Material graph shader cook produced no vertex binaries for a world-position-offset graph.");
+            return result;
+        }
     }
 
     result.artifact = std::move(artifact);
