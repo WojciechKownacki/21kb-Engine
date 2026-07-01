@@ -65,6 +65,29 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateSquareRoot,
     CreateSine,
     CreateCosine,
+    CreateExponential,
+    CreateExponential2,
+    CreateLogarithm,
+    CreateLogarithm2,
+    CreateSrgbToLinear,
+    CreateLinearToSrgb,
+    CreateLogarithm10,
+    CreateHsvToRgb,
+    CreateRgbToHsv,
+    CreateDeriveNormalZ,
+    CreateFmod,
+    CreateInverseLerp,
+    CreatePartialDerivativeX,
+    CreatePartialDerivativeY,
+    CreateSphereMask,
+    CreateBlackBody,
+    CreateNoise,
+    CreateVectorNoise,
+    CreateAppendVector,
+    CreateColorRamp,
+    CreateAntialiasedTextureMask,
+    CreateTransform,
+    CreateTransformPosition,
     CreateDotProduct,
     CreateCrossProduct,
     CreateNormalize,
@@ -1175,6 +1198,29 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
         case kb::render::RenderMaterialGraphNodeKind::Sine:
         case kb::render::RenderMaterialGraphNodeKind::Cosine:
+        case kb::render::RenderMaterialGraphNodeKind::Exponential:
+        case kb::render::RenderMaterialGraphNodeKind::Exponential2:
+        case kb::render::RenderMaterialGraphNodeKind::Logarithm:
+        case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
+        case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
+        case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
+        case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
+        case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
+        case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
+        case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
+        case kb::render::RenderMaterialGraphNodeKind::Fmod:
+        case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
+        case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
+        case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
+        case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+        case kb::render::RenderMaterialGraphNodeKind::BlackBody:
+        case kb::render::RenderMaterialGraphNodeKind::Noise:
+        case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+        case kb::render::RenderMaterialGraphNodeKind::AppendVector:
+        case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+        case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+        case kb::render::RenderMaterialGraphNodeKind::Transform:
+        case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
         case kb::render::RenderMaterialGraphNodeKind::DotProduct:
         case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
         case kb::render::RenderMaterialGraphNodeKind::Normalize:

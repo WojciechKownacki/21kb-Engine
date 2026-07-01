@@ -3072,6 +3072,52 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Sine, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateCosine:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Cosine, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateExponential:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Exponential, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateExponential2:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Exponential2, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLogarithm:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Logarithm, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLogarithm2:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Logarithm2, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSrgbToLinear:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SrgbToLinear, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLinearToSrgb:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::LinearToSrgb, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLogarithm10:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Logarithm10, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateHsvToRgb:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::HsvToRgb, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateRgbToHsv:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::RgbToHsv, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDeriveNormalZ:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateFmod:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Fmod, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateInverseLerp:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::InverseLerp, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeX:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeY:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSphereMask:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SphereMask, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBlackBody:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::BlackBody, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateNoise:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Noise, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVectorNoise:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VectorNoise, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateAppendVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::AppendVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateColorRamp:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ColorRamp, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTransform:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Transform, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTransformPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TransformPosition, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateDotProduct:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DotProduct, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateCrossProduct:

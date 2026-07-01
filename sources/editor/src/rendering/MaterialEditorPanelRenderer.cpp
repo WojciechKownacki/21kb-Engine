@@ -455,7 +455,11 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
     case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
     case kb::render::RenderMaterialGraphNodeKind::Distance:
+    case kb::render::RenderMaterialGraphNodeKind::Fmod:
+    case kb::render::RenderMaterialGraphNodeKind::SphereMask:
         return { { "a", "A" }, { "b", "B" } };
+    case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
+        return { { "a", "A" }, { "b", "B" }, { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::Power:
         return { { "base", "Base" }, { "exponent", "Exponent" } };
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
@@ -467,10 +471,36 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
     case kb::render::RenderMaterialGraphNodeKind::Sine:
     case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential2:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
+    case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
+    case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
+    case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
+    case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
+    case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
     case kb::render::RenderMaterialGraphNodeKind::Normalize:
     case kb::render::RenderMaterialGraphNodeKind::Length:
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
         return { { "value", "Value" } };
+    case kb::render::RenderMaterialGraphNodeKind::BlackBody:
+        return { { "value", "Temp (K)" } };
+    case kb::render::RenderMaterialGraphNodeKind::Noise:
+    case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+        return { { "value", "Position" } };
+    case kb::render::RenderMaterialGraphNodeKind::AppendVector:
+        return { { "a", "XYZ" }, { "b", "W" } };
+    case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+        return { { "value", "Gradient" } };
+    case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+        return { { "value", "Mask" } };
+    case kb::render::RenderMaterialGraphNodeKind::Transform:
+    case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
+        return { { "value", "Vector" } };
     case kb::render::RenderMaterialGraphNodeKind::MakeVector:
         return { { "x", "X" }, { "y", "Y" }, { "z", "Z" }, { "w", "W" } };
     case kb::render::RenderMaterialGraphNodeKind::Step:
@@ -538,6 +568,29 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::SquareRoot:
     case kb::render::RenderMaterialGraphNodeKind::Sine:
     case kb::render::RenderMaterialGraphNodeKind::Cosine:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential:
+    case kb::render::RenderMaterialGraphNodeKind::Exponential2:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
+    case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
+    case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
+    case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
+    case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
+    case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
+    case kb::render::RenderMaterialGraphNodeKind::BlackBody:
+    case kb::render::RenderMaterialGraphNodeKind::Noise:
+    case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+    case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+    case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+    case kb::render::RenderMaterialGraphNodeKind::Transform:
+    case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
+    case kb::render::RenderMaterialGraphNodeKind::Fmod:
+    case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
+    case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+    case kb::render::RenderMaterialGraphNodeKind::AppendVector:
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
     case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
     case kb::render::RenderMaterialGraphNodeKind::Normalize:
@@ -642,6 +695,52 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Sin";
     case kb::render::RenderMaterialGraphNodeKind::Cosine:
         return "Cos";
+    case kb::render::RenderMaterialGraphNodeKind::Exponential:
+        return "Exp";
+    case kb::render::RenderMaterialGraphNodeKind::Exponential2:
+        return "Exp2";
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm:
+        return "Log";
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm2:
+        return "Log2";
+    case kb::render::RenderMaterialGraphNodeKind::SrgbToLinear:
+        return "sRGB to Linear";
+    case kb::render::RenderMaterialGraphNodeKind::LinearToSrgb:
+        return "Linear to sRGB";
+    case kb::render::RenderMaterialGraphNodeKind::Logarithm10:
+        return "Log10";
+    case kb::render::RenderMaterialGraphNodeKind::HsvToRgb:
+        return "HSV to RGB";
+    case kb::render::RenderMaterialGraphNodeKind::RgbToHsv:
+        return "RGB to HSV";
+    case kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ:
+        return "Derive Normal Z";
+    case kb::render::RenderMaterialGraphNodeKind::Fmod:
+        return "Fmod";
+    case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
+        return "Inverse Lerp";
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
+        return "DDX";
+    case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
+        return "DDY";
+    case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+        return "Sphere Mask";
+    case kb::render::RenderMaterialGraphNodeKind::BlackBody:
+        return "Black Body";
+    case kb::render::RenderMaterialGraphNodeKind::Noise:
+        return "Noise";
+    case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+        return "Vector Noise";
+    case kb::render::RenderMaterialGraphNodeKind::AppendVector:
+        return "Append Vector";
+    case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+        return "Color Ramp";
+    case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+        return "Antialiased Mask";
+    case kb::render::RenderMaterialGraphNodeKind::Transform:
+        return "Transform";
+    case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
+        return "Transform Position";
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
         return "Dot Product";
     case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
