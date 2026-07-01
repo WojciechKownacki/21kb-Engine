@@ -68,6 +68,8 @@ class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
 struct EditorMaterialPreviewTelemetry;
+class EditorMaterialGraphCookService;
+struct EditorMaterialGraphCookResult;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -249,6 +251,15 @@ public:
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
     [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
+    // Per-project graph shader cache root shared by the cook service and every renderer (preview
+    // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
+    [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
+    [[nodiscard]] EditorMaterialGraphCookService& MaterialGraphCookService() noexcept;
+    // Latest cook result for the material open in the editor (drives the preview status banner).
+    [[nodiscard]] EditorMaterialGraphCookResult OpenMaterialGraphCookResult() const;
+    // Apply freshly cooked graph programs to live render state (hot reload + status); returns the
+    // number of completed cooks consumed this call (MAT-32/33).
+    std::size_t PumpMaterialGraphCookResults();
     [[nodiscard]] std::uint64_t MaterialPreviewRevision() const noexcept;
     [[nodiscard]] std::uint32_t SelectedMaterialGraphNodeId() const noexcept;
     [[nodiscard]] bool SelectMaterialGraphNode(std::uint32_t nodeId) noexcept;
@@ -437,6 +448,9 @@ private:
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
     void SyncMaterialEditorWorkingCopyRuntimePreview();
     void ClearMaterialEditorWorkingCopyRuntimePreview();
+    // MAT-84: cook every graph-backed material referenced by scene meshes (even unopened ones) so
+    // the scene/game render their real GPU graph program instead of the CPU fallback.
+    void CookSceneGraphMaterials();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
@@ -475,6 +489,9 @@ private:
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
+    std::string graphShaderCacheRoot_;
+    std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
+    bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};

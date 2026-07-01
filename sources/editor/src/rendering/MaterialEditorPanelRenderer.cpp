@@ -15,6 +15,7 @@
 #include "rendering/ProjectFilesPanelDrawing.hpp"
 #include "rendering/gdi/ScopedFont.hpp"
 #include "rendering/gdi/ScopedGdiObject.hpp"
+#include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #pragma warning(push, 0)
@@ -298,7 +299,36 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     return 0;
 }
 
-[[nodiscard]] std::vector<std::pair<std::string_view, std::string_view>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind);
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind);
+
+// Turn a camelCase pin name (e.g. "baseColor") into a readable label ("Base Color"). Used as the fallback
+// label for nodes that are not in the editor's explicit pin tables, so every node renders sensible pins.
+[[nodiscard]] std::string HumanizePinName(std::string_view pin) {
+    std::string label;
+    label.reserve(pin.size() + 4U);
+    for (std::size_t i = 0U; i < pin.size(); ++i) {
+        const char c = pin[i];
+        if (i == 0U) {
+            label.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+        } else if (c >= 'A' && c <= 'Z') {
+            label.push_back(' ');
+            label.push_back(c);
+        } else {
+            label.push_back(c);
+        }
+    }
+    return label.empty() ? std::string{ pin } : label;
+}
+
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphPinFallback(std::vector<std::string> names) {
+    std::vector<std::pair<std::string, std::string>> pins;
+    pins.reserve(names.size());
+    for (std::string& name : names) {
+        std::string label = HumanizePinName(name);
+        pins.emplace_back(std::move(name), std::move(label));
+    }
+    return pins;
+}
 
 [[nodiscard]] POINT InputPinPoint(const RECT& node, std::string_view pin) noexcept {
     const int index = GraphInputPinIndex(pin);
@@ -318,11 +348,20 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 }
 
 [[nodiscard]] POINT InputPinPoint(const RECT& node, kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
-    const int index = GraphInputPinIndex(pin);
+    // The pin's row is its position within this node's own input list, so every node (including those
+    // resolved via the renderer fallback) lays its pins out correctly without a global name->row map.
+    const std::vector<std::pair<std::string, std::string>> pins = GraphInputPins(kind);
+    int index = 0;
+    for (std::size_t i = 0U; i < pins.size(); ++i) {
+        if (pins[i].first == pin) {
+            index = static_cast<int>(i);
+            break;
+        }
+    }
     const float scale = NodeUiScale(node, kind);
     const int pinInset = ScaleMetric(6, scale);
     const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
-    const int count = static_cast<int>(std::max<std::size_t>(1U, GraphInputPins(kind).size()));
+    const int count = static_cast<int>(std::max<std::size_t>(1U, pins.size()));
     const int bodyTop = node.top + headerHeight;
     const int bodyHeight = std::max(1, RectHeight(node) - headerHeight);
     const int rowHeight = std::min(ScaleMetric(kGraphNodePinRowHeight, scale), std::max(ScaleMetric(16, scale), bodyHeight / count));
@@ -393,7 +432,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     };
 }
 
-[[nodiscard]] std::vector<std::pair<std::string_view, std::string_view>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return {
@@ -472,11 +511,14 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return {};
+    default:
+        break;
     }
-    return {};
+    // Any node not explicitly listed above falls back to the renderer's authoritative pin schema.
+    return GraphPinFallback(kb::render::RenderMaterialGraphNodeInputPinNames(kind));
 }
 
-[[nodiscard]] std::vector<std::pair<std::string_view, std::string_view>> GraphOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
@@ -540,8 +582,10 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "uv", "UV" } };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return {};
+    default:
+        break;
     }
-    return {};
+    return GraphPinFallback(kb::render::RenderMaterialGraphNodeOutputPinNames(kind));
 }
 
 [[nodiscard]] std::string GraphNodeTitle(kb::render::RenderMaterialGraphNodeKind kind) {
@@ -648,8 +692,11 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Normal Map";
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return "Texture Coordinate";
+    default:
+        break;
     }
-    return "Material Node";
+    // Any node not explicitly named above uses the renderer's authoritative display name.
+    return std::string{ kb::render::RenderMaterialGraphNodeKindName(kind) };
 }
 
 [[nodiscard]] COLORREF GraphOutputPinColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept;
@@ -723,7 +770,7 @@ void DrawGraphLink(
     std::string_view toPin,
     const kb::render::RenderMaterialGraphNode& fromGraphNode,
     const kb::render::RenderMaterialGraphNode& toGraphNode) {
-    const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(fromGraphNode.kind);
+    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(fromGraphNode.kind);
     std::size_t outputIndex = 0U;
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
         if (outputPins[index].first == fromPin) {
@@ -827,7 +874,7 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
             continue;
         }
 
-        const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(fromNode->kind);
+        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(fromNode->kind);
         std::size_t outputIndex = 0U;
         for (std::size_t index = 0U; index < outputPins.size(); ++index) {
             if (outputPins[index].first == link.fromPin) {
@@ -1349,7 +1396,7 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
     DrawConstantValue(dc, rect, node, sceneContext);
 
-    const std::vector<std::pair<std::string_view, std::string_view>> inputPins = GraphInputPins(node.kind);
+    const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node.kind);
     if (!inputPins.empty()) {
         for (std::size_t index = 0; index < inputPins.size(); ++index) {
             const POINT scaledPin = InputPinPoint(rect, node.kind, inputPins[index].first);
@@ -1374,7 +1421,7 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
-    const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(node.kind);
+    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(node.kind);
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
         const POINT output = OutputPinPoint(rect, node.kind, index, outputPins.size());
         DrawGraphPin(
@@ -1432,7 +1479,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
 
     POINT anchor{};
     if (sceneContext.MaterialGraphPinConnectionIsOutput()) {
-        const std::vector<std::pair<std::string_view, std::string_view>> outputPins = GraphOutputPins(node->kind);
+        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(node->kind);
         std::size_t pinIndex = 0U;
         for (std::size_t index = 0U; index < outputPins.size(); ++index) {
             if (outputPins[index].first == sceneContext.MaterialGraphPinConnectionPin()) {
@@ -1442,7 +1489,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
         }
         anchor = OutputPinPoint(*nodeRect, node->kind, pinIndex, outputPins.size());
     } else {
-        const std::vector<std::pair<std::string_view, std::string_view>> inputPins = GraphInputPins(node->kind);
+        const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node->kind);
         std::string_view pinName = inputPins.empty() ? std::string_view{} : inputPins.front().first;
         for (const auto& inputPin : inputPins) {
             if (inputPin.first == sceneContext.MaterialGraphPinConnectionPin()) {
@@ -1716,9 +1763,41 @@ void DrawGraphOverlay(HDC dc, const RECT& rect, COLORREF fill, COLORREF border) 
     GdiDrawing::DrawSharpFrame(dc, rect, fill, border);
 }
 
-void DrawPreviewOverlay(HDC dc, const MaterialEditorPanelLayout& layout, const EditorMaterialPreviewTelemetry& telemetry) {
+[[nodiscard]] COLORREF CookBannerColor(EditorMaterialGraphCookBannerSeverity severity) noexcept {
+    switch (severity) {
+    case EditorMaterialGraphCookBannerSeverity::Ready:
+        return RGB(126, 201, 143);
+    case EditorMaterialGraphCookBannerSeverity::Pending:
+        return RGB(214, 196, 120);
+    case EditorMaterialGraphCookBannerSeverity::Warning:
+        return RGB(226, 170, 104);
+    case EditorMaterialGraphCookBannerSeverity::Error:
+        return RGB(232, 112, 112);
+    case EditorMaterialGraphCookBannerSeverity::None:
+        break;
+    }
+    return RGB(86, 92, 100);
+}
+
+void DrawPreviewOverlay(
+    HDC dc,
+    const MaterialEditorPanelLayout& layout,
+    const EditorMaterialPreviewTelemetry& telemetry,
+    const EditorMaterialGraphCookBanner& cookBanner) {
     DrawGraphOverlay(dc, layout.previewFrame, RGB(9, 10, 12), RGB(54, 58, 66));
     DrawText(dc, layout.previewFrame, telemetry.materialLoaded ? "Preview" : "Preview unavailable", RGB(86, 92, 100), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    // MAT-32: surface the live graph cook/program state over the preview so the artist sees whether
+    // the GPU graph program is ready, compiling, fell back, or failed - never a silent black frame.
+    if (cookBanner.severity != EditorMaterialGraphCookBannerSeverity::None && !cookBanner.label.empty()) {
+        const RECT bannerRect{
+            layout.previewFrame.left + 6,
+            layout.previewFrame.top + 6,
+            layout.previewFrame.right - 6,
+            layout.previewFrame.top + 26,
+        };
+        DrawText(dc, bannerRect, cookBanner.label.c_str(), CookBannerColor(cookBanner.severity), 10, FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
 }
 
 void DrawDiagnosticsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const MaterialEditorDocumentView& document) {
@@ -1824,7 +1903,9 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         DrawGraphGrid(dc, layout.graphCanvas);
         DrawText(dc, layout.graphCanvas, "Material document could not be parsed.", RGB(232, 112, 112), 12, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-    DrawPreviewOverlay(dc, layout, telemetry);
+    const EditorMaterialGraphCookBanner cookBanner =
+        MakeEditorMaterialGraphCookBanner(sceneContext.OpenMaterialGraphCookResult().status);
+    DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
     if (sceneContext.MaterialEditor().InfoPanelVisible()) {
         MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRows(

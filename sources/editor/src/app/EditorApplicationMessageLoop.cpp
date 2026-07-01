@@ -257,6 +257,11 @@ void InvalidateInspectorPanels(EditorApplicationState& state) noexcept {
         return false;
     }
 
+    // Keep the scene viewport renderer pointed at the project graph shader cache and consume any
+    // graph cooks that finished since the last paint so authored programs swap in live (MAT-31/33).
+    state.sceneViewport.SetGraphShaderCacheRoot(state.sceneContext.GraphShaderCacheRoot());
+    static_cast<void>(state.sceneContext.PumpMaterialGraphCookResults());
+
     bool scenePresented = false;
     const DockLayout layout = BuildMainLayout(state);
     const std::vector<EditorSceneBgfxViewport::HostSurfaceLayout> hostLayouts =
@@ -488,7 +493,18 @@ void EditorApplicationMessageLoop::Run(EditorApplicationState& state) {
             }
             static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, kPausedToolbarAnimationIntervalMs, QS_ALLINPUT));
         } else if (!state.playMode.IsPlaying() && !sceneFramePresented) {
-            WaitMessage();
+            // Keep the editor rendering continuously while a material is open so time-driven graph nodes
+            // (Time / Panner / Rotator) animate live in the preview and scene, instead of freezing on a
+            // single frame; otherwise fall back to event-driven idle to save CPU.
+            if (state.sceneContext.MaterialEditor().OpenAssetId().IsValid()) {
+                state.sceneContext.MarkSceneRenderDirty();
+                if (state.window != nullptr) {
+                    InvalidateRect(state.window, nullptr, FALSE);
+                }
+                static_cast<void>(MsgWaitForMultipleObjects(0, nullptr, FALSE, FrameWaitMilliseconds(currentTick, nextEditorFrame), QS_ALLINPUT));
+            } else {
+                WaitMessage();
+            }
         }
     }
 }

@@ -6,6 +6,8 @@
 #include "engine/scene/BehaviourComponent.hpp"
 #include "engine/scene/SceneBehaviourComponents.hpp"
 #include "engine/scene/SceneComponentQueries.hpp"
+#include "engine/scene/SceneVisitors.hpp"
+#include "engine/scene/TransformComponent.hpp"
 #include "engine/scene/SceneComponents.hpp"
 #include "engine/scene/CameraComponent.hpp"
 #include "engine/scene/AudioListenerComponent.hpp"
@@ -57,6 +59,7 @@
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
 #include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
+#include "scene/material_preview/EditorMaterialGraphCookService.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditApplier.hpp"
@@ -625,7 +628,9 @@ EditorSceneContext::EditorSceneContext()
     , project_(projectBootstrap_.succeeded ? projectBootstrap_.descriptor : kb::project::ProjectDescriptor{})
     , projectFile_(projectBootstrap_.succeeded ? projectBootstrap_.projectFile : EditorProjectPaths::ProjectFile())
     , scene_(std::make_unique<kb::scene::Scene>(project_))
-    , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>()) {
+    , materialPreviewScene_(std::make_unique<EditorMaterialPreviewScene>())
+    , graphShaderCacheRoot_((EditorProjectPaths::ProjectRoot() / ".cache" / "graph_shaders").generic_string())
+    , materialGraphCookService_(std::make_unique<EditorMaterialGraphCookService>(EditorMaterialGraphCookConfig::Resolve(graphShaderCacheRoot_))) {
     if (projectBootstrap_.succeeded) {
         console_.Info("Project", projectBootstrap_.created ? "Created project descriptor." : "Loaded project descriptor.");
     } else {
@@ -2224,6 +2229,53 @@ std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
     return materialPreviewScene_->Revision();
 }
 
+const std::string& EditorSceneContext::GraphShaderCacheRoot() const noexcept {
+    return graphShaderCacheRoot_;
+}
+
+EditorMaterialGraphCookService& EditorSceneContext::MaterialGraphCookService() noexcept {
+    return *materialGraphCookService_;
+}
+
+EditorMaterialGraphCookResult EditorSceneContext::OpenMaterialGraphCookResult() const {
+    const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+    if (materialGraphCookService_ == nullptr || !openAsset.IsValid()) {
+        EditorMaterialGraphCookResult idle{};
+        idle.materialAssetId = openAsset;
+        idle.status = EditorMaterialGraphCookStatus::Idle;
+        return idle;
+    }
+    return materialGraphCookService_->LatestResult(openAsset);
+}
+
+std::size_t EditorSceneContext::PumpMaterialGraphCookResults() {
+    if (materialGraphCookService_ == nullptr) {
+        return 0U;
+    }
+    // Batch-cook scene materials once per scene load, deferred to here so the active renderer backend
+    // (resolved from live bgfx) is known before cooking (MAT-84).
+    if (sceneGraphCookPending_) {
+        sceneGraphCookPending_ = false;
+        CookSceneGraphMaterials();
+    }
+    const std::vector<EditorMaterialGraphCookResult> results = materialGraphCookService_->DrainResults();
+    for (const EditorMaterialGraphCookResult& result : results) {
+        if (result.status == EditorMaterialGraphCookStatus::Failed) {
+            for (const std::string& diagnostic : result.diagnostics) {
+                console_.Warning("Materials", "Graph shader cook: " + diagnostic);
+            }
+        } else if (result.status == EditorMaterialGraphCookStatus::CookUnavailable && !result.diagnostics.empty()) {
+            console_.Warning("Materials", "Graph shader cook: " + result.diagnostics.front());
+        }
+    }
+    // A freshly cooked program is picked up by the renderer's MaterialProgramRegistry on the next
+    // frame via the shared cache root + runtime asset reload; surface that the preview must refresh.
+    if (!results.empty()) {
+        MarkSceneRenderDirty();
+    }
+    return results.size();
+}
+
 std::uint32_t EditorSceneContext::SelectedMaterialGraphNodeId() const noexcept {
     return materialEditor_.SelectedNodeId();
 }
@@ -3068,6 +3120,70 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Lerp, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::NormalUnpack, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTime:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Time, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVertexColor:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VertexColor, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateScreenPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ScreenPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLocalPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::LocalPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateObjectPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ObjectPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateWorldPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::WorldPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateObjectRadius:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ObjectRadius, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::GetMaterialAttributes, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateStaticSwitch:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::StaticSwitch, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateStaticComponentMask:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::StaticComponentMask, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureCoordinate:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureCoordinate, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePanner:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Panner, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateRotator:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Rotator, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBumpOffset:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::BumpOffset, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateConstantBiasScale:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateRotateAboutAxis:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateViewportUV:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewportUV, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateCameraPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::CameraPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateCameraVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::CameraVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateReflectionVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ReflectionVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateLightVector:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::LightVector, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePixelNormalWS:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PixelNormalWS, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVertexNormalWS:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VertexNormalWS, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateVertexTangentWS:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VertexTangentWS, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateViewProperty:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewProperty, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateViewSize:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewSize, graphX, graphY);
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return DisconnectSelectedMaterialGraphNodeLinks(id);
     case MaterialEditorGraphMenuCommand::DeleteSelected:
@@ -4254,6 +4370,16 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
         }
     }
 
+    // Hot-reload last-good (MAT-33): if the working copy is currently invalid but we already have a
+    // live runtime preview, keep rendering that last-good material and only kick a recook so the
+    // cook service reports Stale (with the failure reason) instead of dropping to a black/error frame.
+    if (materialEditor_.DiagnosticsHaveError() && materialRuntimePreviewAssetId_ == openAsset) {
+        if (materialGraphCookService_ != nullptr) {
+            static_cast<void>(materialGraphCookService_->RequestCook(openAsset, *materialEditor_.WorkingCopy()));
+        }
+        return;
+    }
+
     if (!materialRuntimePreviewSourceMetadata_.has_value()) {
         materialRuntimePreviewSourceMetadata_ = *metadata;
     }
@@ -4285,6 +4411,12 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     materialRuntimePreviewAssetId_ = openAsset;
     materialRuntimePreviewPath_ = runtimePath;
     materialRuntimePreviewContentHash_ = runtimeContentHash;
+
+    // The working copy changed: kick a debounced GPU cook so the preview and scene render the
+    // authored graph program (not the CPU PBR fallback) on the next frame (MAT-30/32/33).
+    if (materialGraphCookService_ != nullptr) {
+        static_cast<void>(materialGraphCookService_->RequestCook(openAsset, *materialEditor_.WorkingCopy()));
+    }
 }
 
 void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
@@ -4339,6 +4471,12 @@ bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
     materialEditor_.SetWorkingCopy(after);
     materialEditor_.MarkSaved();
     ClearMaterialEditorWorkingCopyRuntimePreview();
+    // MAT-87: the saved material must propagate to every scene mesh using it. Recook the scene's
+    // graph materials (deduped) and re-resolve so meshes pick up the new program next frame.
+    if (materialGraphCookService_ != nullptr && (!after.graph.links.empty() || after.graph.nodes.size() > 1U)) {
+        static_cast<void>(materialGraphCookService_->RequestCook(id, after));
+        sceneGraphCookPending_ = true;
+    }
     MarkSceneRenderDirty();
     return ValidateMaterialEditorAsset(id);
 }
@@ -4391,7 +4529,53 @@ void EditorSceneContext::ResetSceneEditState() {
     scene_->Runtime().SynchronizeTransforms();
 }
 
+void EditorSceneContext::CookSceneGraphMaterials() {
+    if (scene_ == nullptr || materialGraphCookService_ == nullptr) {
+        return;
+    }
+
+    // Collect every material asset referenced by scene mesh renderers (primary slot + overrides).
+    std::vector<std::uint64_t> referenced;
+    scene_->Components().Visitors().ForEachMeshRenderer(
+        [](kb::scene::SceneEntity, const kb::scene::TransformComponent&, const kb::scene::MeshRendererComponent& renderer, void* context) {
+            auto* ids = static_cast<std::vector<std::uint64_t>*>(context);
+            if (renderer.materialAssetId != 0U) {
+                ids->push_back(renderer.materialAssetId);
+            }
+            const std::uint32_t slotCount = std::min(renderer.materialSlotOverrideCount, kb::scene::kMaxMeshRendererMaterialSlotOverrides);
+            for (std::uint32_t slot = 0U; slot < slotCount; ++slot) {
+                if (renderer.materialSlotAssetIds[slot] != 0U) {
+                    ids->push_back(renderer.materialSlotAssetIds[slot]);
+                }
+            }
+        },
+        &referenced);
+
+    std::sort(referenced.begin(), referenced.end());
+    referenced.erase(std::unique(referenced.begin(), referenced.end()), referenced.end());
+
+    for (const std::uint64_t idValue : referenced) {
+        const kb::assets::AssetId id{ idValue };
+        // The open material is already cooked from its live working copy (MAT-30); skip it here.
+        if (materialEditor_.OpenAssetId() == id) {
+            continue;
+        }
+        const std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialDocumentAsset(id);
+        if (!material.has_value()) {
+            continue;
+        }
+        // Only authored graph materials need a cooked program; builtin/default materials carry just
+        // the implicit Material Output node and use the static PBR program.
+        if (material->graph.links.empty() && material->graph.nodes.size() <= 1U) {
+            continue;
+        }
+        static_cast<void>(materialGraphCookService_->RequestCook(id, *material));
+    }
+}
+
 void EditorSceneContext::SelectFirstSceneEntityOrClear() noexcept {
+    // A scene was (re)loaded or seeded: its referenced graph materials must be (re)cooked (MAT-84).
+    sceneGraphCookPending_ = true;
     const std::vector<kb::scene::SceneEntity> roots = scene_->Hierarchy().RootEntities();
     if (roots.empty()) {
         hierarchySelection_.Clear();

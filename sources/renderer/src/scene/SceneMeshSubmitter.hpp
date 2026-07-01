@@ -9,7 +9,10 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
 #include <span>
+#include <string>
+#include <utility>
 
 namespace kb::render {
 
@@ -29,7 +32,8 @@ public:
         SceneRenderLightingConfig lightingConfig = {},
         const SceneRenderShadowMapBinding* shadowMap = nullptr,
         std::span<const std::uint64_t> selectedEntityIds = {},
-        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) const;
+        SceneGpuDrivenFeatureSupport gpuDrivenSupport = {},
+        std::array<float, 4> frameTime = {}) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,
@@ -44,6 +48,7 @@ public:
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {}) noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] MaterialProgramRegistryStats ProgramRegistryStats() const noexcept { return passResources_.ProgramRegistryStats(); }
+    void SetGraphShaderCacheRoot(std::string root) { passResources_.SetGraphShaderCacheRoot(std::move(root)); }
 
 private:
     SceneMeshPassResources passResources_;

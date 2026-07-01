@@ -46,6 +46,10 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
     if (key.pass == "BaseOpaque") {
         return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
     }
+    if (key.pass == "BaseTransparent") {
+        // Transparent reuses the forward shader; the alpha blend is a render state (MAT-80), not a shader.
+        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
+    }
     if (key.pass == "ShadowDepth") {
         return ShaderLoader::LoadProgram("vs_mesh_shadow_instanced.sc", "fs_mesh_shadow_instanced.sc");
     }
@@ -145,6 +149,7 @@ bool SceneMeshPassResources::Initialize() {
     materialFlagsUniform_ = bgfx::createUniform("u_materialFlags", bgfx::UniformType::Vec4);
     materialUvTransformUniform_ = bgfx::createUniform("u_materialUvTransform", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
+    timeUniform_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
     lightDirKindUniform_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
     lightPositionRangeUniform_ = bgfx::createUniform("u_lightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
     lightColorIntensityUniform_ = bgfx::createUniform("u_lightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
@@ -231,6 +236,10 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(cameraPositionUniform_);
         cameraPositionUniform_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(timeUniform_)) {
+        bgfx::destroy(timeUniform_);
+        timeUniform_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(materialFlagsUniform_)) {
         bgfx::destroy(materialFlagsUniform_);
         materialFlagsUniform_ = BGFX_INVALID_HANDLE;
@@ -284,6 +293,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(materialFlagsUniform_) &&
         bgfx::isValid(materialUvTransformUniform_) &&
         bgfx::isValid(cameraPositionUniform_) &&
+        bgfx::isValid(timeUniform_) &&
         bgfx::isValid(lightDirKindUniform_) &&
         bgfx::isValid(lightPositionRangeUniform_) &&
         bgfx::isValid(lightColorIntensityUniform_) &&
@@ -420,6 +430,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
+    bgfx::setUniform(timeUniform_, desc.frameTime.data());
     bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardLights);
     bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardLights);
     bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardLights);
@@ -431,6 +442,25 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
     bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowParams.data());
     bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
+
+    // MAT-78/#16: bind the graph material's own textures at their graph slots (>= 6). The builtin slots
+    // (0-5) above are for the flattened PBR path; a real graph shader samples its own SAMPLER2D(name, slot),
+    // so without this the graph texture is never bound and the surface renders black.
+    if (resolution.graphProgram && material != nullptr) {
+        for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
+            const RenderTextureHandle resolved = desc.resourceMap.ResolveTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
+            const RenderTextureResource* textureResource = desc.resources.FindTexture(resolved);
+            const bgfx::TextureHandle handle = (textureResource != nullptr && bgfx::isValid(textureResource->texture))
+                ? textureResource->texture
+                : fallbackWhiteTexture_;
+
+            bgfx::UniformHandle& sampler = graphSamplerUniforms_[graphTexture.samplerName];
+            if (!bgfx::isValid(sampler)) {
+                sampler = bgfx::createUniform(graphTexture.samplerName.c_str(), bgfx::UniformType::Sampler);
+            }
+            bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
+        }
+    }
     return resolution.program;
 }
 

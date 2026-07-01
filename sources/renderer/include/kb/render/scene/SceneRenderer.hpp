@@ -8,8 +8,11 @@
 
 #include <bgfx/bgfx.h>
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace kb::render {
 
@@ -45,6 +48,12 @@ public:
     [[nodiscard]] SceneRenderLightingConfig DefaultLightingConfig() const noexcept;
     void SetGpuDrivenRuntimeSupport(SceneGpuDrivenFeatureSupport support) noexcept;
     [[nodiscard]] SceneGpuDrivenFeatureSupport GpuDrivenRuntimeSupport() const noexcept;
+    void SetGraphShaderCacheRoot(std::string root);
+    [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
+    // MAT-72: advance per-frame material time (seconds accumulate, frame index increments) and
+    // expose it as the u_time vec4 (time, deltaTime, frameIndex, 0) bound during mesh submit.
+    void AdvanceFrameTime(float deltaSeconds) noexcept;
+    [[nodiscard]] std::array<float, 4> FrameTimeConstants() const noexcept;
     void TickFrame() noexcept;
     [[nodiscard]] bool IsInitialized() const noexcept;
     [[nodiscard]] RenderResourceRegistry& Resources() noexcept;
@@ -69,6 +78,10 @@ private:
     SceneRenderDrawBudget defaultDrawBudget_{};
     SceneRenderLightingConfig defaultLightingConfig_{};
     SceneGpuDrivenFeatureSupport gpuDrivenRuntimeSupport_{};
+    std::string graphShaderCacheRoot_;
+    float frameTimeSeconds_ = 0.0F;
+    float frameDeltaSeconds_ = 0.0F;
+    std::uint32_t frameTimeIndex_ = 0U;
     bool initialized_ = false;
 };
 

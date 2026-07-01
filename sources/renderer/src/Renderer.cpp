@@ -83,6 +83,9 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     sceneRenderer_->SetDefaultDrawBudget(defaultSceneDrawBudget_);
     sceneRenderer_->SetDefaultLightingConfig(defaultSceneLightingConfig_);
+    if (!graphShaderCacheRoot_.empty()) {
+        sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     ApplyRuntimeSceneResourceReserve();
@@ -180,6 +183,7 @@ void Renderer::EndFrame() {
     lastCompletedFrame_ = context_->EndFrame();
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->TickFrame();
+        sceneRenderer_->AdvanceFrameTime(frameDeltaSeconds_);
     }
     frameActive_ = false;
     frameState_.End();
@@ -710,6 +714,25 @@ void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
 
 bool Renderer::GpuDrivenRuntimeDispatchEnabled() const noexcept {
     return gpuDrivenRuntimeDispatchEnabled_;
+}
+
+void Renderer::SetGraphShaderCacheRoot(std::string root) {
+    graphShaderCacheRoot_ = std::move(root);
+    if (sceneRenderer_ != nullptr) {
+        sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
+}
+
+const std::string& Renderer::GraphShaderCacheRoot() const noexcept {
+    return graphShaderCacheRoot_;
+}
+
+void Renderer::SetFrameDeltaSeconds(float seconds) noexcept {
+    frameDeltaSeconds_ = seconds;
+}
+
+float Renderer::FrameDeltaSeconds() const noexcept {
+    return frameDeltaSeconds_;
 }
 
 void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {

@@ -177,6 +177,9 @@ bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t s
 
 void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig config) noexcept {
     stats.lightingPath = static_cast<std::uint32_t>(config.lightingPath) + 1U;
+    // MAT-82: declared-but-unimplemented paths (clustered/deferred/visibility) are reported non-production
+    // so consumers know lighting actually ran through the real Forward path (no false >4-light claim).
+    stats.lightingPathProduction = IsSceneRenderLightingPathProduction(config.lightingPath);
     stats.lightClusterCount = ClusterCount(config);
     stats.globalIlluminationMode = static_cast<std::uint32_t>(config.globalIllumination) + 1U;
     const std::uint32_t probeCount = std::min<std::uint32_t>(config.ibl.reflectionProbeCount, kMaxSceneReflectionProbes);

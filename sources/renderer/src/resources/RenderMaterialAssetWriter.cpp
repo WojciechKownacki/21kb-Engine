@@ -165,6 +165,22 @@ void WriteGraphParameterValues(std::ostream& output, const RenderMaterialAssetDa
     return "REPLACE";
 }
 
+[[nodiscard]] const char* TranslucencyBlendName(RenderMaterialTranslucencyBlend mode) noexcept {
+    switch (mode) {
+    case RenderMaterialTranslucencyBlend::Alpha:
+        return "ALPHA";
+    case RenderMaterialTranslucencyBlend::Additive:
+        return "ADDITIVE";
+    case RenderMaterialTranslucencyBlend::Modulate:
+        return "MODULATE";
+    case RenderMaterialTranslucencyBlend::PreMultipliedAlpha:
+        return "PREMULTIPLIED_ALPHA";
+    case RenderMaterialTranslucencyBlend::AlphaHoldout:
+        return "ALPHA_HOLDOUT";
+    }
+    return "ALPHA";
+}
+
 class BaseColorPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
 public:
     void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
@@ -345,6 +361,20 @@ class DoubleSidedPropertyWriter final : public IRenderMaterialAssetPropertyWrite
 public:
     void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
         output << "doubleSided " << (asset.desc.doubleSided ? "true" : "false") << '\n';
+    }
+};
+
+class TranslucencyBlendPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
+public:
+    void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
+        output << "translucencyBlend " << TranslucencyBlendName(asset.desc.translucencyBlend) << '\n';
+    }
+};
+
+class WritesDepthPropertyWriter final : public IRenderMaterialAssetPropertyWriter {
+public:
+    void Write(std::ostream& output, const RenderMaterialAssetData& asset) const override {
+        output << "writesDepth " << (asset.desc.writesDepth ? "true" : "false") << '\n';
     }
 };
 
@@ -544,7 +574,7 @@ public:
     }
 };
 
-const std::array<const IRenderMaterialAssetPropertyWriter*, 53>& PropertyWriters() {
+const std::array<const IRenderMaterialAssetPropertyWriter*, 55>& PropertyWriters() {
     static const BaseColorPropertyWriter baseColor;
     static const EmissiveColorPropertyWriter emissiveColor;
     static const MetallicFactorPropertyWriter metallicFactor;
@@ -569,7 +599,9 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 53>& PropertyWriters
     static const AlphaModePropertyWriter alphaMode;
     static const DecalBlendModePropertyWriter decalBlendMode;
     static const LayerBlendModePropertyWriter layerBlendMode;
+    static const TranslucencyBlendPropertyWriter translucencyBlend;
     static const DoubleSidedPropertyWriter doubleSided;
+    static const WritesDepthPropertyWriter writesDepth;
     static const UvTilingPropertyWriter uvTiling;
     static const UvOffsetPropertyWriter uvOffset;
     static const AlbedoTextureAssetIdPropertyWriter albedoTextureAssetId;
@@ -599,7 +631,7 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 53>& PropertyWriters
     static const DecalTexturePathPropertyWriter decalTexturePath;
     static const LayerMaskTexturePathPropertyWriter layerMaskTexturePath;
 
-    static const std::array<const IRenderMaterialAssetPropertyWriter*, 53> writers{
+    static const std::array<const IRenderMaterialAssetPropertyWriter*, 55> writers{
         &baseColor,
         &metallicFactor,
         &roughnessFactor,
@@ -609,7 +641,9 @@ const std::array<const IRenderMaterialAssetPropertyWriter*, 53>& PropertyWriters
         &emissiveStrength,
         &alphaMode,
         &alphaCutoff,
+        &translucencyBlend,
         &doubleSided,
+        &writesDepth,
         &uvTiling,
         &uvOffset,
         &albedoTextureAssetId,

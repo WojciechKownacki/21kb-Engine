@@ -67,6 +67,38 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     ArcTangent,
     ArcTangent2,
     ConstantVector2,
+    Time,
+    VertexColor,
+    ScreenPosition,
+    LocalPosition,
+    ObjectPosition,
+    WorldPosition,
+    PerInstanceRandom,
+    ObjectRadius,
+    MakeMaterialAttributes,
+    BreakMaterialAttributes,
+    BlendMaterialAttributes,
+    GetMaterialAttributes,
+    SetMaterialAttributes,
+    StaticBoolParameter,
+    StaticSwitch,
+    StaticComponentMask,
+    TextureCoordinate,
+    Panner,
+    Rotator,
+    BumpOffset,
+    ConstantBiasScale,
+    RotateAboutAxis,
+    ViewportUV,
+    CameraPosition,
+    CameraVector,
+    ReflectionVector,
+    LightVector,
+    PixelNormalWS,
+    VertexNormalWS,
+    VertexTangentWS,
+    ViewProperty,
+    ViewSize,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {
@@ -139,6 +171,8 @@ enum class RenderMaterialGraphPinType : std::uint8_t {
     Sampler,
     Normal,
     Bool,
+    // MAT-36: a container carrying the whole MaterialSurface (all output channels) as a single pin.
+    MaterialAttributes,
 };
 
 enum class RenderMaterialGraphDiagnosticSeverity : std::uint8_t {
@@ -157,6 +191,31 @@ enum class RenderMaterialGraphDiagnosticKind : std::uint8_t {
     ShaderGenerationFailed,
     DuplicateParameterStableId,
     UnsupportedRenderPathNode,
+    TextureSamplerLimitExceeded,
+    UnsupportedMaterialDomain,
+    UnsupportedShadingModel,
+    StaticPermutationExplosion,
+};
+
+enum class RenderMaterialGraphSamplerFilter : std::uint8_t {
+    Linear,
+    Point,
+};
+
+enum class RenderMaterialGraphSamplerWrap : std::uint8_t {
+    Repeat,
+    Clamp,
+    Mirror,
+};
+
+struct RenderMaterialGraphSamplerState {
+    RenderMaterialGraphSamplerFilter minFilter = RenderMaterialGraphSamplerFilter::Linear;
+    RenderMaterialGraphSamplerFilter magFilter = RenderMaterialGraphSamplerFilter::Linear;
+    RenderMaterialGraphSamplerFilter mipFilter = RenderMaterialGraphSamplerFilter::Linear;
+    RenderMaterialGraphSamplerWrap wrapU = RenderMaterialGraphSamplerWrap::Repeat;
+    RenderMaterialGraphSamplerWrap wrapV = RenderMaterialGraphSamplerWrap::Repeat;
+
+    [[nodiscard]] friend bool operator==(const RenderMaterialGraphSamplerState&, const RenderMaterialGraphSamplerState&) noexcept = default;
 };
 
 struct RenderMaterialGraphParameterMetadata {
@@ -169,6 +228,7 @@ struct RenderMaterialGraphParameterMetadata {
     float rangeMax = 1.0F;
     std::string textureRole;
     RenderMaterialTextureColorSpace expectedTextureColorSpace = RenderMaterialTextureColorSpace::Unknown;
+    RenderMaterialGraphSamplerState samplerState{};
     bool overrideSupported = true;
     std::uint32_t editorOrder = 0U;
     std::string description;
@@ -206,6 +266,7 @@ struct RenderMaterialGraphDocument {
     bool hasExplicitDocumentVersion = false;
     std::string materialDomain = "surface";
     std::string shadingModel = "lit";
+    std::string blendMode = "opaque";
     std::string storageModel = "inline-kbmat";
     std::uint32_t diagnosticSchemaVersion = 1U;
     bool persistCompileDiagnostics = true;
@@ -308,17 +369,36 @@ struct RenderMaterialGraphReflectionUniform {
     RenderMaterialGraphNodeKind kind = RenderMaterialGraphNodeKind::ParameterScalar;
 };
 
+// Builtin forward samplers occupy texture stages 0-5 (albedo, normal, metallicRoughness, occlusion,
+// emissive, shadow), bound for every mesh draw including graph programs. Graph textures therefore
+// start at stage 6 so they never collide with those builtin bindings (MAT-78).
+inline constexpr std::uint32_t kRenderMaterialGraphTextureBaseSlot = 6U;
+// Conservative sampler ceiling shared by every backend we target (D3D11/D3D12/Vulkan/Metal/GL3+/GLES3
+// all expose >= 16 fragment samplers). Graph textures must fit in [base, ceiling).
+inline constexpr std::uint32_t kRenderMaterialGraphMaxTextureSamplers = 16U;
+
 struct RenderMaterialGraphReflectionTexture {
     std::string samplerName;
     std::string stableId;
     std::uint32_t slot = 0U;
     RenderMaterialTextureColorSpace colorSpace = RenderMaterialTextureColorSpace::Unknown;
+    RenderMaterialGraphSamplerState samplerState{};
 };
 
 struct RenderMaterialGraphReflection {
     std::vector<RenderMaterialGraphReflectionUniform> uniforms;
     std::vector<RenderMaterialGraphReflectionTexture> textures;
     std::vector<std::string> requiredVaryings;
+    // MAT-81: the graph drives a vertex-shader world-position offset, so the cook must build a generated
+    // vertex shader (the EvaluateWorldPositionOffset function in the shader source) instead of the fixed VS.
+    bool hasWorldPositionOffset = false;
+    // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
+    // key (Unlit and DefaultLit produce different wrappers). Non-production models fall back to DefaultLit.
+    RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
+    // MAT-38: resolved blend mode. Masked makes the fragment wrapper clip on alphaClipThreshold; the
+    // transparent modes select the BaseTransparent cook and the scene blend equation, and contribute to
+    // the program key.
+    RenderMaterialGraphBlendMode blendMode = RenderMaterialGraphBlendMode::Opaque;
 };
 
 struct RenderMaterialGraphShaderSource {
@@ -383,6 +463,10 @@ struct RenderMaterialGraphMaterialTypeBuildResult {
 
 [[nodiscard]] std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kind) noexcept;
 [[nodiscard]] std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std::string_view text) noexcept;
+// Authoritative input/output pin names for a node kind, in layout order. The editor uses these so every
+// node renders with the correct pins without duplicating the pin schema.
+[[nodiscard]] std::vector<std::string> RenderMaterialGraphNodeInputPinNames(RenderMaterialGraphNodeKind kind);
+[[nodiscard]] std::vector<std::string> RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind kind);
 [[nodiscard]] std::string_view RenderMaterialGraphArtifactFailurePolicyName(RenderMaterialGraphArtifactFailurePolicy policy) noexcept;
 [[nodiscard]] std::optional<RenderMaterialGraphArtifactFailurePolicy> ParseRenderMaterialGraphArtifactFailurePolicy(std::string_view text) noexcept;
 [[nodiscard]] std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagnosticKind kind) noexcept;

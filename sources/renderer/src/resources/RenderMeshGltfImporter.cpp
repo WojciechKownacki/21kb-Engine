@@ -74,6 +74,8 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     const cgltf_accessor* normals = nullptr;
     const cgltf_accessor* tangents = nullptr;
     const cgltf_accessor* texCoords = nullptr;
+    const cgltf_accessor* texCoords1 = nullptr;
+    const cgltf_accessor* colors = nullptr;
     bool hasSkinningAttributes = false;
     for (cgltf_size attributeIndex = 0U; attributeIndex < primitive.attributes_count; ++attributeIndex) {
         const cgltf_attribute& attribute = primitive.attributes[attributeIndex];
@@ -86,6 +88,10 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
             tangents = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0) {
             texCoords = attribute.data;
+        } else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 1) {
+            texCoords1 = attribute.data;
+        } else if (attribute.type == cgltf_attribute_type_color && attribute.index == 0) {
+            colors = attribute.data;
         } else if (attribute.type == cgltf_attribute_type_joints || attribute.type == cgltf_attribute_type_weights) {
             hasSkinningAttributes = true;
         }
@@ -101,6 +107,15 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
     std::optional<GltfAccessorFloats> normalData = UnpackFloats(normals, 3U);
     std::optional<GltfAccessorFloats> tangentData = UnpackFloats(tangents, 4U);
     std::optional<GltfAccessorFloats> texCoordData = UnpackFloats(texCoords, 2U);
+    std::optional<GltfAccessorFloats> texCoord1Data = UnpackFloats(texCoords1, 2U);
+    if (texCoord1Data.has_value() && texCoord1Data->elementCount != positionData->elementCount) {
+        return false;
+    }
+    std::optional<GltfAccessorFloats> colorData = UnpackFloats(colors, 3U); // COLOR_0 is vec3 or vec4
+    if (colorData.has_value() && colorData->elementCount != positionData->elementCount) {
+        return false;
+    }
+    const bool hasColorAlpha = colorData.has_value() && colorData->componentCount >= 4U;
     if (normalData.has_value() && normalData->elementCount != positionData->elementCount) {
         return false;
     }
@@ -141,6 +156,14 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
             : std::array<float, 3>{ 0.0F, 1.0F, 0.0F };
         const float u = texCoordData.has_value() ? AccessorValue(*texCoordData, vertexIndex, 0U) : 0.0F;
         const float v = texCoordData.has_value() ? AccessorValue(*texCoordData, vertexIndex, 1U) : 0.0F;
+        // Second UV set when the source provides it, else fall back to uv0 (MAT-73).
+        const float u1 = texCoord1Data.has_value() ? AccessorValue(*texCoord1Data, vertexIndex, 0U) : u;
+        const float v1 = texCoord1Data.has_value() ? AccessorValue(*texCoord1Data, vertexIndex, 1U) : v;
+        // Per-vertex color (MAT-74), white when absent; alpha 1 when the source color is vec3.
+        const float cr = colorData.has_value() ? AccessorValue(*colorData, vertexIndex, 0U) : 1.0F;
+        const float cg = colorData.has_value() ? AccessorValue(*colorData, vertexIndex, 1U) : 1.0F;
+        const float cb = colorData.has_value() ? AccessorValue(*colorData, vertexIndex, 2U) : 1.0F;
+        const float ca = hasColorAlpha ? AccessorValue(*colorData, vertexIndex, 3U) : 1.0F;
         if (useTangentFormat) {
             const std::array<float, 3> tangent = tangentData.has_value()
                 ? RenderMeshGltfTransforms::TransformDirection(
@@ -162,6 +185,12 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
                 .tw = tangentData.has_value() ? AccessorValue(*tangentData, vertexIndex, 3U) : 1.0F,
                 .u = u,
                 .v = desc.flipV ? 1.0F - v : v,
+                .u1 = u1,
+                .v1 = desc.flipV ? 1.0F - v1 : v1,
+                .r = cr,
+                .g = cg,
+                .b = cb,
+                .a = ca,
             });
         } else {
             asset.vertices.push_back(RenderStaticMeshVertexP3N3UV2{
@@ -173,6 +202,12 @@ void AppendGltfIndex(RenderMeshAssetData& asset, std::uint32_t index) {
                 .nz = normal[2],
                 .u = u,
                 .v = desc.flipV ? 1.0F - v : v,
+                .u1 = u1,
+                .v1 = desc.flipV ? 1.0F - v1 : v1,
+                .r = cr,
+                .g = cg,
+                .b = cb,
+                .a = ca,
             });
         }
     }
