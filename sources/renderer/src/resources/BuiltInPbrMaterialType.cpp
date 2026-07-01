@@ -320,7 +320,7 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
         { .name = "occlusionStrength", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "1", .description = "Ambient occlusion strength." },
         { .name = "emissiveStrength", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 64.0F }, .defaultValueHint = "1", .description = "Emissive strength multiplier." },
         { .name = "alphaCutoff", .type = RenderMaterialParameterType::Scalar, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .range = RenderMaterialParameterRange{ 0.0F, 1.0F }, .defaultValueHint = "0.5", .description = "Alpha test threshold for MASK mode." },
-        { .name = "alphaMode", .type = RenderMaterialParameterType::Enum, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "OPAQUE", .description = "Alpha mode: OPAQUE and MASK are rendered; BLEND is parsed but disabled until the transparent pass is ready." },
+        { .name = "alphaMode", .type = RenderMaterialParameterType::Enum, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "OPAQUE", .description = "Alpha mode: OPAQUE and MASK render in the opaque pass; BLEND renders alpha-blended in the transparent pass." },
         { .name = "doubleSided", .type = RenderMaterialParameterType::Bool, .group = RenderMaterialParameterGroup::Core, .runtimeSupport = RenderMaterialFeatureSupport::Supported, .defaultValueHint = "false", .description = "Render both front and back faces." },
 
         // Surface / advanced PBR parameters (parsed but ignored by current runtime shader)
@@ -404,7 +404,7 @@ const RenderMaterialTypeDocument& GetBuiltInPbrMaterialTypeDocument() noexcept {
         { .name = "ShadowDepth", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_shadow_instanced", .fragmentShader = "fs_mesh_shadow_instanced" },
         { .name = "SelectionId", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
         { .name = "EditorSelection", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
-        { .name = "BaseTransparent", .support = RenderMaterialFeatureSupport::ParsedButIgnored, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
+        { .name = "BaseTransparent", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = "fs_mesh_instanced" },
     }};
 
     static const std::array<RenderMaterialTypePermutationKey, 3> permutationKeys{{

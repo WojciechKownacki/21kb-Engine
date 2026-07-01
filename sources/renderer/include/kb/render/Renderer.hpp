@@ -195,6 +195,11 @@ public:
     [[nodiscard]] SceneRenderLightingConfig DefaultSceneLightingConfig() const noexcept;
     void SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept;
     [[nodiscard]] bool GpuDrivenRuntimeDispatchEnabled() const noexcept;
+    void SetGraphShaderCacheRoot(std::string root);
+    [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
+    // MAT-72: seconds advanced per completed frame; drives material u_time (Time/animation nodes).
+    void SetFrameDeltaSeconds(float seconds) noexcept;
+    [[nodiscard]] float FrameDeltaSeconds() const noexcept;
     void SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept;
     [[nodiscard]] ScenePostProcessSettings DefaultPostProcessSettings() const noexcept;
     [[nodiscard]] bool ConfigurePostProcessChain(const PostProcessChainDesc& desc);
@@ -252,6 +257,8 @@ private:
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
+    std::string graphShaderCacheRoot_;
+    float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = true;
     std::uint32_t lastUnresolvedMaterialTexturePathCount_ = 0;
     std::uint32_t lastDefaultMaterialFallbackCount_ = 0;

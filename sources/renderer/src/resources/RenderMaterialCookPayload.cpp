@@ -169,7 +169,9 @@ void HashDesc(std::uint64_t& hash, const RenderMaterialDesc& desc) noexcept {
     for (const float value : desc.uvTiling) HashFloat(hash, value);
     for (const float value : desc.uvOffset) HashFloat(hash, value);
     HashCombine(hash, static_cast<std::uint64_t>(desc.alphaMode));
+    HashCombine(hash, static_cast<std::uint64_t>(desc.translucencyBlend));
     HashCombine(hash, desc.doubleSided ? 1U : 0U);
+    HashCombine(hash, desc.writesDepth ? 1U : 0U);
 }
 
 void HashGraphParameterValues(std::uint64_t& hash, const std::vector<RenderMaterialGraphParameterValue>& values) noexcept {

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <string>
+#include <unordered_map>
 
 namespace kb::render {
 
@@ -20,6 +21,7 @@ struct SceneMeshPassBindDesc {
     MeshPassType pass = MeshPassType::BaseOpaque;
     const PackedSceneLighting& lighting;
     const std::array<float, 4>& cameraPosition;
+    const std::array<float, 4>& frameTime;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
 };
 
@@ -57,6 +59,9 @@ private:
     mutable MaterialProgramRegistry programRegistry_;
     mutable SceneMeshProgramBindStats programBindStats_{};
     mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
+    // MAT-78/#16: per-graph texture sampler uniforms, created lazily by name and reused across binds so the
+    // scene actually binds a graph material's own textures (slot >= 6), not just the builtin PBR slots.
+    mutable std::unordered_map<std::string, bgfx::UniformHandle> graphSamplerUniforms_;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;
@@ -71,6 +76,7 @@ private:
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialUvTransformUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColorIntensityUniform_ = BGFX_INVALID_HANDLE;

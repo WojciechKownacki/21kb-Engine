@@ -50,6 +50,14 @@ enum class SceneRenderLightingPath : std::uint8_t {
     VisibilityBuffer,
 };
 
+// MAT-82: only the Forward path (capped at kMaxSceneForwardLights analytic lights) is implemented and
+// drives the graph/builtin shaders. ClusteredForwardPlus/Deferred/VisibilityBuffer are declared for the
+// roadmap but NOT implemented (no clustered/tiled light list reaches the shader); they are reported as
+// non-production so nothing falsely claims >4-light lighting is applied.
+[[nodiscard]] constexpr bool IsSceneRenderLightingPathProduction(SceneRenderLightingPath path) noexcept {
+    return path == SceneRenderLightingPath::Forward;
+}
+
 enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
     Disabled,
     SsGi,
@@ -246,6 +254,9 @@ struct SceneRenderSubmitStats {
     std::uint32_t invalidLightCount = 0;
     std::uint32_t forwardLightCapacity = 0;
     std::uint32_t lightingPath = 0;
+    // MAT-82: false when the configured lighting path is a declared-but-unimplemented (non-production)
+    // path; the renderer still lights via the real Forward path, so this prevents a false >4-light claim.
+    bool lightingPathProduction = true;
     std::uint32_t lightClusterCount = 0;
     std::uint32_t submittedAreaLightCount = 0;
     std::uint32_t submittedVolumetricLightCount = 0;
@@ -409,6 +420,7 @@ struct SceneRenderDiagnostics {
     lhs.skippedForwardLightCount += rhs.skippedForwardLightCount;
     lhs.invalidLightCount += rhs.invalidLightCount;
     lhs.forwardLightCapacity += rhs.forwardLightCapacity;
+    lhs.lightingPathProduction = rhs.lightingPath != 0U ? rhs.lightingPathProduction : lhs.lightingPathProduction;
     lhs.lightingPath = rhs.lightingPath != 0U ? rhs.lightingPath : lhs.lightingPath;
     lhs.lightClusterCount = rhs.lightClusterCount != 0U ? rhs.lightClusterCount : lhs.lightClusterCount;
     lhs.submittedAreaLightCount += rhs.submittedAreaLightCount;

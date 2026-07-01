@@ -173,11 +173,33 @@ void AddDiagnostic(
     std::size_t line,
     RenderMaterialGraphDocument& graph,
     std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
-    if (rest != "lit") {
+    // MAT-37: accept every declared shading model token. ParseRenderMaterialShadingModel recognises the
+    // non-DefaultLit models unambiguously; DefaultLit is only accepted for its own spellings so unknown
+    // garbage is still rejected rather than silently treated as DefaultLit.
+    const RenderMaterialShadingModel model = ParseRenderMaterialShadingModel(rest);
+    const bool recognisedDefaultLit = rest == "lit" || rest == "defaultLit" || rest == "default_lit" || rest == "defaultlit";
+    if (model == RenderMaterialShadingModel::DefaultLit && !recognisedDefaultLit) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphShadingModel", "Unsupported material graph shading model.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     graph.shadingModel = std::string{ rest };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphBlendMode(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    // MAT-38: accept every declared blend-mode token. ParseRenderMaterialGraphBlendMode recognises the
+    // non-Opaque modes unambiguously; Opaque is only accepted for its own spelling so unknown tokens fail.
+    const RenderMaterialGraphBlendMode mode = ParseRenderMaterialGraphBlendMode(rest);
+    const bool recognisedOpaque = rest == "opaque";
+    if (mode == RenderMaterialGraphBlendMode::Opaque && !recognisedOpaque) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphBlendMode", "Unsupported material graph blend mode.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    graph.blendMode = std::string{ rest };
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -534,6 +556,9 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     }
     if (keyword == "graphShadingModel") {
         return ParseGraphShadingModel(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphBlendMode") {
+        return ParseGraphBlendMode(rest, line, asset.graph, diagnostics);
     }
     if (keyword == "graphStorageModel") {
         return ParseGraphStorageModel(rest, line, asset.graph, diagnostics);
