@@ -1140,6 +1140,13 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
 
     kb::render::SceneRenderer renderer;
     const kb::render::SceneRenderLightingConfig previewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
+    kb::editor::tests::Require(previewLighting.lightingPath == kb::render::SceneRenderLightingPath::Forward,
+        "Material preview lighting should default to the Forward project lighting path");
+    const kb::render::SceneRenderLightingConfig deferredPreviewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(
+        kb::editor::EditorMaterialPreviewSceneSettings::Defaults(),
+        kb::project::ProjectSceneLightingPath::Deferred);
+    kb::editor::tests::Require(deferredPreviewLighting.lightingPath == kb::render::SceneRenderLightingPath::Deferred,
+        "Material preview lighting should inherit Deferred from Project Settings");
     kb::editor::tests::Require(previewLighting.editorPreviewKeyLightEnabled, "KBMAT-0610: Material preview lighting must enable a neutral key light");
     kb::editor::tests::Require(previewLighting.editorPreviewKeyLightIntensity > 0.0F, "KBMAT-0610: Material preview key light must have positive intensity");
     kb::editor::tests::Require(previewLighting.environmentMode == kb::render::SceneRenderEnvironmentMode::Hemisphere, "KBMAT-0610: Material preview must use a neutral hemisphere/IBL fallback");

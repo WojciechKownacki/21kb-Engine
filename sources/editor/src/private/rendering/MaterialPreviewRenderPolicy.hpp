@@ -2,6 +2,7 @@
 
 #include "kb/render/post/ScenePostProcessSettings.hpp"
 #include "kb/render/scene/SceneRenderTypes.hpp"
+#include "engine/project/ProjectDescriptor.hpp"
 #include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 
 namespace kb::editor {
@@ -10,9 +11,22 @@ class MaterialPreviewRenderPolicy {
 public:
     MaterialPreviewRenderPolicy() = delete;
 
+    [[nodiscard]] static kb::render::SceneRenderLightingPath SceneLightingPath(
+        kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+        switch (projectLightingPath) {
+        case kb::project::ProjectSceneLightingPath::Deferred:
+            return kb::render::SceneRenderLightingPath::Deferred;
+        case kb::project::ProjectSceneLightingPath::Forward:
+        default:
+            return kb::render::SceneRenderLightingPath::Forward;
+        }
+    }
+
     [[nodiscard]] static kb::render::SceneRenderLightingConfig NeutralPbrLightingConfig(
-        EditorMaterialPreviewSceneSettings settings = EditorMaterialPreviewSceneSettings::Defaults()) noexcept {
+        EditorMaterialPreviewSceneSettings settings = EditorMaterialPreviewSceneSettings::Defaults(),
+        kb::project::ProjectSceneLightingPath projectLightingPath = kb::project::ProjectSceneLightingPath::Forward) noexcept {
         kb::render::SceneRenderLightingConfig lighting{};
+        lighting.lightingPath = SceneLightingPath(projectLightingPath);
         lighting.ambientColor = { 0.24F, 0.24F, 0.24F };
         lighting.ambientIntensity = settings.ambientIntensity;
         lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;
