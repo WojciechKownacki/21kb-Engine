@@ -26,6 +26,7 @@
 #include "app/EditorPlayModeSceneSession.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 
+#include <array>
 #include <string>
 #include <string_view>
 #include <cstddef>
@@ -68,6 +69,8 @@ class IEditorMaterialAssetPropertyEdit;
 class EditorMaterialAssetAuthoring;
 class EditorMaterialPreviewScene;
 struct EditorMaterialPreviewTelemetry;
+class EditorMaterialGraphCookService;
+struct EditorMaterialGraphCookResult;
 
 enum class EditorDirtySceneResolution {
     Save,
@@ -75,6 +78,12 @@ enum class EditorDirtySceneResolution {
 };
 
 class EditorSceneContext {
+    struct MaterialGraphDragNodeStart {
+        std::uint32_t nodeId = 0U;
+        std::int32_t positionX = 0;
+        std::int32_t positionY = 0;
+    };
+
 public:
     EditorSceneContext();
     ~EditorSceneContext();
@@ -223,6 +232,7 @@ public:
     [[nodiscard]] bool CreateInputAxisAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInputMappingContextAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialAsset(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateMaterialFunctionAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialGraphAsset(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateMaterialInstanceAsset(kb::assets::AssetId parentMaterial);
     [[nodiscard]] bool CreateMaterialTypeAsset(const std::filesystem::path& virtualFolder);
@@ -246,13 +256,32 @@ public:
     [[nodiscard]] bool SetInputActionValueType(kb::assets::AssetId id, kb::input::InputActionValueType valueType);
     [[nodiscard]] bool ToggleInputActionConsume(kb::assets::AssetId id);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] std::optional<kb::render::RenderMaterialInstanceAssetData> ReadMaterialInstanceAsset(kb::assets::AssetId id) const;
+    [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadEffectiveMaterialAsset(kb::assets::AssetId id) const;
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
     [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
+    // Per-project graph shader cache root shared by the cook service and every renderer (preview
+    // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
+    [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
+    [[nodiscard]] EditorMaterialGraphCookService& MaterialGraphCookService() noexcept;
+    // Latest cook result for the material open in the editor (drives the preview status banner).
+    [[nodiscard]] EditorMaterialGraphCookResult OpenMaterialGraphCookResult() const;
+    // Apply freshly cooked graph programs to live render state (hot reload + status); returns the
+    // number of completed cooks consumed this call (MAT-32/33).
+    std::size_t PumpMaterialGraphCookResults();
     [[nodiscard]] std::uint64_t MaterialPreviewRevision() const noexcept;
     [[nodiscard]] std::uint32_t SelectedMaterialGraphNodeId() const noexcept;
-    [[nodiscard]] bool SelectMaterialGraphNode(std::uint32_t nodeId) noexcept;
-    [[nodiscard]] bool ClearMaterialGraphNodeSelection() noexcept;
+    [[nodiscard]] const std::vector<std::uint32_t>& SelectedMaterialGraphNodeIds() const noexcept;
+    [[nodiscard]] bool IsMaterialGraphNodeSelected(std::uint32_t nodeId) const noexcept;
+    [[nodiscard]] bool SelectMaterialGraphNode(std::uint32_t nodeId);
+    [[nodiscard]] bool SelectMaterialGraphNode(std::uint32_t nodeId, bool additive, bool toggle);
+    [[nodiscard]] bool SetMaterialGraphNodeSelection(std::vector<std::uint32_t> nodeIds, std::uint32_t primaryNodeId);
+    [[nodiscard]] bool ClearMaterialGraphNodeSelection();
+    [[nodiscard]] std::uint32_t SelectedMaterialGraphCommentId() const noexcept;
+    [[nodiscard]] bool IsMaterialGraphCommentSelected(std::uint32_t commentId) const noexcept;
+    [[nodiscard]] bool SelectMaterialGraphComment(std::uint32_t commentId);
+    [[nodiscard]] bool ClearMaterialGraphCommentSelection();
     void FocusMaterialGraph(bool focused) noexcept;
     [[nodiscard]] bool IsMaterialGraphFocused() const noexcept;
     [[nodiscard]] float MaterialGraphZoom() const noexcept;
@@ -260,10 +289,32 @@ public:
     [[nodiscard]] int MaterialGraphPanY() const noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta) noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept;
+    void SetMaterialGraphCanvasViewport(int width, int height) noexcept;
+    void SetMaterialEditorFindQuery(std::string query);
+    [[nodiscard]] bool FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight);
+    [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
+    [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    [[nodiscard]] bool SelectMaterialGraphUpstream();
+    [[nodiscard]] bool SelectMaterialGraphDownstream();
+    [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
+    [[nodiscard]] bool DistributeSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphDistributeAxis axis);
     [[nodiscard]] bool BeginMaterialGraphNodeDrag(kb::assets::AssetId assetId, std::uint32_t nodeId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphNode(int x, int y);
     [[nodiscard]] bool EndMaterialGraphNodeDrag();
     [[nodiscard]] bool IsMaterialGraphNodeDragging() const noexcept;
+    [[nodiscard]] bool BeginMaterialGraphCommentDrag(kb::assets::AssetId assetId, std::uint32_t commentId, int x, int y);
+    [[nodiscard]] bool DragMaterialGraphComment(int x, int y);
+    [[nodiscard]] bool EndMaterialGraphCommentDrag();
+    [[nodiscard]] bool IsMaterialGraphCommentDragging() const noexcept;
+    [[nodiscard]] bool BeginMaterialGraphBoxSelection(kb::assets::AssetId assetId, int x, int y, bool additive) noexcept;
+    [[nodiscard]] bool DragMaterialGraphBoxSelection(int x, int y) noexcept;
+    [[nodiscard]] bool EndMaterialGraphBoxSelection(std::vector<std::uint32_t> nodeIds, std::uint32_t primaryNodeId);
+    [[nodiscard]] bool IsMaterialGraphBoxSelecting() const noexcept;
+    [[nodiscard]] bool MaterialGraphBoxSelectionAdditive() const noexcept;
+    [[nodiscard]] int MaterialGraphBoxSelectionStartX() const noexcept;
+    [[nodiscard]] int MaterialGraphBoxSelectionStartY() const noexcept;
+    [[nodiscard]] int MaterialGraphBoxSelectionCurrentX() const noexcept;
+    [[nodiscard]] int MaterialGraphBoxSelectionCurrentY() const noexcept;
     [[nodiscard]] bool BeginMaterialGraphPan(int x, int y) noexcept;
     [[nodiscard]] bool DragMaterialGraphPan(int x, int y) noexcept;
     [[nodiscard]] bool EndMaterialGraphPan() noexcept;
@@ -276,9 +327,23 @@ public:
         kb::render::RenderMaterialGraphNodeKind kind,
         int graphX,
         int graphY);
+    [[nodiscard]] bool AddMaterialGraphComment(kb::assets::AssetId id, int graphX, int graphY);
+    [[nodiscard]] bool AddMaterialGraphComposite(kb::assets::AssetId id, int graphX, int graphY);
     [[nodiscard]] bool DeleteSelectedMaterialGraphNode(kb::assets::AssetId id);
+    [[nodiscard]] bool DeleteSelectedMaterialGraphComment(kb::assets::AssetId id);
     [[nodiscard]] bool DisconnectSelectedMaterialGraphNodeLinks(kb::assets::AssetId id);
+    [[nodiscard]] bool CopySelectedMaterialGraphNodes();
+    [[nodiscard]] bool PasteMaterialGraphNodes(kb::assets::AssetId id, int offsetX, int offsetY);
+    [[nodiscard]] bool DuplicateSelectedMaterialGraphNodes(kb::assets::AssetId id, int offsetX, int offsetY);
+    [[nodiscard]] bool BeginMaterialGraphWorkingCopyTransaction(kb::assets::AssetId id, std::string label);
+    [[nodiscard]] bool CommitMaterialGraphWorkingCopyTransaction();
+    void CancelMaterialGraphWorkingCopyTransaction();
+    [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
     [[nodiscard]] bool SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId);
+    [[nodiscard]] bool SetMaterialGraphConstantColorValue(kb::assets::AssetId id, std::uint32_t nodeId, const std::array<float, 4U>& color);
+    [[nodiscard]] bool SetMaterialGraphNodeEnumValue(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view propertyId, std::string_view value);
+    void ToggleMaterialGraphNodeEnumDropdown(std::uint32_t nodeId, std::string propertyId);
+    void CloseMaterialGraphNodeEnumDropdown() noexcept;
     [[nodiscard]] bool BeginMaterialGraphPinConnection(kb::assets::AssetId id, std::uint32_t nodeId, std::string pin);
     [[nodiscard]] bool BeginMaterialGraphPinConnection(
         kb::assets::AssetId id,
@@ -308,7 +373,7 @@ public:
         std::string_view toPin,
         int x,
         int y);
-    void CancelMaterialGraphPinConnection() noexcept;
+    [[nodiscard]] bool CancelMaterialGraphPinConnection();
     [[nodiscard]] bool HasMaterialGraphPinConnection() const noexcept;
     [[nodiscard]] kb::assets::AssetId MaterialGraphPinConnectionAssetId() const noexcept;
     [[nodiscard]] std::uint32_t MaterialGraphPinConnectionNodeId() const noexcept;
@@ -317,12 +382,25 @@ public:
     [[nodiscard]] int MaterialGraphPinConnectionX() const noexcept;
     [[nodiscard]] int MaterialGraphPinConnectionY() const noexcept;
     [[nodiscard]] bool OpenMaterialGraphContextMenu(kb::assets::AssetId id, int x, int y, int graphX, int graphY) noexcept;
+    [[nodiscard]] bool OpenMaterialGraphContextMenuForPinConnection(kb::assets::AssetId id, int x, int y, int graphX, int graphY) noexcept;
     [[nodiscard]] bool CloseMaterialGraphContextMenu() noexcept;
     [[nodiscard]] bool IsMaterialGraphContextMenuOpen() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuX() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuY() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuGraphX() const noexcept;
     [[nodiscard]] int MaterialGraphContextMenuGraphY() const noexcept;
+    [[nodiscard]] std::string_view MaterialGraphContextMenuSearchQuery() const noexcept;
+    void SetMaterialGraphContextMenuSearchQuery(std::string query);
+    void AppendMaterialGraphContextMenuSearchText(wchar_t character);
+    void BackspaceMaterialGraphContextMenuSearch();
+    void ClearMaterialGraphContextMenuSearch() noexcept;
+    [[nodiscard]] const std::vector<MaterialEditorGraphMenuCommand>& MaterialGraphPaletteFavoriteCommands() const noexcept;
+    [[nodiscard]] bool IsMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand command) const noexcept;
+    [[nodiscard]] bool ToggleMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand command);
+    [[nodiscard]] bool IsMaterialGraphContextMenuPinFiltered() const noexcept;
+    [[nodiscard]] std::uint32_t MaterialGraphContextMenuPinFilterNodeId() const noexcept;
+    [[nodiscard]] std::string_view MaterialGraphContextMenuPinFilterPin() const noexcept;
+    [[nodiscard]] bool MaterialGraphContextMenuPinFilterIsOutput() const noexcept;
     [[nodiscard]] bool IsMaterialGraphContextMenuCategoryExpanded(std::size_t categoryIndex) const noexcept;
     [[nodiscard]] bool IsMaterialGraphContextMenuCategoryHovered(std::size_t categoryIndex) const noexcept;
     [[nodiscard]] bool IsMaterialGraphContextMenuCommandHovered(std::size_t categoryIndex, MaterialEditorGraphMenuCommand command) const noexcept;
@@ -335,6 +413,24 @@ public:
         std::string_view stableId,
         kb::render::RenderMaterialParameterType type,
         std::string_view valueText);
+    [[nodiscard]] bool SetMaterialInstanceEditorGraphParameterValue(
+        kb::assets::AssetId id,
+        std::string_view stableId,
+        kb::render::RenderMaterialParameterType type,
+        std::string_view valueText);
+    [[nodiscard]] bool ClearMaterialInstanceEditorGraphParameterOverride(
+        kb::assets::AssetId id,
+        std::string_view stableId,
+        kb::render::RenderMaterialParameterType type);
+    [[nodiscard]] bool SetMaterialInstanceEditorStaticParameterOverride(
+        kb::assets::AssetId id,
+        std::string_view stableId,
+        kb::render::RenderMaterialGraphNodeKind nodeKind,
+        std::string value);
+    [[nodiscard]] bool SetMaterialInstanceEditorTextureParameterValue(
+        kb::assets::AssetId id,
+        std::string_view stableId,
+        kb::assets::AssetId textureId);
     [[nodiscard]] bool SetMaterialGraphConstantValue(
         kb::assets::AssetId id,
         std::uint32_t nodeId,
@@ -431,12 +527,21 @@ private:
         kb::assets::AssetId id,
         std::string label,
         kb::render::RenderMaterialAssetData before,
-        std::uint32_t beforeSelectedNodeId);
+        std::uint32_t beforeSelectedNodeId,
+        std::vector<std::uint32_t> beforeSelectedNodeIds = {},
+        std::uint32_t beforeSelectedCommentId = 0U);
+    void ClearMaterialGraphWorkingCopyTransaction() noexcept;
+    void ClearMaterialGraphPinConnectionState() noexcept;
+    [[nodiscard]] bool AddMaterialGraphNodeForPendingConnection(kb::assets::AssetId id, MaterialEditorGraphMenuCommand command, int graphX, int graphY);
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> MaterialSourceForEdit(kb::assets::AssetId id) const;
     [[nodiscard]] bool ApplyPatchToMaterialEditorWorkingCopy(kb::assets::AssetId id, IEditorMaterialAssetPropertyEdit& edit);
     [[nodiscard]] bool CopyWorkingMaterialToSource(kb::assets::AssetId id);
+    [[nodiscard]] bool CopyWorkingMaterialInstanceToSource(kb::assets::AssetId id);
     void SyncMaterialEditorWorkingCopyRuntimePreview();
     void ClearMaterialEditorWorkingCopyRuntimePreview();
+    // MAT-84: cook every graph-backed material referenced by scene meshes (even unopened ones) so
+    // the scene/game render their real GPU graph program instead of the CPU fallback.
+    void CookSceneGraphMaterials();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
@@ -475,6 +580,9 @@ private:
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;
     std::unique_ptr<EditorMaterialPreviewScene> materialPreviewScene_;
+    std::string graphShaderCacheRoot_;
+    std::unique_ptr<EditorMaterialGraphCookService> materialGraphCookService_;
+    bool sceneGraphCookPending_ = true;
     EditorCommandStack commandStack_;
     EditorHierarchySelectionState hierarchySelection_;
     EditorSceneViewportBoxSelectionState viewportBoxSelection_{};
@@ -499,6 +607,8 @@ private:
     float materialGraphZoom_ = 0.72F;
     int materialGraphPanX_ = 0;
     int materialGraphPanY_ = 0;
+    int materialGraphCanvasWidth_ = 1280;
+    int materialGraphCanvasHeight_ = 720;
     kb::assets::AssetId materialGraphDragAssetId_{};
     std::uint32_t materialGraphDragNodeId_ = 0U;
     int materialGraphDragStartX_ = 0;
@@ -509,8 +619,29 @@ private:
     int materialGraphDragStartNodeY_ = 0;
     std::optional<kb::render::RenderMaterialAssetData> materialGraphDragStartDocument_;
     std::uint32_t materialGraphDragStartSelectedNodeId_ = 0U;
+    std::vector<std::uint32_t> materialGraphDragStartSelectedNodeIds_;
+    std::vector<MaterialGraphDragNodeStart> materialGraphDragStartNodes_;
     bool materialGraphDragChanged_ = false;
     bool materialGraphNodeDragging_ = false;
+    kb::assets::AssetId materialGraphCommentDragAssetId_{};
+    std::uint32_t materialGraphCommentDragId_ = 0U;
+    int materialGraphCommentDragStartX_ = 0;
+    int materialGraphCommentDragStartY_ = 0;
+    int materialGraphCommentDragStartCommentX_ = 0;
+    int materialGraphCommentDragStartCommentY_ = 0;
+    std::optional<kb::render::RenderMaterialAssetData> materialGraphCommentDragStartDocument_;
+    std::uint32_t materialGraphCommentDragStartSelectedNodeId_ = 0U;
+    std::vector<std::uint32_t> materialGraphCommentDragStartSelectedNodeIds_;
+    std::uint32_t materialGraphCommentDragStartSelectedCommentId_ = 0U;
+    bool materialGraphCommentDragChanged_ = false;
+    bool materialGraphCommentDragging_ = false;
+    kb::assets::AssetId materialGraphBoxSelectionAssetId_{};
+    int materialGraphBoxSelectionStartX_ = 0;
+    int materialGraphBoxSelectionStartY_ = 0;
+    int materialGraphBoxSelectionCurrentX_ = 0;
+    int materialGraphBoxSelectionCurrentY_ = 0;
+    bool materialGraphBoxSelectionAdditive_ = false;
+    bool materialGraphBoxSelecting_ = false;
     kb::assets::AssetId materialGraphConstantSliderAssetId_{};
     std::uint32_t materialGraphConstantSliderNodeId_ = 0U;
     std::size_t materialGraphConstantSliderComponentIndex_ = 0U;
@@ -534,6 +665,7 @@ private:
     bool materialGraphPendingConnectionOutput_ = true;
     int materialGraphPendingConnectionX_ = 0;
     int materialGraphPendingConnectionY_ = 0;
+    bool materialGraphPendingConnectionOwnsTransaction_ = false;
     kb::assets::AssetId materialGraphContextMenuAssetId_{};
     int materialGraphContextMenuX_ = 0;
     int materialGraphContextMenuY_ = 0;
@@ -542,6 +674,19 @@ private:
     std::uint32_t materialGraphContextMenuExpandedMask_ = 0U;
     std::size_t materialGraphContextMenuHoveredCategory_ = static_cast<std::size_t>(-1);
     MaterialEditorGraphMenuCommand materialGraphContextMenuHoveredCommand_ = MaterialEditorGraphMenuCommand::None;
+    std::string materialGraphContextMenuSearchQuery_;
+    std::vector<MaterialEditorGraphMenuCommand> materialGraphPaletteFavorites_;
+    std::uint32_t materialGraphContextMenuPinFilterNodeId_ = 0U;
+    std::string materialGraphContextMenuPinFilterPin_;
+    bool materialGraphContextMenuPinFilterOutput_ = true;
+    bool materialGraphContextMenuPinFilterActive_ = false;
+    kb::assets::AssetId materialGraphWorkingCopyTransactionAssetId_{};
+    std::string materialGraphWorkingCopyTransactionLabel_;
+    std::optional<kb::render::RenderMaterialAssetData> materialGraphWorkingCopyTransactionBefore_;
+    std::uint32_t materialGraphWorkingCopyTransactionBeforeSelectedNodeId_ = 0U;
+    std::vector<std::uint32_t> materialGraphWorkingCopyTransactionBeforeSelectedNodeIds_;
+    std::uint32_t materialGraphWorkingCopyTransactionBeforeSelectedCommentId_ = 0U;
+    bool materialGraphWorkingCopyTransactionChanged_ = false;
     std::uint64_t sceneRenderRevision_ = 1U;
     std::uint64_t sceneRenderDirtyBaseRevision_ = 1U;
     std::vector<std::uint64_t> sceneRenderDirtyEntityIds_;

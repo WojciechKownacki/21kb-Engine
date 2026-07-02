@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderHandles.hpp"
 
 #include <bgfx/bgfx.h>
@@ -29,9 +30,12 @@ struct RenderStaticMeshVertexP3N3UV2 {
     float nz = 0.0F;
     float u = 0.0F;
     float v = 0.0F;
+    float u1 = 0.0F;
+    float v1 = 0.0F;
     float r = 1.0F;
     float g = 1.0F;
     float b = 1.0F;
+    float a = 1.0F;
 };
 
 struct RenderStaticMeshVertexP3N3T4UV2 {
@@ -47,9 +51,12 @@ struct RenderStaticMeshVertexP3N3T4UV2 {
     float tw = 1.0F;
     float u = 0.0F;
     float v = 0.0F;
+    float u1 = 0.0F;
+    float v1 = 0.0F;
     float r = 1.0F;
     float g = 1.0F;
     float b = 1.0F;
+    float a = 1.0F;
 };
 
 struct RenderStaticMeshVertexSkinned {
@@ -91,6 +98,16 @@ enum class RenderMaterialAlphaMode : std::uint8_t {
     Opaque,
     Mask,
     Blend,
+};
+
+// Blend function applied when a material renders translucently (alphaMode == Blend) in the transparent
+// pass. Mirrors UE's translucent blend modes; opaque/masked materials ignore it (MAT-79).
+enum class RenderMaterialTranslucencyBlend : std::uint8_t {
+    Alpha,
+    Additive,
+    Modulate,
+    PreMultipliedAlpha,
+    AlphaHoldout,
 };
 
 enum class RenderMaterialDecalBlendMode : std::uint8_t {
@@ -246,7 +263,9 @@ struct RenderMaterialDesc {
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
     RenderMaterialDecalBlendMode decalBlendMode = RenderMaterialDecalBlendMode::Disabled;
     RenderMaterialLayerBlendMode layerBlendMode = RenderMaterialLayerBlendMode::Replace;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
+    bool writesDepth = true;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;
@@ -286,10 +305,18 @@ enum class RenderMaterialGraphUniformBindingType : std::uint8_t {
     Color,
 };
 
+enum class RenderMaterialGraphUniformBindingSource : std::uint8_t {
+    MaterialParameter,
+    ParameterCollection,
+};
+
 struct RenderMaterialGraphUniformBinding {
     std::string name;
     std::string stableId;
     RenderMaterialGraphUniformBindingType type = RenderMaterialGraphUniformBindingType::Scalar;
+    RenderMaterialGraphUniformBindingSource source = RenderMaterialGraphUniformBindingSource::MaterialParameter;
+    std::uint64_t collectionAssetId = 0U;
+    std::string collectionParameterStableId;
     float value[4]{ 0.0F, 0.0F, 0.0F, 0.0F };
 };
 
@@ -300,6 +327,9 @@ struct RenderMaterialGraphTextureBinding {
     std::uint64_t textureAssetId = 0U;
     RenderTextureHandle texture{};
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
+    // Resolved bgfx sampler flags (filter/wrap) from the graph sampler state; UINT32_MAX = texture default.
+    std::uint32_t samplerFlags = UINT32_MAX;
+    RenderMaterialGraphTextureDimension dimension = RenderMaterialGraphTextureDimension::Texture2D;
     bool resolved = false;
 };
 
@@ -308,9 +338,19 @@ struct RenderMaterialGraphProgramBinding {
     std::uint64_t materialTypeId = 0U;
     std::uint32_t materialTypeVersion = 0U;
     std::uint64_t graphSourceHash = 0U;
+    std::uint64_t variantKey = 0U;
+    std::uint64_t pipelineStateKey = 0U;
     std::vector<RenderMaterialGraphUniformBinding> uniforms;
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
+    // MAT-38/#25d: scene render state resolved from the graph blend mode, so a translucent graph material
+    // is submitted in the transparent pass with the correct blend equation (not just previewed).
+    RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
+    // MAT-80/#18b: the graph samples the opaque scene depth, so the scene binds the resolved depth texture
+    // to the graph fragment shader in the transparent pass.
+    bool usesSceneDepth = false;
+    bool usesSceneColor = false;
 };
 
 struct RenderMaterialResource {
@@ -340,7 +380,9 @@ struct RenderMaterialResource {
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;
     RenderMaterialDecalBlendMode decalBlendMode = RenderMaterialDecalBlendMode::Disabled;
     RenderMaterialLayerBlendMode layerBlendMode = RenderMaterialLayerBlendMode::Replace;
+    RenderMaterialTranslucencyBlend translucencyBlend = RenderMaterialTranslucencyBlend::Alpha;
     bool doubleSided = false;
+    bool writesDepth = true;
     std::uint64_t albedoTextureAssetId = 0;
     std::uint64_t normalTextureAssetId = 0;
     std::uint64_t metallicRoughnessTextureAssetId = 0;

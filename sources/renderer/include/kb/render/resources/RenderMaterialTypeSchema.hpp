@@ -47,7 +47,66 @@ enum class RenderMaterialTypeMigrationOperationKind : std::uint8_t {
 
 enum class RenderMaterialDomain : std::uint8_t {
     Surface,
+    DeferredDecal,
+    LightFunction,
+    Volume,
+    PostProcess,
+    UserInterface,
 };
+
+// MAT-34: only Surface is implemented (drives the forward graph wrapper/pass). The other domains are
+// declared for parity but NOT implemented; a graph that requests them falls back to Surface with a
+// diagnostic instead of silently mis-rendering — zero false claim.
+[[nodiscard]] constexpr bool IsRenderMaterialDomainProduction(RenderMaterialDomain domain) noexcept {
+    return domain == RenderMaterialDomain::Surface;
+}
+
+[[nodiscard]] RenderMaterialDomain ParseRenderMaterialDomain(std::string_view text) noexcept;
+[[nodiscard]] std::string_view RenderMaterialDomainName(RenderMaterialDomain domain) noexcept;
+
+// MAT-37: surface shading models. Unlit (emissive/base color straight to the framebuffer) and DefaultLit
+// (the metallic-roughness forward PBR path) are fully implemented and produce visibly different pixels.
+// The remaining models are declared for parity but NOT implemented; a graph that requests one falls back
+// to DefaultLit with a diagnostic instead of silently mis-shading — zero false claim.
+enum class RenderMaterialShadingModel : std::uint8_t {
+    Unlit,
+    DefaultLit,
+    Subsurface,
+    ClearCoat,
+    Cloth,
+    Hair,
+    Eye,
+    SingleLayerWater,
+    ThinTranslucent,
+};
+
+[[nodiscard]] constexpr bool IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel model) noexcept {
+    return model == RenderMaterialShadingModel::Unlit || model == RenderMaterialShadingModel::DefaultLit;
+}
+
+[[nodiscard]] RenderMaterialShadingModel ParseRenderMaterialShadingModel(std::string_view text) noexcept;
+[[nodiscard]] std::string_view RenderMaterialShadingModelName(RenderMaterialShadingModel model) noexcept;
+
+// MAT-38: material blend modes (the UE-style flat enum). Opaque/Masked are opaque-pass; the four
+// translucent modes resolve to real bgfx blend equations in MeshPipelinePassPolicy and to the
+// BaseTransparent cook. Every mode is implemented (real GPU state), so all are production.
+enum class RenderMaterialGraphBlendMode : std::uint8_t {
+    Opaque,
+    Masked,
+    Translucent,
+    Additive,
+    Modulate,
+    AlphaComposite,
+    AlphaHoldout,
+};
+
+// True when the blend mode draws in the transparent pass with a blend equation (everything but Opaque/Masked).
+[[nodiscard]] constexpr bool IsRenderMaterialGraphBlendModeTransparent(RenderMaterialGraphBlendMode mode) noexcept {
+    return mode != RenderMaterialGraphBlendMode::Opaque && mode != RenderMaterialGraphBlendMode::Masked;
+}
+
+[[nodiscard]] RenderMaterialGraphBlendMode ParseRenderMaterialGraphBlendMode(std::string_view text) noexcept;
+[[nodiscard]] std::string_view RenderMaterialGraphBlendModeName(RenderMaterialGraphBlendMode mode) noexcept;
 
 enum class RenderMaterialShaderModel : std::uint8_t {
     MetallicRoughnessPbr,

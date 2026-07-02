@@ -3,8 +3,10 @@
 #include "engine/assets/AssetId.hpp"
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetMetadata.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,6 +25,8 @@
 namespace kb::render {
 namespace {
 
+struct MaterialGraphRuntimeValue;
+
 [[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
     return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
 }
@@ -34,11 +38,65 @@ namespace {
     return manager.Mounts().Resolve(metadata.virtualPath).value_or(std::filesystem::path{});
 }
 
+[[nodiscard]] std::uint64_t MaterialRuntimeContentHashImpl(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata,
+    std::unordered_set<std::uint64_t>& visited);
+
 [[nodiscard]] RuntimeMaterialResolveDiagnosticSeverity ConvertSeverity(RenderMaterialAssetParseDiagnosticSeverity severity) noexcept {
     return severity == RenderMaterialAssetParseDiagnosticSeverity::Warning
         ? RuntimeMaterialResolveDiagnosticSeverity::Warning
         : RuntimeMaterialResolveDiagnosticSeverity::Error;
 }
+
+[[nodiscard]] float FastAtanScalar(float value) noexcept {
+    const float ax = std::abs(value);
+    const float t = ax >= 1.0F ? 1.0F / std::max(ax, 0.000001F) : ax;
+    const float s = t * t;
+    float result = (((-0.0464964749F * s + 0.15931422F) * s - 0.327622764F) * s + 0.999787841F) * t;
+    if (ax >= 1.0F) {
+        result = 1.57079632679F - result;
+    }
+    return value < 0.0F ? -result : result;
+}
+
+[[nodiscard]] float FastAtan2Scalar(float y, float x) noexcept {
+    if (std::abs(x) <= 0.000001F) {
+        return y < 0.0F ? -1.57079632679F : 1.57079632679F;
+    }
+    float angle = FastAtanScalar(y / x);
+    if (x < 0.0F) {
+        angle += y < 0.0F ? -3.14159265359F : 3.14159265359F;
+    }
+    return angle;
+}
+
+[[nodiscard]] float FastAsinScalar(float value) noexcept {
+    const float clamped = std::clamp(value, -1.0F, 1.0F);
+    return FastAtan2Scalar(clamped, std::sqrt(std::max(0.0F, 1.0F - clamped * clamped)));
+}
+
+[[nodiscard]] float FastAcosScalar(float value) noexcept {
+    return 1.57079632679F - FastAsinScalar(value);
+}
+
+[[nodiscard]] float FractScalar(float value) noexcept {
+    return value - std::floor(value);
+}
+
+[[nodiscard]] std::uint32_t SobolSeedBits(float value) noexcept {
+    const float seed = FractScalar(std::abs(value));
+    return static_cast<std::uint32_t>(std::floor(seed * 65536.0F)) & 0xffffU;
+}
+
+[[nodiscard]] float SobolComponentToUnit(std::uint32_t value) noexcept {
+    return static_cast<float>(value & 0xffffU) / 65536.0F;
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue SobolRuntimeValue(
+    const MaterialGraphRuntimeValue& cell,
+    const MaterialGraphRuntimeValue& index,
+    const MaterialGraphRuntimeValue& seed) noexcept;
 
 [[nodiscard]] std::string ParseDiagnosticMessage(const RenderMaterialAssetParseDiagnostic& diagnostic) {
     std::string message{ RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) };
@@ -68,6 +126,39 @@ namespace {
         }
     }
     return true;
+}
+
+[[nodiscard]] std::uint64_t MaterialRuntimeContentHashImpl(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata,
+    std::unordered_set<std::uint64_t>& visited) {
+    std::uint64_t hash = metadata.contentHash;
+    if (!visited.insert(metadata.id.value).second) {
+        return HashCombine(hash, 0x6d6174696e737443ULL);
+    }
+    if (metadata.type == "RenderMaterialInstance") {
+        const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+        if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
+            visited.erase(metadata.id.value);
+            return hash;
+        }
+        const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
+        const std::uint64_t resolvedHash = parentMetadata == nullptr ? hash : HashCombine(hash, MaterialRuntimeContentHashImpl(manager, *parentMetadata, visited));
+        visited.erase(metadata.id.value);
+        return resolvedHash;
+    }
+    if (metadata.type == "RenderMaterial" || metadata.type == kRenderMaterialFunctionAssetType) {
+        for (const kb::assets::AssetId dependency : metadata.dependencies) {
+            const kb::assets::AssetMetadata* dependencyMetadata = manager.Registry().Find(dependency);
+            if (dependencyMetadata == nullptr || dependencyMetadata->type == "RenderTexture") {
+                continue;
+            }
+            hash = HashCombine(hash, dependencyMetadata->id.value);
+            hash = HashCombine(hash, MaterialRuntimeContentHashImpl(manager, *dependencyMetadata, visited));
+        }
+    }
+    visited.erase(metadata.id.value);
+    return hash;
 }
 
 [[nodiscard]] bool IsRuntimeTextureAsset(const kb::assets::AssetMetadata& metadata) noexcept {
@@ -135,6 +226,142 @@ void AppendGraphValidationDiagnostics(
     }
 }
 
+struct RuntimeMaterialFunctionLibraryBuildResult {
+    RenderMaterialGraphFunctionLibrary library;
+    std::vector<RenderMaterialGraphDiagnostic> diagnostics;
+};
+
+void AppendRuntimeFunctionLibraryDiagnostic(
+    RuntimeMaterialFunctionLibraryBuildResult& result,
+    std::uint64_t assetId,
+    std::filesystem::path path,
+    std::string message) {
+    result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
+        .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+        .kind = RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+        .assetId = assetId,
+        .sourcePath = path.generic_string(),
+        .message = std::move(message),
+    });
+}
+
+[[nodiscard]] RuntimeMaterialFunctionLibraryBuildResult BuildRuntimeMaterialFunctionLibrary(
+    const kb::assets::AssetManager& manager,
+    const RenderMaterialGraphDocument& graph) {
+    RuntimeMaterialFunctionLibraryBuildResult result{};
+    std::vector<std::uint64_t> pending = DiscoverRenderMaterialGraphFunctionDependencies(graph);
+    std::unordered_set<std::uint64_t> visited;
+    while (!pending.empty()) {
+        const std::uint64_t assetId = pending.back();
+        pending.pop_back();
+        if (assetId == 0U || !visited.insert(assetId).second) {
+            continue;
+        }
+
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ assetId });
+        if (metadata == nullptr || metadata->type != kRenderMaterialFunctionAssetType) {
+            AppendRuntimeFunctionLibraryDiagnostic(
+                result,
+                assetId,
+                {},
+                "Material function asset " + std::to_string(assetId) + " is missing or has the wrong asset type.");
+            continue;
+        }
+
+        const std::filesystem::path path = ResolveAssetPhysicalPath(manager, *metadata);
+        const RenderMaterialAssetParseResult loaded = RenderMaterialFunctionAssetLoader::LoadFunctionWithDiagnostics(path, metadata->id);
+        if (!loaded.asset.has_value()) {
+            if (loaded.diagnostics.empty()) {
+                AppendRuntimeFunctionLibraryDiagnostic(
+                    result,
+                    assetId,
+                    path,
+                    "Material function asset " + std::to_string(assetId) + " could not be loaded.");
+            } else {
+                for (const RenderMaterialAssetParseDiagnostic& diagnostic : loaded.diagnostics) {
+                    AppendRuntimeFunctionLibraryDiagnostic(
+                        result,
+                        assetId,
+                        diagnostic.path.empty() ? path : diagnostic.path,
+                        "Material function asset could not be loaded: " + ParseDiagnosticMessage(diagnostic));
+                }
+            }
+            continue;
+        }
+
+        result.library.entries.push_back(RenderMaterialGraphFunctionLibraryEntry{
+            .assetId = metadata->id.value,
+            .contentHash = metadata->contentHash,
+            .name = metadata->virtualPath.generic_string(),
+            .graph = loaded.asset->graph,
+        });
+        for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(loaded.asset->graph)) {
+            if (!visited.contains(nestedAssetId)) {
+                pending.push_back(nestedAssetId);
+            }
+        }
+    }
+    return result;
+}
+
+void AppendRuntimeMaterialParameterCollectionDiagnostic(
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
+    std::uint64_t assetId,
+    std::filesystem::path path,
+    std::string message) {
+    diagnostics.push_back(RenderMaterialGraphDiagnostic{
+        .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+        .kind = RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+        .assetId = assetId,
+        .sourcePath = path.generic_string(),
+        .message = std::move(message),
+    });
+}
+
+[[nodiscard]] std::vector<RenderMaterialGraphDiagnostic> LoadRuntimeMaterialParameterCollectionDefaults(
+    const kb::assets::AssetManager& manager,
+    const RenderMaterialGraphDocument& graph) {
+    std::vector<RenderMaterialGraphDiagnostic> diagnostics;
+    for (const std::uint64_t assetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(graph)) {
+        if (assetId == 0U) {
+            continue;
+        }
+        const kb::assets::AssetMetadata* metadata = manager.Registry().Find(kb::assets::AssetId{ assetId });
+        if (metadata == nullptr || metadata->type != kRenderMaterialParameterCollectionAssetType) {
+            AppendRuntimeMaterialParameterCollectionDiagnostic(
+                diagnostics,
+                assetId,
+                {},
+                "Material parameter collection asset " + std::to_string(assetId) + " is missing or has the wrong asset type.");
+            continue;
+        }
+
+        const std::filesystem::path path = ResolveAssetPhysicalPath(manager, *metadata);
+        const RenderMaterialParameterCollectionParseResult loaded =
+            RenderMaterialParameterCollectionAssetLoader::LoadCollectionWithDiagnostics(path, metadata->id);
+        if (!loaded.collection.has_value()) {
+            if (loaded.diagnostics.empty()) {
+                AppendRuntimeMaterialParameterCollectionDiagnostic(
+                    diagnostics,
+                    assetId,
+                    path,
+                    "Material parameter collection asset " + std::to_string(assetId) + " could not be loaded.");
+            } else {
+                for (const RenderMaterialAssetParseDiagnostic& diagnostic : loaded.diagnostics) {
+                    AppendRuntimeMaterialParameterCollectionDiagnostic(
+                        diagnostics,
+                        assetId,
+                        diagnostic.path.empty() ? path : diagnostic.path,
+                        "Material parameter collection could not be loaded: " + ParseDiagnosticMessage(diagnostic));
+                }
+            }
+            continue;
+        }
+        static_cast<void>(GlobalRenderMaterialParameterCollectionStore().LoadDefaults(metadata->id.value, *loaded.collection));
+    }
+    return diagnostics;
+}
+
 [[nodiscard]] ResolvedRuntimeMaterialAsset FallbackMaterial(
     RuntimeMaterialResolveStatus status,
     RuntimeMaterialResolveDiagnosticKind kind,
@@ -157,6 +384,143 @@ void AppendGraphValidationDiagnostics(
         .message = std::move(message),
     });
     return resolved;
+}
+
+struct EffectiveRuntimeMaterialDocumentResult {
+    std::optional<RenderMaterialAssetData> material;
+    std::vector<RuntimeMaterialResolveDiagnostic> diagnostics;
+};
+
+void AppendParentMaterialParseDiagnostics(
+    EffectiveRuntimeMaterialDocumentResult& result,
+    const RenderMaterialAssetParseResult& parseResult,
+    kb::assets::AssetId ownerAssetId,
+    kb::assets::AssetId parentAssetId) {
+    for (const RenderMaterialAssetParseDiagnostic& diagnostic : parseResult.diagnostics) {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = ConvertSeverity(diagnostic.severity),
+            .kind = RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed,
+            .assetId = ownerAssetId,
+            .parentAssetId = parentAssetId,
+            .path = diagnostic.path,
+            .message = ParseDiagnosticMessage(diagnostic),
+        });
+    }
+}
+
+void AppendInstanceValidationDiagnostics(
+    EffectiveRuntimeMaterialDocumentResult& result,
+    const RenderMaterialInstanceValidationResult& validation,
+    kb::assets::AssetId ownerAssetId,
+    kb::assets::AssetId parentAssetId,
+    const std::filesystem::path& path) {
+    for (const RenderMaterialInstanceValidationDiagnostic& diagnostic : validation.diagnostics) {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+            .kind = RuntimeMaterialResolveDiagnosticKind::MaterialInstanceValidationFailed,
+            .assetId = ownerAssetId,
+            .parentAssetId = parentAssetId,
+            .path = path,
+            .message = std::string{ RenderMaterialInstanceValidationDiagnosticCodeName(diagnostic.code) } + ": " + diagnostic.message,
+        });
+    }
+}
+
+[[nodiscard]] EffectiveRuntimeMaterialDocumentResult LoadEffectiveRuntimeMaterialDocument(
+    kb::assets::AssetManager& manager,
+    const kb::assets::AssetMetadata& metadata,
+    std::unordered_set<std::uint64_t>& visited) {
+    EffectiveRuntimeMaterialDocumentResult result{};
+    if (!visited.insert(metadata.id.value).second) {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+            .kind = RuntimeMaterialResolveDiagnosticKind::MaterialInstanceValidationFailed,
+            .assetId = metadata.id,
+            .path = ResolveAssetPhysicalPath(manager, metadata),
+            .message = "Material instance parent chain contains a cycle.",
+        });
+        return result;
+    }
+
+    if (metadata.type == "RenderMaterial") {
+        const std::filesystem::path path = ResolveAssetPhysicalPath(manager, metadata);
+        const RenderMaterialAssetParseResult loaded = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(path, metadata.id);
+        if (!loaded.asset.has_value()) {
+            AppendParentMaterialParseDiagnostics(result, loaded, metadata.id, metadata.id);
+            visited.erase(metadata.id.value);
+            return result;
+        }
+        result.material = *loaded.asset;
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    if (metadata.type != "RenderMaterialInstance") {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+            .kind = RuntimeMaterialResolveDiagnosticKind::UnsupportedAssetType,
+            .assetId = metadata.id,
+            .path = ResolveAssetPhysicalPath(manager, metadata),
+            .message = "Material instance parent is neither a material nor a material instance.",
+        });
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
+    if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+            .kind = RuntimeMaterialResolveDiagnosticKind::MaterialInstanceLoadFailed,
+            .assetId = metadata.id,
+            .path = ResolveAssetPhysicalPath(manager, metadata),
+            .message = "Material instance could not be loaded or has no parent.",
+        });
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
+    if (parentMetadata == nullptr || (parentMetadata->type != "RenderMaterial" && parentMetadata->type != "RenderMaterialInstance")) {
+        result.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+            .kind = RuntimeMaterialResolveDiagnosticKind::MissingParentMaterial,
+            .assetId = metadata.id,
+            .parentAssetId = instance->parentMaterialAssetId,
+            .path = ResolveAssetPhysicalPath(manager, metadata),
+            .message = "Material instance parent is missing or is not a material.",
+        });
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    EffectiveRuntimeMaterialDocumentResult parent = LoadEffectiveRuntimeMaterialDocument(manager, *parentMetadata, visited);
+    if (!parent.material.has_value()) {
+        result.diagnostics = std::move(parent.diagnostics);
+        for (RuntimeMaterialResolveDiagnostic& diagnostic : result.diagnostics) {
+            if (!diagnostic.assetId.IsValid()) {
+                diagnostic.assetId = metadata.id;
+            }
+            if (!diagnostic.parentAssetId.IsValid()) {
+                diagnostic.parentAssetId = parentMetadata->id;
+            }
+        }
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    const RenderMaterialInstanceValidationResult validation =
+        RenderMaterialInstanceAssetLoader::ValidateAgainstParent(*instance, *parent.material);
+    if (!validation.Succeeded()) {
+        AppendInstanceValidationDiagnostics(result, validation, metadata.id, parentMetadata->id, ResolveAssetPhysicalPath(manager, metadata));
+        visited.erase(metadata.id.value);
+        return result;
+    }
+
+    result.material = BuildEffectiveRenderMaterialInstanceAsset(*parent.material, *instance);
+    result.diagnostics = std::move(parent.diagnostics);
+    visited.erase(metadata.id.value);
+    return result;
 }
 
 [[nodiscard]] std::string NormalizeMaterialParameterKey(std::string_view value) {
@@ -314,6 +678,8 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
         return "vector" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::ParameterColor:
         return "color" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return "collectionParam" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
     case RenderMaterialGraphNodeKind::ConstantVector2:
@@ -345,6 +711,7 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -356,9 +723,14 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
         break;
     }
@@ -415,6 +787,47 @@ struct MaterialGraphRuntimeValue {
 
 [[nodiscard]] float Clamp01(float value) noexcept {
     return std::clamp(value, 0.0F, 1.0F);
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue SobolRuntimeValue(
+    const MaterialGraphRuntimeValue& cell,
+    const MaterialGraphRuntimeValue& index,
+    const MaterialGraphRuntimeValue& seed) noexcept {
+    static constexpr std::array<std::array<std::uint32_t, 2U>, 10U> kDirections{ {
+        { 34432U, 19584U },
+        { 62016U, 37440U },
+        { 33312U, 3616U },
+        { 16656U, 5648U },
+        { 42504U, 30216U },
+        { 35330U, 10250U },
+        { 57860U, 40452U },
+        { 41984U, 18050U },
+        { 58112U, 42829U },
+        { 46848U, 38935U },
+    } };
+
+    const float originX = std::floor(cell.value[0]);
+    const float originY = std::floor(cell.value[1]);
+    const std::uint32_t cx = static_cast<std::uint32_t>(std::floor(std::abs(cell.value[0])));
+    const std::uint32_t cy = static_cast<std::uint32_t>(std::floor(std::abs(cell.value[1])));
+    std::uint32_t sx = ((cx * 1973U) + (cy * 9277U)) & 0xffffU;
+    std::uint32_t sy = ((cx * 26699U) + (cy * 31847U)) & 0xffffU;
+    const std::uint32_t sampleIndex = static_cast<std::uint32_t>(std::floor(std::max(index.value[0], 0.0F)));
+    for (std::uint32_t bit = 0U; bit < kDirections.size(); ++bit) {
+        if ((sampleIndex & (1U << bit)) != 0U) {
+            sx ^= kDirections[bit][0];
+            sy ^= kDirections[bit][1];
+        }
+    }
+    sx ^= SobolSeedBits(seed.value[0]);
+    sy ^= SobolSeedBits(seed.value[1]);
+    return RuntimeValue(
+        originX + SobolComponentToUnit(sx),
+        originY + SobolComponentToUnit(sy),
+        0.0F,
+        1.0F,
+        RenderMaterialGraphPinType::Float2,
+        cell.authored || index.authored || seed.authored);
 }
 
 [[nodiscard]] std::vector<float> ParseGraphDefaultNumbers(std::string_view text) {
@@ -995,6 +1408,29 @@ struct MaterialGraphRuntimeValue {
         result.authored = lhs.authored || rhs.authored || selected.authored;
         break;
     }
+    case RenderMaterialGraphNodeKind::RuntimeSwitch: {
+        const MaterialGraphRuntimeValue index = EvaluateGraphInput(materialAsset, node, "index", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue defaultValue = EvaluateGraphInput(materialAsset, node, "default", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case0 = EvaluateGraphInput(materialAsset, node, "case0", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case1 = EvaluateGraphInput(materialAsset, node, "case1", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case2 = EvaluateGraphInput(materialAsset, node, "case2", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case3 = EvaluateGraphInput(materialAsset, node, "case3", RuntimeValue(0.0F, false), stack);
+        const int selectedIndex = static_cast<int>(std::floor(index.value[0] + 0.5F));
+        const MaterialGraphRuntimeValue* selected = &defaultValue;
+        if (selectedIndex == 0) {
+            selected = &case0;
+        } else if (selectedIndex == 1) {
+            selected = &case1;
+        } else if (selectedIndex == 2) {
+            selected = &case2;
+        } else if (selectedIndex == 3) {
+            selected = &case3;
+        }
+        result = RuntimeValue(selected->value[0], selected->value[1], selected->value[2], selected->value[3], RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = selected->textureAssetId;
+        result.authored = index.authored || selected->authored;
+        break;
+    }
     case RenderMaterialGraphNodeKind::Desaturate: {
         const MaterialGraphRuntimeValue color = EvaluateGraphInput(materialAsset, node, "color", RuntimeValue(1.0F, 1.0F, 1.0F, 1.0F, RenderMaterialGraphPinType::Color, false), stack);
         const MaterialGraphRuntimeValue fraction = EvaluateGraphInput(materialAsset, node, "fraction", RuntimeValue(1.0F, false), stack);
@@ -1104,6 +1540,40 @@ struct MaterialGraphRuntimeValue {
         result.authored = y.authored || x.authored;
         break;
     }
+    case RenderMaterialGraphNodeKind::ArcSineFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(FastAsinScalar(input.value[0]), FastAsinScalar(input.value[1]), FastAsinScalar(input.value[2]), FastAsinScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcCosineFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(FastAcosScalar(input.value[0]), FastAcosScalar(input.value[1]), FastAcosScalar(input.value[2]), FastAcosScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcTangentFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(FastAtanScalar(input.value[0]), FastAtanScalar(input.value[1]), FastAtanScalar(input.value[2]), FastAtanScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast: {
+        const MaterialGraphRuntimeValue y = EvaluateGraphInput(materialAsset, node, "y", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue x = EvaluateGraphInput(materialAsset, node, "x", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(
+            FastAtan2Scalar(y.value[0], x.value[0]),
+            FastAtan2Scalar(y.value[1], x.value[1]),
+            FastAtan2Scalar(y.value[2], x.value[2]),
+            FastAtan2Scalar(y.value[3], x.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(y.textureAssetId, x.textureAssetId);
+        result.authored = y.authored || x.authored;
+        break;
+    }
     case RenderMaterialGraphNodeKind::Clamp: {
         const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
         const MaterialGraphRuntimeValue minValue = EvaluateGraphInput(materialAsset, node, "min", RuntimeValue(0.0F, false), stack);
@@ -1131,6 +1601,14 @@ struct MaterialGraphRuntimeValue {
             RenderMaterialGraphPinType::Float4);
         result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
         result.authored = lhs.authored || rhs.authored || t.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Sobol: {
+        const MaterialGraphRuntimeValue cell = EvaluateGraphInput(materialAsset, node, "cell", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float2, false), stack);
+        const MaterialGraphRuntimeValue index = EvaluateGraphInput(materialAsset, node, "index", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue seed = EvaluateGraphInput(materialAsset, node, "seed", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float2, false), stack);
+        result = SobolRuntimeValue(cell, index, seed);
+        result.textureAssetId = MergeTextureProvenance(MergeTextureProvenance(cell.textureAssetId, index.textureAssetId), seed.textureAssetId);
         break;
     }
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -1257,81 +1735,6 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
     }
 }
 
-void InheritMissingTextureAssetIds(RenderMaterialDesc& material, const RenderMaterialDesc& parent) noexcept {
-    material.albedoTextureAssetId = material.albedoTextureAssetId != 0U ? material.albedoTextureAssetId : parent.albedoTextureAssetId;
-    material.normalTextureAssetId = material.normalTextureAssetId != 0U ? material.normalTextureAssetId : parent.normalTextureAssetId;
-    material.metallicRoughnessTextureAssetId = material.metallicRoughnessTextureAssetId != 0U ? material.metallicRoughnessTextureAssetId : parent.metallicRoughnessTextureAssetId;
-    material.occlusionTextureAssetId = material.occlusionTextureAssetId != 0U ? material.occlusionTextureAssetId : parent.occlusionTextureAssetId;
-    material.emissiveTextureAssetId = material.emissiveTextureAssetId != 0U ? material.emissiveTextureAssetId : parent.emissiveTextureAssetId;
-    material.clearcoatTextureAssetId = material.clearcoatTextureAssetId != 0U ? material.clearcoatTextureAssetId : parent.clearcoatTextureAssetId;
-    material.clearcoatRoughnessTextureAssetId = material.clearcoatRoughnessTextureAssetId != 0U ? material.clearcoatRoughnessTextureAssetId : parent.clearcoatRoughnessTextureAssetId;
-    material.sheenColorTextureAssetId = material.sheenColorTextureAssetId != 0U ? material.sheenColorTextureAssetId : parent.sheenColorTextureAssetId;
-    material.transmissionTextureAssetId = material.transmissionTextureAssetId != 0U ? material.transmissionTextureAssetId : parent.transmissionTextureAssetId;
-    material.thicknessTextureAssetId = material.thicknessTextureAssetId != 0U ? material.thicknessTextureAssetId : parent.thicknessTextureAssetId;
-    material.anisotropyTextureAssetId = material.anisotropyTextureAssetId != 0U ? material.anisotropyTextureAssetId : parent.anisotropyTextureAssetId;
-    material.decalTextureAssetId = material.decalTextureAssetId != 0U ? material.decalTextureAssetId : parent.decalTextureAssetId;
-    material.layerMaskTextureAssetId = material.layerMaskTextureAssetId != 0U ? material.layerMaskTextureAssetId : parent.layerMaskTextureAssetId;
-}
-
-void InheritMissingTexturePaths(RenderMaterialAssetData& material, const RenderMaterialAssetData& parent) {
-    if (material.albedoTexturePath.empty()) material.albedoTexturePath = parent.albedoTexturePath;
-    if (material.normalTexturePath.empty()) material.normalTexturePath = parent.normalTexturePath;
-    if (material.metallicRoughnessTexturePath.empty()) material.metallicRoughnessTexturePath = parent.metallicRoughnessTexturePath;
-    if (material.occlusionTexturePath.empty()) material.occlusionTexturePath = parent.occlusionTexturePath;
-    if (material.emissiveTexturePath.empty()) material.emissiveTexturePath = parent.emissiveTexturePath;
-    if (material.clearcoatTexturePath.empty()) material.clearcoatTexturePath = parent.clearcoatTexturePath;
-    if (material.clearcoatRoughnessTexturePath.empty()) material.clearcoatRoughnessTexturePath = parent.clearcoatRoughnessTexturePath;
-    if (material.sheenColorTexturePath.empty()) material.sheenColorTexturePath = parent.sheenColorTexturePath;
-    if (material.transmissionTexturePath.empty()) material.transmissionTexturePath = parent.transmissionTexturePath;
-    if (material.thicknessTexturePath.empty()) material.thicknessTexturePath = parent.thicknessTexturePath;
-    if (material.anisotropyTexturePath.empty()) material.anisotropyTexturePath = parent.anisotropyTexturePath;
-    if (material.decalTexturePath.empty()) material.decalTexturePath = parent.decalTexturePath;
-    if (material.layerMaskTexturePath.empty()) material.layerMaskTexturePath = parent.layerMaskTexturePath;
-}
-
-void MergeGraphParameterValues(
-    std::vector<RenderMaterialGraphParameterValue>& materialValues,
-    const std::vector<RenderMaterialGraphParameterValue>& parentValues) {
-    if (materialValues.empty()) {
-        materialValues = parentValues;
-        return;
-    }
-
-    std::vector<RenderMaterialGraphParameterValue> merged = parentValues;
-    for (const RenderMaterialGraphParameterValue& overrideValue : materialValues) {
-        const auto existing = std::find_if(merged.begin(), merged.end(), [&overrideValue](const RenderMaterialGraphParameterValue& value) {
-            return value.stableId == overrideValue.stableId;
-        });
-        if (existing != merged.end()) {
-            *existing = overrideValue;
-        } else {
-            merged.push_back(overrideValue);
-        }
-    }
-    materialValues = std::move(merged);
-}
-
-[[nodiscard]] RenderMaterialAssetData BuildResolvedMaterialInstanceAsset(
-    const RenderMaterialAssetData& parent,
-    const RenderMaterialInstanceAssetData& instance) {
-    if (!instance.hasOverrides) {
-        return parent;
-    }
-
-    RenderMaterialAssetData material = instance.overrides;
-    material.materialTypeAssetId = material.materialTypeAssetId != 0U ? material.materialTypeAssetId : parent.materialTypeAssetId;
-    if (material.materialTypeAssetPath.empty()) material.materialTypeAssetPath = parent.materialTypeAssetPath;
-    material.graphSourceAssetId = material.graphSourceAssetId != 0U ? material.graphSourceAssetId : parent.graphSourceAssetId;
-    if (material.graphSourceAssetPath.empty()) material.graphSourceAssetPath = parent.graphSourceAssetPath;
-    InheritMissingTextureAssetIds(material.desc, parent.desc);
-    InheritMissingTexturePaths(material, parent);
-    if (!HasGraphAuthoringData(material.graph) && HasGraphAuthoringData(parent.graph)) {
-        material.graph = parent.graph;
-    }
-    MergeGraphParameterValues(material.graphParameterValues, parent.graphParameterValues);
-    return material;
-}
-
 } // namespace
 
 std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept {
@@ -1347,28 +1750,8 @@ std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t mes
 std::uint64_t RuntimeMaterialResolver::MaterialRuntimeContentHash(
     kb::assets::AssetManager& manager,
     const kb::assets::AssetMetadata& metadata) {
-    std::uint64_t hash = metadata.contentHash;
-    if (metadata.type == "RenderMaterialInstance") {
-        const kb::assets::AssetHandle<RenderMaterialInstanceAssetData> instance = manager.Load<RenderMaterialInstanceAssetData>(metadata.id);
-        if (!instance.IsLoaded() || !instance->parentMaterialAssetId.IsValid()) {
-            return hash;
-        }
-        const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
-        return parentMetadata == nullptr ? hash : HashCombine(hash, MaterialRuntimeContentHash(manager, *parentMetadata));
-    }
-    if (metadata.type != "RenderMaterial") {
-        return hash;
-    }
-
-    for (const kb::assets::AssetId dependency : metadata.dependencies) {
-        const kb::assets::AssetMetadata* dependencyMetadata = manager.Registry().Find(dependency);
-        if (dependencyMetadata == nullptr || dependencyMetadata->type == "RenderTexture") {
-            continue;
-        }
-        hash = HashCombine(hash, dependencyMetadata->id.value);
-        hash = HashCombine(hash, dependencyMetadata->contentHash);
-    }
-    return hash;
+    std::unordered_set<std::uint64_t> visited;
+    return MaterialRuntimeContentHashImpl(manager, metadata, visited);
 }
 
 RuntimeFallbackMaterialProfile RuntimeMaterialResolver::FallbackMaterialProfile(RuntimeFallbackMaterialKind kind) noexcept {
@@ -1507,12 +1890,31 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
     ApplyMaterialOutputGraphToPbrDesc(resolved.desc, materialAsset);
 
     if (HasGraphAuthoringData(materialAsset.graph)) {
+        RuntimeMaterialFunctionLibraryBuildResult functionLibrary = BuildRuntimeMaterialFunctionLibrary(manager, materialAsset.graph);
+        resolved.graphDiagnostics = std::move(functionLibrary.diagnostics);
+        std::vector<RenderMaterialGraphDiagnostic> collectionDiagnostics =
+            LoadRuntimeMaterialParameterCollectionDefaults(manager, materialAsset.graph);
+        const bool collectionHasError = std::any_of(collectionDiagnostics.begin(), collectionDiagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+            return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+        });
+        resolved.graphDiagnostics.insert(
+            resolved.graphDiagnostics.end(),
+            collectionDiagnostics.begin(),
+            collectionDiagnostics.end());
+        if (collectionHasError) {
+            return resolved;
+        }
         const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
             materialAsset.graph,
             RenderMaterialGraphBuildContext{
                 .assetId = materialMetadata.id.value,
                 .sourcePath = materialMetadata.virtualPath.generic_string(),
+                .functionLibrary = &functionLibrary.library,
             });
+        resolved.graphDiagnostics.insert(
+            resolved.graphDiagnostics.end(),
+            graphCompile.diagnostics.begin(),
+            graphCompile.diagnostics.end());
         if (graphCompile.Succeeded()) {
             std::uint64_t materialTypeId = 1469598103934665603ULL;
             for (const char ch : materialAsset.materialType) {
@@ -1524,7 +1926,16 @@ ResolvedRuntimeMaterialDesc RuntimeMaterialResolver::ResolveLoadedMaterial(
                 materialAsset.materialTypeVersion == 0U ? 1U : materialAsset.materialTypeVersion,
                 graphCompile.shader,
                 materialAsset.graphParameterValues);
-            resolved.graphProgram = std::move(bindingResult.binding);
+            const bool bindingHasError = std::any_of(bindingResult.diagnostics.begin(), bindingResult.diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+                return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+            });
+            resolved.graphDiagnostics.insert(
+                resolved.graphDiagnostics.end(),
+                bindingResult.diagnostics.begin(),
+                bindingResult.diagnostics.end());
+            if (!bindingHasError) {
+                resolved.graphProgram = std::move(bindingResult.binding);
+            }
         }
     }
     return resolved;
@@ -1632,6 +2043,7 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
                     .path = path,
                     .message = "Material graph has no GPU program; falling back to CPU PBR flattening.",
                 });
+                AppendGraphValidationDiagnostics(resolved, resolved.material.graphDiagnostics, metadata.id, path);
             }
         }
         AppendParseDiagnostics(resolved, loaded, metadata.id);
@@ -1664,38 +2076,54 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         return fallback;
     }
     const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance->parentMaterialAssetId);
-    if (parentMetadata == nullptr || parentMetadata->type != "RenderMaterial") {
+    if (parentMetadata == nullptr || (parentMetadata->type != "RenderMaterial" && parentMetadata->type != "RenderMaterialInstance")) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,
             RuntimeMaterialResolveDiagnosticKind::MissingParentMaterial,
             RuntimeMaterialResolveDiagnosticSeverity::Error,
             metadata.id,
             ResolveAssetPhysicalPath(manager, metadata),
-            "Material instance parent is missing or is not a material; using the error material.");
+            "Material instance parent is missing or is not a material/material instance; using the error material.");
         fallback.diagnostics.front().parentAssetId = instance->parentMaterialAssetId;
         fallback.contentHash = runtimeContentHash;
         return fallback;
     }
-    const std::filesystem::path parentPath = ResolveAssetPhysicalPath(manager, *parentMetadata);
-    const RenderMaterialAssetParseResult parentMaterial = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(parentPath, parentMetadata->id);
-    if (!parentMaterial.asset.has_value()) {
+
+    std::unordered_set<std::uint64_t> visited;
+    visited.insert(metadata.id.value);
+    EffectiveRuntimeMaterialDocumentResult parentDocument = LoadEffectiveRuntimeMaterialDocument(manager, *parentMetadata, visited);
+    if (!parentDocument.material.has_value()) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,
-            RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed,
+            parentDocument.diagnostics.empty() ? RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed : parentDocument.diagnostics.front().kind,
             RuntimeMaterialResolveDiagnosticSeverity::Error,
             metadata.id,
             ResolveAssetPhysicalPath(manager, metadata),
-            "Material instance parent could not be loaded; using the error material.");
-        fallback.diagnostics.clear();
-        AppendParseDiagnostics(fallback, parentMaterial, parentMetadata->id);
+            "Material instance parent could not be resolved; using the error material.");
+        fallback.diagnostics = std::move(parentDocument.diagnostics);
+        if (fallback.diagnostics.empty()) {
+            fallback.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
+                .kind = RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed,
+                .assetId = metadata.id,
+                .parentAssetId = parentMetadata->id,
+                .path = ResolveAssetPhysicalPath(manager, metadata),
+                .message = "Material instance parent could not be resolved; using the error material.",
+            });
+        }
         for (RuntimeMaterialResolveDiagnostic& diagnostic : fallback.diagnostics) {
-            diagnostic.assetId = metadata.id;
-            diagnostic.parentAssetId = parentMetadata->id;
+            if (!diagnostic.assetId.IsValid()) {
+                diagnostic.assetId = metadata.id;
+            }
+            if (!diagnostic.parentAssetId.IsValid()) {
+                diagnostic.parentAssetId = parentMetadata->id;
+            }
         }
         fallback.contentHash = runtimeContentHash;
         return fallback;
     }
-    const RenderMaterialInstanceValidationResult validation = RenderMaterialInstanceAssetLoader::ValidateAgainstParent(*instance, *parentMaterial.asset);
+
+    const RenderMaterialInstanceValidationResult validation = RenderMaterialInstanceAssetLoader::ValidateAgainstParent(*instance, *parentDocument.material);
     if (!validation.Succeeded()) {
         ResolvedRuntimeMaterialAsset fallback = FallbackMaterial(
             RuntimeMaterialResolveStatus::ErrorMaterial,
@@ -1718,12 +2146,8 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         fallback.contentHash = runtimeContentHash;
         return fallback;
     }
-    ResolvedRuntimeMaterialAsset parent = ResolveAsset(manager, *parentMetadata);
-    if (!parent.resolved) {
-        return parent;
-    }
 
-    const RenderMaterialAssetData instanceMaterial = BuildResolvedMaterialInstanceAsset(*parentMaterial.asset, *instance);
+    const RenderMaterialAssetData instanceMaterial = BuildEffectiveRenderMaterialInstanceAsset(*parentDocument.material, *instance);
     const std::vector<RenderMaterialGraphDiagnostic> instanceGraphDiagnostics = ValidateMaterialOutputRuntimeGraphDiagnostics(instanceMaterial);
     const bool instanceGraphHasError = std::any_of(instanceGraphDiagnostics.begin(), instanceGraphDiagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
@@ -1746,10 +2170,10 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
     }
 
     ResolvedRuntimeMaterialAsset resolved{
-        .material = instance->hasOverrides ? ResolveLoadedMaterial(manager, metadata, instanceMaterial) : parent.material,
-        .diagnostics = std::move(parent.diagnostics),
+        .material = ResolveLoadedMaterial(manager, metadata, instanceMaterial),
+        .diagnostics = std::move(parentDocument.diagnostics),
         .contentHash = runtimeContentHash,
-        .status = parent.status,
+        .status = RuntimeMaterialResolveStatus::Resolved,
         .renderMode = RuntimeMaterialRenderMode::BuiltinPbr,
         .resolved = true,
     };
@@ -1759,16 +2183,17 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         } else {
             resolved.renderMode = RuntimeMaterialRenderMode::CpuPbrFlatteningFallback;
             resolved.cpuFallbackReason = RuntimeMaterialCpuFallbackReason::GraphProgramUnavailable;
-            resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
-                .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
-                .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
-                .assetId = metadata.id,
-                .parentAssetId = parentMetadata->id,
-                .path = ResolveAssetPhysicalPath(manager, metadata),
-                .message = "Material instance graph has no GPU program; falling back to CPU PBR flattening.",
-            });
+                resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
+                    .severity = RuntimeMaterialResolveDiagnosticSeverity::Warning,
+                    .kind = RuntimeMaterialResolveDiagnosticKind::MaterialGraphValidationFailed,
+                    .assetId = metadata.id,
+                    .parentAssetId = parentMetadata->id,
+                    .path = ResolveAssetPhysicalPath(manager, metadata),
+                    .message = "Material instance graph has no GPU program; falling back to CPU PBR flattening.",
+                });
+                AppendGraphValidationDiagnostics(resolved, resolved.material.graphDiagnostics, metadata.id, ResolveAssetPhysicalPath(manager, metadata));
+            }
         }
-    }
     for (RuntimeMaterialResolveDiagnostic& diagnostic : resolved.diagnostics) {
         if (!diagnostic.parentAssetId.IsValid()) {
             diagnostic.parentAssetId = parentMetadata->id;
@@ -1776,16 +2201,6 @@ ResolvedRuntimeMaterialAsset RuntimeMaterialResolver::ResolveAsset(
         if (!diagnostic.assetId.IsValid()) {
             diagnostic.assetId = metadata.id;
         }
-    }
-    if (resolved.status == RuntimeMaterialResolveStatus::ErrorMaterial) {
-        resolved.diagnostics.push_back(RuntimeMaterialResolveDiagnostic{
-            .severity = RuntimeMaterialResolveDiagnosticSeverity::Error,
-            .kind = RuntimeMaterialResolveDiagnosticKind::ParentMaterialLoadFailed,
-            .assetId = metadata.id,
-            .parentAssetId = parentMetadata->id,
-            .path = ResolveAssetPhysicalPath(manager, metadata),
-            .message = "Material instance parent resolved to an error material.",
-        });
     }
     return resolved;
 }

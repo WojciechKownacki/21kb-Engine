@@ -55,7 +55,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         }
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialGraph, .label = "New Material Graph" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });
@@ -68,7 +68,7 @@ std::vector<EditorAssetContextMenuItem> EditorAssetBrowserContextMenuState::Item
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewFolder, .label = "New Folder", .separatorAfter = true });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewLuaScript, .label = "New Lua Script" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterial, .label = "New Material" });
-        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialGraph, .label = "New Material Graph" });
+        items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialFunction, .label = "New Material Function" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewMaterialType, .label = "New Material Type" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAction, .label = "New Input Action" });
         items.push_back(EditorAssetContextMenuItem{ .command = EditorAssetContextCommand::NewInputAxis, .label = "New Input Axis" });

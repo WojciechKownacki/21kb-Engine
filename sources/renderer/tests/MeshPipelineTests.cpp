@@ -816,11 +816,10 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
         .diagnostics = &blendedDiagnostics,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
-    Require(blendedOpaque.commands.empty(), "KBMAT-UE-0014: MeshPipeline kept disabled alpha blend materials in the opaque pass");
-    Require(blendedDiagnostics.events.size() == 1U, "KBMAT-UE-0014: Disabled alpha blend material did not emit a diagnostic");
-    Require(blendedDiagnostics.events[0].kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend, "KBMAT-UE-0014: Disabled alpha blend diagnostic used the wrong kind");
-    Require(blendedDiagnostics.events[0].severity == SceneRenderDiagnosticSeverity::Warning, "KBMAT-UE-0014: Disabled alpha blend diagnostic must be a warning");
-    Require(blendedDiagnostics.events[0].materialAssetId == 7U, "KBMAT-UE-0014: Disabled alpha blend diagnostic lost the material asset id");
+    Require(blendedOpaque.commands.empty(), "KBMAT-MAT80: MeshPipeline kept blended materials in the opaque pass");
+    // MAT-80: routing a blended material out of the opaque pass is correct (it renders in transparent),
+    // so it must NOT raise an unsupported-alpha-blend diagnostic anymore.
+    Require(blendedDiagnostics.events.empty(), "KBMAT-MAT80: blended material excluded from opaque must not emit an unsupported diagnostic");
 
     const MeshPipelineBuildResult blendedTransparent = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseTransparent,
@@ -829,7 +828,7 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
         .resolvedMaterialResource = &blended,
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
-    Require(blendedTransparent.commands.empty(), "KBMAT-UE-0014: MeshPipeline routed disabled alpha blend materials to the transparent pass");
+    Require(blendedTransparent.commands.size() == 1U, "KBMAT-MAT80: MeshPipeline must route blended materials to the transparent pass");
 }
 
 void RunMeshPipelineUsesMaterialDoubleSidedStateTest() {
@@ -942,8 +941,8 @@ void RunMeshPipelineKeepsBlendDisabledUntilTransparentPassIsReadyTest() {
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
 
-    Require(result.commands.empty(), "KBMAT-0608: Transparent pass emitted commands for disabled blend materials");
-    Require(diagnostics.events.empty(), "KBMAT-0608: Transparent pass should not duplicate the BaseOpaque disabled-blend diagnostic");
+    Require(result.commands.size() == 2U, "KBMAT-MAT80: Transparent pass must emit commands for blended materials (one per draw group)");
+    Require(diagnostics.events.empty(), "KBMAT-MAT80: Transparent pass must not emit an unsupported-blend diagnostic");
 }
 
 void RunMeshPipelineCpuCullsByFrustumBoundsTest() {

@@ -16,9 +16,11 @@
 #include "engine/scene/TransformComponent.hpp"
 #include "kb/render/Renderer.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
@@ -29,7 +31,9 @@
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -793,6 +797,63 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(conditionalResolved.desc.baseColor[3], 0.4F), "KBMAT-RUNTIME: If equal branch did not evaluate into Alpha");
     Require(NearlyEqual(conditionalResolved.desc.emissiveColor[0], 0.8F), "KBMAT-RUNTIME: If greater branch did not evaluate into Emissive");
 
+    RenderMaterialAssetData switchMaterial{};
+    switchMaterial.desc.baseColor[0] = 1.0F;
+    switchMaterial.desc.baseColor[1] = 1.0F;
+    switchMaterial.desc.baseColor[2] = 1.0F;
+    switchMaterial.desc.baseColor[3] = 1.0F;
+    switchMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "2.4"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "9"),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.1"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.2"),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.4"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.7"),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.9"),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::RuntimeSwitch),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::RuntimeSwitch),
+    };
+    switchMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "default"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case0"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case1"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case2"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case3"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "default"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case0"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case1"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case2"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case3"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    const ResolvedRuntimeMaterialDesc switchResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, switchMaterial);
+    Require(NearlyEqual(switchResolved.desc.roughnessFactor, 0.7F), "KBMAT-RUNTIME: Switch case2 branch did not evaluate into Roughness");
+    Require(NearlyEqual(switchResolved.desc.baseColor[3], 0.1F), "KBMAT-RUNTIME: Switch default branch did not evaluate into Alpha");
+
+    RenderMaterialAssetData sobolMaterial{};
+    sobolMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::Sobol),
+    };
+    sobolMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Sobol, 3U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Sobol, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Sobol, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+    };
+    const ResolvedRuntimeMaterialDesc sobolResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, sobolMaterial);
+    Require(NearlyEqual(sobolResolved.desc.baseColor[0], 34432.0F / 65536.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[1], 19584.0F / 65536.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[3], 1.0F),
+        "KBMAT-RUNTIME: Sobol graph did not evaluate its deterministic Float2 sample into Base Color");
+    Require(NearlyEqual(sobolResolved.desc.roughnessFactor, 34432.0F / 65536.0F),
+        "KBMAT-RUNTIME: Sobol graph did not coerce its Float2 sample into Roughness");
+
     RenderMaterialAssetData surfaceMaterial{};
     surfaceMaterial.desc.baseColor[0] = 1.0F;
     surfaceMaterial.desc.baseColor[1] = 1.0F;
@@ -881,6 +942,36 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(advancedMathResolved.desc.metallicFactor, 0.523599F), "KBMAT-RUNTIME: ArcSine graph did not evaluate into Metallic");
     Require(NearlyEqual(advancedMathResolved.desc.occlusionStrength, 0.785398F), "KBMAT-RUNTIME: ArcTangent graph did not evaluate into Occlusion");
     Require(NearlyEqual(advancedMathResolved.desc.emissiveColor[0], 1.047198F), "KBMAT-RUNTIME: ArcCosine graph did not evaluate into Emissive");
+
+    RenderMaterialAssetData fastTrigMaterial{};
+    fastTrigMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ArcSineFast),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ArcCosineFast),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ArcTangentFast),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::ArcTangent2Fast),
+    };
+    fastTrigMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "y"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "x"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    const ResolvedRuntimeMaterialDesc fastTrigResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, fastTrigMaterial);
+    Require(NearlyEqual(fastTrigResolved.desc.metallicFactor, 0.523403F), "KBMAT-RUNTIME: ArcSineFast graph did not evaluate into Metallic");
+    Require(NearlyEqual(fastTrigResolved.desc.emissiveColor[0], 1.047394F), "KBMAT-RUNTIME: ArcCosineFast graph did not evaluate into Emissive");
+    Require(NearlyEqual(fastTrigResolved.desc.occlusionStrength, 0.785814F), "KBMAT-RUNTIME: ArcTangentFast graph did not evaluate into Occlusion");
+    Require(NearlyEqual(fastTrigResolved.desc.baseColor[3], 0.785814F), "KBMAT-RUNTIME: ArcTangent2Fast graph did not evaluate into Alpha");
 }
 
 void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {
@@ -1032,6 +1123,215 @@ void RunRuntimeGraphMaterialRenderModeReportingTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRuntimeMaterialInstanceDynamicParameterOverrideTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_runtime_material_instance_dynamic";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-40 instance dynamic test could not create temp root");
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ParameterColor,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = "tint",
+            .displayName = "Tint",
+            .defaultValueHint = "1 0 0 1",
+            .overrideSupported = true,
+        },
+    });
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ParameterColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    parent.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "tint",
+        .type = RenderMaterialParameterType::Color,
+        .numbers = { 1.0F, 0.0F, 0.0F, 1.0F },
+    });
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-40 instance dynamic test could not save parent material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-40 instance dynamic test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "MAT-40 instance dynamic test could not register instance loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-40 instance dynamic test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "MAT-40 instance dynamic test did not discover parent material");
+    const kb::assets::AssetMetadata* parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(parentMeta != nullptr, "MAT-40 instance dynamic test did not find parent material metadata");
+
+    RenderMaterialInstanceAssetData instance{};
+    instance.parentMaterialAssetId = parentMeta->id;
+    instance.hasOverrides = true;
+    instance.overrides = parent;
+    instance.overrides.graphParameterValues.clear();
+    instance.overrides.graphParameterValues.push_back(RenderMaterialGraphParameterValue{
+        .stableId = "tint",
+        .type = RenderMaterialParameterType::Color,
+        .numbers = { 0.0F, 1.0F, 0.0F, 1.0F },
+    });
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Parent_Inst.kbmatinst", instance), "MAT-40 instance dynamic test could not save material instance");
+
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-40 instance dynamic test did not discover parent and instance");
+    parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    const kb::assets::AssetMetadata* instanceMeta = manager.Registry().FindByPath("/Game/Parent_Inst.kbmatinst");
+    Require(parentMeta != nullptr && instanceMeta != nullptr, "MAT-40 instance dynamic test did not find discovered materials");
+    Require(instance.parentMaterialAssetId == parentMeta->id, "MAT-40 instance dynamic test parent id must match discovered parent metadata");
+
+    RuntimeMaterialResolver resolver;
+    const ResolvedRuntimeMaterialAsset resolvedParent = resolver.ResolveAsset(manager, *parentMeta);
+    const ResolvedRuntimeMaterialAsset resolvedInstance = resolver.ResolveAsset(manager, *instanceMeta);
+    Require(resolvedParent.resolved && resolvedParent.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph,
+        "MAT-40 parent graph material must resolve to GPU material graph");
+    Require(resolvedInstance.resolved && resolvedInstance.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph,
+        "MAT-40 material instance override must resolve to GPU material graph");
+    Require(resolvedParent.material.graphProgram.active && resolvedInstance.material.graphProgram.active,
+        "MAT-40 parent and instance must both bind active graph programs");
+    Require(resolvedParent.material.graphProgram.graphSourceHash == resolvedInstance.material.graphProgram.graphSourceHash &&
+            resolvedParent.material.graphProgram.materialTypeId == resolvedInstance.material.graphProgram.materialTypeId &&
+            resolvedParent.material.graphProgram.materialTypeVersion == resolvedInstance.material.graphProgram.materialTypeVersion,
+        "MAT-40 material instance dynamic override must keep the same graph program key");
+
+    const auto findTint = [](const RenderMaterialGraphProgramBinding& binding) -> const RenderMaterialGraphUniformBinding* {
+        for (const RenderMaterialGraphUniformBinding& uniform : binding.uniforms) {
+            if (uniform.stableId == "tint") {
+                return &uniform;
+            }
+        }
+        return nullptr;
+    };
+    const RenderMaterialGraphUniformBinding* parentTint = findTint(resolvedParent.material.graphProgram);
+    const RenderMaterialGraphUniformBinding* instanceTint = findTint(resolvedInstance.material.graphProgram);
+    Require(parentTint != nullptr && instanceTint != nullptr, "MAT-40 graph program binding must expose the tint uniform");
+    Require(NearlyEqual(parentTint->value[0], 1.0F) && NearlyEqual(parentTint->value[1], 0.0F),
+        "MAT-40 parent graph uniform must carry the parent tint value");
+    Require(NearlyEqual(instanceTint->value[0], 0.0F) && NearlyEqual(instanceTint->value[1], 1.0F),
+        "MAT-40 material instance override must update the tint uniform without changing program key");
+
+    RenderMaterialInstanceAssetData invalid = instance;
+    invalid.overrides.graphParameterValues.front().stableId = "missingTint";
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Invalid_Inst.kbmatinst", invalid), "MAT-40 instance dynamic test could not save invalid instance");
+    static_cast<void>(manager.DiscoverMountedAssets());
+    const kb::assets::AssetMetadata* invalidMeta = manager.Registry().FindByPath("/Game/Invalid_Inst.kbmatinst");
+    Require(invalidMeta != nullptr, "MAT-40 instance dynamic test did not discover invalid instance");
+    const ResolvedRuntimeMaterialAsset invalidResolved = resolver.ResolveAsset(manager, *invalidMeta);
+    Require(invalidResolved.status == RuntimeMaterialResolveStatus::ErrorMaterial &&
+            std::ranges::any_of(invalidResolved.diagnostics, [](const RuntimeMaterialResolveDiagnostic& diagnostic) {
+                return diagnostic.kind == RuntimeMaterialResolveDiagnosticKind::MaterialInstanceValidationFailed &&
+                    diagnostic.message.find("unknown_override_parameter") != std::string::npos;
+            }),
+        "MAT-40 invalid material instance override must fail with typed validation diagnostics");
+
+    std::filesystem::remove_all(root, error);
+}
+
+void RunRuntimeMaterialInstanceStaticBaseOverrideChainTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_material_instance_static_base_chain";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-47 static/base chain test could not create temp root");
+
+    RenderMaterialAssetData parent{};
+    parent.graph = MakeDefaultRenderMaterialGraphDocument();
+    parent.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::StaticBoolParameter,
+        .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "useRed", .displayName = "Use Red", .defaultValueHint = "true" },
+    });
+    parent.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+    });
+    parent.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+    });
+    parent.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::StaticSwitch });
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::StaticBoolParameter, 2U, "value", RenderMaterialGraphNodeKind::StaticSwitch, 5U, "value"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::StaticSwitch, 5U, "true"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::StaticSwitch, 5U, "false"));
+    parent.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::StaticSwitch, 5U, "result", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-47 static/base chain test could not save parent material");
+
+    kb::assets::AssetManager manager;
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-47 static/base chain test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialInstanceAssetLoader>()), "MAT-47 static/base chain test could not register instance loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-47 static/base chain test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() == 1U, "MAT-47 static/base chain test did not discover parent material");
+    const kb::assets::AssetMetadata* parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    Require(parentMeta != nullptr && parentMeta->type == "RenderMaterial", "MAT-47 static/base chain test did not find parent material metadata");
+
+    RenderMaterialInstanceAssetData mid{};
+    mid.parentMaterialAssetId = parentMeta->id;
+    mid.staticParameterOverrides.push_back(RenderMaterialInstanceStaticParameterOverride{
+        .stableId = "useRed",
+        .nodeKind = RenderMaterialGraphNodeKind::StaticBoolParameter,
+        .value = "false",
+    });
+    mid.basePropertyOverrides.overrideBlendMode = true;
+    mid.basePropertyOverrides.blendMode = RenderMaterialGraphBlendMode::Additive;
+    mid.basePropertyOverrides.overrideShadingModel = true;
+    mid.basePropertyOverrides.shadingModel = RenderMaterialShadingModel::Unlit;
+    mid.basePropertyOverrides.overrideTwoSided = true;
+    mid.basePropertyOverrides.twoSided = true;
+    mid.basePropertyOverrides.overrideOpacityMaskClip = true;
+    mid.basePropertyOverrides.opacityMaskClip = 0.33F;
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Mid.kbmatinst", mid), "MAT-47 static/base chain test could not save mid instance");
+    Require(manager.DiscoverMountedAssets() == 2U, "MAT-47 static/base chain test did not discover mid instance");
+    const kb::assets::AssetMetadata* midMeta = manager.Registry().FindByPath("/Game/Mid.kbmatinst");
+    Require(midMeta != nullptr && midMeta->type == "RenderMaterialInstance", "MAT-47 static/base chain test did not find mid metadata");
+
+    RenderMaterialInstanceAssetData child{};
+    child.parentMaterialAssetId = midMeta->id;
+    Require(RenderMaterialInstanceAssetWriter::Save(root / "Child.kbmatinst", child), "MAT-47 static/base chain test could not save child instance");
+    Require(manager.DiscoverMountedAssets() == 3U, "MAT-47 static/base chain test did not discover child instance");
+    parentMeta = manager.Registry().FindByPath("/Game/Parent.kbmat");
+    midMeta = manager.Registry().FindByPath("/Game/Mid.kbmatinst");
+    const kb::assets::AssetMetadata* childMeta = manager.Registry().FindByPath("/Game/Child.kbmatinst");
+    Require(parentMeta != nullptr && midMeta != nullptr && childMeta != nullptr, "MAT-47 static/base chain test lost discovered metadata");
+
+    RuntimeMaterialResolver resolver;
+    const ResolvedRuntimeMaterialAsset resolvedParent = resolver.ResolveAsset(manager, *parentMeta);
+    const ResolvedRuntimeMaterialAsset resolvedMid = resolver.ResolveAsset(manager, *midMeta);
+    const ResolvedRuntimeMaterialAsset resolvedChild = resolver.ResolveAsset(manager, *childMeta);
+    Require(resolvedParent.resolved && resolvedParent.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph,
+        "MAT-47 parent graph material must resolve to a GPU graph");
+    Require(resolvedMid.resolved, "MAT-47 mid instance static override did not resolve");
+    Require(resolvedMid.material.graphProgram.active, "MAT-47 mid instance static override did not bind an active graph program");
+    Require(resolvedMid.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph,
+        "MAT-47 mid instance static override did not report GPU graph render mode");
+    Require(resolvedChild.resolved, "MAT-47 child instance did not resolve");
+    Require(resolvedChild.material.graphProgram.active, "MAT-47 child instance did not bind an inherited graph program");
+    Require(resolvedChild.renderMode == RuntimeMaterialRenderMode::GpuMaterialGraph,
+        "MAT-47 child instance did not report inherited GPU graph render mode");
+    Require(resolvedParent.material.graphProgram.graphSourceHash != resolvedMid.material.graphProgram.graphSourceHash,
+        "MAT-47 static override must produce a different runtime graph variant key");
+    Require(resolvedMid.material.graphProgram.graphSourceHash == resolvedChild.material.graphProgram.graphSourceHash,
+        "MAT-47 child instance did not inherit the static variant key from its parent instance");
+    Require(resolvedChild.material.graphProgram.alphaMode == RenderMaterialAlphaMode::Blend &&
+            resolvedChild.material.graphProgram.translucencyBlend == RenderMaterialTranslucencyBlend::Additive,
+        "MAT-47 blendMode override did not propagate to the child graph render state");
+    Require(resolvedChild.material.desc.doubleSided && NearlyEqual(resolvedChild.material.desc.alphaCutoff, 0.33F),
+        "MAT-47 base property overrides did not propagate through the instance chain");
+    Require(resolvedChild.contentHash != childMeta->contentHash,
+        "MAT-47 child runtime content hash must include parent instance/material content");
+
+    const std::uint64_t childRuntimeHashBeforeParentReload =
+        RuntimeMaterialResolver::MaterialRuntimeContentHash(manager, *childMeta);
+    parent.desc.roughnessFactor = 0.42F;
+    Require(RenderMaterialAssetWriter::Save(root / "Parent.kbmat", parent), "MAT-47 static/base chain test could not rewrite parent material");
+    Require(manager.DiscoverMountedAssets() == 3U, "MAT-47 static/base chain test did not rediscover parent material reload");
+    childMeta = manager.Registry().FindByPath("/Game/Child.kbmatinst");
+    Require(childMeta != nullptr && childMeta->type == "RenderMaterialInstance", "MAT-47 static/base chain test lost child metadata after parent reload");
+    const std::uint64_t childRuntimeHashAfterParentReload =
+        RuntimeMaterialResolver::MaterialRuntimeContentHash(manager, *childMeta);
+    Require(childRuntimeHashAfterParentReload != childRuntimeHashBeforeParentReload,
+        "MAT-47 parent reload must invalidate the child instance runtime material hash through the chain");
+
+    std::filesystem::remove_all(root, error);
+}
+
 void RunRendererBindsGraphMaterialGpuProgramTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_gpu_program";
     std::error_code error;
@@ -1097,6 +1397,197 @@ void RunRendererBindsGraphMaterialGpuProgramTest() {
     renderer.Shutdown();
     std::filesystem::remove_all(root, error);
 }
+
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+// MAT-31: the public Renderer::SetGraphShaderCacheRoot must reach the mesh pass resources so a
+// cooked graph binary is loaded as the bound program (not the builtin fallback). This proves the
+// full forwarding chain Renderer -> SceneRenderer -> SceneMeshSubmitter -> SceneMeshPassResources.
+void RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_public_cache_root";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-31 public cache root test could not create temp root");
+
+    WriteTriangleObj(root / "triangle.obj");
+
+    RenderMaterialAssetData gpuMaterial{};
+    gpuMaterial.graph = MakeDefaultRenderMaterialGraphDocument();
+    gpuMaterial.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+    gpuMaterial.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    Require(RenderMaterialAssetWriter::Save(root / "graph.kbmat", gpuMaterial), "MAT-31 public cache root test could not save graph material");
+
+    // Cook the graph's BaseOpaque binary for the headless Noop renderer (dxbc directory) into a
+    // dedicated cache root that we will hand to the renderer through its public setter.
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(gpuMaterial.graph, RenderMaterialGraphBuildContext{ .assetId = 0x3100U });
+    Require(compiled.Succeeded(), "MAT-31 public cache root test graph must compile");
+    RenderMaterialGraphShaderArtifactRequest request{};
+    request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+    request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+    request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+    request.cacheRoot = cacheRoot.generic_string();
+    request.pass = "BaseOpaque";
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+    Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+        "MAT-31 public cache root test must cook a DXBC graph binary");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-31 public cache root test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-31 public cache root test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-31 public cache root test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "MAT-31 public cache root test did not discover mesh and material");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph.kbmat");
+    Require(meshMetadata != nullptr && materialMetadata != nullptr, "MAT-31 public cache root test did not discover both assets");
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Cooked Graph Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = materialMetadata->id.value,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    // Set the cache root BEFORE Initialize to exercise the deferred-apply path added in MAT-31.
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
+    Require(renderer.GraphShaderCacheRoot() == cacheRoot.generic_string(),
+        "MAT-31: Renderer must retain the graph shader cache root through its public setter");
+    Require(renderer.Initialize(surface, &config), "MAT-31 public cache root test renderer did not initialize");
+    Require(renderer.BeginFrame(), "MAT-31 public cache root test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "MAT-31 public cache root test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.graphMaterialGpuCount == 1U, "MAT-31: A cooked graph material must resolve to the GPU graph path");
+    const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
+    Require(programStats.loads >= 1U,
+        "MAT-31: Setting the cache root through the public renderer must load the cooked graph program from disk");
+    Require(programStats.failures == 0U,
+        "MAT-31: A present cooked graph binary must load without a program failure/fallback");
+    Require(programStats.liveProgramCount >= 1U,
+        "MAT-31: The cooked graph program must be retained live in the material program registry");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
+// MAT-84/85: a scene that references several distinct graph materials (none of them "open" in an
+// editor) must render each through its own cooked GPU program once the cache root is supplied.
+void RunRendererSceneRendersMultipleCookedGraphMaterialsTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_scene_multi_graph";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "MAT-84 scene multi-graph test could not create temp root");
+
+    WriteTriangleObj(root / "triangle.obj");
+    const std::filesystem::path cacheRoot = root / "graph_shaders";
+
+    const std::array<std::string_view, 3U> colors{ "0.9 0.1 0.1 1", "0.1 0.9 0.1 1", "0.1 0.1 0.9 1" };
+    std::array<std::string, 3U> materialFiles{ "red.kbmat", "green.kbmat", "blue.kbmat" };
+    for (std::size_t index = 0U; index < colors.size(); ++index) {
+        RenderMaterialAssetData material{};
+        material.graph = MakeDefaultRenderMaterialGraphDocument();
+        material.graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = -160, .positionY = 64 });
+        material.graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        material.graph.nodes[1].parameter.defaultValueHint = std::string{ colors[index] };
+        Require(RenderMaterialAssetWriter::Save(root / materialFiles[index], material), "MAT-84 scene multi-graph test could not save a graph material");
+
+        const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(material.graph, RenderMaterialGraphBuildContext{ .assetId = 0x8400U + index });
+        Require(compiled.Succeeded(), "MAT-84 scene multi-graph test material must compile");
+        RenderMaterialGraphShaderArtifactRequest request{};
+        request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
+        request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
+        request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
+        request.cacheRoot = cacheRoot.generic_string();
+        request.pass = "BaseOpaque";
+        const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+        Require(CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request).Succeeded(),
+            "MAT-84 scene multi-graph test must cook each graph material");
+    }
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "MAT-84 scene multi-graph test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "MAT-84 scene multi-graph test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "MAT-84 scene multi-graph test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 4U, "MAT-84 scene multi-graph test did not discover mesh and materials");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    Require(meshMetadata != nullptr, "MAT-84 scene multi-graph test did not discover the mesh");
+
+    for (std::size_t index = 0U; index < materialFiles.size(); ++index) {
+        const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath(std::string{ "/Game/" } + materialFiles[index]);
+        Require(materialMetadata != nullptr, "MAT-84 scene multi-graph test did not discover a graph material");
+        const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+            .name = "Graph Mesh " + std::to_string(index),
+            .transform = TransformAt(static_cast<float>(index) * 2.0F, 0.0F, 0.0F),
+        });
+        scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+            .meshAssetId = meshMetadata->id.value,
+            .materialAssetId = materialMetadata->id.value,
+        });
+    }
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.SetGraphShaderCacheRoot(cacheRoot.generic_string());
+    Require(renderer.Initialize(surface, &config), "MAT-84 scene multi-graph test renderer did not initialize");
+    Require(renderer.BeginFrame(), "MAT-84 scene multi-graph test renderer did not begin frame");
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+    };
+    Require(renderer.SubmitScene(scene, desc), "MAT-84 scene multi-graph test renderer did not submit scene");
+
+    const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+    Require(runtimeStats.graphMaterialGpuCount == 3U,
+        "MAT-84: A scene with three distinct graph materials must bind three GPU graph programs without opening them");
+    Require(runtimeStats.graphMaterialCpuFallbackCount == 0U,
+        "MAT-84: Cooked scene graph materials must not fall back to CPU flattening");
+    const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
+    Require(programStats.liveProgramCount >= 3U,
+        "MAT-85: Three distinct cooked graph materials must retain three distinct live programs");
+    Require(programStats.failures == 0U,
+        "MAT-85: Present cooked scene graph binaries must all load without a program failure");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+#endif
 
 void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_runtime_submit";
@@ -1231,9 +1722,13 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(renderer.SubmitScene(scene, desc), "Renderer did not submit runtime mesh asset scene");
 
     const SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
-    Require(submitStats.visibleMeshCount == instanceCount * 2U, "Runtime submit did not keep shadow and opaque mesh instances visible while disabling blend");
-    Require(submitStats.submittedMeshCount == instanceCount * 2U, "Runtime submit did not submit shadow and opaque mesh instances while disabling blend");
-    Require(submitStats.submittedDrawCallCount == 2U, "Runtime submit should not draw disabled blend materials");
+    // 16 opaque instances render in the opaque + shadow passes (32); the 1 blended instance renders in
+    // the now-active transparent pass (MAT-80), so the visible/submitted totals are instanceCount*2 + 1.
+    Require(submitStats.visibleMeshCount == instanceCount * 2U + 1U, "Runtime submit did not keep opaque (opaque+shadow) and blended (transparent) mesh instances visible");
+    Require(submitStats.submittedMeshCount == instanceCount * 2U + 1U, "Runtime submit did not submit opaque (opaque+shadow) and blended (transparent) mesh instances");
+    // Opaque instances = 1 instanced draw in the opaque pass + 1 in the shadow pass; the blended instance
+    // adds 1 draw in the transparent pass (MAT-80) = 3 draw calls.
+    Require(submitStats.submittedDrawCallCount == 3U, "Runtime submit must draw opaque (opaque+shadow) and blended (transparent) materials");
     Require(submitStats.shadowCasterCount == instanceCount, "Runtime submit did not count shadow casters");
     Require(submitStats.submittedShadowCasterCount == instanceCount, "Runtime submit did not submit shadow casters");
     Require(submitStats.submittedShadowDrawCallCount == 1U, "Runtime submit did not draw one shadow caster batch");
@@ -1251,7 +1746,7 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(passStats[0].stats.shadowLightEntityId == light.Id(), "Runtime submit shadow pass did not report selected shadow light entity");
     Require(passStats[0].stats.shadowMapAllocationBytes == 1024ULL * 1024ULL * 4ULL, "Runtime submit shadow pass did not report shadow map allocation bytes");
     Require(passStats[1].pass == MeshPassType::BaseOpaque && passStats[1].stats.submittedMeshCount == instanceCount, "Runtime submit opaque pass stats are wrong");
-    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 0U, "Runtime submit transparent pass should not submit disabled blend materials");
+    Require(passStats[2].pass == MeshPassType::BaseTransparent && passStats[2].stats.submittedMeshCount == 1U, "Runtime submit transparent pass must submit the blended material (MAT-80)");
     Require(renderer.LastSceneExposureStats().empty(), "Runtime submit without post-process unexpectedly reported exposure stats");
 
     const Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
@@ -1280,15 +1775,14 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
             event.instanceCount == 1U) {
             foundUnresolvedTexturePathDiagnostic = true;
         }
-        if (event.severity == SceneRenderDiagnosticSeverity::Warning &&
-            event.kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend &&
-            event.materialAssetId == transparentMaterialMetadata->id.value &&
-            event.instanceCount == 1U) {
+        if (event.kind == SceneRenderDiagnosticKind::UnsupportedMaterialAlphaBlend) {
             foundDisabledBlendDiagnostic = true;
         }
     }
     Require(foundUnresolvedTexturePathDiagnostic, "Runtime submit did not emit unresolved material texture path diagnostic");
-    Require(foundDisabledBlendDiagnostic, "Runtime submit did not emit disabled blend material diagnostic");
+    // MAT-80: blended materials are now supported via the transparent pass, so they must NOT raise the
+    // "unsupported alpha blend" diagnostic anymore.
+    Require(!foundDisabledBlendDiagnostic, "Runtime submit must not flag blended materials as unsupported once the transparent pass is active");
     Require(runtimeStats.renderSceneMeshProxyCount == instanceCount + 1U, "Runtime submit did not keep scene mesh proxies");
     Require(runtimeStats.meshResourceSlotCapacity >= 4U, "Runtime submit did not apply mesh resource slot reserve");
     Require(runtimeStats.materialResourceSlotCapacity >= 4U, "Runtime submit did not apply material resource slot reserve");
@@ -2811,14 +3305,43 @@ void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
 
 } // namespace
 
+// MAT-72: material frame time accumulates and is exposed as the u_time vec4 (time, delta, frameIndex).
+void RunMaterialFrameTimeAdvanceTest() {
+    const auto nearly = [](float a, float b) noexcept { return std::fabs(a - b) <= 0.0005F; };
+
+    SceneRenderer sceneRenderer;
+    Require(nearly(sceneRenderer.FrameTimeConstants()[0], 0.0F), "MAT-72: Frame time must start at zero seconds");
+    sceneRenderer.AdvanceFrameTime(0.5F);
+    sceneRenderer.AdvanceFrameTime(0.25F);
+    const std::array<float, 4> constants = sceneRenderer.FrameTimeConstants();
+    Require(nearly(constants[0], 0.75F), "MAT-72: Frame seconds must accumulate across advances");
+    Require(nearly(constants[1], 0.25F), "MAT-72: Frame delta must reflect the most recent advance");
+    Require(nearly(constants[2], 2.0F), "MAT-72: Frame index must increment per advance");
+    sceneRenderer.SetDynamicParameter({ 0.1F, 0.2F, 0.3F, 0.4F });
+    const std::array<float, 4> dynamicParameter = sceneRenderer.DynamicParameterConstants();
+    Require(nearly(dynamicParameter[0], 0.1F) && nearly(dynamicParameter[3], 0.4F),
+        "MAT-30: SceneRenderer must retain DynamicParameter constants for graph shader submission");
+
+    Renderer renderer;
+    renderer.SetFrameDeltaSeconds(1.0F / 30.0F);
+    Require(nearly(renderer.FrameDeltaSeconds(), 1.0F / 30.0F), "MAT-72: Renderer must retain the per-frame delta seconds");
+}
+
 void RunRendererRuntimeSubmitTests() {
+    RunMaterialFrameTimeAdvanceTest();
     RunRuntimeMaterialResolverReturnsTypedFallbacksAndDiagnosticsTest();
     RunRuntimeMaterialResolverEvaluatesMaterialOutputTextureGraphTest();
     RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest();
     RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest();
     RunRendererUsesResolverDefaultFallbackForMissingMaterialTest();
     RunRuntimeGraphMaterialRenderModeReportingTest();
+    RunRuntimeMaterialInstanceDynamicParameterOverrideTest();
+    RunRuntimeMaterialInstanceStaticBaseOverrideChainTest();
     RunRendererBindsGraphMaterialGpuProgramTest();
+#if defined(KB_TEST_GRAPH_SHADERC_PATH)
+    RunRendererPublicGraphShaderCacheRootBindsCookedProgramTest();
+    RunRendererSceneRendersMultipleCookedGraphMaterialsTest();
+#endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();

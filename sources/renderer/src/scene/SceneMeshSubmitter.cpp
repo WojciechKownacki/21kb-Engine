@@ -86,6 +86,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::ValidateResourcesInto(
     pipelineScratch.stats.invalidLightCount = lightingStats.invalidLightCount;
     pipelineScratch.stats.forwardLightCapacity = lightingStats.forwardLightCapacity;
     pipelineScratch.stats.lightingPath = lightingStats.lightingPath;
+    pipelineScratch.stats.lightingPathProduction = lightingStats.lightingPathProduction;
     pipelineScratch.stats.lightClusterCount = lightingStats.lightClusterCount;
     pipelineScratch.stats.submittedAreaLightCount = lightingStats.submittedAreaLightCount;
     pipelineScratch.stats.submittedVolumetricLightCount = lightingStats.submittedVolumetricLightCount;
@@ -122,7 +123,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     SceneRenderLightingConfig lightingConfig,
     const SceneRenderShadowMapBinding* shadowMap,
     std::span<const std::uint64_t> selectedEntityIds,
-    SceneGpuDrivenFeatureSupport gpuDrivenSupport) const {
+    SceneGpuDrivenFeatureSupport gpuDrivenSupport,
+    std::array<float, 4> frameTime,
+    std::array<float, 4> dynamicParameter,
+    bgfx::TextureHandle sceneDepthTexture,
+    bgfx::TextureHandle sceneColorTexture) const {
     SceneRenderSubmitStats stats{};
     if (!IsInitialized()) {
         return stats;
@@ -152,6 +157,7 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
     stats.invalidLightCount = lightingStats.invalidLightCount;
     stats.forwardLightCapacity = lightingStats.forwardLightCapacity;
     stats.lightingPath = lightingStats.lightingPath;
+    stats.lightingPathProduction = lightingStats.lightingPathProduction;
     stats.lightClusterCount = lightingStats.lightClusterCount;
     stats.submittedAreaLightCount = lightingStats.submittedAreaLightCount;
     stats.submittedVolumetricLightCount = lightingStats.submittedVolumetricLightCount;
@@ -190,7 +196,11 @@ SceneRenderSubmitStats SceneMeshSubmitter::Submit(
         .resourceMap = resourceMap,
         .lighting = lighting,
         .cameraPosition = cameraPosition,
+        .frameTime = frameTime,
+        .dynamicParameter = dynamicParameter,
         .shadowMap = shadowMap,
+        .sceneDepthTexture = sceneDepthTexture,
+        .sceneColorTexture = sceneColorTexture,
         .passResources = passResources_,
         .diagnostics = diagnostics,
         .stats = stats,

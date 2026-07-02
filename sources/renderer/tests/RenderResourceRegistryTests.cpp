@@ -148,6 +148,34 @@ void RunMaterialHandlesAreGenerationalTest() {
     Require(secondMaterial->version != firstVersion, "RenderResourceRegistry reused a material resource version after slot reuse");
 }
 
+void RunGraphBlendModeDrivesResourceRenderStateTest() {
+    // #25d: an active graph program's resolved blend mode overrides the resource render state so the
+    // scene submits a translucent graph material in the transparent pass with the authored blend equation.
+    RenderResourceRegistry registry;
+    RenderMaterialDesc desc{};
+    desc.alphaMode = RenderMaterialAlphaMode::Opaque; // desc is opaque; the graph blend mode must win.
+
+    RenderMaterialGraphProgramBinding binding{};
+    binding.active = true;
+    binding.alphaMode = RenderMaterialAlphaMode::Blend;
+    binding.translucencyBlend = RenderMaterialTranslucencyBlend::Additive;
+
+    const RenderMaterialHandle handle = registry.RegisterMaterial(desc, std::move(binding));
+    const RenderMaterialResource* material = registry.FindMaterial(handle);
+    Require(material != nullptr, "#25d: graph material must register");
+    Require(material->alphaMode == RenderMaterialAlphaMode::Blend,
+        "#25d: an active graph program's blend mode must drive the resource alpha mode (transparent pass)");
+    Require(material->translucencyBlend == RenderMaterialTranslucencyBlend::Additive,
+        "#25d: an active graph program's blend equation must drive the resource translucency blend");
+
+    RenderMaterialDesc opaqueDesc{};
+    opaqueDesc.alphaMode = RenderMaterialAlphaMode::Opaque;
+    const RenderMaterialHandle opaqueHandle = registry.RegisterMaterial(opaqueDesc);
+    const RenderMaterialResource* opaque = registry.FindMaterial(opaqueHandle);
+    Require(opaque != nullptr && opaque->alphaMode == RenderMaterialAlphaMode::Opaque,
+        "#25d: a non-graph material must keep its authored alpha mode");
+}
+
 void RunMaterialReloadInvalidatesStaleSceneBindingTest() {
     RenderResourceRegistry registry;
     SceneRenderResourceMap resourceMap;
@@ -1895,7 +1923,9 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "emissiveStrength 4\n"
         "alphaMode MASK\n"
         "alphaCutoff 0.25\n"
+        "translucencyBlend ALPHA\n"
         "doubleSided true\n"
+        "writesDepth true\n"
         "tiling 1 1\n"
         "offset 0 0\n"
         "albedoTextureAssetId 10\n"
@@ -1918,9 +1948,10 @@ void RunRenderMaterialAssetWriterRoundTripsThroughParserTest() {
         "layerWeight 1\n"
         "decalBlendMode DISABLED\n"
         "layerBlendMode REPLACE\n"
-        "graphVersion 1\n"
+        "graphVersion 2\n"
         "graphMaterialDomain surface\n"
-        "graphShadingModel lit\n"
+        "graphShadingModel defaultLit\n"
+        "graphBlendMode opaque\n"
         "graphStorageModel inline-kbmat\n"
         "graphDiagnosticSchemaVersion 1\n"
         "graphPersistCompileDiagnostics true\n"
@@ -2284,6 +2315,7 @@ void RunSceneRendererTicksRegistryDeferredDestroyTest() {
 
 void RunRenderResourceRegistryTests() {
     RunMaterialHandlesAreGenerationalTest();
+    RunGraphBlendModeDrivesResourceRenderStateTest();
     RunMaterialReloadInvalidatesStaleSceneBindingTest();
     RunInvalidHandlesAreIgnoredTest();
     RunShutdownInvalidatesLiveHandlesTest();

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <string>
+#include <unordered_map>
 
 namespace kb::render {
 
@@ -20,7 +21,14 @@ struct SceneMeshPassBindDesc {
     MeshPassType pass = MeshPassType::BaseOpaque;
     const PackedSceneLighting& lighting;
     const std::array<float, 4>& cameraPosition;
+    const std::array<float, 4>& frameTime;
+    const std::array<float, 4>& dynamicParameter;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
+    // MAT-80/#18b: the resolved opaque scene depth texture, bound to graph fragment shaders that sample it
+    // (SceneDepth / DepthFade) in the transparent pass. Invalid when unavailable.
+    bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
+    // MAT-31: the opaque scene-color snapshot for graph fragment shaders that sample SceneColor/SceneTexture.
+    bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
 };
 
 struct SceneMeshProgramBindStats {
@@ -33,6 +41,9 @@ struct SceneMeshProgramBindStats {
 
 struct SceneMeshPassProgramResolution {
     bgfx::ProgramHandle program = BGFX_INVALID_HANDLE;
+    MaterialProgramKey key{};
+    std::uint64_t materialProgramIdentity = 0U;
+    SceneRenderMaterialProgramStatus status = SceneRenderMaterialProgramStatus::None;
     bool graphProgram = false;
     bool fellBackToBuiltin = false;
 };
@@ -47,6 +58,7 @@ public:
 
     void SetGraphShaderCacheRoot(std::string root) { graphShaderCacheRoot_ = std::move(root); }
     [[nodiscard]] SceneMeshPassProgramResolution ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept;
+    [[nodiscard]] SceneMeshPassProgramResolution LastProgramResolution() const noexcept { return lastProgramResolution_; }
     void ResetProgramBindStats() const noexcept;
     [[nodiscard]] SceneMeshProgramBindStats ProgramBindStats() const noexcept { return programBindStats_; }
 
@@ -57,6 +69,13 @@ private:
     mutable MaterialProgramRegistry programRegistry_;
     mutable SceneMeshProgramBindStats programBindStats_{};
     mutable bgfx::ProgramHandle lastBoundProgram_ = BGFX_INVALID_HANDLE;
+    mutable SceneMeshPassProgramResolution lastProgramResolution_{};
+    // MAT-78/#16: per-graph texture sampler uniforms, created lazily by name and reused across binds so the
+    // scene actually binds a graph material's own textures (slot >= 6), not just the builtin PBR slots.
+    mutable std::unordered_map<std::string, bgfx::UniformHandle> graphSamplerUniforms_;
+    // Numeric graph uniforms are created lazily by generated shader name. Collection-backed uniforms are
+    // refreshed from the global runtime store at bind time so global parameter edits do not recompile graphs.
+    mutable std::unordered_map<std::string, bgfx::UniformHandle> graphUniforms_;
     bgfx::ProgramHandle meshProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle shadowProgram_ = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle selectionProgram_ = BGFX_INVALID_HANDLE;
@@ -71,6 +90,8 @@ private:
     bgfx::UniformHandle materialFlagsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialUvTransformUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle timeUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle dynamicParameterUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColorIntensityUniform_ = BGFX_INVALID_HANDLE;

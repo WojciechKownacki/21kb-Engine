@@ -36,6 +36,32 @@ void EmitGroupDiagnostics(
     }
 }
 
+void EmitGraphProgramDiagnostic(
+    SceneRenderDiagnostics* diagnostics,
+    const MeshDrawCommand& command,
+    const SceneMeshPassProgramResolution& resolution) {
+    if (diagnostics == nullptr || !resolution.fellBackToBuiltin) {
+        return;
+    }
+    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+        .severity = SceneRenderDiagnosticSeverity::Warning,
+        .kind = SceneRenderDiagnosticKind::GraphMaterialProgramFallback,
+        .entityId = command.instances.empty() ? 0U : command.instances.front().entityId,
+        .meshAssetId = command.meshAssetId,
+        .materialAssetId = command.materialAssetId,
+        .instanceCount = static_cast<std::uint32_t>(command.instances.size()),
+        .materialTypeId = resolution.key.materialTypeId,
+        .materialTypeVersion = resolution.key.materialTypeVersion,
+        .graphSourceHash = resolution.key.graphSourceHash,
+        .graphVariantKey = resolution.key.variantKey,
+        .pipelineStateKey = resolution.key.pipelineStateKey,
+        .materialProgramIdentity = resolution.materialProgramIdentity,
+        .materialProgramBackend = resolution.key.backend,
+        .materialProgramHandle = resolution.program.idx,
+        .materialProgramStatus = resolution.status,
+    });
+}
+
 [[nodiscard]] bool IsSelectionPass(MeshPassType pass) noexcept {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
 }
@@ -95,8 +121,13 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .pass = desc.pass,
             .lighting = desc.lighting,
             .cameraPosition = desc.cameraPosition,
+            .frameTime = desc.frameTime,
+            .dynamicParameter = desc.dynamicParameter,
             .shadowMap = desc.shadowMap,
+            .sceneDepthTexture = desc.sceneDepthTexture,
+            .sceneColorTexture = desc.sceneColorTexture,
         });
+        EmitGraphProgramDiagnostic(desc.diagnostics, command, desc.passResources.LastProgramResolution());
         bgfx::setState(command.state);
         bgfx::submit(desc.viewId, program);
 

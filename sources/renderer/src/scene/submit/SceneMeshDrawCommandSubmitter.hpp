@@ -21,7 +21,13 @@ struct SceneMeshDrawCommandSubmitDesc {
     const SceneRenderResourceMap& resourceMap;
     const PackedSceneLighting& lighting;
     const std::array<float, 4>& cameraPosition;
+    const std::array<float, 4>& frameTime;
+    const std::array<float, 4>& dynamicParameter;
     const SceneRenderShadowMapBinding* shadowMap = nullptr;
+    // MAT-80/#18b: opaque scene depth texture bound to depth-sampling graph materials in the transparent pass.
+    bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE;
+    // MAT-31: opaque scene color snapshot bound to color-sampling graph materials in the transparent pass.
+    bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE;
     const SceneMeshPassResources& passResources;
     SceneRenderDiagnostics* diagnostics = nullptr;
     SceneRenderSubmitStats& stats;

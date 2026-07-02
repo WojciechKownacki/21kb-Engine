@@ -186,6 +186,9 @@ void FinishSection(RenderMeshAssetData& asset, ObjImportContext& context) {
         .nz = normal.z,
         .u = texCoord.x,
         .v = texCoord.y,
+        // OBJ exposes a single UV channel; uv1 falls back to uv0 (MAT-73).
+        .u1 = texCoord.x,
+        .v1 = texCoord.y,
     });
     context.vertexMap[key] = vertexIndex;
     return vertexIndex;

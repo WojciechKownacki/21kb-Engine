@@ -83,6 +83,9 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
     }
     sceneRenderer_->SetDefaultDrawBudget(defaultSceneDrawBudget_);
     sceneRenderer_->SetDefaultLightingConfig(defaultSceneLightingConfig_);
+    if (!graphShaderCacheRoot_.empty()) {
+        sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
     SetGpuDrivenRuntimeDispatchEnabled(gpuDrivenRuntimeDispatchEnabled_);
     renderSceneSynchronizer_ = std::make_unique<EcsRenderSceneSynchronizer>();
     ApplyRuntimeSceneResourceReserve();
@@ -180,6 +183,7 @@ void Renderer::EndFrame() {
     lastCompletedFrame_ = context_->EndFrame();
     if (sceneRenderer_ != nullptr) {
         sceneRenderer_->TickFrame();
+        sceneRenderer_->AdvanceFrameTime(frameDeltaSeconds_);
     }
     frameActive_ = false;
     frameState_.End();
@@ -328,6 +332,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
     RendererViewConfigurator::ConfigureSceneNoClear(viewportPlan.viewIds.transparentScene, desc, "KB Scene Transparent");
 
+    // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
+    // (SceneDepth / DepthFade) read real geometry depth.
+    sceneRenderer_->SetSceneDepthTexture(desc.target.depthTexture);
+    sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
+
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     if (renderSceneSynchronizer_ == nullptr) {
@@ -443,12 +452,17 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         MeshPassType::BaseOpaque,
         shadowBinding.IsValid() ? &shadowBinding : nullptr);
     if (desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent) {
+        if (bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
+            bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
+            sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
+        }
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
             viewportPlan.viewIds.transparentScene,
             RenderPassKind::TransparentScene,
             MeshPassType::BaseTransparent,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
+        sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
     }
     if (desc.selectionMaskEnabled) {
         editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
@@ -710,6 +724,25 @@ void Renderer::SetGpuDrivenRuntimeDispatchEnabled(bool enabled) noexcept {
 
 bool Renderer::GpuDrivenRuntimeDispatchEnabled() const noexcept {
     return gpuDrivenRuntimeDispatchEnabled_;
+}
+
+void Renderer::SetGraphShaderCacheRoot(std::string root) {
+    graphShaderCacheRoot_ = std::move(root);
+    if (sceneRenderer_ != nullptr) {
+        sceneRenderer_->SetGraphShaderCacheRoot(graphShaderCacheRoot_);
+    }
+}
+
+const std::string& Renderer::GraphShaderCacheRoot() const noexcept {
+    return graphShaderCacheRoot_;
+}
+
+void Renderer::SetFrameDeltaSeconds(float seconds) noexcept {
+    frameDeltaSeconds_ = seconds;
+}
+
+float Renderer::FrameDeltaSeconds() const noexcept {
+    return frameDeltaSeconds_;
 }
 
 void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {
