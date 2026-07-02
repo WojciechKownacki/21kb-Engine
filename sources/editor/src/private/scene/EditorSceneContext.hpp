@@ -269,6 +269,7 @@ public:
     [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
     [[nodiscard]] bool CycleMaterialPreviewSceneLightingPreset();
+    [[nodiscard]] bool CycleMaterialPreviewQualityLevel();
     [[nodiscard]] bool MaterialPreviewNodePreviewEnabled() const noexcept;
     [[nodiscard]] bool SetMaterialPreviewNodePreviewEnabled(bool enabled) noexcept;
     [[nodiscard]] bool ToggleMaterialPreviewNodePreview() noexcept;

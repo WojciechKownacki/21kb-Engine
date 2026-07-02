@@ -263,6 +263,7 @@ const EditorMaterialPreviewSceneSettings& EditorMaterialPreviewScene::SceneSetti
 
 bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSettings settings) noexcept {
     if (std::tie(sceneSettings_.lightingPreset,
+            sceneSettings_.qualityLevel,
             sceneSettings_.cameraDistance,
             sceneSettings_.verticalFovDegrees,
             sceneSettings_.keyLightIntensity,
@@ -272,6 +273,7 @@ bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSett
             sceneSettings_.exposureStops,
             sceneSettings_.postProcessEnabled)
         == std::tie(settings.lightingPreset,
+            settings.qualityLevel,
             settings.cameraDistance,
             settings.verticalFovDegrees,
             settings.keyLightIntensity,
@@ -333,10 +335,18 @@ void EditorMaterialPreviewScene::Rebuild(
     }
     RegisterPreviewMesh(targetManager, effectivePolicy);
 
-    const kb::render::ResolvedRuntimeMaterialAsset resolved = kb::render::RuntimeMaterialResolver{}.ResolveAsset(targetManager, materialAssetId);
+    kb::render::RenderMaterialGraphBuildContext graphContext{};
+    graphContext.assetId = materialAssetId.value;
+    graphContext.qualityLevel = sceneSettings_.qualityLevel;
+    const kb::render::ResolvedRuntimeMaterialAsset resolved =
+        kb::render::RuntimeMaterialResolver{ graphContext }.ResolveAsset(targetManager, materialAssetId);
     kb::render::RenderMaterialAssetData telemetryMaterial{};
     if (resolved.resolved) {
         telemetryMaterial.desc = resolved.material.desc;
+        if (workingCopy != nullptr) {
+            telemetryMaterial.graph = workingCopy->graph;
+            telemetryMaterial.materialTypeVersion = workingCopy->materialTypeVersion;
+        }
     }
 
     AddPreviewMesh(*scene_, materialAssetId, resolved.resolved, effectivePolicy);
@@ -344,7 +354,12 @@ void EditorMaterialPreviewScene::Rebuild(
     AddPreviewLighting(*scene_);
     scene_->Runtime().SynchronizeTransforms();
 
-    telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(targetManager, materialAssetId, resolved.resolved ? &telemetryMaterial : nullptr, true);
+    telemetry_ = EditorMaterialPreviewTelemetryBuilder::Build(
+        targetManager,
+        materialAssetId,
+        resolved.resolved ? &telemetryMaterial : nullptr,
+        true,
+        graphContext);
     materialAssetId_ = materialAssetId;
     materialContentHash_ = contentHash;
     ++revision_;

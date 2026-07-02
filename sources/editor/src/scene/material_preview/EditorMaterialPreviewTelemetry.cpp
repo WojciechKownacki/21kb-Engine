@@ -33,7 +33,8 @@ EditorMaterialPreviewTelemetry EditorMaterialPreviewTelemetryBuilder::Build(
     const kb::assets::AssetManager& manager,
     kb::assets::AssetId materialAssetId,
     const kb::render::RenderMaterialAssetData* material,
-    bool previewSceneReady) {
+    bool previewSceneReady,
+    kb::render::RenderMaterialGraphBuildContext graphContext) {
     EditorMaterialPreviewTelemetry telemetry{
         .materialAssetId = materialAssetId,
         .materialMetadataFound = manager.Registry().Find(materialAssetId) != nullptr,
@@ -46,9 +47,10 @@ EditorMaterialPreviewTelemetry EditorMaterialPreviewTelemetryBuilder::Build(
 
     telemetry.graphBacked = kb::render::HasGraphAuthoringData(material->graph);
     if (telemetry.graphBacked) {
+        graphContext.assetId = materialAssetId.value;
         const kb::render::RenderMaterialGraphCompileResult compile = kb::render::CompileRenderMaterialGraphToShaderSource(
             material->graph,
-            kb::render::RenderMaterialGraphBuildContext{ .assetId = materialAssetId.value });
+            graphContext);
         telemetry.graphProgramKey = compile.shader.sourceHash;
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : compile.diagnostics) {
             telemetry.compileDiagnostics.push_back(

@@ -152,6 +152,16 @@ void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasi
     return "Scene";
 }
 
+[[nodiscard]] const char* PreviewQualityButtonLabel(kb::render::RenderMaterialGraphQualityLevel qualityLevel) noexcept {
+    switch (qualityLevel) {
+    case kb::render::RenderMaterialGraphQualityLevel::Low: return "Low";
+    case kb::render::RenderMaterialGraphQualityLevel::Medium: return "Med";
+    case kb::render::RenderMaterialGraphQualityLevel::High: return "High";
+    case kb::render::RenderMaterialGraphQualityLevel::Epic: return "Epic";
+    }
+    return "Quality";
+}
+
 void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
@@ -161,6 +171,7 @@ void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneCont
     DrawCommandButton(dc, layout.infoButton, "Info", infoVisible);
     DrawCommandButton(dc, layout.previewPrimitiveButton, PreviewPrimitiveButtonLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
     DrawCommandButton(dc, layout.previewSceneButton, PreviewSceneButtonLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
+    DrawCommandButton(dc, layout.previewQualityButton, PreviewQualityButtonLabel(sceneContext.MaterialPreviewSceneSettings().qualityLevel), false);
     DrawCommandButton(dc, layout.previewNodeButton, "Node", sceneContext.MaterialPreviewNodePreviewEnabled());
     DrawCommandButton(dc, layout.applyButton, "Apply To Selection", false);
     DrawCommandButton(dc, layout.saveButton, "Save", dirty);
