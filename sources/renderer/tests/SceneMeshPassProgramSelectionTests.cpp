@@ -176,10 +176,11 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 1U,
             "KBMAT-MAT07: Builtin fallback program usage must be counted in submit stats");
         const SceneMeshPassProgramResolution missingGBufferResolution = passResources.ResolveMeshPassProgram(&graphFallback, MeshPassType::GBuffer);
-        Require(!bgfx::isValid(missingGBufferResolution.program) && !missingGBufferResolution.fellBackToBuiltin,
-            "Deferred graph GBuffer pass must fail closed when the GBuffer artifact is missing");
-        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 1U,
-            "Deferred graph GBuffer miss must not increment builtin fallback usage");
+        Require(bgfx::isValid(missingGBufferResolution.program) && !missingGBufferResolution.graphProgram &&
+                missingGBufferResolution.fellBackToBuiltin,
+            "Deferred graph GBuffer pass must fall back to builtin GBuffer when the graph artifact is missing");
+        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 2U,
+            "Deferred graph GBuffer miss must increment builtin fallback usage");
         Require(passResources.ProgramBindStats().programSwitchCount >= 2U,
             "KBMAT-MAT07: Program switch stats must count distinct bound programs");
 

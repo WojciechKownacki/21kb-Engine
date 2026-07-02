@@ -1906,12 +1906,13 @@ void RunForwardGraphTransparentBlendTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Blue base color with alpha 0.5; the MaterialOutput alpha defaults to baseColor.a, so surface.alpha = 0.5.
+    // Blue base color with explicit alpha 0.5; BaseColor.a must not implicitly drive surface alpha.
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .positionX = 40, .positionY = 40 };
     color.parameter.defaultValueHint = "0 0 1 0.5";
     graph.nodes.push_back(color);
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x8000U });
     Require(compiled.Succeeded(), "KBMAT-MAT80: translucent graph must compile");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
@@ -3235,13 +3236,14 @@ void RunForwardGraphBlendModeCompositeTest() {
     const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
 
-    // Unlit red with alpha 0.5 (surface.alpha defaults to baseColor.a) over an opaque green background.
+    // Unlit red with explicit alpha 0.5 over an opaque green background.
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = "unlit";
     RenderMaterialGraphNode color{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
     color.parameter.defaultValueHint = "1 0 0 0.5";
     graph.nodes.push_back(color);
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x3801U });
     Require(compiled.Succeeded(), "KBMAT-MAT38C: composite graph must compile");
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));

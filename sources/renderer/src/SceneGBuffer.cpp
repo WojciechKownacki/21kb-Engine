@@ -1,6 +1,9 @@
 #include "kb/render/SceneGBuffer.hpp"
 
+#include "renderer/RendererDebugLog.hpp"
+
 #include <algorithm>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -46,6 +49,37 @@ constexpr std::uint64_t kGBufferDepthTextureFlags =
     }
 }
 
+[[nodiscard]] const char* TextureFormatName(bgfx::TextureFormat::Enum format) noexcept {
+    switch (format) {
+    case bgfx::TextureFormat::BGRA8:
+        return "BGRA8";
+    case bgfx::TextureFormat::RGBA8:
+        return "RGBA8";
+    case bgfx::TextureFormat::RG16F:
+        return "RG16F";
+    case bgfx::TextureFormat::RGBA16F:
+        return "RGBA16F";
+    case bgfx::TextureFormat::D24S8:
+        return "D24S8";
+    case bgfx::TextureFormat::D32:
+        return "D32";
+    case bgfx::TextureFormat::D32F:
+        return "D32F";
+    case bgfx::TextureFormat::Count:
+        return "Count";
+    default:
+        return "Other";
+    }
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::FrameBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
 } // namespace
 
 bool SceneGBufferFormatSelection::IsSupported() const noexcept {
@@ -68,21 +102,46 @@ bool SceneGBuffer::Ensure(const SceneGBufferDesc& desc) {
 }
 
 bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
+    {
+        std::ostringstream message;
+        message << "Ensure begin requested=" << width << 'x' << height
+                << " current=" << width_ << 'x' << height_
+                << " valid=" << (IsValid() ? "true" : "false")
+                << " renderer=" << static_cast<int>(bgfx::getRendererType());
+        WriteRendererDebugLog("gbuffer", message.str());
+    }
+
     width = std::max(1U, width);
     height = std::max(1U, height);
 
     if (!IsSupportedExtent(width, height)) {
+        std::ostringstream message;
+        message << "Ensure unsupported extent " << width << 'x' << height;
+        WriteRendererDebugLog("gbuffer", message.str());
         return false;
     }
 
     if (IsValid() && width_ == width && height_ == height) {
+        WriteRendererDebugLog("gbuffer", "Ensure reuse existing targets");
         return true;
     }
 
+    WriteRendererDebugLog("gbuffer", "Ensure recreate targets begin");
     Shutdown();
 
     selection_ = SelectSceneGBufferFormats(kGBufferColorTextureFlags, kGBufferDepthTextureFlags);
+    {
+        std::ostringstream message;
+        message << "Format selection status=" << static_cast<int>(selection_.status)
+                << " albedo=" << TextureFormatName(selection_.albedoFormat)
+                << " normal=" << TextureFormatName(selection_.normalFormat)
+                << " material=" << TextureFormatName(selection_.materialFormat)
+                << " depth=" << TextureFormatName(selection_.depth.format)
+                << " depthStatus=" << static_cast<int>(selection_.depth.status);
+        WriteRendererDebugLog("gbuffer", message.str());
+    }
     if (!selection_.IsSupported()) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed unsupported format selection");
         return false;
     }
 
@@ -90,6 +149,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
     const auto textureHeight = static_cast<std::uint16_t>(height);
     albedoTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.albedoFormat, kGBufferColorTextureFlags);
     if (!bgfx::isValid(albedoTexture_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create albedo texture");
         Shutdown();
         return false;
     }
@@ -97,6 +157,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
 
     normalTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.normalFormat, kGBufferColorTextureFlags);
     if (!bgfx::isValid(normalTexture_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create normal texture");
         Shutdown();
         return false;
     }
@@ -104,6 +165,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
 
     materialTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.materialFormat, kGBufferColorTextureFlags);
     if (!bgfx::isValid(materialTexture_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create material texture");
         Shutdown();
         return false;
     }
@@ -111,6 +173,7 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
 
     depthTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, selection_.depth.format, kGBufferDepthTextureFlags);
     if (!bgfx::isValid(depthTexture_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create depth texture");
         Shutdown();
         return false;
     }
@@ -123,16 +186,37 @@ bool SceneGBuffer::Ensure(std::uint32_t width, std::uint32_t height) {
     attachments[3].init(depthTexture_);
     frameBuffer_ = bgfx::createFrameBuffer(4, attachments, true);
     if (!bgfx::isValid(frameBuffer_)) {
+        WriteRendererDebugLog("gbuffer", "Ensure failed create framebuffer");
         Shutdown();
         return false;
     }
 
     width_ = width;
     height_ = height;
+    {
+        std::ostringstream message;
+        message << "Ensure end ok fb=" << HandleValue(frameBuffer_)
+                << " albedoTex=" << HandleValue(albedoTexture_)
+                << " normalTex=" << HandleValue(normalTexture_)
+                << " materialTex=" << HandleValue(materialTexture_)
+                << " depthTex=" << HandleValue(depthTexture_)
+                << " extent=" << width_ << 'x' << height_;
+        WriteRendererDebugLog("gbuffer", message.str());
+    }
     return true;
 }
 
 void SceneGBuffer::Shutdown() {
+    if (IsValid() || bgfx::isValid(frameBuffer_) || bgfx::isValid(albedoTexture_) || bgfx::isValid(normalTexture_) ||
+        bgfx::isValid(materialTexture_) || bgfx::isValid(depthTexture_)) {
+        std::ostringstream message;
+        message << "Shutdown fb=" << HandleValue(frameBuffer_)
+                << " albedoTex=" << HandleValue(albedoTexture_)
+                << " normalTex=" << HandleValue(normalTexture_)
+                << " materialTex=" << HandleValue(materialTexture_)
+                << " depthTex=" << HandleValue(depthTexture_);
+        WriteRendererDebugLog("gbuffer", message.str());
+    }
     if (bgfx::isValid(frameBuffer_)) {
         bgfx::destroy(frameBuffer_);
     } else {

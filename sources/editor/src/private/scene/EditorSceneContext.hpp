@@ -573,6 +573,7 @@ private:
     // MAT-84: cook every graph-backed material referenced by scene meshes (even unopened ones) so
     // the scene/game render their real GPU graph program instead of the CPU fallback.
     void CookSceneGraphMaterials();
+    void RequestOpenMaterialSceneGraphCook();
     void RefreshOpenMaterialEditorFromSource();
     [[nodiscard]] EditorInputActionAuthoring InputActionAuthoring() noexcept;
     [[nodiscard]] EditorInputMappingContextAuthoring InputMappingContextAuthoring() noexcept;
