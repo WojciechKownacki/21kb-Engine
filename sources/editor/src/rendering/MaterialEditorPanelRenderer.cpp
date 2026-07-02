@@ -747,6 +747,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "RGB Parameter";
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return "Image Parameter";
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
+        return "Texture Object";
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return "Collection Parameter";
     case kb::render::RenderMaterialGraphNodeKind::CustomCode:
@@ -1281,6 +1283,7 @@ void DrawGraphPin(
         return RGB(98, 58, 51);
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
         return RGB(91, 74, 47);
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
@@ -1421,13 +1424,17 @@ void DrawGraphCompositeBox(HDC dc, const RECT& rect, const kb::render::RenderMat
     if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
         return "texture" + std::to_string(node.id);
     }
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+        return "textureObject" + std::to_string(node.id);
+    }
     return "textureSample" + std::to_string(node.id);
 }
 
 [[nodiscard]] const kb::render::RenderMaterialGraphNode* TextureValueNodeForDisplay(
     const kb::render::RenderMaterialAssetData& material,
     const kb::render::RenderMaterialGraphNode& node) noexcept {
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
         return &node;
     }
     if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
@@ -1501,7 +1508,8 @@ void DrawTextureSamplePreview(HDC dc, const RECT& nodeRect, const kb::render::Re
 }
 
 void DrawTextureParameterValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
-    if (node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+    if (node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
+        node.kind != kb::render::RenderMaterialGraphNodeKind::TextureObject) {
         return;
     }
 
