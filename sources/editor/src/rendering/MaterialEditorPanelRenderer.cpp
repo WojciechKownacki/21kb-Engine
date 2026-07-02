@@ -2608,6 +2608,26 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
         y += 6;
     }
 
+    if (!rows.materialDiffRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Material Diff", RGB(241, 185, 126), 10, FW_SEMIBOLD);
+        y += 22;
+        std::size_t diffCount = 0U;
+        for (const std::string& row : rows.materialDiffRows) {
+            if (y + rowHeight > bottom || diffCount >= 8U) {
+                break;
+            }
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, row.c_str(), RGB(235, 215, 190), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++diffCount;
+        }
+        if (diffCount < rows.materialDiffRows.size() && y + rowHeight <= bottom) {
+            const std::string more = "+" + std::to_string(rows.materialDiffRows.size() - diffCount) + " more material changes";
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, more.c_str(), RGB(201, 178, 150), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
     if (!rows.debugChannelRows.empty()) {
         DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Debug Channels", RGB(239, 203, 127), 10, FW_SEMIBOLD);
         y += 22;
@@ -2766,6 +2786,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         details.materialStats = sceneContext.MaterialEditor().MaterialStats();
         details.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
         details.findResults = sceneContext.MaterialEditor().FindResults();
+        details.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
         if (metadata.type == "RenderMaterialInstance") {
             details.title = "Material Instance Overrides";
         }

@@ -530,6 +530,7 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
     kb::editor::tests::Require(materialEditor.WorkingCopy().has_value(), "Material Editor state did not capture a material working copy");
     kb::editor::tests::Require(materialEditor.CleanSnapshot().has_value(), "Material Editor state did not capture a clean snapshot");
     kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should open with a clean snapshot");
+    kb::editor::tests::Require(materialEditor.MaterialDiffRows().empty(), "KBMAT-WORKFLOW-DIFF: Clean material editor snapshots should not report material diff rows");
     const auto findEditorParameter = [&materialEditor](std::string_view stableId) -> const kb::editor::MaterialEditorParameter* {
         const auto found = std::ranges::find_if(materialEditor.Parameters(), [stableId](const kb::editor::MaterialEditorParameter& parameter) {
             return parameter.stableId == stableId;
@@ -582,6 +583,12 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
     material.desc.roughnessFactor = 0.375F;
     materialEditor.SetWorkingCopy(material);
     kb::editor::tests::Require(materialEditor.Dirty(), "Material Editor state should mark mutated working copy dirty");
+    {
+        const std::vector<std::string> diffRows = materialEditor.MaterialDiffRows();
+        kb::editor::tests::Require(std::ranges::any_of(diffRows, [](const std::string& row) {
+            return row.find("Roughness") != std::string::npos && row.find("0.375") != std::string::npos;
+        }), "KBMAT-WORKFLOW-DIFF: Material diff should expose changed scalar PBR fields");
+    }
     materialEditor.SetDiagnostics({ "Warning test: state diagnostic" }, false);
     kb::editor::tests::Require(!materialEditor.Diagnostics().empty() && !materialEditor.DiagnosticsHaveError(), "Material Editor state should store diagnostics snapshot");
     materialEditor.RevertToCleanSnapshot();
@@ -599,6 +606,36 @@ void RunMaterialEditorStateIndependentFromInspectorSelectionTest() {
         "KBMAT-UE-0003: Material Editor parameter model should refresh scalar values from the working copy");
     kb::editor::tests::Require(normalTextureParameter != nullptr && normalTextureParameter->value.assetId == 777U,
         "KBMAT-UE-0003: Material Editor parameter model should refresh texture asset ids from the working copy");
+    {
+        const std::vector<std::string> diffRows = materialEditor.MaterialDiffRows();
+        kb::editor::tests::Require(std::ranges::any_of(diffRows, [](const std::string& row) {
+            return row.find("Normal texture") != std::string::npos && row.find("777") != std::string::npos;
+        }), "KBMAT-WORKFLOW-DIFF: Material diff should expose changed texture slots");
+    }
+    kb::render::RenderMaterialAssetData graphEdited = *materialEditor.WorkingCopy();
+    graphEdited.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 9U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = -120,
+        .positionY = 88,
+    });
+    graphEdited.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        9U,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    materialEditor.SetWorkingCopy(std::move(graphEdited));
+    {
+        const std::vector<std::string> diffRows = materialEditor.MaterialDiffRows();
+        kb::editor::tests::Require(std::ranges::any_of(diffRows, [](const std::string& row) {
+            return row.find("Added node #9") != std::string::npos;
+        }), "KBMAT-WORKFLOW-DIFF: Material diff should expose added graph nodes");
+        kb::editor::tests::Require(std::ranges::any_of(diffRows, [](const std::string& row) {
+            return row.find("Added link") != std::string::npos && row.find("9:rgba->1:baseColor") != std::string::npos;
+        }), "KBMAT-WORKFLOW-DIFF: Material diff should expose added graph links");
+    }
     materialEditor.MarkSaved();
     kb::editor::tests::Require(!materialEditor.Dirty(), "Material Editor state should clear dirty after saving snapshot");
     kb::editor::tests::Require(materialEditor.CleanSnapshot().has_value() && kb::editor::tests::NearlyEqual(materialEditor.CleanSnapshot()->desc.roughnessFactor, 0.5F),
