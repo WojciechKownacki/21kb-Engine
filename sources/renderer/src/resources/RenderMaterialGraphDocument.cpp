@@ -8136,8 +8136,17 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
     case RenderMaterialGraphNodeKind::Distance:
+    case RenderMaterialGraphNodeKind::Fmod:
+    case RenderMaterialGraphNodeKind::SphereMask:
+    case RenderMaterialGraphNodeKind::AppendVector:
         if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::InverseLerp:
+        if (!outputPin && pin == "a") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "b") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 3U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Power:
