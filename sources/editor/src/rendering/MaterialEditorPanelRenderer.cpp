@@ -1976,11 +1976,11 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         10);
 
     int y = menu.top + kMaterialEditorGraphMenuPadding + kMaterialEditorGraphMenuSearchHeight + kMaterialEditorGraphMenuPadding;
-    const bool hasSelectedGraphObject = sceneContext.SelectedMaterialGraphNodeId() != 0U ||
-        sceneContext.SelectedMaterialGraphCommentId() != 0U;
+    const std::size_t selectedGraphNodeCount = sceneContext.SelectedMaterialGraphNodeIds().size();
+    const bool hasSelectedGraphComment = sceneContext.SelectedMaterialGraphCommentId() != 0U;
     const std::vector<MaterialEditorGraphMenuCommand>& favoriteCommands = sceneContext.MaterialGraphPaletteFavoriteCommands();
     const auto drawCommandRow = [&](MaterialEditorGraphMenuCommand command, std::size_t categoryIndex) {
-        const bool enabled = MaterialEditorGraphContextMenuCommandEnabled(command, hasSelectedGraphObject);
+        const bool enabled = MaterialEditorGraphContextMenuCommandEnabled(command, selectedGraphNodeCount, hasSelectedGraphComment);
         const bool commandHovered = sceneContext.IsMaterialGraphContextMenuCommandHovered(categoryIndex, command);
         const bool favorite = sceneContext.IsMaterialGraphPaletteFavorite(command);
         const RECT commandFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCommandHeight };

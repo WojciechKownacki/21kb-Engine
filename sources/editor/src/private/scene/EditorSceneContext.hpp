@@ -289,8 +289,15 @@ public:
     [[nodiscard]] int MaterialGraphPanY() const noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta) noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept;
+    void SetMaterialGraphCanvasViewport(int width, int height) noexcept;
     void SetMaterialEditorFindQuery(std::string query);
     [[nodiscard]] bool FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight);
+    [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
+    [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);
+    [[nodiscard]] bool SelectMaterialGraphUpstream();
+    [[nodiscard]] bool SelectMaterialGraphDownstream();
+    [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
+    [[nodiscard]] bool DistributeSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphDistributeAxis axis);
     [[nodiscard]] bool BeginMaterialGraphNodeDrag(kb::assets::AssetId assetId, std::uint32_t nodeId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphNode(int x, int y);
     [[nodiscard]] bool EndMaterialGraphNodeDrag();
@@ -600,6 +607,8 @@ private:
     float materialGraphZoom_ = 0.72F;
     int materialGraphPanX_ = 0;
     int materialGraphPanY_ = 0;
+    int materialGraphCanvasWidth_ = 1280;
+    int materialGraphCanvasHeight_ = 720;
     kb::assets::AssetId materialGraphDragAssetId_{};
     std::uint32_t materialGraphDragNodeId_ = 0U;
     int materialGraphDragStartX_ = 0;
