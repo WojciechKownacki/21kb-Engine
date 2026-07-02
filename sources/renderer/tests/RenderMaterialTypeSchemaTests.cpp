@@ -1746,6 +1746,13 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Step") == RenderMaterialGraphNodeKind::Step, "Material graph conditional math should parse Step node");
     Require(ParseRenderMaterialGraphNodeKind("SmoothStep") == RenderMaterialGraphNodeKind::SmoothStep, "Material graph conditional math should parse SmoothStep node");
     Require(ParseRenderMaterialGraphNodeKind("Compare") == RenderMaterialGraphNodeKind::If, "Material graph conditional math should parse Compare alias");
+    Require(ParseRenderMaterialGraphNodeKind("RuntimeSwitch") == RenderMaterialGraphNodeKind::RuntimeSwitch, "Material graph conditional math should parse RuntimeSwitch alias");
+    Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::RuntimeSwitch, "index") &&
+            IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::RuntimeSwitch, "case3") &&
+            IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::RuntimeSwitch, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::RuntimeSwitch, "index", false) == RenderMaterialGraphPinType::Float &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::RuntimeSwitch, "case0", false) == RenderMaterialGraphPinType::Float4,
+        "Material graph runtime Switch should expose index/default/case pins and a Float4 output");
     Require(ParseRenderMaterialGraphNodeKind("Desaturation") == RenderMaterialGraphNodeKind::Desaturate, "Material graph surface utility should parse Desaturation alias");
     Require(ParseRenderMaterialGraphNodeKind("Fresnel") == RenderMaterialGraphNodeKind::Fresnel, "Material graph surface utility should parse Fresnel node");
     Require(ParseRenderMaterialGraphNodeKind("ObjectBounds") == RenderMaterialGraphNodeKind::ObjectBounds, "MAT-46 ObjectBounds must parse as a world/object-space node");
@@ -2644,6 +2651,7 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
         .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.8" },
     });
     conditionalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 15U, .kind = RenderMaterialGraphNodeKind::If, .positionX = 720, .positionY = 300 });
+    conditionalGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 16U, .kind = RenderMaterialGraphNodeKind::RuntimeSwitch, .positionX = 720, .positionY = 480 });
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::Step, 5U, "edge"));
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Step, 5U, "value"));
@@ -2658,6 +2666,11 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::If, 15U, "equal"));
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::If, 15U, "greater"));
     conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::If, 15U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 16U, "index"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 12U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 16U, "default"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 13U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 16U, "case0"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 14U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 16U, "case1"));
+    conditionalGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 16U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     const RenderMaterialGraphCompileResult conditionalResult = CompileRenderMaterialGraphToShaderSource(
         conditionalGraph,
         RenderMaterialGraphBuildContext{
@@ -2672,6 +2685,8 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(conditionalResult.shader.source.find("abs(") != std::string::npos &&
             conditionalResult.shader.source.find("?") != std::string::npos,
         "KBMAT-GRAPH-0202: Shader compiler should emit If compare expression");
+    Require(conditionalResult.shader.source.find("kbSwitch4(") != std::string::npos,
+        "KBMAT-GRAPH-0202: Shader compiler should emit runtime Switch expression");
 
     RenderMaterialGraphDocument surfaceGraph = MakeDefaultRenderMaterialGraphDocument();
     surfaceGraph.nodes.push_back(RenderMaterialGraphNode{

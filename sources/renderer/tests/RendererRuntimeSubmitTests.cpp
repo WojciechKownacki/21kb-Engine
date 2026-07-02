@@ -797,6 +797,43 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(conditionalResolved.desc.baseColor[3], 0.4F), "KBMAT-RUNTIME: If equal branch did not evaluate into Alpha");
     Require(NearlyEqual(conditionalResolved.desc.emissiveColor[0], 0.8F), "KBMAT-RUNTIME: If greater branch did not evaluate into Emissive");
 
+    RenderMaterialAssetData switchMaterial{};
+    switchMaterial.desc.baseColor[0] = 1.0F;
+    switchMaterial.desc.baseColor[1] = 1.0F;
+    switchMaterial.desc.baseColor[2] = 1.0F;
+    switchMaterial.desc.baseColor[3] = 1.0F;
+    switchMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "2.4"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "9"),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.1"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.2"),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.4"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.7"),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.9"),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::RuntimeSwitch),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::RuntimeSwitch),
+    };
+    switchMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "default"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case0"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case1"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case2"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "case3"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "default"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 5U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case0"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case1"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 7U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case2"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "case3"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    const ResolvedRuntimeMaterialDesc switchResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, switchMaterial);
+    Require(NearlyEqual(switchResolved.desc.roughnessFactor, 0.7F), "KBMAT-RUNTIME: Switch case2 branch did not evaluate into Roughness");
+    Require(NearlyEqual(switchResolved.desc.baseColor[3], 0.1F), "KBMAT-RUNTIME: Switch default branch did not evaluate into Alpha");
+
     RenderMaterialAssetData surfaceMaterial{};
     surfaceMaterial.desc.baseColor[0] = 1.0F;
     surfaceMaterial.desc.baseColor[1] = 1.0F;
