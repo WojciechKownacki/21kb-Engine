@@ -43,6 +43,39 @@ void RendererViewConfigurator::ConfigureSceneNoClear(bgfx::ViewId viewId, const 
     bgfx::setViewRect(viewId, 0, 0, width, height);
 }
 
+void RendererViewConfigurator::ConfigureFramebufferClear(
+    bgfx::ViewId viewId,
+    bgfx::FrameBufferHandle frameBuffer,
+    RenderExtent extent,
+    const char* name,
+    std::uint16_t clearFlags,
+    std::uint32_t rgba,
+    float depth,
+    std::uint8_t stencil) {
+    const std::array<float, 16> identity = RendererMatrixMath::Identity();
+    const std::uint16_t width = ClampToViewExtent(extent.width);
+    const std::uint16_t height = ClampToViewExtent(extent.height);
+
+    bgfx::setViewName(viewId, name == nullptr ? "KB Framebuffer Clear" : name);
+    bgfx::setViewFrameBuffer(viewId, frameBuffer);
+    bgfx::setViewTransform(viewId, identity.data(), identity.data());
+    bgfx::setViewClear(viewId, clearFlags, rgba, depth, stencil);
+    bgfx::setViewRect(viewId, 0, 0, width, height);
+    bgfx::touch(viewId);
+}
+
+void RendererViewConfigurator::ConfigureFramebufferNoClear(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, RenderExtent extent, const char* name) {
+    const std::array<float, 16> identity = RendererMatrixMath::Identity();
+    const std::uint16_t width = ClampToViewExtent(extent.width);
+    const std::uint16_t height = ClampToViewExtent(extent.height);
+
+    bgfx::setViewName(viewId, name == nullptr ? "KB Framebuffer" : name);
+    bgfx::setViewFrameBuffer(viewId, frameBuffer);
+    bgfx::setViewTransform(viewId, identity.data(), identity.data());
+    bgfx::setViewClear(viewId, BGFX_CLEAR_NONE);
+    bgfx::setViewRect(viewId, 0, 0, width, height);
+}
+
 void RendererViewConfigurator::ConfigureShadowDepth(bgfx::ViewId viewId, bgfx::FrameBufferHandle frameBuffer, std::uint32_t size) {
     const std::uint16_t extent = ClampToViewExtent(size);
     bgfx::setViewName(viewId, "KB Shadow Depth");

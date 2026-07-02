@@ -90,6 +90,7 @@ struct ProjectSettingsClickPoints {
     POINT optionRow1{}; // First named option inside the open dropdown.
     POINT checkbox{};   // Enabled checkbox.
     POINT vulkanBackend{};
+    POINT deferredLightingPath{};
     POINT postProcessToggle{};
     POINT fxaaMode{};
     POINT msaaMode{};
@@ -108,6 +109,7 @@ struct ProjectSettingsClickPoints {
         .optionRow1 = Center(ProjectSettingsPanelLayout::OptionRow(fieldBox, 1)),
         .checkbox = Center(rects.enabledCheckbox),
         .vulkanBackend = Center(rects.backendVulkanButton),
+        .deferredLightingPath = Center(rects.lightingPathDeferredButton),
         .postProcessToggle = Center(rects.postProcessCheckbox),
         .fxaaMode = Center(rects.antiAliasingFxaaButton),
         .msaaMode = Center(rects.antiAliasingMsaaButton),
@@ -201,6 +203,14 @@ void RunProjectSettingsSuite(Report& report) {
     report.Check(controller.HandlePointerDown(kContent, click.vulkanBackend.x, click.vulkanBackend.y, renderBackendSettings), "Clicking Vulkan backend is handled");
     report.Check(renderBackendSettings.Backend() == EditorRenderBackend::Vulkan, "Graphics backend setting changed to Vulkan");
     report.Check(renderBackendSettings.Generation() == generationBefore + 1U, "Graphics backend generation increments");
+    report.Check(HitKindAt(context, click.deferredLightingPath) == ProjectSettingsHitKind::LightingPathOption, "Deferred lighting path point hit-tests as LightingPathOption");
+    report.Check(controller.HandlePointerDown(kContent, click.deferredLightingPath.x, click.deferredLightingPath.y, renderBackendSettings), "Clicking Deferred lighting path is handled");
+    report.Check(context.Project().sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Project lighting path changed to Deferred");
+    {
+        const kb::project::ProjectDescriptorReadResult reloaded = kb::project::ProjectManager::LoadProject(context.ProjectFile());
+        report.Check(reloaded.succeeded && reloaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Deferred, "Deferred lighting path persisted to descriptor");
+        report.Check(reloaded.succeeded && reloaded.descriptor.fileVersion >= 4U, "Descriptor written at file version >= 4");
+    }
     report.Check(HitKindAt(context, click.postProcessToggle) == ProjectSettingsHitKind::GraphicsToggle, "Post FX point hit-tests as GraphicsToggle");
     const std::uint64_t toggleGenerationBefore = renderBackendSettings.Generation();
     const std::uint64_t backendGenerationBeforeToggle = renderBackendSettings.BackendGeneration();

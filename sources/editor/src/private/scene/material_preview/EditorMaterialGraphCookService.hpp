@@ -82,7 +82,7 @@ struct EditorMaterialGraphCookConfig {
     std::string varyingDefPath;    // varying.def.sc used by the mesh vertex shader
     std::vector<std::string> includeDirs; // graph shader include dirs (engine shaders + bgfx headers)
     std::string cacheRoot;         // per-project graph shader cache root (shared with the renderer)
-    std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + ShadowDepth
+    std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + GBuffer + ShadowDepth + BaseTransparent
     std::uint32_t materialTypeVersion = 1U;
     std::uint32_t debounceMs = 180U; // coalesce rapid edits into a single recook
     std::uint32_t compileWarningMs = 5000U;

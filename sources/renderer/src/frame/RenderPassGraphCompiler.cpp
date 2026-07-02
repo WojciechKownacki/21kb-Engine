@@ -12,6 +12,7 @@ namespace {
     case RenderTargetFormat::Rgba8:
     case RenderTargetFormat::D32:
     case RenderTargetFormat::D32F:
+    case RenderTargetFormat::Rg16F:
         return 4U;
     case RenderTargetFormat::Rgba16:
     case RenderTargetFormat::Rgba16F:
