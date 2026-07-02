@@ -2053,7 +2053,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 0U:
         return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray };
     case 1U:
-        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
+        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateDeltaTime, MaterialEditorGraphMenuCommand::CreateDynamicParameter, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount, MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition, MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
         return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter };
     case 3U:
@@ -2290,15 +2290,21 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
     case MaterialEditorGraphMenuCommand::CreateTime: return "Time";
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return "Delta Time";
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return "Dynamic Parameter";
     case MaterialEditorGraphMenuCommand::CreateVertexColor: return "Vertex Color";
     case MaterialEditorGraphMenuCommand::CreateScreenPosition: return "Screen Position";
     case MaterialEditorGraphMenuCommand::CreateLocalPosition: return "Local Position";
     case MaterialEditorGraphMenuCommand::CreateObjectPosition: return "Object Position";
     case MaterialEditorGraphMenuCommand::CreateWorldPosition: return "World Position";
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return "Per Instance Random";
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return "Per Instance Fade Amount";
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return "Per Instance Custom Data";
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return "Object Radius";
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return "Object Bounds";
     case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return "Object Orientation";
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return "Pre-Skinned Position";
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return "Pre-Skinned Normal";
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return "Make Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return "Break Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return "Blend Material Attributes";
@@ -2520,15 +2526,21 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateLerp: return kb::render::RenderMaterialGraphNodeKind::Lerp;
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return kb::render::RenderMaterialGraphNodeKind::NormalUnpack;
     case MaterialEditorGraphMenuCommand::CreateTime: return kb::render::RenderMaterialGraphNodeKind::Time;
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime: return kb::render::RenderMaterialGraphNodeKind::DeltaTime;
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter: return kb::render::RenderMaterialGraphNodeKind::DynamicParameter;
     case MaterialEditorGraphMenuCommand::CreateVertexColor: return kb::render::RenderMaterialGraphNodeKind::VertexColor;
     case MaterialEditorGraphMenuCommand::CreateScreenPosition: return kb::render::RenderMaterialGraphNodeKind::ScreenPosition;
     case MaterialEditorGraphMenuCommand::CreateLocalPosition: return kb::render::RenderMaterialGraphNodeKind::LocalPosition;
     case MaterialEditorGraphMenuCommand::CreateObjectPosition: return kb::render::RenderMaterialGraphNodeKind::ObjectPosition;
     case MaterialEditorGraphMenuCommand::CreateWorldPosition: return kb::render::RenderMaterialGraphNodeKind::WorldPosition;
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom;
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount: return kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData: return kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData;
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return kb::render::RenderMaterialGraphNodeKind::ObjectRadius;
     case MaterialEditorGraphMenuCommand::CreateObjectBounds: return kb::render::RenderMaterialGraphNodeKind::ObjectBounds;
     case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return kb::render::RenderMaterialGraphNodeKind::ObjectOrientation;
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition: return kb::render::RenderMaterialGraphNodeKind::PreSkinnedPosition;
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal: return kb::render::RenderMaterialGraphNodeKind::PreSkinnedNormal;
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes;
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes;
     case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes;
@@ -2659,6 +2671,22 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreateSobol) {
         haystack += " low discrepancy quasirandom quasi random blue noise sobol2d cell index seed";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateDeltaTime) {
+        haystack += " time delta time delta frame time timestep frame dt";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateDynamicParameter) {
+        haystack += " dynamic parameters particle parameter runtime rgba channel cascade niagara";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount) {
+        haystack += " per instance fade amount perinstancefade lod fade instance fade";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData) {
+        haystack += " per instance custom data custom data instance data perinstancecustomdata0";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition ||
+        command == MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal) {
+        haystack += " pre skinned preskinned local skeletal skinning skinned mesh vertex";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";
