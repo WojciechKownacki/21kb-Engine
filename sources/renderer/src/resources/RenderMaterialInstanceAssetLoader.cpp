@@ -237,6 +237,7 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -312,6 +313,7 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:

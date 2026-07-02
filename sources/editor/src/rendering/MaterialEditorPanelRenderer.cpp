@@ -550,6 +550,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "min", "Min" }, { "max", "Max" }, { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::If:
         return { { "a", "A" }, { "b", "B" }, { "less", "Less" }, { "equal", "Equal" }, { "greater", "Greater" } };
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return { { "index", "Index" }, { "default", "Default" }, { "case0", "Case 0" }, { "case1", "Case 1" }, { "case2", "Case 2" }, { "case3", "Case 3" } };
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
         return { { "color", "Color" }, { "fraction", "Fraction" } };
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
@@ -647,6 +649,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Step:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
     case kb::render::RenderMaterialGraphNodeKind::If:
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
     case kb::render::RenderMaterialGraphNodeKind::Negate:
     case kb::render::RenderMaterialGraphNodeKind::Sign:
@@ -885,6 +888,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Smooth Step";
     case kb::render::RenderMaterialGraphNodeKind::If:
         return "If";
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return "Switch";
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
         return "Desaturate";
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
