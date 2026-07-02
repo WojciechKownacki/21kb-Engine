@@ -907,6 +907,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Normal Map";
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return "Texture Coordinate";
+    case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
+        return "Two Sided Sign";
     default:
         break;
     }
@@ -1303,6 +1305,7 @@ void DrawGraphPin(
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
+    case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
         return RGB(68, 68, 68);
     case kb::render::RenderMaterialGraphNodeKind::Reroute:
     case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:

@@ -65,6 +65,8 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT08: Forward wrapper must reuse the shared PBR lighting library");
     Require(opaque.find("KbEvaluateForwardLighting(") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must run PBR lighting over the evaluated surface");
+    Require(opaque.find("ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;") != std::string::npos,
+        "KBMAT-MAT46: Forward wrapper must expose a real front/back-face sign to graph nodes");
     Require(opaque.find("gl_FragColor = vec4(lighting + surface.emissive, surface.alpha);") != std::string::npos,
         "KBMAT-MAT08: Forward wrapper must combine lit color, emissive and surface alpha");
 
