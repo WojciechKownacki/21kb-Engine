@@ -107,6 +107,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateStep,
     CreateSmoothStep,
     CreateIf,
+    CreateSwitch,
     CreateDesaturate,
     CreateFresnel,
     CreateNegate,
@@ -2883,6 +2884,11 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::CustomCode:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Custom Code",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Switch",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:

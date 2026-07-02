@@ -657,6 +657,15 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "greater", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        AppendIrPin(irNode, irNode.kind, "index", false);
+        AppendIrPin(irNode, irNode.kind, "default", false);
+        AppendIrPin(irNode, irNode.kind, "case0", false);
+        AppendIrPin(irNode, irNode.kind, "case1", false);
+        AppendIrPin(irNode, irNode.kind, "case2", false);
+        AppendIrPin(irNode, irNode.kind, "case3", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
     case RenderMaterialGraphNodeKind::Desaturate:
         AppendIrPin(irNode, irNode.kind, "color", false);
         AppendIrPin(irNode, irNode.kind, "fraction", false);
@@ -2106,6 +2115,20 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const std::string greater = CompileInputExpression(cg, node, "greater", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)");
         return "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
     }
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return "kbSwitch4(" +
+            CompileInputExpression(cg, node, "index", RenderMaterialGraphPinType::Float, "0.0") +
+            ", " +
+            CompileInputExpression(cg, node, "default", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "case0", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "case1", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "case2", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "case3", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ")";
     case RenderMaterialGraphNodeKind::Desaturate: {
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
         const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, "1.0");
@@ -2430,6 +2453,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -2616,6 +2640,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -2760,6 +2785,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -3928,6 +3954,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "SmoothStep";
     case RenderMaterialGraphNodeKind::If:
         return "If";
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return "Switch";
     case RenderMaterialGraphNodeKind::Desaturate:
         return "Desaturate";
     case RenderMaterialGraphNodeKind::Fresnel:
@@ -4238,6 +4266,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "If") || EqualsIgnoreCase(text, "Compare")) {
         return RenderMaterialGraphNodeKind::If;
+    }
+    if (EqualsIgnoreCase(text, "Switch") || EqualsIgnoreCase(text, "RuntimeSwitch") || EqualsIgnoreCase(text, "DynamicSwitch")) {
+        return RenderMaterialGraphNodeKind::RuntimeSwitch;
     }
     if (EqualsIgnoreCase(text, "Desaturate") || EqualsIgnoreCase(text, "Desaturation")) {
         return RenderMaterialGraphNodeKind::Desaturate;
@@ -4689,6 +4720,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -4980,6 +5012,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::Step,
         RenderMaterialGraphNodeKind::SmoothStep,
         RenderMaterialGraphNodeKind::If,
+        RenderMaterialGraphNodeKind::RuntimeSwitch,
         RenderMaterialGraphNodeKind::Desaturate,
         RenderMaterialGraphNodeKind::Fresnel,
         RenderMaterialGraphNodeKind::Negate,
@@ -5763,6 +5796,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesSceneColor = false;
     bool usesHsv = false;
     bool usesFastTrig = false;
+    bool usesRuntimeSwitch = false;
     bool usesBlackBody = false;
     bool usesNoise = false;
     bool usesVertexColor = false;
@@ -5803,6 +5837,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::ArcTangentFast:
         case RenderMaterialGraphNodeKind::ArcTangent2Fast:
             usesFastTrig = true;
+            break;
+        case RenderMaterialGraphNodeKind::RuntimeSwitch:
+            usesRuntimeSwitch = true;
             break;
         case RenderMaterialGraphNodeKind::BlackBody:
             // MAT-50: BlackBody calls a shared Planckian-locus helper emitted into the shader prelude.
@@ -6052,6 +6089,18 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
         source += "vec4 kbAcosFast(vec4 x) {\n";
         source += "    return vec4_splat(1.57079632679) - kbAsinFast(x);\n";
+        source += "}\n\n";
+    }
+
+    if (usesRuntimeSwitch) {
+        source += "vec4 kbSwitch4(float indexValue, vec4 defaultValue, vec4 case0Value, vec4 case1Value, vec4 case2Value, vec4 case3Value) {\n";
+        source += "    float selected = floor(indexValue + 0.5);\n";
+        source += "    float case0Mask = 1.0 - step(0.5, abs(selected - 0.0));\n";
+        source += "    float case1Mask = 1.0 - step(0.5, abs(selected - 1.0));\n";
+        source += "    float case2Mask = 1.0 - step(0.5, abs(selected - 2.0));\n";
+        source += "    float case3Mask = 1.0 - step(0.5, abs(selected - 3.0));\n";
+        source += "    float selectedMask = max(max(case0Mask, case1Mask), max(case2Mask, case3Mask));\n";
+        source += "    return defaultValue * (1.0 - selectedMask) + case0Value * case0Mask + case1Value * case1Mask + case2Value * case2Mask + case3Value * case3Mask;\n";
         source += "}\n\n";
     }
 
@@ -6828,6 +6877,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "min" || pin == "max" || pin == "value";
     case RenderMaterialGraphNodeKind::If:
         return pin == "a" || pin == "b" || pin == "less" || pin == "equal" || pin == "greater";
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return pin == "index" || pin == "default" || pin == "case0" || pin == "case1" || pin == "case2" || pin == "case3";
     case RenderMaterialGraphNodeKind::Desaturate:
         return pin == "color" || pin == "fraction";
     case RenderMaterialGraphNodeKind::Fresnel:
@@ -6940,6 +6991,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
     case RenderMaterialGraphNodeKind::Sign:
@@ -7467,6 +7519,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (!outputPin && (pin == "a" || pin == "b")) return RenderMaterialGraphPinType::Float;
         if (!outputPin && (pin == "less" || pin == "equal" || pin == "greater")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        if (!outputPin && pin == "index") return RenderMaterialGraphPinType::Float;
+        if (!outputPin && (pin == "default" || pin == "case0" || pin == "case1" || pin == "case2" || pin == "case3")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Desaturate:
         if (!outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
         if (!outputPin && pin == "fraction") return RenderMaterialGraphPinType::Float;
@@ -7799,6 +7855,15 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "less") return PinId(nodeKind, direction, 3U);
         if (!outputPin && pin == "equal") return PinId(nodeKind, direction, 4U);
         if (!outputPin && pin == "greater") return PinId(nodeKind, direction, 5U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
+        if (!outputPin && pin == "index") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "default") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "case0") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "case1") return PinId(nodeKind, direction, 4U);
+        if (!outputPin && pin == "case2") return PinId(nodeKind, direction, 5U);
+        if (!outputPin && pin == "case3") return PinId(nodeKind, direction, 6U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Desaturate:
@@ -8198,6 +8263,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:

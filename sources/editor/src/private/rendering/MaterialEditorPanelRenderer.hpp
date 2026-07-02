@@ -343,6 +343,8 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
         return SIZE{ 154, 68 };
     case kb::render::RenderMaterialGraphNodeKind::If:
         return SIZE{ 194, 142 };
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return SIZE{ 202, 174 };
     default:
         return SIZE{ MaterialEditorPanelMetrics::GraphNodeWidth, MaterialEditorPanelMetrics::GraphNodeHeight };
     }
@@ -1039,6 +1041,8 @@ inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderM
         return { "min", "max", "value" };
     case kb::render::RenderMaterialGraphNodeKind::If:
         return { "a", "b", "less", "equal", "greater" };
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
+        return { "index", "default", "case0", "case1", "case2", "case3" };
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
         return { "color", "fraction" };
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
@@ -1112,6 +1116,7 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
     case kb::render::RenderMaterialGraphNodeKind::Step:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
     case kb::render::RenderMaterialGraphNodeKind::If:
+    case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
     case kb::render::RenderMaterialGraphNodeKind::Negate:
     case kb::render::RenderMaterialGraphNodeKind::Sign:
@@ -1984,6 +1989,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateStep,
             MaterialEditorGraphMenuCommand::CreateSmoothStep,
             MaterialEditorGraphMenuCommand::CreateIf,
+            MaterialEditorGraphMenuCommand::CreateSwitch,
             MaterialEditorGraphMenuCommand::CreateDesaturate,
             MaterialEditorGraphMenuCommand::CreateFresnel,
             MaterialEditorGraphMenuCommand::CreateClamp,
@@ -2151,6 +2157,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateStep: return "Step";
     case MaterialEditorGraphMenuCommand::CreateSmoothStep: return "Smooth Step";
     case MaterialEditorGraphMenuCommand::CreateIf: return "If";
+    case MaterialEditorGraphMenuCommand::CreateSwitch: return "Switch";
     case MaterialEditorGraphMenuCommand::CreateDesaturate: return "Desaturate";
     case MaterialEditorGraphMenuCommand::CreateFresnel: return "Fresnel";
     case MaterialEditorGraphMenuCommand::CreateNegate: return "Negate";
@@ -2312,6 +2319,7 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateStep: return kb::render::RenderMaterialGraphNodeKind::Step;
     case MaterialEditorGraphMenuCommand::CreateSmoothStep: return kb::render::RenderMaterialGraphNodeKind::SmoothStep;
     case MaterialEditorGraphMenuCommand::CreateIf: return kb::render::RenderMaterialGraphNodeKind::If;
+    case MaterialEditorGraphMenuCommand::CreateSwitch: return kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch;
     case MaterialEditorGraphMenuCommand::CreateDesaturate: return kb::render::RenderMaterialGraphNodeKind::Desaturate;
     case MaterialEditorGraphMenuCommand::CreateFresnel: return kb::render::RenderMaterialGraphNodeKind::Fresnel;
     case MaterialEditorGraphMenuCommand::CreateNegate: return kb::render::RenderMaterialGraphNodeKind::Negate;
@@ -2440,6 +2448,9 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     }
     if (command == MaterialEditorGraphMenuCommand::CreateStaticComponentMask) {
         haystack += " static component mask parameter channel mask channelmask channelmaskparameter";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateSwitch) {
+        haystack += " runtime switch dynamic switch index case default branch";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";
