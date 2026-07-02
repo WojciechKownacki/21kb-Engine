@@ -574,6 +574,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return {};
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
@@ -592,6 +593,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphOutputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
     case kb::render::RenderMaterialGraphNodeKind::Add:
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
@@ -727,6 +729,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Material Output";
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
         return "Value";
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+        return "Bool";
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         return "Vector";
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -1294,6 +1298,7 @@ void DrawGraphPin(
     case kb::render::RenderMaterialGraphNodeKind::DotProduct:
         return RGB(55, 73, 96);
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
         return RGB(68, 68, 68);
     case kb::render::RenderMaterialGraphNodeKind::Reroute:

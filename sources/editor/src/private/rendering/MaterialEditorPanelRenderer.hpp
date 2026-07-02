@@ -1250,6 +1250,7 @@ inline RECT MaterialEditorPanelTextureSamplePreviewRect(const RECT& node) noexce
 
 inline bool MaterialEditorPanelIsConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
     return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+        kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool ||
         kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2 ||
         kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
         kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
@@ -1259,6 +1260,8 @@ inline kb::render::RenderMaterialParameterType MaterialEditorPanelConstantParame
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
         return kb::render::RenderMaterialParameterType::Scalar;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+        return kb::render::RenderMaterialParameterType::Bool;
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         return kb::render::RenderMaterialParameterType::Vec4;
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -1285,6 +1288,17 @@ inline MaterialEditorParameterValue MaterialEditorPanelConstantParameterValue(
             value.numbers[0] = 0.0F;
         }
         break;
+    case kb::render::RenderMaterialGraphNodeKind::ConstantBool: {
+        std::string boolText;
+        input >> boolText;
+        std::ranges::transform(boolText, boolText.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        value.kind = MaterialEditorParameterValueKind::Bool;
+        value.boolValue = boolText == "true" || boolText == "1";
+        value.numbers[0] = value.boolValue ? 1.0F : 0.0F;
+        break;
+    }
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
         value.kind = MaterialEditorParameterValueKind::Vec2;
         if (!(input >> value.numbers[0] >> value.numbers[1])) {
@@ -1418,6 +1432,9 @@ inline std::optional<MaterialEditorGraphConstantValueHit> MaterialEditorPanelRen
     for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
         if (!MaterialEditorPanelIsConstantNode(node.kind)) {
+            continue;
+        }
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
             continue;
         }
         const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
@@ -1926,7 +1943,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 2U:
         return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter };
     case 3U:
-        return { MaterialEditorGraphMenuCommand::CreateScalar, MaterialEditorGraphMenuCommand::CreateVector2, MaterialEditorGraphMenuCommand::CreateVector, MaterialEditorGraphMenuCommand::CreateColor };
+        return { MaterialEditorGraphMenuCommand::CreateScalar, MaterialEditorGraphMenuCommand::CreateBool, MaterialEditorGraphMenuCommand::CreateVector2, MaterialEditorGraphMenuCommand::CreateVector, MaterialEditorGraphMenuCommand::CreateColor };
     case 4U:
         return { MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter, MaterialEditorGraphMenuCommand::CreateTextureParameter };
     case 5U:
@@ -2053,6 +2070,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return "Texture Parameter";
     case MaterialEditorGraphMenuCommand::CreateUv: return "UV";
     case MaterialEditorGraphMenuCommand::CreateScalar: return "Constant Scalar";
+    case MaterialEditorGraphMenuCommand::CreateBool: return "Constant Bool";
     case MaterialEditorGraphMenuCommand::CreateVector2: return "Constant2Vector (XY)";
     case MaterialEditorGraphMenuCommand::CreateVector: return "Constant3Vector (RGB)";
     case MaterialEditorGraphMenuCommand::CreateColor: return "Constant4Vector (RGBA)";
@@ -2207,6 +2225,7 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterTexture;
     case MaterialEditorGraphMenuCommand::CreateUv: return kb::render::RenderMaterialGraphNodeKind::Uv;
     case MaterialEditorGraphMenuCommand::CreateScalar: return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
+    case MaterialEditorGraphMenuCommand::CreateBool: return kb::render::RenderMaterialGraphNodeKind::ConstantBool;
     case MaterialEditorGraphMenuCommand::CreateVector2: return kb::render::RenderMaterialGraphNodeKind::ConstantVector2;
     case MaterialEditorGraphMenuCommand::CreateVector: return kb::render::RenderMaterialGraphNodeKind::ConstantVector;
     case MaterialEditorGraphMenuCommand::CreateColor: return kb::render::RenderMaterialGraphNodeKind::ConstantColor;

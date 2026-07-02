@@ -135,7 +135,8 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
     return kind == RenderMaterialGraphNodeKind::ConstantScalar ||
         kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
         kind == RenderMaterialGraphNodeKind::ConstantVector ||
-        kind == RenderMaterialGraphNodeKind::ConstantColor;
+        kind == RenderMaterialGraphNodeKind::ConstantColor ||
+        kind == RenderMaterialGraphNodeKind::ConstantBool;
 }
 
 [[nodiscard]] bool IsRenderMaterialGraphPassThroughNode(RenderMaterialGraphNodeKind kind) noexcept {
@@ -700,6 +701,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "normal", true);
         break;
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::ParameterScalar:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
@@ -926,6 +928,21 @@ void AttachDiagnosticContext(
     if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float) {
         return "(" + expression + ").x";
     }
+    if (from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Float) {
+        return "((" + expression + ") ? 1.0 : 0.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Float4) {
+        return "vec4_splat((" + expression + ") ? 1.0 : 0.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Color) {
+        return "vec4_splat((" + expression + ") ? 1.0 : 0.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Float && to == RenderMaterialGraphPinType::Bool) {
+        return "((" + expression + ") != 0.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Bool) {
+        return "(((" + expression + ").x) != 0.0)";
+    }
     return expression;
 }
 
@@ -980,6 +997,8 @@ struct GraphCodegen {
         return RenderMaterialGraphPinType::Color;
     case RenderMaterialGraphNodeKind::CustomCode:
         return RenderMaterialGraphPinType::Float4;
+    case RenderMaterialGraphNodeKind::ConstantBool:
+        return RenderMaterialGraphPinType::Bool;
     case RenderMaterialGraphNodeKind::QualitySwitch:
     case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
@@ -1003,6 +1022,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
@@ -1536,6 +1556,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         // A compile-time boolean baked as a literal so it participates in the shader source / variant key.
         return ParseStaticBoolHint(node.parameter.defaultValueHint) ? "1.0" : "0.0";
+    case RenderMaterialGraphNodeKind::ConstantBool:
+        return ParseStaticBoolHint(node.parameter.defaultValueHint) ? "true" : "false";
     case RenderMaterialGraphNodeKind::StaticSwitch:
         // Only the selected branch is compiled — the other subgraph is never emitted (dead-branch elimination).
         return ResolveStaticSwitchSelector(cg.graph, node)
@@ -2335,6 +2357,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -2507,6 +2530,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureObject:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
@@ -2640,6 +2664,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureObject:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
@@ -3736,6 +3761,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ConstantVector";
     case RenderMaterialGraphNodeKind::ConstantColor:
         return "ConstantColor";
+    case RenderMaterialGraphNodeKind::ConstantBool:
+        return "ConstantBool";
     case RenderMaterialGraphNodeKind::TextureSample:
         return "TextureSample";
     case RenderMaterialGraphNodeKind::TextureObject:
@@ -4025,6 +4052,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "ConstantColor") || EqualsIgnoreCase(text, "Color")) {
         return RenderMaterialGraphNodeKind::ConstantColor;
+    }
+    if (EqualsIgnoreCase(text, "ConstantBool") || EqualsIgnoreCase(text, "Bool") || EqualsIgnoreCase(text, "Boolean")) {
+        return RenderMaterialGraphNodeKind::ConstantBool;
     }
     if (EqualsIgnoreCase(text, "TextureSample")) {
         return RenderMaterialGraphNodeKind::TextureSample;
@@ -4531,6 +4561,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureObject:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
@@ -4888,6 +4919,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ArcTangent,
         RenderMaterialGraphNodeKind::ArcTangent2,
         RenderMaterialGraphNodeKind::ConstantVector2,
+        RenderMaterialGraphNodeKind::ConstantBool,
         RenderMaterialGraphNodeKind::Time,
         RenderMaterialGraphNodeKind::DeltaTime,
         RenderMaterialGraphNodeKind::DynamicParameter,
@@ -6707,6 +6739,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
@@ -6743,6 +6776,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
 bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
@@ -7200,6 +7234,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ConstantScalar:
     case RenderMaterialGraphNodeKind::ParameterScalar:
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ConstantBool:
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Bool : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantVector2:
         return outputPin && pin == "xy" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantVector:
@@ -7456,6 +7492,13 @@ bool AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType from, Rende
     if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float) {
         return true;
     }
+    if ((from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Float) ||
+        (from == RenderMaterialGraphPinType::Float && to == RenderMaterialGraphPinType::Bool) ||
+        (from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Float4) ||
+        (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Bool) ||
+        (from == RenderMaterialGraphPinType::Bool && to == RenderMaterialGraphPinType::Color)) {
+        return true;
+    }
     return false;
 }
 
@@ -7674,6 +7717,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "normal") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::ConstantScalar:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::ParameterScalar:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
@@ -7973,6 +8017,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::ConstantVector2:
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ConstantBool:
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:

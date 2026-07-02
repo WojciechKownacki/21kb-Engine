@@ -3870,6 +3870,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Uv, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScalar:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantScalar, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateBool:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantBool, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVector2:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ConstantVector2, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVector:
