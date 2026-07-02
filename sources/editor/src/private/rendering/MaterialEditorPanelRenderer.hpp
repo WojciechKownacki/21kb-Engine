@@ -2051,7 +2051,7 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject, MaterialEditorGraphMenuCommand::CreateTextureSampleCube, MaterialEditorGraphMenuCommand::CreateTextureObjectCube, MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, MaterialEditorGraphMenuCommand::CreateTextureObjectVolume, MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, MaterialEditorGraphMenuCommand::CreateTextureObject2DArray };
     case 1U:
         return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
@@ -2204,6 +2204,12 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return "Texture Sample";
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return "Texture Parameter";
     case MaterialEditorGraphMenuCommand::CreateTextureObject: return "Texture Object";
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return "Texture Sample Cube";
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return "Texture Object Cube";
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return "Texture Sample Volume";
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return "Texture Object Volume";
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return "Texture Sample 2D Array";
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return "Texture Object 2D Array";
     case MaterialEditorGraphMenuCommand::CreateUv: return "UV";
     case MaterialEditorGraphMenuCommand::CreateScalar: return "Constant Scalar";
     case MaterialEditorGraphMenuCommand::CreateBool: return "Constant Bool";
@@ -2428,6 +2434,12 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return kb::render::RenderMaterialGraphNodeKind::TextureSample;
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterTexture;
     case MaterialEditorGraphMenuCommand::CreateTextureObject: return kb::render::RenderMaterialGraphNodeKind::TextureObject;
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube: return kb::render::RenderMaterialGraphNodeKind::TextureSampleCube;
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube: return kb::render::RenderMaterialGraphNodeKind::TextureObjectCube;
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume: return kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume;
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume: return kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume;
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray: return kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray;
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray: return kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray;
     case MaterialEditorGraphMenuCommand::CreateUv: return kb::render::RenderMaterialGraphNodeKind::Uv;
     case MaterialEditorGraphMenuCommand::CreateScalar: return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
     case MaterialEditorGraphMenuCommand::CreateBool: return kb::render::RenderMaterialGraphNodeKind::ConstantBool;
@@ -2623,6 +2635,18 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTextureObject) {
         haystack += " texture object parameter texture object sampler object";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSampleCube ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObjectCube) {
+        haystack += " cube cubemap environment reflection texturecube";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSampleVolume ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObjectVolume) {
+        haystack += " volume texture3d 3d voxel volumetric";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureSample2DArray ||
+        command == MaterialEditorGraphMenuCommand::CreateTextureObject2DArray) {
+        haystack += " array texture array texture2darray layer slice";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateStaticSwitch) {
         haystack += " static switch parameter staticswitchparameter";

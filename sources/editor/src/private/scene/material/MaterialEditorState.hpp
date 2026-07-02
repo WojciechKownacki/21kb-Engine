@@ -59,6 +59,12 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateTextureSample,
     CreateTextureParameter,
     CreateTextureObject,
+    CreateTextureSampleCube,
+    CreateTextureObjectCube,
+    CreateTextureSampleVolume,
+    CreateTextureObjectVolume,
+    CreateTextureSample2DArray,
+    CreateTextureObject2DArray,
     CreateUv,
     CreateScalar,
     CreateBool,
@@ -3543,6 +3549,30 @@ private:
                 .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
                 .overrideSupported = true,
             };
+        case kb::render::RenderMaterialGraphNodeKind::TextureObjectCube:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureCubeObject" + std::to_string(nodeId),
+                .displayName = "Texture Cube Object " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureVolumeObject" + std::to_string(nodeId),
+                .displayName = "Texture Volume Object " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureArrayObject" + std::to_string(nodeId),
+                .displayName = "Texture 2D Array Object " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
         case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .stableId = "collectionParam" + std::to_string(nodeId),
@@ -3555,6 +3585,30 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .stableId = "textureSample" + std::to_string(nodeId),
                 .displayName = "Texture Sample " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureSampleCube:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureCubeSample" + std::to_string(nodeId),
+                .displayName = "Texture Cube Sample " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureVolumeSample" + std::to_string(nodeId),
+                .displayName = "Texture Volume Sample " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureArraySample" + std::to_string(nodeId),
+                .displayName = "Texture 2D Array Sample " + std::to_string(nodeId),
                 .textureRole = "baseColor",
                 .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
                 .overrideSupported = true,
