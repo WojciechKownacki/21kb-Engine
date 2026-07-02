@@ -1,6 +1,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -60,11 +61,19 @@ LONG WINAPI BreadcrumbUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionPoin
          << " tid=" << CurrentThreadIdValue()
          << " [crash] unhandled_exception";
     if (exceptionPointers != nullptr && exceptionPointers->ExceptionRecord != nullptr) {
+        const auto address = reinterpret_cast<std::uintptr_t>(exceptionPointers->ExceptionRecord->ExceptionAddress);
         line << " code=0x" << std::hex << exceptionPointers->ExceptionRecord->ExceptionCode
-             << " address=0x" << reinterpret_cast<std::uintptr_t>(exceptionPointers->ExceptionRecord->ExceptionAddress);
+             << " address=0x" << address;
+        if (const HMODULE module = GetModuleHandleW(nullptr); module != nullptr) {
+            const auto base = reinterpret_cast<std::uintptr_t>(module);
+            line << " module_base=0x" << base;
+            if (address >= base) {
+                line << " rva=0x" << (address - base);
+            }
+        }
     }
     AppendLine(line.str());
-    return EXCEPTION_EXECUTE_HANDLER;
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
 
