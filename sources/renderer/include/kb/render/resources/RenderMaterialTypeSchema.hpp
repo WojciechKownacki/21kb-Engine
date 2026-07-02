@@ -54,9 +54,8 @@ enum class RenderMaterialDomain : std::uint8_t {
     UserInterface,
 };
 
-// MAT-34: only Surface is implemented (drives the forward graph wrapper/pass). The other domains are
-// declared for parity but NOT implemented; a graph that requests them falls back to Surface with a
-// diagnostic instead of silently mis-rendering — zero false claim.
+// MAT-34: only Surface has a production graph runtime pass. Declared domains without a runtime pass fail
+// compilation instead of silently compiling as Surface.
 [[nodiscard]] constexpr bool IsRenderMaterialDomainProduction(RenderMaterialDomain domain) noexcept {
     return domain == RenderMaterialDomain::Surface;
 }
