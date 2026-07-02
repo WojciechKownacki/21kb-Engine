@@ -1505,6 +1505,8 @@ void RunMaterialEditorGraphCompositeRerouteAuthoringTest() {
 void RunMaterialEditorGraphNodeCreationUxModelTest() {
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample, "tex sample"),
         "KBMAT-MAT57: Palette search should find Texture Sample by a fragmented query");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject, "texture object parameter"),
+        "KBMAT-MAT57: Palette search should expose Texture Object by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "rgba"),
         "KBMAT-MAT57: Palette search should include node pin aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateBool, "constant bool"),
@@ -1520,6 +1522,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphContextMenuCommands(kb::editor::MaterialEditorGraphContextMenuFavoritesCategoryIndex(), favorites);
     kb::editor::tests::Require(favoriteCategory == favorites,
         "KBMAT-MAT57: Palette favorites category should expose the stored favorite commands in order");
+    const std::vector<kb::editor::MaterialEditorGraphMenuCommand> textureCommands =
+        kb::editor::MaterialEditorGraphContextMenuCommands(0U);
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject),
+        "KBMAT-MAT57: Texture Object must be available from the Textures palette category");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
@@ -1559,6 +1565,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateBool);
     kb::editor::tests::Require(boolKind.has_value() && *boolKind == kb::render::RenderMaterialGraphNodeKind::ConstantBool,
         "KBMAT-MAT57: CreateBool command should map to the ConstantBool graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureObjectKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject);
+    kb::editor::tests::Require(textureObjectKind.has_value() && *textureObjectKind == kb::render::RenderMaterialGraphNodeKind::TextureObject,
+        "KBMAT-MAT57: CreateTextureObject command should map to the TextureObject graph node kind");
     std::uint32_t createdNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(*colorKind, -240, 96, &createdNodeId),
         "KBMAT-MAT57: Drag-from-pin should be able to create the selected compatible node");
@@ -1959,6 +1969,26 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     });
     kb::editor::tests::Require(textureProperty != textureProperties.end() && textureProperty->value.assetId == 0x5800U,
         "KBMAT-MAT58: Texture nodes should expose an asset picker property backed by graph parameter values");
+
+    std::uint32_t textureObjectNodeId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureObject, -40, 220, &textureObjectNodeId),
+        "KBMAT-MAT58: Material Editor should create TextureObject nodes from the palette/runtime kind");
+    const kb::render::RenderMaterialGraphNode* textureObjectNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureObjectNodeId);
+    kb::editor::tests::Require(textureObjectNode != nullptr &&
+            textureObjectNode->parameter.stableId == "textureObject" + std::to_string(textureObjectNodeId) &&
+            textureObjectNode->parameter.displayName == "Texture Object " + std::to_string(textureObjectNodeId) &&
+            textureObjectNode->parameter.textureRole == "baseColor" &&
+            textureObjectNode->parameter.expectedTextureColorSpace == kb::render::RenderMaterialTextureColorSpace::Srgb &&
+            textureObjectNode->parameter.overrideSupported,
+        "KBMAT-MAT58: Created TextureObject must carry runtime texture slot metadata defaults");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> textureObjectProperties =
+        materialEditor.GraphNodeProperties(textureObjectNodeId);
+    kb::editor::tests::Require(textureObjectProperties.size() == 1U &&
+            textureObjectProperties[0].kind == kb::editor::MaterialEditorGraphNodePropertyKind::TextureAsset &&
+            textureObjectProperties[0].type == kb::render::RenderMaterialParameterType::Texture &&
+            kb::render::RenderMaterialGraphPinDataType(*textureObjectNode, "texture", true) == kb::render::RenderMaterialGraphPinType::Texture2D,
+        "KBMAT-MAT58: TextureObject must expose a texture picker property and typed Texture2D output");
 }
 
 void RunMaterialEditorGraphPinTypeUiModelTest() {
