@@ -533,6 +533,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::Noise:
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
         return { { "value", "Position" } };
+    case kb::render::RenderMaterialGraphNodeKind::Sobol:
+        return { { "cell", "Cell" }, { "index", "Index" }, { "seed", "Seed" } };
     case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         return { { "a", "XYZ" }, { "b", "W" } };
     case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
@@ -632,6 +634,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::BlackBody:
     case kb::render::RenderMaterialGraphNodeKind::Noise:
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+    case kb::render::RenderMaterialGraphNodeKind::Sobol:
     case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
     case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case kb::render::RenderMaterialGraphNodeKind::Transform:
@@ -858,6 +861,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Noise";
     case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
         return "Vector Noise";
+    case kb::render::RenderMaterialGraphNodeKind::Sobol:
+        return "Sobol";
     case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         return "Append Vector";
     case kb::render::RenderMaterialGraphNodeKind::ColorRamp:

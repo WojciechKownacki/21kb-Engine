@@ -834,6 +834,26 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(switchResolved.desc.roughnessFactor, 0.7F), "KBMAT-RUNTIME: Switch case2 branch did not evaluate into Roughness");
     Require(NearlyEqual(switchResolved.desc.baseColor[3], 0.1F), "KBMAT-RUNTIME: Switch default branch did not evaluate into Alpha");
 
+    RenderMaterialAssetData sobolMaterial{};
+    sobolMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::Sobol),
+    };
+    sobolMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Sobol, 3U, "index"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Sobol, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::Sobol, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"),
+    };
+    const ResolvedRuntimeMaterialDesc sobolResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, sobolMaterial);
+    Require(NearlyEqual(sobolResolved.desc.baseColor[0], 34432.0F / 65536.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[1], 19584.0F / 65536.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[2], 0.0F) &&
+            NearlyEqual(sobolResolved.desc.baseColor[3], 1.0F),
+        "KBMAT-RUNTIME: Sobol graph did not evaluate its deterministic Float2 sample into Base Color");
+    Require(NearlyEqual(sobolResolved.desc.roughnessFactor, 34432.0F / 65536.0F),
+        "KBMAT-RUNTIME: Sobol graph did not coerce its Float2 sample into Roughness");
+
     RenderMaterialAssetData surfaceMaterial{};
     surfaceMaterial.desc.baseColor[0] = 1.0F;
     surfaceMaterial.desc.baseColor[1] = 1.0F;
