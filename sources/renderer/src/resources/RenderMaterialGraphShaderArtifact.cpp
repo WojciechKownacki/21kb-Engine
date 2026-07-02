@@ -297,7 +297,12 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    occlusion *= clamp(dot(worldBentNormal, bentHalf) * 0.5 + 0.5, 0.0, 1.0);\n";
             }
             wrapper += "    vec3 lighting = KbEvaluateForwardLighting(worldNormal, v_worldPos, surface.baseColor.rgb, metallic, roughness, occlusion);\n";
-            if (shader.reflection.hasClearCoatNormal) {
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::Subsurface) {
+                wrapper += "    float subsurfaceThickness = clamp(surface.surfaceThickness, 0.0, 1.0);\n";
+                wrapper += "    float subsurfaceWrap = pow(clamp(1.0 - dot(worldNormal, ctx.viewDir), 0.0, 1.0), 2.0);\n";
+                wrapper += "    lighting += surface.subsurfaceColor * (0.15 + 0.85 * subsurfaceWrap) * (0.25 + 0.75 * subsurfaceThickness) * (1.0 - metallic);\n";
+            }
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ClearCoat || shader.reflection.hasClearCoatNormal) {
                 wrapper += "    vec3 clearCoatNormalRaw = basisTangent * surface.clearCoatNormal.x + basisBitangent * surface.clearCoatNormal.y + basisNormal * surface.clearCoatNormal.z;\n";
                 wrapper += "    vec3 worldClearCoatNormal = dot(clearCoatNormalRaw, clearCoatNormalRaw) > 0.0001 ? normalize(clearCoatNormalRaw) : worldNormal;\n";
                 wrapper += "    vec3 coatHalfRaw = ctx.lightVector + ctx.viewDir;\n";
@@ -306,10 +311,10 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    float coatPower = mix(128.0, 8.0, clamp(surface.clearCoatRoughness, 0.0, 1.0));\n";
                 wrapper += "    lighting += vec3_splat(pow(max(dot(worldClearCoatNormal, coatHalf), 0.0), coatPower) * coat * 0.25);\n";
             }
-            if (shader.reflection.hasThinTranslucentOutput) {
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::ThinTranslucent || shader.reflection.hasThinTranslucentOutput) {
                 wrapper += "    lighting += surface.thinTranslucentOutput.rgb * clamp(surface.thinTranslucentOutput.a, 0.0, 1.0);\n";
             }
-            if (shader.reflection.hasSingleLayerWaterOutput) {
+            if (shader.reflection.shadingModel == RenderMaterialShadingModel::SingleLayerWater || shader.reflection.hasSingleLayerWaterOutput) {
                 wrapper += "    float waterWeight = clamp(surface.singleLayerWaterOutput.a, 0.0, 1.0);\n";
                 wrapper += "    lighting = mix(lighting, lighting * (1.0 - 0.25 * waterWeight) + surface.singleLayerWaterOutput.rgb, waterWeight);\n";
             }
