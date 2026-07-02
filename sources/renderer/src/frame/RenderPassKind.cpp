@@ -9,6 +9,8 @@ constexpr std::array<RenderPassKind, RenderPassKindCount> kRequiredRenderPassKin
     RenderPassKind::SceneTargetSetup,
     RenderPassKind::ShadowDepth,
     RenderPassKind::OpaqueScene,
+    RenderPassKind::GBufferGeometry,
+    RenderPassKind::DeferredLighting,
     RenderPassKind::TransparentScene,
     RenderPassKind::EditorSelectionMask,
     RenderPassKind::PostProcessExposureReadback,
@@ -35,6 +37,10 @@ const char* RenderPassKindName(RenderPassKind kind) noexcept {
         return "ShadowDepth";
     case RenderPassKind::OpaqueScene:
         return "OpaqueScene";
+    case RenderPassKind::GBufferGeometry:
+        return "GBufferGeometry";
+    case RenderPassKind::DeferredLighting:
+        return "DeferredLighting";
     case RenderPassKind::TransparentScene:
         return "TransparentScene";
     case RenderPassKind::EditorSelectionMask:

@@ -36,8 +36,12 @@ void RenderPassGraphValidatesRequiredPasses() {
     RenderPassGraph graph = RenderFramePipeline{}.BuildViewportGraph(RenderViewportViewIdAllocator::ForViewportIndex(0U));
     const RenderPassGraphValidationResult result = graph.ValidateRequiredPasses();
     Require(result.Succeeded(), RenderPassGraphValidationStatusName(result.status));
-    Require(graph.Resources().size() == 12U, "RenderPassGraph did not declare the viewport graph resources");
+    Require(graph.Resources().size() == 16U, "RenderPassGraph did not declare the viewport graph resources");
     Require(graph.FindResource(RenderGraphResource::SceneColor) != nullptr, "RenderPassGraph did not declare SceneColor");
+    Require(graph.FindResource(RenderGraphResource::GBufferAlbedo) != nullptr, "RenderPassGraph did not declare GBufferAlbedo");
+    Require(graph.FindResource(RenderGraphResource::GBufferNormal) != nullptr, "RenderPassGraph did not declare GBufferNormal");
+    Require(graph.FindResource(RenderGraphResource::GBufferMaterial) != nullptr, "RenderPassGraph did not declare GBufferMaterial");
+    Require(graph.FindResource(RenderGraphResource::GBufferDepth) != nullptr, "RenderPassGraph did not declare GBufferDepth");
     Require(graph.FindResource(RenderGraphResource::ShadowMap) != nullptr, "RenderPassGraph did not declare ShadowMap");
     Require(graph.FindResource(RenderGraphResource::FinalOutput) != nullptr, "RenderPassGraph did not declare FinalOutput");
     Require(RequiredRenderPassKinds().size() == RenderPassKindCount, "Required render pass list does not match pass kind count");
@@ -49,7 +53,7 @@ void RenderPassGraphValidatesRequiredPasses() {
     Require(compile.Succeeded(), RenderPassGraphValidationStatusName(compile.validation.status));
     Require(compile.resourceUsages.size() == graph.Resources().size(), "RenderPassGraph compile did not emit usage for every resource");
     Require(compile.externalResourceCount == 4U, "RenderPassGraph compile reported wrong external resource count");
-    Require(compile.transientResourceCount == 8U, "RenderPassGraph compile reported wrong transient resource count");
+    Require(compile.transientResourceCount == 12U, "RenderPassGraph compile reported wrong transient resource count");
     Require(compile.estimatedTransientBytes > 0U, "RenderPassGraph compile did not estimate transient memory");
     Require(compile.estimatedAliasedTransientBytes > 0U, "RenderPassGraph compile did not estimate aliased transient memory");
     Require(compile.estimatedAliasedTransientBytes <= compile.estimatedTransientBytes, "RenderPassGraph aliased memory estimate exceeded unaliased estimate");
@@ -141,6 +145,8 @@ void PrimaryViewportIdsUseCanonicalRuntimeViews() {
     Require(ids.IsValid(), "Primary viewport view ids are invalid");
     Require(ids.shadowDepth == ViewId::ShadowDepth, "Primary shadow depth view id is not canonical");
     Require(ids.opaqueScene == ViewId::Scene3D, "Primary opaque scene view id is not Scene3D");
+    Require(ids.gbufferGeometry == ViewId::GBufferGeometry, "Primary GBuffer geometry view id is not canonical");
+    Require(ids.deferredLighting == ViewId::DeferredLighting, "Primary deferred lighting view id is not canonical");
     Require(ids.transparentScene == ViewId::TransparentScene, "Primary transparent scene view id is not canonical");
     Require(ids.selectionMask == ViewId::EditorSelectionMask, "Primary selection mask view id is not canonical");
     Require(ids.postProcessExposureReadback == ViewId::PostProcessExposureReadback, "Primary exposure readback view id is not canonical");
@@ -169,13 +175,15 @@ void DetachedViewportIdsAreContiguousAndBounded() {
     Require(second.IsValid(), "Second detached viewport view ids are invalid");
     Require(first.shadowDepth == ViewId::DetachedViewportStart, "First detached viewport shadow view id is wrong");
     Require(first.opaqueScene == ViewId::DetachedViewportStart + 1U, "First detached viewport scene view id is wrong");
-    Require(first.transparentScene == ViewId::DetachedViewportStart + 2U, "First detached viewport transparent scene view id is wrong");
-    Require(first.editorUiComposite == ViewId::DetachedViewportStart + 14U, "First detached viewport editor UI view id is wrong");
+    Require(first.gbufferGeometry == ViewId::DetachedViewportStart + 2U, "First detached viewport GBuffer view id is wrong");
+    Require(first.deferredLighting == ViewId::DetachedViewportStart + 3U, "First detached viewport deferred lighting view id is wrong");
+    Require(first.transparentScene == ViewId::DetachedViewportStart + 4U, "First detached viewport transparent scene view id is wrong");
+    Require(first.editorUiComposite == ViewId::DetachedViewportStart + 16U, "First detached viewport editor UI view id is wrong");
     Require(first.editorGizmoOverlay == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride - 1U, "First detached viewport gizmo overlay view id is wrong");
     Require(second.shadowDepth == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride, "Second detached viewport shadow view id is wrong");
     Require(second.opaqueScene == ViewId::DetachedViewportStart + ViewId::DetachedViewportStride + 1U, "Second detached viewport scene view id is wrong");
-    Require(RenderViewportViewIdAllocator::ForViewportIndex(7U).IsValid(), "Last supported detached viewport should be valid");
-    Require(!RenderViewportViewIdAllocator::ForViewportIndex(8U).IsValid(), "Out-of-range detached viewport should be invalid");
+    Require(RenderViewportViewIdAllocator::ForViewportIndex(6U).IsValid(), "Last supported detached viewport should be valid");
+    Require(!RenderViewportViewIdAllocator::ForViewportIndex(7U).IsValid(), "Out-of-range detached viewport should be invalid");
 }
 
 void FramePipelineBuildsCanonicalPassOrder() {
@@ -195,6 +203,8 @@ void FramePipelineBuildsCanonicalPassOrder() {
         RenderPassKind::SceneTargetSetup,
         RenderPassKind::ShadowDepth,
         RenderPassKind::OpaqueScene,
+        RenderPassKind::GBufferGeometry,
+        RenderPassKind::DeferredLighting,
         RenderPassKind::TransparentScene,
         RenderPassKind::EditorSelectionMask,
         RenderPassKind::PostProcessExposureReadback,
@@ -216,12 +226,16 @@ void FramePipelineBuildsCanonicalPassOrder() {
         Require(viewport.passes[index].kind == expectedPasses[index], "RenderFramePipeline pass order is wrong");
     }
     const RenderPassDesc* opaqueScene = viewportGraph.FindPass(RenderPassKind::OpaqueScene);
+    const RenderPassDesc* gbufferGeometry = viewportGraph.FindPass(RenderPassKind::GBufferGeometry);
+    const RenderPassDesc* deferredLighting = viewportGraph.FindPass(RenderPassKind::DeferredLighting);
     const RenderPassDesc* shadowDepth = viewportGraph.FindPass(RenderPassKind::ShadowDepth);
     const RenderPassDesc* transparentScene = viewportGraph.FindPass(RenderPassKind::TransparentScene);
     const RenderPassDesc* selectionMask = viewportGraph.FindPass(RenderPassKind::EditorSelectionMask);
     const RenderPassDesc* finalComposite = viewportGraph.FindPass(RenderPassKind::FinalComposite);
     Require(shadowDepth != nullptr && shadowDepth->meshPass.value_or(MeshPassType::Depth) == MeshPassType::ShadowDepth, "ShadowDepth pass did not carry ShadowDepth mesh pass metadata");
     Require(opaqueScene != nullptr && opaqueScene->meshPass.value_or(MeshPassType::Depth) == MeshPassType::BaseOpaque, "OpaqueScene pass did not carry BaseOpaque mesh pass metadata");
+    Require(gbufferGeometry != nullptr && gbufferGeometry->meshPass.value_or(MeshPassType::Depth) == MeshPassType::GBuffer, "GBufferGeometry pass did not carry GBuffer mesh pass metadata");
+    Require(deferredLighting != nullptr && !deferredLighting->meshPass.has_value(), "DeferredLighting pass unexpectedly carried mesh pass metadata");
     Require(transparentScene != nullptr && transparentScene->meshPass.value_or(MeshPassType::Depth) == MeshPassType::BaseTransparent, "TransparentScene pass did not carry BaseTransparent mesh pass metadata");
     Require(selectionMask != nullptr && selectionMask->meshPass.value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask pass did not carry SelectionId mesh pass metadata");
     Require(finalComposite != nullptr && !finalComposite->meshPass.has_value(), "FinalComposite pass unexpectedly carried mesh pass metadata");
@@ -230,6 +244,8 @@ void FramePipelineBuildsCanonicalPassOrder() {
         ViewId::ShadowDepth,
         ViewId::GpuCompute,
         ViewId::Scene3D,
+        ViewId::GBufferGeometry,
+        ViewId::DeferredLighting,
         ViewId::TransparentScene,
         ViewId::EditorSelectionMask,
         ViewId::PostProcessExposureReadback,
@@ -304,10 +320,12 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
     Require(state.IsActive(), "RenderFrameState became inactive during viewport registration");
     Require(state.FrameIndex() == frame.frameIndex, "RenderFrameState has the wrong frame index");
 
-    constexpr std::array<std::uint16_t, 63U> expectedViewOrder{
+    constexpr std::array<std::uint16_t, 67U> expectedViewOrder{
         ViewId::ShadowDepth,
         ViewId::GpuCompute,
         ViewId::Scene3D,
+        ViewId::GBufferGeometry,
+        ViewId::DeferredLighting,
         ViewId::TransparentScene,
         ViewId::EditorSelectionMask,
         ViewId::PostProcessExposureReadback,
@@ -347,12 +365,8 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 7U,
         ViewId::DetachedViewportStart + 8U,
         ViewId::DetachedViewportStart + 9U,
-        ViewId::DetachedViewportStart + 15U,
-        ViewId::DetachedViewportStart + 20U,
-        ViewId::DetachedViewportStart + 25U,
-        ViewId::DetachedViewportStart + 16U,
-        ViewId::DetachedViewportStart + 21U,
-        ViewId::DetachedViewportStart + 26U,
+        ViewId::DetachedViewportStart + 10U,
+        ViewId::DetachedViewportStart + 11U,
         ViewId::DetachedViewportStart + 17U,
         ViewId::DetachedViewportStart + 22U,
         ViewId::DetachedViewportStart + 27U,
@@ -362,12 +376,18 @@ void FrameStateAccumulatesMultipleViewportViewOrders() {
         ViewId::DetachedViewportStart + 19U,
         ViewId::DetachedViewportStart + 24U,
         ViewId::DetachedViewportStart + 29U,
-        ViewId::DetachedViewportStart + 10U,
-        ViewId::DetachedViewportStart + 11U,
-        ViewId::DetachedViewportStart + 13U,
-        ViewId::DetachedViewportStart + 12U,
-        ViewId::DetachedViewportStart + 14U,
+        ViewId::DetachedViewportStart + 20U,
+        ViewId::DetachedViewportStart + 25U,
         ViewId::DetachedViewportStart + 30U,
+        ViewId::DetachedViewportStart + 21U,
+        ViewId::DetachedViewportStart + 26U,
+        ViewId::DetachedViewportStart + 31U,
+        ViewId::DetachedViewportStart + 12U,
+        ViewId::DetachedViewportStart + 13U,
+        ViewId::DetachedViewportStart + 15U,
+        ViewId::DetachedViewportStart + 14U,
+        ViewId::DetachedViewportStart + 16U,
+        ViewId::DetachedViewportStart + 32U,
     };
 
     const std::span<const std::uint16_t> viewOrder = state.ViewOrder();

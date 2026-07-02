@@ -9,6 +9,7 @@ enum class ProjectSettingsTooltipKind : std::uint8_t {
     MappingContext,
     InputEnabled,
     RenderBackend,
+    LightingPath,
     PostProcess,
     AntiAliasing,
     MsaaSamples,

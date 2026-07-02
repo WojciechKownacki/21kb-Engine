@@ -18,8 +18,13 @@ struct ProjectPluginReference {
     bool enabled = true;
 };
 
+enum class ProjectSceneLightingPath : std::uint32_t {
+    Forward = 0U,
+    Deferred = 1U,
+};
+
 struct ProjectDescriptor {
-    static constexpr std::uint32_t CurrentFileVersion = 3U;
+    static constexpr std::uint32_t CurrentFileVersion = 4U;
 
     std::uint32_t fileVersion = CurrentFileVersion;
     std::string engineAssociation = "21kb";
@@ -37,6 +42,10 @@ struct ProjectDescriptor {
     // play, referenced by its virtual asset path (empty = none).
     std::string inputMappingContext;
     bool inputEnabled = true;
+
+    // Project-wide renderer lighting path (file version >= 4). Older projects
+    // remain on Forward until the user switches them in Project Settings.
+    ProjectSceneLightingPath sceneLightingPath = ProjectSceneLightingPath::Forward;
 };
 
 } // namespace kb::project

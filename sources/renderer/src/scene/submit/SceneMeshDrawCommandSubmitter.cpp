@@ -62,6 +62,32 @@ void EmitGraphProgramDiagnostic(
     });
 }
 
+void EmitProgramUnavailableDiagnostic(
+    SceneRenderDiagnostics* diagnostics,
+    const MeshDrawCommand& command,
+    const SceneMeshPassProgramResolution& resolution) {
+    if (diagnostics == nullptr) {
+        return;
+    }
+    diagnostics->events.push_back(SceneRenderDiagnosticEvent{
+        .severity = SceneRenderDiagnosticSeverity::Error,
+        .kind = SceneRenderDiagnosticKind::GraphMaterialProgramUnavailable,
+        .entityId = command.instances.empty() ? 0U : command.instances.front().entityId,
+        .meshAssetId = command.meshAssetId,
+        .materialAssetId = command.materialAssetId,
+        .instanceCount = static_cast<std::uint32_t>(command.instances.size()),
+        .materialTypeId = resolution.key.materialTypeId,
+        .materialTypeVersion = resolution.key.materialTypeVersion,
+        .graphSourceHash = resolution.key.graphSourceHash,
+        .graphVariantKey = resolution.key.variantKey,
+        .pipelineStateKey = resolution.key.pipelineStateKey,
+        .materialProgramIdentity = resolution.materialProgramIdentity,
+        .materialProgramBackend = resolution.key.backend,
+        .materialProgramHandle = resolution.program.idx,
+        .materialProgramStatus = resolution.status,
+    });
+}
+
 [[nodiscard]] bool IsSelectionPass(MeshPassType pass) noexcept {
     return pass == MeshPassType::SelectionId || pass == MeshPassType::EditorSelection;
 }
@@ -127,7 +153,13 @@ void SceneMeshDrawCommandSubmitter::Submit(const SceneMeshDrawCommandSubmitDesc&
             .sceneDepthTexture = desc.sceneDepthTexture,
             .sceneColorTexture = desc.sceneColorTexture,
         });
-        EmitGraphProgramDiagnostic(desc.diagnostics, command, desc.passResources.LastProgramResolution());
+        const SceneMeshPassProgramResolution resolution = desc.passResources.LastProgramResolution();
+        EmitGraphProgramDiagnostic(desc.diagnostics, command, resolution);
+        if (!bgfx::isValid(program)) {
+            EmitProgramUnavailableDiagnostic(desc.diagnostics, command, resolution);
+            desc.stats.missingMaterialResourceCount += availableInstances;
+            continue;
+        }
         bgfx::setState(command.state);
         bgfx::submit(desc.viewId, program);
 

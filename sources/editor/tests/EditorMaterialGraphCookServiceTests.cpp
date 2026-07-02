@@ -185,7 +185,7 @@ void RunSynchronousCookProducesBinaryTest() {
     Require(first.status == EditorMaterialGraphCookStatus::Ready,
         "KBMAT-MAT30: Cooking a valid graph must produce ready GPU binaries");
     Require(first.graphSourceHash != 0U, "KBMAT-MAT30: A cooked graph must expose its source hash");
-    Require(first.passes.size() == 3U, "KBMAT-MAT80: Default cook must cover BaseOpaque, ShadowDepth and BaseTransparent");
+    Require(first.passes.size() == 4U, "Deferred default cook must cover BaseOpaque, GBuffer, ShadowDepth and BaseTransparent");
     Require(first.compiledPassCount == first.passes.size() && first.cacheHitPassCount == 0U && first.cacheEntryCount > 0U,
         "KBMAT-MAT69: A fresh cook must report compiled passes and cache footprint telemetry");
     for (const EditorMaterialGraphCookPassResult& pass : first.passes) {
@@ -195,6 +195,13 @@ void RunSynchronousCookProducesBinaryTest() {
             "KBMAT-MAT30: Each cooked pass must leave a non-empty binary in the cache");
         Require(pass.binaryByteSize > 0U, "KBMAT-MAT69: Cook pass telemetry must report binary byte size");
     }
+    bool sawGBuffer = false;
+    for (const EditorMaterialGraphCookPassResult& pass : first.passes) {
+        if (pass.pass == "GBuffer") {
+            sawGBuffer = pass.binaryPath.find("/GBuffer/") != std::string::npos || pass.binaryPath.find("\\GBuffer\\") != std::string::npos;
+        }
+    }
+    Require(sawGBuffer, "Deferred graph cook must produce a distinct GBuffer pass artifact path");
 
     // Re-cooking the unchanged graph must dedupe on the source/cook hash (no recompile).
     const EditorMaterialGraphCookResult second = service.CookNow(assetId, MakeConstantColorMaterial("0.2 0.4 0.6 1"));

@@ -4990,16 +4990,13 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
 }
 
 bool IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath path) noexcept {
-    // MAT-65/#52: graph materials have no Deferred/GBuffer writer yet. GpuDeferred therefore remains
-    // explicitly non-production so validation emits a warning instead of pretending deferred rendering works.
     switch (path) {
     case RenderMaterialGraphRenderPath::GpuForward:
     case RenderMaterialGraphRenderPath::GpuShadow:
+    case RenderMaterialGraphRenderPath::GpuDeferred:
     case RenderMaterialGraphRenderPath::CpuFallback:
     case RenderMaterialGraphRenderPath::Preview:
         return true;
-    case RenderMaterialGraphRenderPath::GpuDeferred:
-        return false;
     }
     return false;
 }
@@ -5083,6 +5080,17 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMater
     if (status == RenderMaterialGraphNodeSupport::Unsupported) {
         return RenderMaterialGraphNodeSupport::Unsupported;
     }
+    if (path == RenderMaterialGraphRenderPath::GpuDeferred) {
+        switch (kind) {
+        case RenderMaterialGraphNodeKind::SceneDepth:
+        case RenderMaterialGraphNodeKind::SceneColor:
+        case RenderMaterialGraphNodeKind::SceneTexture:
+        case RenderMaterialGraphNodeKind::DepthFade:
+            return RenderMaterialGraphNodeSupport::Unsupported;
+        default:
+            break;
+        }
+    }
     if (!IsRenderMaterialGraphRenderPathProduction(path)) {
         return RenderMaterialGraphNodeSupport::FallbackOnly;
     }
@@ -5093,10 +5101,10 @@ static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialG
     switch (kind) {
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
-        return "Requires the transparent pass scene-depth binding; covered by MAT-80/MAT-68 GPU readback.";
+        return "Requires the transparent pass scene-depth binding; GpuDeferred GBuffer geometry currently rejects it until a deferred scene-depth binding is defined.";
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
-        return "Requires the scene-color snapshot binding; covered by scene-texture graph tests.";
+        return "Requires the scene-color snapshot binding; GpuDeferred GBuffer geometry currently rejects it until a deferred scene-color binding is defined.";
     case RenderMaterialGraphNodeKind::CustomCode:
         return "Production when custom pin declarations validate; invalid code reports shader-generation diagnostics.";
     case RenderMaterialGraphNodeKind::MaterialFunctionCall:
@@ -5108,7 +5116,7 @@ static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialG
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         return "Baked into source/variant identity through RenderMaterialGraphBuildContext.";
     default:
-        return "Production on GpuForward/Preview; GpuDeferred is explicitly FallbackOnly until a real GBuffer writer exists.";
+        return "Production on GpuForward/Preview/GpuDeferred; deferred requires the GBuffer graph artifact, MRT writer and deferred lighting pass.";
     }
 }
 
@@ -8801,6 +8809,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
         .defaultCullMode = RenderMaterialCullMode::BackFace,
         .renderPasses = std::vector<RenderMaterialTypeRenderPass>{
             RenderMaterialTypeRenderPass{ .name = "BaseOpaque", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
+            RenderMaterialTypeRenderPass{ .name = "GBuffer", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
             RenderMaterialTypeRenderPass{ .name = "ShadowDepth", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_shadow_instanced", .fragmentShader = "fs_mesh_shadow_instanced" },
             RenderMaterialTypeRenderPass{ .name = "BaseTransparent", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
         },

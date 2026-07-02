@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace kb::render::tests {
 namespace {
@@ -118,13 +119,16 @@ namespace {
     return compiled.shader;
 }
 
-[[nodiscard]] bool CookGraphForActiveBackend(const RenderMaterialGraphShaderSource& shader, const std::string& cacheRoot) {
+[[nodiscard]] bool CookGraphForActiveBackend(
+    const RenderMaterialGraphShaderSource& shader,
+    const std::string& cacheRoot,
+    std::string_view pass = "BaseOpaque") {
     RenderMaterialGraphShaderArtifactRequest request{};
     request.shadercPath = KB_TEST_GRAPH_SHADERC_PATH;
     request.varyingDefPath = KB_TEST_GRAPH_SHADER_VARYING_DEF;
     request.includeDirs = { KB_TEST_GRAPH_SHADER_INCLUDE_DIR, KB_TEST_GRAPH_BGFX_SHADER_INCLUDE_DIR };
     request.cacheRoot = cacheRoot;
-    request.pass = "BaseOpaque";
+    request.pass = pass;
     const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
     const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(shader, backends, request);
     return result.Succeeded();
@@ -171,6 +175,11 @@ void RunSceneMeshPassProgramSelectionTest() {
             "KBMAT-MAT07: The graph fallback must reuse the builtin opaque program");
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 1U,
             "KBMAT-MAT07: Builtin fallback program usage must be counted in submit stats");
+        const SceneMeshPassProgramResolution missingGBufferResolution = passResources.ResolveMeshPassProgram(&graphFallback, MeshPassType::GBuffer);
+        Require(!bgfx::isValid(missingGBufferResolution.program) && !missingGBufferResolution.fellBackToBuiltin,
+            "Deferred graph GBuffer pass must fail closed when the GBuffer artifact is missing");
+        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 1U,
+            "Deferred graph GBuffer miss must not increment builtin fallback usage");
         Require(passResources.ProgramBindStats().programSwitchCount >= 2U,
             "KBMAT-MAT07: Program switch stats must count distinct bound programs");
 
@@ -210,6 +219,8 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(shaderA.sourceHash != shaderB.sourceHash, "KBMAT-MAT07: Distinct graphs must have distinct source hashes");
         Require(CookGraphForActiveBackend(shaderA, cacheRoot.generic_string()), "KBMAT-MAT07: Graph A must cook a DXBC binary");
         Require(CookGraphForActiveBackend(shaderB, cacheRoot.generic_string()), "KBMAT-MAT07: Graph B must cook a DXBC binary");
+        Require(CookGraphForActiveBackend(shaderA, cacheRoot.generic_string(), "GBuffer"),
+            "Deferred graph material must cook a distinct GBuffer DXBC binary");
 
         passResources.SetGraphShaderCacheRoot(cacheRoot.generic_string());
         passResources.ResetProgramBindStats();
@@ -231,6 +242,16 @@ void RunSceneMeshPassProgramSelectionTest() {
                 graphA.key.materialTypeId == graphMaterialA.graphProgram.materialTypeId &&
                 graphA.key.materialTypeVersion == graphMaterialA.graphProgram.materialTypeVersion,
             "KBMAT-MAT66: Successful graph program resolution must expose full runtime program diagnostics");
+        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 0U,
+            "Deferred graph setup must not count builtin fallback before GBuffer resolution");
+
+        const SceneMeshPassProgramResolution graphGBuffer = passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::GBuffer);
+        Require(graphGBuffer.graphProgram && bgfx::isValid(graphGBuffer.program) && !graphGBuffer.fellBackToBuiltin &&
+                graphGBuffer.status == SceneRenderMaterialProgramStatus::GraphReady &&
+                graphGBuffer.key.graphSourceHash == shaderA.sourceHash,
+            "Deferred graph GBuffer pass must bind the cooked GBuffer graph program without builtin fallback");
+        Require(passResources.ProgramBindStats().builtinFallbackBindCount == 0U,
+            "Deferred graph GBuffer program resolution must keep builtinFallbackBindCount at zero");
 
         const SceneMeshPassProgramResolution graphB = passResources.ResolveMeshPassProgram(&graphMaterialB, MeshPassType::BaseOpaque);
         Require(graphB.graphProgram && bgfx::isValid(graphB.program),
@@ -310,7 +331,7 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
             "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 7U,
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 8U,
             "KBMAT-MAT07: Graph program binds must be counted in submit stats");
 #endif
 

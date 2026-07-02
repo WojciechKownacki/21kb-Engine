@@ -3,6 +3,7 @@
 #include "kb/render/BgfxContext.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/RenderSurface.hpp"
+#include "kb/render/SceneDeferredLightingPass.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "engine/ecs/WorkerPool.hpp"
 #include "engine/scene/Scene.hpp"
@@ -48,6 +49,10 @@ void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::opti
     output.fxaaEnabled = settings.fxaaEnabled;
     output.temporalAntiAliasingEnabled = settings.temporalAntiAliasingEnabled;
     output.tonemapEnabled = settings.tonemapEnabled;
+}
+
+[[nodiscard]] bool UsesDeferredLighting(SceneRenderLightingPath path) noexcept {
+    return path == SceneRenderLightingPath::Deferred;
 }
 
 } // namespace
@@ -102,6 +107,11 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         Shutdown();
         return false;
     }
+    deferredLightingPass_ = std::make_unique<SceneDeferredLightingPass>();
+    if (!deferredLightingPass_->Initialize()) {
+        Shutdown();
+        return false;
+    }
     if (!editorPassSubmitter_.Initialize()) {
         Shutdown();
         return false;
@@ -138,11 +148,16 @@ void Renderer::Shutdown() {
     sceneExposureMeter_.ShutdownGpuResources();
     defaultShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
+    defaultSceneGBuffer_.Shutdown();
     defaultSceneTarget_.Shutdown();
     renderSceneSynchronizer_.reset();
     if (finalCompositePass_ != nullptr) {
         finalCompositePass_->Shutdown();
         finalCompositePass_.reset();
+    }
+    if (deferredLightingPass_ != nullptr) {
+        deferredLightingPass_->Shutdown();
+        deferredLightingPass_.reset();
     }
     editorPassSubmitter_.Shutdown();
     if (sceneRenderer_ != nullptr) {
@@ -329,14 +344,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
 
-    RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
-    RendererViewConfigurator::ConfigureSceneNoClear(viewportPlan.viewIds.transparentScene, desc, "KB Scene Transparent");
-
-    // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
-    // (SceneDepth / DepthFade) read real geometry depth.
-    sceneRenderer_->SetSceneDepthTexture(desc.target.depthTexture);
-    sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
-
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     if (renderSceneSynchronizer_ == nullptr) {
@@ -395,6 +402,35 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
+    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
+    if (deferredLighting && !defaultSceneGBuffer_.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
+        lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+            .severity = SceneRenderDiagnosticSeverity::Error,
+            .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
+            .instanceCount = 1U,
+        });
+        return false;
+    }
+    if (deferredLighting) {
+        RendererViewConfigurator::ConfigureFramebufferClear(
+            viewportPlan.viewIds.gbufferGeometry,
+            defaultSceneGBuffer_.FrameBuffer(),
+            desc.target.viewport.extent,
+            "KB GBuffer Geometry",
+            BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL,
+            desc.clearRgba,
+            desc.clearDepth,
+            desc.clearStencil);
+    } else {
+        RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
+    }
+    RendererViewConfigurator::ConfigureSceneNoClear(viewportPlan.viewIds.transparentScene, desc, "KB Scene Transparent");
+
+    // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
+    // (SceneDepth / DepthFade) read real geometry depth. Deferred uses the GBuffer depth attachment.
+    sceneRenderer_->SetSceneDepthTexture(deferredLighting ? defaultSceneGBuffer_.DepthTexture() : desc.target.depthTexture);
+    sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
+
     SceneGpuDrivenFeatureSupport effectiveGpuDrivenSupport = sceneRenderer_->GpuDrivenRuntimeSupport();
     if (!desc.gpuDrivenRuntimeDispatchEnabled) {
         effectiveGpuDrivenSupport = SceneGpuDrivenFeatureSupport{};
@@ -445,12 +481,55 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .passSubmitStats = lastScenePassSubmitStats_,
     };
 
-    RendererMeshPassSubmitter::SubmitViewportPass(
-        meshPassSubmitDesc,
-        viewportPlan.viewIds.opaqueScene,
-        RenderPassKind::OpaqueScene,
-        MeshPassType::BaseOpaque,
-        shadowBinding.IsValid() ? &shadowBinding : nullptr);
+    if (deferredLighting) {
+        RendererMeshPassSubmitter::SubmitViewportPass(
+            meshPassSubmitDesc,
+            viewportPlan.viewIds.gbufferGeometry,
+            RenderPassKind::GBufferGeometry,
+            MeshPassType::GBuffer,
+            shadowBinding.IsValid() ? &shadowBinding : nullptr);
+        if (deferredLightingPass_ == nullptr) {
+            lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                .severity = SceneRenderDiagnosticSeverity::Error,
+                .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
+                .instanceCount = 1U,
+            });
+            return false;
+        }
+        SceneRenderSubmitStats deferredStats{};
+        if (!deferredLightingPass_->Submit(SceneDeferredLightingPassDesc{
+                .viewId = viewportPlan.viewIds.deferredLighting,
+                .frameBuffer = desc.target.frameBuffer,
+                .gbuffer = &defaultSceneGBuffer_,
+                .renderScene = &renderScene,
+                .camera = sceneCamera,
+                .lightingConfig = effectiveLightingConfig,
+                .extent = desc.target.viewport.extent,
+                .clearRgba = desc.clearRgba,
+            }, deferredStats)) {
+            lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
+                .severity = SceneRenderDiagnosticSeverity::Error,
+                .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
+                .instanceCount = 1U,
+            });
+            return false;
+        }
+        lastSceneSubmitStats_ += deferredStats;
+        lastScenePassSubmitStats_.push_back(SceneRenderPassSubmitStats{
+            .viewportId = desc.target.viewport.id.value,
+            .viewportIndex = desc.target.viewport.viewportIndex,
+            .renderPass = RenderPassKind::DeferredLighting,
+            .pass = MeshPassType::GBuffer,
+            .stats = deferredStats,
+        });
+    } else {
+        RendererMeshPassSubmitter::SubmitViewportPass(
+            meshPassSubmitDesc,
+            viewportPlan.viewIds.opaqueScene,
+            RenderPassKind::OpaqueScene,
+            MeshPassType::BaseOpaque,
+            shadowBinding.IsValid() ? &shadowBinding : nullptr);
+    }
     if (desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent) {
         if (bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
             bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
@@ -571,6 +650,7 @@ void Renderer::OnResize(std::uint32_t width, std::uint32_t height) {
     }
 
     defaultPostProcessTargets_.Shutdown();
+    defaultSceneGBuffer_.Shutdown();
     defaultSceneTarget_.Shutdown();
     temporalViewportStates_.clear();
     context_->Reset(width, height, displayConfig_.ComputeResetFlags());

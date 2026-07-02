@@ -42,6 +42,7 @@ struct SceneDepthFormatSelection {
 [[nodiscard]] bool SceneColorFormatIsHdr(bgfx::TextureFormat::Enum format) noexcept;
 [[nodiscard]] bgfx::TextureFormat::Enum SceneColorFormatForPolicy(SceneColorFormatPolicy policy) noexcept;
 [[nodiscard]] bool SceneColorFormatSupported(bgfx::TextureFormat::Enum format, std::uint64_t textureFlags) noexcept;
+[[nodiscard]] bool SceneTextureFormatSupported(bgfx::TextureFormat::Enum format, std::uint64_t textureFlags) noexcept;
 [[nodiscard]] SceneColorFormatSelection SelectSceneColorFormat(SceneColorFormatPolicy policy, std::uint64_t textureFlags) noexcept;
 [[nodiscard]] SceneDepthFormatSelection SelectSceneDepthFormat(std::uint64_t textureFlags) noexcept;
 

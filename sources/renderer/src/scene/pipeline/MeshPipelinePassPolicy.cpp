@@ -26,6 +26,7 @@ bool MeshPipelinePassPolicy::CanEverContain(
         return IsSelectedEntity(selectedEntityIds, instance.entityId);
     case MeshPassType::Depth:
     case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
     case MeshPassType::BaseTransparent:
     case MeshPassType::Gizmo:
         return true;
@@ -54,6 +55,7 @@ bool MeshPipelinePassPolicy::Accepts(
     case MeshPassType::Depth:
         return !UsesDisabledAlphaBlend(material);
     case MeshPassType::BaseOpaque:
+    case MeshPassType::GBuffer:
         return !UsesDisabledAlphaBlend(material);
     case MeshPassType::BaseTransparent:
         // Translucent (alphaMode == Blend) materials render exclusively in the transparent pass (MAT-80).
@@ -114,6 +116,8 @@ std::uint64_t MeshPipelinePassPolicy::State(
     case MeshPassType::Depth:
     case MeshPassType::ShadowDepth:
         return BGFX_STATE_WRITE_Z | SceneDepthPolicy::DepthTestState() | cullState | rasterStateExtra;
+    case MeshPassType::GBuffer:
+        return SceneDepthPolicy::SceneWriteState() | cullState | rasterStateExtra;
     case MeshPassType::BaseTransparent:
         return SceneDepthPolicy::SceneDepthReadState() | TranslucencyBlendState(material) | cullState | rasterStateExtra;
     case MeshPassType::SelectionId:

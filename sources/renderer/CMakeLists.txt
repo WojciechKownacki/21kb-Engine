@@ -4,8 +4,10 @@ add_library(kb_renderer STATIC
     include/kb/render/Renderer.hpp
     include/kb/render/RendererCapabilityReport.hpp
     include/kb/render/RenderSurface.hpp
+    include/kb/render/SceneDeferredLightingPass.hpp
     include/kb/render/SceneDepthPolicy.hpp
     include/kb/render/SceneFramebuffer.hpp
+    include/kb/render/SceneGBuffer.hpp
     include/kb/render/SceneRenderTarget.hpp
     include/kb/render/SceneRenderTargetFormat.hpp
     include/kb/render/ShaderManifest.hpp
@@ -109,7 +111,9 @@ add_library(kb_renderer STATIC
     src/renderer/RendererViewConfigurator.hpp
     src/renderer/RendererViewportPassResolver.cpp
     src/renderer/RendererViewportPassResolver.hpp
+    src/SceneDeferredLightingPass.cpp
     src/SceneFramebuffer.cpp
+    src/SceneGBuffer.cpp
     src/SceneRenderTarget.cpp
     src/SceneRenderTargetFormat.cpp
     src/ShaderManifest.cpp
@@ -299,7 +303,9 @@ set(KB_RENDERER_SHADER_MANIFEST
     fs_editor_viewport_grid.sc
     fs_leui_rect.sc
     fs_lit.sc
+    fs_deferred_lighting.sc
     fs_mesh.sc
+    fs_mesh_gbuffer_instanced.sc
     fs_mesh_instanced.sc
     fs_mesh_selection_instanced.sc
     fs_mesh_shadow_instanced.sc
@@ -361,6 +367,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
         TYPE FRAGMENT
         SHADERS
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_gbuffer_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_selection_instanced.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_mesh_shadow_instanced.sc
@@ -372,6 +379,7 @@ if(KB_GENERATE_RENDERER_SHADERS AND TARGET bgfx::shaderc AND COMMAND bgfx_compil
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_fxaa.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_motion_vectors.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_post_taa_resolve.sc
+            ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_deferred_lighting.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_gizmo.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_grid.sc
             ${KB_RENDERER_SHADER_INCLUDE_DIR}/fs_editor_selection_outline.sc

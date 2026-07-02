@@ -47,6 +47,7 @@ SceneRenderShadowMapBinding RendererShadowSubmitter::Submit(const RendererShadow
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
         .viewportId = desc.sceneDesc.target.viewport.id.value,
         .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+        .renderPass = RenderPassKind::ShadowDepth,
         .pass = MeshPassType::ShadowDepth,
         .stats = shadowStats,
     });
