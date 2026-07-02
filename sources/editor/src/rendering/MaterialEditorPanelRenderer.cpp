@@ -1780,6 +1780,60 @@ void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMat
     }
 }
 
+[[nodiscard]] std::vector<MaterialEditorGraphDiagnosticMarker> MarkersForNode(
+    const EditorSceneContext& sceneContext,
+    std::uint32_t nodeId) {
+    std::vector<MaterialEditorGraphDiagnosticMarker> markers;
+    for (const MaterialEditorGraphDiagnosticMarker& marker : sceneContext.MaterialEditor().GraphDiagnosticMarkers()) {
+        if (marker.nodeId == nodeId) {
+            markers.push_back(marker);
+        }
+    }
+    return markers;
+}
+
+[[nodiscard]] COLORREF MarkerColor(kb::render::RenderMaterialGraphDiagnosticSeverity severity) noexcept {
+    switch (severity) {
+    case kb::render::RenderMaterialGraphDiagnosticSeverity::Error:
+        return RGB(229, 86, 91);
+    case kb::render::RenderMaterialGraphDiagnosticSeverity::Warning:
+        return RGB(226, 170, 77);
+    }
+    return RGB(226, 170, 77);
+}
+
+void DrawGraphDiagnosticMarker(
+    HDC dc,
+    const RECT& nodeRect,
+    const std::vector<MaterialEditorGraphDiagnosticMarker>& markers,
+    float scale) {
+    if (markers.empty()) {
+        return;
+    }
+    const bool hasError = std::ranges::any_of(markers, [](const MaterialEditorGraphDiagnosticMarker& marker) {
+        return marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    const MaterialEditorGraphDiagnosticMarker& primary = *std::ranges::find_if(markers, [hasError](const MaterialEditorGraphDiagnosticMarker& marker) {
+        return !hasError || marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+    const int size = ScaleMetric(22, scale);
+    const RECT badge{
+        nodeRect.right - ScaleMetric(10, scale) - size,
+        nodeRect.top + ScaleMetric(5, scale),
+        nodeRect.right - ScaleMetric(10, scale),
+        nodeRect.top + ScaleMetric(5, scale) + size,
+    };
+    const COLORREF fill = MarkerColor(primary.severity);
+    FillRoundedRect(dc, badge, fill, std::max(4, ScaleMetric(6, scale)));
+    StrokeRoundedRect(dc, badge, RGB(24, 19, 20), std::max(4, ScaleMetric(6, scale)), 1);
+    DrawGraphText(dc, badge, hasError ? "!" : "?", RGB(255, 250, 244), ScaleMetric(13, scale), FW_BOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (markers.size() > 1U) {
+        const std::string count = std::to_string(markers.size());
+        const RECT countRect{ badge.left - ScaleMetric(18, scale), badge.top, badge.left - ScaleMetric(3, scale), badge.bottom };
+        DrawGraphText(dc, countRect, count.c_str(), RGB(255, 225, 212), ScaleMetric(9, scale), FW_SEMIBOLD, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    }
+}
+
 void DrawGraphNode(
     HDC dc,
     const RECT& rect,
@@ -1815,6 +1869,8 @@ void DrawGraphNode(
         title += "]";
     }
     DrawGraphText(dc, RECT{ rect.left + ScaleMetric(12, scale), rect.top, rect.right - ScaleMetric(12, scale), rect.top + headerHeight }, title.c_str(), RGB(242, 242, 242), ScaleMetric(kGraphTitleFontSize, scale), FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const std::vector<MaterialEditorGraphDiagnosticMarker> diagnosticMarkers = MarkersForNode(sceneContext, node.id);
+    DrawGraphDiagnosticMarker(dc, rect, diagnosticMarkers, scale);
     DrawTextureSamplePreview(dc, rect, node, material, sceneContext);
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
     DrawConstantValue(dc, rect, node, sceneContext);

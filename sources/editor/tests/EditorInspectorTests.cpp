@@ -1549,6 +1549,46 @@ void RunMaterialEditorGraphDiagnosticsRefreshTest() {
     kb::editor::tests::Require(std::ranges::any_of(materialEditor.Diagnostics(), [](const std::string& diagnostic) {
         return diagnostic.find("graph.unsupported_blend_mode") != std::string::npos;
     }), "KBMAT-GRAPH-0106: Material Editor diagnostics should include unsupported blend mode");
+
+    kb::render::RenderMaterialAssetData invalidLinkMaterial = *materialEditor.WorkingCopy();
+    invalidLinkMaterial.desc.alphaMode = kb::render::RenderMaterialAlphaMode::Opaque;
+    invalidLinkMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        .positionX = 260,
+        .positionY = 120,
+    });
+    std::erase_if(invalidLinkMaterial.graph.links, [](const kb::render::RenderMaterialGraphLink& link) {
+        return link.toNodeId == 1U && link.toPin == "baseColor";
+    });
+    invalidLinkMaterial.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantScalar,
+        3U,
+        "value",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    materialEditor.SetWorkingCopy(invalidLinkMaterial);
+    kb::editor::tests::Require(materialEditor.DiagnosticsHaveError(), "KBMAT-LIVE-0001: Invalid graph link should produce an editor diagnostic error");
+    kb::editor::tests::Require(std::ranges::any_of(materialEditor.GraphDiagnosticMarkers(), [](const kb::editor::MaterialEditorGraphDiagnosticMarker& marker) {
+        return marker.nodeId != 0U && marker.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error &&
+            marker.kind == kb::render::RenderMaterialGraphDiagnosticKind::TypeMismatch;
+    }), "KBMAT-LIVE-0001: Invalid graph link should produce an error marker attached to a graph node");
+
+    kb::render::RenderMaterialAssetData fixedMaterial = invalidLinkMaterial;
+    std::erase_if(fixedMaterial.graph.links, [](const kb::render::RenderMaterialGraphLink& link) {
+        return link.toNodeId == 1U && link.toPin == "baseColor";
+    });
+    fixedMaterial.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        2U,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+    materialEditor.SetWorkingCopy(std::move(fixedMaterial));
+    kb::editor::tests::Require(!materialEditor.DiagnosticsHaveError() && materialEditor.GraphDiagnosticMarkers().empty(),
+        "KBMAT-LIVE-0001: Fixing graph diagnostics should clear node error markers");
 }
 #endif
 
