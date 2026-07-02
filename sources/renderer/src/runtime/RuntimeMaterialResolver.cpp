@@ -1741,6 +1741,10 @@ void ApplyMaterialOutputGraphToPbrDesc(RenderMaterialDesc& desc, const RenderMat
 RuntimeMaterialResolver::RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept
     : graphBuildContext_(std::move(graphBuildContext)) {}
 
+void RuntimeMaterialResolver::SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept {
+    graphBuildContext_ = std::move(graphBuildContext);
+}
+
 std::uint64_t RuntimeMaterialResolver::EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept {
     std::string key = "RenderMeshEmbeddedMaterial:";
     key += std::to_string(meshAssetId);

@@ -15,6 +15,7 @@
 #include "renderer/RendererEditorOverlaySubmitter.hpp"
 #include "renderer/RendererExposureSubmitter.hpp"
 #include "renderer/RendererFinalCompositeSubmitter.hpp"
+#include "renderer/RendererDebugLog.hpp"
 #include "renderer/RendererMeshPassSubmitter.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 #include "renderer/RendererPostProcessSubmitter.hpp"
@@ -28,57 +29,22 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>
+#include <utility>
 #include <vector>
 
 namespace kb::render {
 
 namespace {
 
-std::mutex g_rendererBreadcrumbMutex;
-
-[[nodiscard]] std::filesystem::path RendererBreadcrumbPath() {
-    return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
-}
-
-[[nodiscard]] std::string RendererBreadcrumbNowMs() {
-    const auto now = std::chrono::system_clock::now();
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    return std::to_string(millis);
-}
-
-[[nodiscard]] std::uint64_t RendererBreadcrumbThreadId() noexcept {
-    return static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
-}
-
 void WriteRendererBreadcrumb(std::string_view category, std::string_view message) {
-    try {
-        std::lock_guard lock{g_rendererBreadcrumbMutex};
-        const std::filesystem::path path = RendererBreadcrumbPath();
-        std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
-        std::ofstream output{path, std::ios::out | std::ios::app};
-        if (!output.is_open()) {
-            return;
-        }
-        output << RendererBreadcrumbNowMs()
-               << " tid=" << RendererBreadcrumbThreadId()
-               << " [" << category << "] " << message << '\n';
-        output.flush();
-    } catch (...) {
-    }
+    WriteRendererDebugLog(category, message);
 }
 
 [[nodiscard]] const char* BoolText(bool value) noexcept {
@@ -202,6 +168,14 @@ bool Renderer::Initialize(RenderSurface& surface, const DisplayConfig* config) {
         return false;
     }
     SetDefaultPostProcessSettings(defaultPostProcessSettings_);
+    {
+        std::ostringstream message;
+        message << "Initialize end ok backend=" << CapabilityReport().selectedBackendName
+                << " rendererType=" << static_cast<int>(bgfx::getRendererType())
+                << " backbuffer=" << BackbufferWidth() << 'x' << BackbufferHeight()
+                << " homogeneousDepth=" << (SceneDepthPolicy::HomogeneousDepth() ? "true" : "false");
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
 
     return true;
 }
@@ -225,6 +199,7 @@ void Renderer::Shutdown() {
     runtimeResourceCache_.DestroyAll(sceneRenderer_.get());
     frameReferences_.Clear();
     runtimeAssetDiscovery_.Clear();
+    lastRuntimeMaterialLightingPath_.reset();
     sceneExposureMeter_.ShutdownGpuResources();
     defaultShadowMap_.Shutdown();
     defaultPostProcessTargets_.Shutdown();
@@ -568,6 +543,21 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
+    if (!desc.shadowPassEnabled) {
+        effectiveLightingConfig.shadowsEnabled = false;
+    }
+    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
+    RenderMaterialGraphBuildContext runtimeGraphContext{};
+    runtimeGraphContext.shadingPath = deferredLighting
+        ? RenderMaterialGraphShadingPath::Deferred
+        : RenderMaterialGraphShadingPath::Forward;
+    runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
+    if (!lastRuntimeMaterialLightingPath_.has_value() || *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath) {
+        runtimeResourceCache_.InvalidateMaterials(sceneRenderer_.get());
+        lastRuntimeMaterialLightingPath_ = effectiveLightingConfig.lightingPath;
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport runtime material cache invalidated for lighting path change");
+    }
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
@@ -598,11 +588,6 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " diagnostics=" << lastSceneDiagnostics_.events.size();
         WriteRendererBreadcrumb("renderer", message.str());
     }
-    SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
-    if (!desc.shadowPassEnabled) {
-        effectiveLightingConfig.shadowsEnabled = false;
-    }
-    const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
     {
         std::ostringstream message;
         message << "SubmitSceneToViewport lighting resolved path=" << LightingPathName(effectiveLightingConfig.lightingPath)
@@ -620,7 +605,22 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         return false;
     }
     if (deferredLighting) {
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer Ensure end ok");
+        const SceneGBufferFormatSelection selection = defaultSceneGBuffer_.FormatSelection();
+        std::ostringstream message;
+        message << "SubmitSceneToViewport GBuffer Ensure end ok"
+                << " fb=" << HandleValue(defaultSceneGBuffer_.FrameBuffer())
+                << " albedoTex=" << HandleValue(defaultSceneGBuffer_.AlbedoTexture())
+                << " normalTex=" << HandleValue(defaultSceneGBuffer_.NormalTexture())
+                << " materialTex=" << HandleValue(defaultSceneGBuffer_.MaterialTexture())
+                << " depthTex=" << HandleValue(defaultSceneGBuffer_.DepthTexture())
+                << " extent=" << defaultSceneGBuffer_.Width() << 'x' << defaultSceneGBuffer_.Height()
+                << " formats=(" << SceneTextureFormatName(selection.albedoFormat)
+                << ',' << SceneTextureFormatName(selection.normalFormat)
+                << ',' << SceneTextureFormatName(selection.materialFormat)
+                << ',' << SceneTextureFormatName(selection.depth.format) << ')'
+                << " targetFb=" << HandleValue(desc.target.frameBuffer)
+                << " finalFb=" << HandleValue(desc.finalComposite.frameBuffer);
+        WriteRendererBreadcrumb("renderer", message.str());
     }
     if (deferredLighting) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
@@ -723,7 +723,30 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             RenderPassKind::GBufferGeometry,
             MeshPassType::GBuffer,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
-        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer pass end");
+        const SceneRenderPassSubmitStats* gbufferPassStats = lastScenePassSubmitStats_.empty()
+            ? nullptr
+            : &lastScenePassSubmitStats_.back();
+        if (gbufferPassStats != nullptr) {
+            const SceneRenderSubmitStats& stats = gbufferPassStats->stats;
+            std::ostringstream message;
+            message << "SubmitSceneToViewport GBuffer pass end"
+                    << " visibleMeshes=" << stats.visibleMeshCount
+                    << " visibleGroups=" << stats.visibleDrawGroupCount
+                    << " submittedMeshes=" << stats.submittedMeshCount
+                    << " submittedDrawCalls=" << stats.submittedDrawCallCount
+                    << " missingMeshBinding=" << stats.missingMeshBindingCount
+                    << " missingMeshResource=" << stats.missingMeshResourceCount
+                    << " unsupportedVertexFormat=" << stats.unsupportedMeshVertexFormatCount
+                    << " missingMaterialBinding=" << stats.missingMaterialBindingCount
+                    << " missingMaterialResource=" << stats.missingMaterialResourceCount
+                    << " missingTextureBinding=" << stats.missingTextureBindingCount
+                    << " missingTextureResource=" << stats.missingTextureResourceCount
+                    << " diagnostics=" << lastSceneDiagnostics_.events.size();
+            WriteRendererBreadcrumb("renderer", message.str());
+
+        } else {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer pass end stats missing");
+        }
         if (deferredLightingPass_ == nullptr) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,

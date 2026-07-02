@@ -1,6 +1,7 @@
 #include "kb/render/runtime/RuntimeRenderResourceCache.hpp"
 
 #include "kb/render/runtime/RuntimeRenderAssetDiscovery.hpp"
+#include "kb/render/scene/SceneRenderer.hpp"
 #include "runtime/RuntimeMaterialResourceEnsurer.hpp"
 #include "runtime/RuntimeMeshResourceEnsurer.hpp"
 #include "runtime/RuntimeRenderResourceLifecycle.hpp"
@@ -47,6 +48,27 @@ void RuntimeRenderResourceCache::ReleaseScene(kb::scene::Scene& scene, SceneRend
 
 void RuntimeRenderResourceCache::DestroyAll(SceneRenderer* sceneRenderer) noexcept {
     RuntimeRenderResourceLifecycle::DestroyAll(sceneRenderer, meshes_, materials_, embeddedMaterials_, textures_);
+}
+
+void RuntimeRenderResourceCache::InvalidateMaterials(SceneRenderer* sceneRenderer) noexcept {
+    if (sceneRenderer == nullptr) {
+        materials_.clear();
+        embeddedMaterials_.clear();
+        return;
+    }
+    for (const auto& [materialKey, resource] : materials_) {
+        static_cast<void>(materialKey);
+        sceneRenderer->ResourceMap().UnbindMaterialHandle(resource.handle);
+        sceneRenderer->Resources().DestroyMaterial(resource.handle);
+    }
+    materials_.clear();
+
+    for (const auto& [materialKey, resource] : embeddedMaterials_) {
+        static_cast<void>(materialKey);
+        sceneRenderer->ResourceMap().UnbindMaterialHandle(resource.handle);
+        sceneRenderer->Resources().DestroyMaterial(resource.handle);
+    }
+    embeddedMaterials_.clear();
 }
 
 void RuntimeRenderResourceCache::PruneUnused(

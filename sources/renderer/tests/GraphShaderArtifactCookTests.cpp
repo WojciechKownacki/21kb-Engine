@@ -78,7 +78,7 @@ void RunGraphShaderWrapperSourceTest() {
     const std::string gbuffer = BuildGraphFragmentWrapperSource(shader, "GBuffer");
     Require(gbuffer.find("// pass:GBuffer") != std::string::npos,
         "KBMAT-MAT04: GBuffer wrapper must carry its own pass identity");
-    Require(gbuffer.find("gl_FragData[0] = vec4(surface.baseColor.rgb, surface.alpha);") != std::string::npos &&
+    Require(gbuffer.find("gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);") != std::string::npos &&
             gbuffer.find("gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);") != std::string::npos &&
             gbuffer.find("gl_FragData[2] = vec4(clamp(surface.metallic") != std::string::npos,
         "Deferred graph wrapper must write albedo, normal and material MRT outputs");

@@ -255,7 +255,7 @@ std::string BuildGraphFragmentWrapperSource(
                 wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent));\n";
             }
             wrapper += "    vec3 worldNormal = normalize(basisTangent * surface.normal.x + basisBitangent * surface.normal.y + basisNormal * surface.normal.z);\n";
-            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, surface.alpha);\n";
+            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, 1.0);\n";
             wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
             wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), 1.0);\n";
         } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
