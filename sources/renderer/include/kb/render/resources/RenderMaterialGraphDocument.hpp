@@ -609,7 +609,7 @@ struct RenderMaterialGraphReflection {
     bool hasThinTranslucentOutput = false;
     bool hasSingleLayerWaterOutput = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
-    // key (Unlit and DefaultLit produce different wrappers). Non-production models fall back to DefaultLit.
+    // key. Declared models without production shader branches fail compilation instead of falling back.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
     // MAT-38: resolved blend mode. Masked makes the fragment wrapper clip on alphaClipThreshold; the
     // transparent modes select the BaseTransparent cook and the scene blend equation, and contribute to
