@@ -648,6 +648,19 @@ void RunForwardGraphRenderTest() {
         return result;
     };
 
+    // ConstantBool -> BaseColor proves bool schema, codegen, cook, link, and GPU execution with readback.
+    const auto buildBoolGraph = [](std::string_view hint) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        RenderMaterialGraphNode boolNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantBool, .positionX = 40, .positionY = 40 };
+        boolNode.parameter.defaultValueHint = std::string{ hint };
+        graph.nodes.push_back(boolNode);
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantBool, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        return graph;
+    };
+    const RenderMaterialGraphShaderArtifactResult boolTrueResult = cookGraph(buildBoolGraph("true"), 0x0806U);
+    const RenderMaterialGraphShaderArtifactResult boolFalseResult = cookGraph(buildBoolGraph("false"), 0x0807U);
+
     // ImageTexture * Color -> BaseColor works per pixel (texture math).
     RenderMaterialGraphDocument texMathGraph = MakeDefaultRenderMaterialGraphDocument();
     RenderMaterialGraphNode texMathSample{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TextureSample, .positionX = 40, .positionY = 40 };
@@ -704,16 +717,23 @@ void RunForwardGraphRenderTest() {
     const bgfx::ProgramHandle redProgram = BuildGraphProgram(vsBytes, *redResult.artifact);
     const bgfx::ProgramHandle blueProgram = BuildGraphProgram(vsBytes, *blueResult.artifact);
     const bgfx::ProgramHandle textureProgram = BuildGraphProgram(vsBytes, *textureResult.artifact);
-    Require(bgfx::isValid(redProgram) && bgfx::isValid(blueProgram) && bgfx::isValid(textureProgram),
+    const bgfx::ProgramHandle boolTrueProgram = BuildGraphProgram(vsBytes, *boolTrueResult.artifact);
+    const bgfx::ProgramHandle boolFalseProgram = BuildGraphProgram(vsBytes, *boolFalseResult.artifact);
+    Require(bgfx::isValid(redProgram) && bgfx::isValid(blueProgram) && bgfx::isValid(textureProgram) &&
+            bgfx::isValid(boolTrueProgram) && bgfx::isValid(boolFalseProgram),
         "KBMAT-MAT08: Forward graph programs must link on the real GPU backend");
 
     const ForwardRenderProbe red = harness.Render(redProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
     const ForwardRenderProbe blue = harness.Render(blueProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const ForwardRenderProbe boolTrue = harness.Render(boolTrueProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const ForwardRenderProbe boolFalse = harness.Render(boolFalseProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
     Require(red.r > red.g && red.r > red.b && red.r > 80U,
         "KBMAT-MAT08: A red ConstantColor graph must render a red-dominant pixel through the GPU graph program");
     Require(blue.b > blue.r && blue.b > blue.g && blue.b > 80U,
         "KBMAT-MAT08: A blue ConstantColor graph must render a blue-dominant pixel through the GPU graph program");
     Require(red.a == 255U, "KBMAT-MAT08: Surface alpha must drive the rendered output alpha");
+    Require(boolTrue.r > boolFalse.r + 64U && boolTrue.g > boolFalse.g + 64U && boolTrue.b > boolFalse.b + 64U,
+        "KBMAT-MAT08: ConstantBool true/false must produce distinct GPU pixels through bool-to-color codegen");
 
     const std::uint32_t greenTexel = 0xff20c020U; // ABGR: opaque green
     bgfx::UniformHandle sampler = bgfx::createUniform(samplerName.c_str(), bgfx::UniformType::Sampler);
