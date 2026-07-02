@@ -143,6 +143,7 @@ struct ForwardRenderProbe {
             "    ctx.objectOrientation = vec3(0.0, 0.0, 1.0);\n"
             "    ctx.preSkinnedPosition = a_position;\n"
             "    ctx.preSkinnedNormal = vec3(0.0, 0.0, 1.0);\n"
+            "    ctx.twoSidedSign = 1.0;\n"
             "    vec3 worldPos = a_position + EvaluateWorldPositionOffset(ctx);\n"
             "    gl_Position = vec4(worldPos, 1.0);\n"
             "    v_normal = vec3(0.0, 0.0, 1.0);\n"
@@ -213,6 +214,7 @@ struct ForwardRenderProbe {
             "    ctx.objectOrientation = vec3(0.0, 0.0, 1.0);\n"
             "    ctx.preSkinnedPosition = a_position;\n"
             "    ctx.preSkinnedNormal = vec3(0.0, 0.0, 1.0);\n"
+            "    ctx.twoSidedSign = 1.0;\n"
             "    vec3 worldPos = " << positionExpression << ";\n"
             "    gl_Position = vec4(worldPos, 1.0);\n"
             "    v_normal = vec3(0.0, 0.0, 1.0);\n"
@@ -3312,6 +3314,22 @@ void RunForwardGraphWorldSpaceNodesTest() {
     const RenderMaterialGraphShaderArtifactResult orientationResult = CookRenderMaterialGraphShaderArtifact(orientationCompiled.shader, backends, CookRequest(cacheDir.generic_string()));
     Require(orientationResult.Succeeded() && orientationResult.artifact.has_value(), "KBMAT-MAT46: ObjectOrientation graph must cook");
 
+    RenderMaterialGraphDocument twoSidedSignGraph = MakeDefaultRenderMaterialGraphDocument();
+    twoSidedSignGraph.shadingModel = "unlit";
+    twoSidedSignGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TwoSidedSign });
+    RenderMaterialGraphNode white{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    white.parameter.defaultValueHint = "1 1 1 1";
+    twoSidedSignGraph.nodes.push_back(white);
+    twoSidedSignGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::Multiply });
+    twoSidedSignGraph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::TwoSidedSign, 2U, "value", RenderMaterialGraphNodeKind::Multiply, 4U, "a"));
+    twoSidedSignGraph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::Multiply, 4U, "b"));
+    twoSidedSignGraph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Multiply, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult twoSidedSignCompiled = CompileRenderMaterialGraphToShaderSource(twoSidedSignGraph, RenderMaterialGraphBuildContext{ .assetId = 0x4604U });
+    Require(twoSidedSignCompiled.Succeeded() && twoSidedSignCompiled.shader.source.find("ctx.twoSidedSign") != std::string::npos,
+        "KBMAT-MAT46: TwoSidedSign graph must compile through ctx.twoSidedSign");
+    const RenderMaterialGraphShaderArtifactResult twoSidedSignResult = CookRenderMaterialGraphShaderArtifact(twoSidedSignCompiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(twoSidedSignResult.Succeeded() && twoSidedSignResult.artifact.has_value(), "KBMAT-MAT46: TwoSidedSign graph must cook");
+
     ForwardRenderHarness harness;
     if (!harness.Init()) {
         std::fprintf(stderr, "KBMAT-MAT46: Direct3D11 device unavailable; cannot run GPU world-space node proof\n");
@@ -3347,6 +3365,13 @@ void RunForwardGraphWorldSpaceNodesTest() {
     Require(orientationPixel.g > orientationPixel.r + 40U && orientationPixel.g > orientationPixel.b + 80U,
         "KBMAT-MAT46: ObjectOrientation must reach the graph shader as the object-space +Z axis in world space");
 
+    const bgfx::ProgramHandle twoSidedSignProgram = BuildGraphProgram(vsBytes, *twoSidedSignResult.artifact);
+    Require(bgfx::isValid(twoSidedSignProgram), "KBMAT-MAT46: TwoSidedSign program must link");
+    const ForwardRenderProbe twoSidedSignPixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(twoSidedSignProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+    Require(twoSidedSignPixel.r > 200U && twoSidedSignPixel.g > 200U && twoSidedSignPixel.b > 200U,
+        "KBMAT-MAT46: front-facing TwoSidedSign must render as +1 on the GPU");
+
+    bgfx::destroy(twoSidedSignProgram);
     bgfx::destroy(orientationProgram);
     bgfx::destroy(boundsProgram);
     bgfx::destroy(fresnelProgram);
