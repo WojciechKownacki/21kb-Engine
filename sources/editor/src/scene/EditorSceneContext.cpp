@@ -4525,6 +4525,10 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::NormalUnpack, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateTime:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Time, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDeltaTime:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DeltaTime, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateDynamicParameter:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::DynamicParameter, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVertexColor:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VertexColor, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScreenPosition:
@@ -4537,12 +4541,20 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::WorldPosition, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateObjectRadius:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ObjectRadius, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateObjectBounds:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ObjectBounds, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateObjectOrientation:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ObjectOrientation, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PreSkinnedPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PreSkinnedNormal, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes:
