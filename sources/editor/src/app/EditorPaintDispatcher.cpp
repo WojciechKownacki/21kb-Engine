@@ -71,8 +71,10 @@ namespace {
     return camera;
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(const EditorMaterialPreviewSceneSettings& settings) noexcept {
-    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings);
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(
+    const EditorMaterialPreviewSceneSettings& settings,
+    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings, projectLightingPath);
 }
 
 [[nodiscard]] EditorSceneBgfxViewport::PresentSettings BuildMaterialPreviewSettings(EditorSceneContext& sceneContext, const RECT& previewRect, std::uint64_t viewportKey) {
@@ -87,7 +89,7 @@ namespace {
         .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings),
+        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
         .postProcessEnabled = previewSettings.postProcessEnabled,

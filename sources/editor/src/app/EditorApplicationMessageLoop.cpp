@@ -90,8 +90,10 @@ constexpr int kMaxMessagesPerPump = 128;
     return camera;
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(const EditorMaterialPreviewSceneSettings& settings) noexcept {
-    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings);
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildMaterialPreviewLightingConfig(
+    const EditorMaterialPreviewSceneSettings& settings,
+    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
+    return MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(settings, projectLightingPath);
 }
 
 [[nodiscard]] const kb::assets::AssetMetadata* MaterialMetadataForAsset(const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept {
@@ -114,7 +116,7 @@ constexpr int kMaxMessagesPerPump = 128;
         .viewportKey = viewportKey,
         .editorSceneOverlaysEnabled = false,
         .meshPassMode = kb::render::SceneRenderMeshPassMode::OpaqueAndTransparent,
-        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings),
+        .lightingConfig = BuildMaterialPreviewLightingConfig(previewSettings, sceneContext.Project().sceneLightingPath),
         .postProcessSettings = MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(previewSettings),
         .shadowPassEnabled = false,
         .postProcessEnabled = previewSettings.postProcessEnabled,
