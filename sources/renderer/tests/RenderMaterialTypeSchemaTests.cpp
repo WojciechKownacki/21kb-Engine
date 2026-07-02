@@ -23,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -4257,28 +4258,52 @@ void RunMaterialShadingModelGatingTest() {
     Require(ComputeRenderMaterialGraphReflectionHash(unlitResult.shader.reflection) != ComputeRenderMaterialGraphReflectionHash(litResult.shader.reflection),
         "KBMAT-MAT37: Unlit and DefaultLit must hash to different program identities");
 
-    // A declared-but-unimplemented model falls back to DefaultLit with a warning (no error, real shader).
-    RenderMaterialGraphDocument subsurfaceGraph = litGraph;
-    subsurfaceGraph.shadingModel = "subsurface";
-    const RenderMaterialGraphCompileResult subsurfaceResult = CompileRenderMaterialGraphToShaderSource(subsurfaceGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0372U });
-    Require(subsurfaceResult.Succeeded(), "KBMAT-MAT37: a non-production shading model must still produce a fallback shader (warning, not error)");
-    Require(subsurfaceResult.shader.reflection.shadingModel == RenderMaterialShadingModel::DefaultLit,
-        "KBMAT-MAT37: a non-production shading model must resolve to the DefaultLit fallback");
-    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(subsurfaceResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
-    Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT37: an unimplemented shading model must emit a warning diagnostic with the DefaultLit fallback");
+    for (const auto& [token, model, marker] : std::initializer_list<std::tuple<const char*, RenderMaterialShadingModel, const char*>>{
+             { "subsurface", RenderMaterialShadingModel::Subsurface, "subsurfaceThickness" },
+             { "clearCoat", RenderMaterialShadingModel::ClearCoat, "clearCoatNormalRaw" },
+             { "singleLayerWater", RenderMaterialShadingModel::SingleLayerWater, "waterWeight" },
+             { "thinTranslucent", RenderMaterialShadingModel::ThinTranslucent, "lighting += surface.thinTranslucentOutput.rgb" } }) {
+        RenderMaterialGraphDocument modelGraph = litGraph;
+        modelGraph.shadingModel = token;
+        modelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+        modelGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.2 0.5 1 1" } });
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "subsurfaceColor"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "surfaceThickness"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "clearCoat"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "singleLayerWaterOutput"));
+        modelGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "thinTranslucentOutput"));
+        const RenderMaterialGraphCompileResult modelResult = CompileRenderMaterialGraphToShaderSource(modelGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0372U });
+        Require(modelResult.Succeeded(), "KBMAT-MAT37: production shading model must compile");
+        Require(modelResult.shader.reflection.shadingModel == model,
+            "KBMAT-MAT37: production shading model reflection lost requested model");
+        Require(FindGraphDiagnostic(modelResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel) == nullptr,
+            "KBMAT-MAT37: production shading model must not emit unsupported diagnostic");
+        const std::string wrapper = BuildGraphFragmentWrapperSource(modelResult.shader, "BaseOpaque");
+        Require(wrapper.find(marker) != std::string::npos,
+            "KBMAT-MAT37: production shading model wrapper did not emit model branch");
+        Require(ComputeRenderMaterialGraphReflectionHash(modelResult.shader.reflection) != ComputeRenderMaterialGraphReflectionHash(litResult.shader.reflection),
+            "KBMAT-MAT37: production shading model must produce a distinct runtime identity");
+    }
+
+    RenderMaterialGraphDocument hairGraph = litGraph;
+    hairGraph.shadingModel = "hair";
+    const RenderMaterialGraphCompileResult hairResult = CompileRenderMaterialGraphToShaderSource(hairGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0376U });
+    Require(!hairResult.Succeeded(), "KBMAT-MAT37: a declared shading model without a production branch must fail instead of falling back");
+    const RenderMaterialGraphDiagnostic* shadingDiag = FindGraphDiagnostic(hairResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel);
+    Require(shadingDiag != nullptr && shadingDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
+        "KBMAT-MAT37: an unimplemented shading model must emit an error diagnostic without a DefaultLit fallback");
 
     Require(IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Unlit) &&
-            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit),
-            "KBMAT-MAT37: Unlit and DefaultLit must be production shading models");
-    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Subsurface) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ClearCoat) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::DefaultLit) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Subsurface) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ClearCoat) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
+            IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
+            "KBMAT-MAT37: Unlit, DefaultLit and implemented advanced models must be production shading models");
+    Require(!IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Cloth) &&
             !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Hair) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::SingleLayerWater) &&
-            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::ThinTranslucent),
-            "KBMAT-MAT37: only Unlit and DefaultLit are production; the other declared models must be non-production");
+            !IsRenderMaterialShadingModelProduction(RenderMaterialShadingModel::Eye),
+            "KBMAT-MAT37: declared shading models without runtime branches must remain non-production");
 }
 
 void RunMaterialGraphBlendModeTest() {
