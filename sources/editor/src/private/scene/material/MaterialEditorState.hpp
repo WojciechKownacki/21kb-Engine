@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <initializer_list>
 #include <optional>
 #include <sstream>
@@ -415,6 +416,146 @@ public:
 
     [[nodiscard]] bool Dirty() const noexcept {
         return dirty_;
+    }
+
+    [[nodiscard]] std::vector<std::string> MaterialDiffRows() const {
+        std::vector<std::string> rows;
+        const auto formatFloat = [](float value) {
+            std::ostringstream output;
+            output << std::fixed << std::setprecision(3) << value;
+            return output.str();
+        };
+        const auto appendText = [&rows](std::string_view label, std::string_view before, std::string_view after) {
+            if (before != after) {
+                rows.push_back(std::string{ label } + ": " + std::string{ before } + " -> " + std::string{ after });
+            }
+        };
+        const auto appendUInt = [&rows](std::string_view label, std::uint64_t before, std::uint64_t after) {
+            if (before != after) {
+                rows.push_back(std::string{ label } + ": " + std::to_string(before) + " -> " + std::to_string(after));
+            }
+        };
+        const auto appendBool = [&rows](std::string_view label, bool before, bool after) {
+            if (before != after) {
+                rows.push_back(std::string{ label } + ": " + (before ? "true" : "false") + " -> " + (after ? "true" : "false"));
+            }
+        };
+        const auto appendFloat = [&rows, &formatFloat](std::string_view label, float before, float after) {
+            if (before != after) {
+                rows.push_back(std::string{ label } + ": " + formatFloat(before) + " -> " + formatFloat(after));
+            }
+        };
+        const auto appendFloatArray = [&appendFloat](std::string_view label, const float* before, const float* after, std::size_t count) {
+            for (std::size_t index = 0U; index < count; ++index) {
+                appendFloat(std::string{ label } + "[" + std::to_string(index) + "]", before[index], after[index]);
+            }
+        };
+        const auto nodeSignature = [](const kb::render::RenderMaterialGraphNode& node) {
+            std::ostringstream output;
+            output << static_cast<int>(node.kind) << "|" << node.positionX << "|" << node.positionY << "|"
+                   << node.parameter.stableId << "|" << node.parameter.displayName << "|" << node.parameter.defaultValueHint << "|"
+                   << node.parameter.textureRole << "|" << static_cast<int>(node.parameter.expectedTextureColorSpace) << "|"
+                   << node.customCode.body << "|" << static_cast<int>(node.customCode.outputType) << "|"
+                   << node.layerStack.size();
+            return output.str();
+        };
+        const auto linkSignature = [](const kb::render::RenderMaterialGraphLink& link) {
+            std::ostringstream output;
+            output << link.fromNodeId << ":" << link.fromPin << "->" << link.toNodeId << ":" << link.toPin;
+            return output.str();
+        };
+        const auto appendGraphDiff = [&](const kb::render::RenderMaterialGraphDocument& before, const kb::render::RenderMaterialGraphDocument& after) {
+            appendText("Graph domain", before.materialDomain, after.materialDomain);
+            appendText("Graph shading", before.shadingModel, after.shadingModel);
+            appendText("Graph blend", before.blendMode, after.blendMode);
+            appendUInt("Graph nodes", before.nodes.size(), after.nodes.size());
+            appendUInt("Graph links", before.links.size(), after.links.size());
+            appendUInt("Graph comments", before.comments.size(), after.comments.size());
+            for (const kb::render::RenderMaterialGraphNode& node : after.nodes) {
+                const auto match = std::ranges::find_if(before.nodes, [&node](const kb::render::RenderMaterialGraphNode& candidate) {
+                    return candidate.id == node.id;
+                });
+                if (match == before.nodes.end()) {
+                    rows.push_back("Added node #" + std::to_string(node.id) + " " + std::string{ kb::render::RenderMaterialGraphNodeKindName(node.kind) });
+                } else if (nodeSignature(*match) != nodeSignature(node)) {
+                    rows.push_back("Changed node #" + std::to_string(node.id) + " " + std::string{ kb::render::RenderMaterialGraphNodeKindName(node.kind) });
+                }
+            }
+            for (const kb::render::RenderMaterialGraphNode& node : before.nodes) {
+                const auto match = std::ranges::find_if(after.nodes, [&node](const kb::render::RenderMaterialGraphNode& candidate) {
+                    return candidate.id == node.id;
+                });
+                if (match == after.nodes.end()) {
+                    rows.push_back("Removed node #" + std::to_string(node.id) + " " + std::string{ kb::render::RenderMaterialGraphNodeKindName(node.kind) });
+                }
+            }
+            for (const kb::render::RenderMaterialGraphLink& link : after.links) {
+                const auto match = std::ranges::find_if(before.links, [&link](const kb::render::RenderMaterialGraphLink& candidate) {
+                    return candidate.id == link.id;
+                });
+                if (match == before.links.end()) {
+                    rows.push_back("Added link " + linkSignature(link));
+                } else if (linkSignature(*match) != linkSignature(link)) {
+                    rows.push_back("Changed link " + linkSignature(link));
+                }
+            }
+            for (const kb::render::RenderMaterialGraphLink& link : before.links) {
+                const auto match = std::ranges::find_if(after.links, [&link](const kb::render::RenderMaterialGraphLink& candidate) {
+                    return candidate.id == link.id;
+                });
+                if (match == after.links.end()) {
+                    rows.push_back("Removed link " + linkSignature(link));
+                }
+            }
+        };
+        const auto appendMaterialDiff = [&](const kb::render::RenderMaterialAssetData& before, const kb::render::RenderMaterialAssetData& after) {
+            appendText("Material type", before.materialType, after.materialType);
+            appendUInt("Material type version", before.materialTypeVersion, after.materialTypeVersion);
+            appendUInt("Material type asset", before.materialTypeAssetId, after.materialTypeAssetId);
+            appendText("Material type path", before.materialTypeAssetPath, after.materialTypeAssetPath);
+            appendUInt("Graph source asset", before.graphSourceAssetId, after.graphSourceAssetId);
+            appendText("Graph source path", before.graphSourceAssetPath, after.graphSourceAssetPath);
+            appendFloatArray("Base color", before.desc.baseColor, after.desc.baseColor, 4U);
+            appendFloatArray("Emissive color", before.desc.emissiveColor, after.desc.emissiveColor, 3U);
+            appendFloat("Metallic", before.desc.metallicFactor, after.desc.metallicFactor);
+            appendFloat("Roughness", before.desc.roughnessFactor, after.desc.roughnessFactor);
+            appendFloat("Normal scale", before.desc.normalScale, after.desc.normalScale);
+            appendFloat("Occlusion", before.desc.occlusionStrength, after.desc.occlusionStrength);
+            appendFloat("Emissive strength", before.desc.emissiveStrength, after.desc.emissiveStrength);
+            appendFloat("Alpha cutoff", before.desc.alphaCutoff, after.desc.alphaCutoff);
+            appendBool("Double sided", before.desc.doubleSided, after.desc.doubleSided);
+            appendBool("Writes depth", before.desc.writesDepth, after.desc.writesDepth);
+            appendUInt("Albedo texture", before.desc.albedoTextureAssetId, after.desc.albedoTextureAssetId);
+            appendUInt("Normal texture", before.desc.normalTextureAssetId, after.desc.normalTextureAssetId);
+            appendUInt("Metallic-roughness texture", before.desc.metallicRoughnessTextureAssetId, after.desc.metallicRoughnessTextureAssetId);
+            appendUInt("Occlusion texture", before.desc.occlusionTextureAssetId, after.desc.occlusionTextureAssetId);
+            appendUInt("Emissive texture", before.desc.emissiveTextureAssetId, after.desc.emissiveTextureAssetId);
+            appendText("Albedo texture path", before.albedoTexturePath, after.albedoTexturePath);
+            appendText("Normal texture path", before.normalTexturePath, after.normalTexturePath);
+            appendUInt("Graph parameter values", before.graphParameterValues.size(), after.graphParameterValues.size());
+            appendGraphDiff(before.graph, after.graph);
+            if (rows.empty() && CanonicalDocument(before) != CanonicalDocument(after)) {
+                rows.push_back("Serialized material data changed");
+            }
+        };
+        const auto appendInstanceDiff = [&](const kb::render::RenderMaterialInstanceAssetData& before, const kb::render::RenderMaterialInstanceAssetData& after) {
+            appendUInt("Instance parent material", before.parentMaterialAssetId.value, after.parentMaterialAssetId.value);
+            appendUInt("Instance static overrides", before.staticParameterOverrides.size(), after.staticParameterOverrides.size());
+            appendBool("Instance has overrides", before.hasOverrides, after.hasOverrides);
+            appendBool("Instance base overrides", before.basePropertyOverrides.HasAny(), after.basePropertyOverrides.HasAny());
+            appendUInt("Instance graph parameter values", before.overrides.graphParameterValues.size(), after.overrides.graphParameterValues.size());
+            if (CanonicalInstance(before) != CanonicalInstance(after)) {
+                rows.push_back("Serialized material instance data changed");
+            }
+        };
+
+        if (cleanSnapshot_.has_value() && workingCopy_.has_value()) {
+            appendMaterialDiff(*cleanSnapshot_, *workingCopy_);
+        }
+        if (instanceCleanSnapshot_.has_value() && instanceWorkingCopy_.has_value()) {
+            appendInstanceDiff(*instanceCleanSnapshot_, *instanceWorkingCopy_);
+        }
+        return rows;
     }
 
     [[nodiscard]] const std::vector<std::string>& Diagnostics() const noexcept {
