@@ -1,5 +1,6 @@
 #include "kb/editor/EditorApplication.hpp"
 
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "app/EditorSelfTest.hpp"
 #include "project/EditorProjectPaths.hpp"
 
@@ -45,12 +46,16 @@ void ConfigureProjectFromArguments(int argc, char** argv) {
 #endif
 
 int RunEditor() {
+    kb::editor::EditorCrashBreadcrumbs::Write("app", "RunEditor begin");
     kb::editor::EditorApplication app;
     if (!app.Initialize()) {
+        kb::editor::EditorCrashBreadcrumbs::Write("app", "EditorApplication Initialize failed");
         return 1;
     }
 
+    kb::editor::EditorCrashBreadcrumbs::Write("app", "EditorApplication Run enter");
     app.Run();
+    kb::editor::EditorCrashBreadcrumbs::Write("app", "EditorApplication Run leave");
     return 0;
 }
 
@@ -66,9 +71,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         selfTest = HasSelfTestFlag(argc, argv);
         LocalFree(argv);
     }
+    kb::editor::EditorCrashBreadcrumbs::Reset();
+    kb::editor::EditorCrashBreadcrumbs::InstallUnhandledExceptionLogger();
+    kb::editor::EditorCrashBreadcrumbs::Write("app", "wWinMain enter");
     if (selfTest) {
         // Headless: run self-tests and exit before any window/graphics init.
         const std::filesystem::path reportPath = std::filesystem::temp_directory_path() / "21kb_selftest" / "report.txt";
+        kb::editor::EditorCrashBreadcrumbs::Write("app", "selftest enter");
         return kb::editor::EditorSelfTest::Run(reportPath);
     }
     return RunEditor();
@@ -76,6 +85,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 #else
 int main(int argc, char** argv) {
     ConfigureProjectFromArguments(argc, argv);
+    kb::editor::EditorCrashBreadcrumbs::Reset();
+    kb::editor::EditorCrashBreadcrumbs::InstallUnhandledExceptionLogger();
+    kb::editor::EditorCrashBreadcrumbs::Write("app", "main enter");
     return RunEditor();
 }
 #endif
