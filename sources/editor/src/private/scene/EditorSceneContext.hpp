@@ -447,6 +447,16 @@ public:
         kb::assets::AssetId id,
         std::uint32_t nodeId,
         std::string_view valueText);
+    [[nodiscard]] bool SetMaterialGraphNodeDisplayName(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view displayName);
+    [[nodiscard]] bool BeginMaterialGraphNodeRenameEdit(kb::assets::AssetId id, std::uint32_t nodeId);
+    [[nodiscard]] bool IsMaterialGraphNodeRenameEditing() const noexcept;
+    void AppendMaterialGraphNodeRenameEditText(wchar_t character);
+    void InsertMaterialGraphNodeRenameEditText(std::string_view text);
+    void BackspaceMaterialGraphNodeRenameEdit();
+    void ClearMaterialGraphNodeRenameEditText();
+    void SelectAllMaterialGraphNodeRenameEditText() noexcept;
+    [[nodiscard]] bool CommitMaterialGraphNodeRenameEdit();
+    void CancelMaterialGraphNodeRenameEdit() noexcept;
     [[nodiscard]] bool BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId);
     [[nodiscard]] bool IsMaterialGraphConstantInlineEditing() const noexcept;
     [[nodiscard]] bool BeginMaterialGraphConstantSliderDrag(kb::assets::AssetId id, std::uint32_t nodeId, std::size_t componentIndex, int x);

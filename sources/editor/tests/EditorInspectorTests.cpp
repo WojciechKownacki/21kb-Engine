@@ -47,7 +47,9 @@
 #include "engine/scene/SceneObjectDesc.hpp"
 #include "engine/scene/ScenePrefabs.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
+#include "scene/material/EditorMaterialAssetEditCommand.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "commands/EditorCommandStack.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1590,6 +1592,65 @@ void RunMaterialEditorGraphDiagnosticsRefreshTest() {
     kb::editor::tests::Require(!materialEditor.DiagnosticsHaveError() && materialEditor.GraphDiagnosticMarkers().empty(),
         "KBMAT-LIVE-0001: Fixing graph diagnostics should clear node error markers");
 }
+
+void RunMaterialEditorGraphNodeRenameTest() {
+    kb::render::RenderMaterialAssetData material{};
+    material.documentVersion = kb::render::kRenderMaterialAssetDocumentVersion;
+    material.hasExplicitDocumentVersion = true;
+    material.materialType = kb::render::kRenderMaterialAssetBuiltInPbrType;
+    material.materialTypeVersion = kb::render::kRenderMaterialAssetBuiltInPbrTypeVersion;
+    material.hasExplicitMaterialType = true;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 120,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .displayName = "Old Tint", .defaultValueHint = "1 1 1 1" },
+    });
+
+    kb::editor::MaterialEditorState materialEditor;
+    const kb::assets::AssetId materialId{ 0x52454E414D45ULL };
+    materialEditor.Open(materialId, material);
+    kb::editor::tests::Require(materialEditor.SelectNode(2U), "KBMAT-RENAME-0001: Material graph rename test should select the node");
+    kb::editor::tests::Require(materialEditor.BeginGraphNodeRenameEdit(2U), "KBMAT-RENAME-0001: F2 rename should begin for a selected material graph node");
+    kb::editor::tests::Require(materialEditor.IsGraphNodeRenameEditing(2U) && materialEditor.GraphNodeRenameEditBuffer() == "Old Tint",
+        "KBMAT-RENAME-0001: Rename buffer should start from the current node display name");
+    materialEditor.ClearGraphNodeRenameEditText();
+    materialEditor.InsertGraphNodeRenameEditText("  Albedo Tint  ");
+    const kb::render::RenderMaterialAssetData before = *materialEditor.WorkingCopy();
+    kb::render::RenderMaterialAssetData after = before;
+    for (kb::render::RenderMaterialGraphNode& node : after.graph.nodes) {
+        if (node.id == 2U) {
+            node.parameter.displayName = "Albedo Tint";
+        }
+    }
+
+    kb::editor::EditorCommandStack stack;
+    kb::editor::tests::Require(stack.Execute(kb::editor::EditorMaterialWorkingCopyEditCommand::Create(
+        materialEditor,
+        materialId,
+        "Rename Material Graph Node",
+        before,
+        after,
+        std::vector<std::uint32_t>{ 2U },
+        std::vector<std::uint32_t>{ 2U })),
+        "KBMAT-RENAME-0001: Material graph node rename should be recorded through the editor command stack");
+    materialEditor.CancelGraphNodeRenameEdit();
+    kb::editor::tests::Require(materialEditor.GraphNodeDisplayName(2U) == "Albedo Tint" && materialEditor.Dirty(),
+        "KBMAT-RENAME-0001: Committed rename should update the visible graph node display name and dirty the working copy");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> properties = materialEditor.GraphNodeProperties(2U);
+    kb::editor::tests::Require(std::ranges::any_of(properties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "node.name" && property.value.text == "Albedo Tint";
+    }), "KBMAT-RENAME-0001: Node details should expose the renamed node name property");
+
+    kb::editor::tests::Require(stack.Undo(), "KBMAT-RENAME-0001: Material graph rename should undo");
+    kb::editor::tests::Require(materialEditor.GraphNodeDisplayName(2U) == "Old Tint",
+        "KBMAT-RENAME-0001: Undo should restore the previous material graph node name");
+    kb::editor::tests::Require(stack.Redo(), "KBMAT-RENAME-0001: Material graph rename should redo");
+    kb::editor::tests::Require(materialEditor.GraphNodeDisplayName(2U) == "Albedo Tint",
+        "KBMAT-RENAME-0001: Redo should restore the renamed material graph node name");
+}
 #endif
 
 } // namespace
@@ -1622,6 +1683,7 @@ void RunEditorInspectorTests() {
     RunMaterialEditorGraphLayoutAndHitTestTest();
     RunMaterialEditorParserDiagnosticRowsTest();
     RunMaterialEditorGraphDiagnosticsRefreshTest();
+    RunMaterialEditorGraphNodeRenameTest();
 #endif
 }
 

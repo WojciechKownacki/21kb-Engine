@@ -3573,6 +3573,81 @@ bool EditorSceneContext::SetMaterialGraphConstantValue(
     return true;
 }
 
+bool EditorSceneContext::SetMaterialGraphNodeDisplayName(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view displayName) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.RenameGraphNode(nodeId, displayName)) {
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(
+            id,
+            "Rename Material Graph Node",
+            std::move(before),
+            beforeSelectedNodeId,
+            std::move(beforeSelectedNodeIds),
+            beforeSelectedCommentId)) {
+        console_.Warning("Materials", "Material graph node rename could not be recorded.");
+        return false;
+    }
+    console_.Info("Materials", "Renamed material graph node #" + std::to_string(nodeId) + ".");
+    return true;
+}
+
+bool EditorSceneContext::BeginMaterialGraphNodeRenameEdit(kb::assets::AssetId id, std::uint32_t nodeId) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        return false;
+    }
+    return materialEditor_.BeginGraphNodeRenameEdit(nodeId);
+}
+
+bool EditorSceneContext::IsMaterialGraphNodeRenameEditing() const noexcept {
+    return materialEditor_.IsGraphNodeRenameEditing();
+}
+
+void EditorSceneContext::AppendMaterialGraphNodeRenameEditText(wchar_t character) {
+    materialEditor_.AppendGraphNodeRenameEditText(character);
+}
+
+void EditorSceneContext::InsertMaterialGraphNodeRenameEditText(std::string_view text) {
+    materialEditor_.InsertGraphNodeRenameEditText(text);
+}
+
+void EditorSceneContext::BackspaceMaterialGraphNodeRenameEdit() {
+    materialEditor_.BackspaceGraphNodeRenameEdit();
+}
+
+void EditorSceneContext::ClearMaterialGraphNodeRenameEditText() {
+    materialEditor_.ClearGraphNodeRenameEditText();
+}
+
+void EditorSceneContext::SelectAllMaterialGraphNodeRenameEditText() noexcept {
+    materialEditor_.SelectAllGraphNodeRenameEditText();
+}
+
+bool EditorSceneContext::CommitMaterialGraphNodeRenameEdit() {
+    const kb::assets::AssetId id = materialEditor_.OpenAssetId();
+    const std::uint32_t nodeId = materialEditor_.GraphNodeRenameEditNodeId();
+    const std::string value{ materialEditor_.GraphNodeRenameEditBuffer() };
+    if (!id.IsValid() || nodeId == 0U) {
+        materialEditor_.CancelGraphNodeRenameEdit();
+        return false;
+    }
+    const std::string beforeName = materialEditor_.GraphNodeDisplayName(nodeId);
+    const bool committed = SetMaterialGraphNodeDisplayName(id, nodeId, value);
+    materialEditor_.CancelGraphNodeRenameEdit();
+    return committed || !beforeName.empty();
+}
+
+void EditorSceneContext::CancelMaterialGraphNodeRenameEdit() noexcept {
+    materialEditor_.CancelGraphNodeRenameEdit();
+}
+
 bool EditorSceneContext::BeginMaterialGraphConstantInlineEdit(kb::assets::AssetId id, std::uint32_t nodeId) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
         return false;
