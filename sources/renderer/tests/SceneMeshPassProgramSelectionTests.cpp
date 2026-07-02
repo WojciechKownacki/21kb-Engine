@@ -32,7 +32,8 @@ namespace {
     std::uint64_t variantKey = 0xA66A'0000'0000'0001ULL,
     std::uint64_t pipelineStateKey = 0xA66A'0000'0000'0002ULL,
     std::uint64_t materialTypeId = 0xC0DEU,
-    std::uint32_t materialTypeVersion = 1U) {
+    std::uint32_t materialTypeVersion = 1U,
+    bool requiresGeneratedVertexShader = false) {
     RenderMaterialResource material{};
     material.graphProgram.active = true;
     material.graphProgram.materialTypeId = materialTypeId;
@@ -40,6 +41,7 @@ namespace {
     material.graphProgram.graphSourceHash = graphSourceHash;
     material.graphProgram.variantKey = variantKey;
     material.graphProgram.pipelineStateKey = pipelineStateKey;
+    material.graphProgram.requiresGeneratedVertexShader = requiresGeneratedVertexShader;
     return material;
 }
 
@@ -66,6 +68,53 @@ namespace {
     graph.links.push_back(link);
     const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0700U });
     Require(compiled.Succeeded(), "KBMAT-MAT07: Selection graph must compile");
+    return compiled.shader;
+}
+
+[[nodiscard]] RenderMaterialGraphShaderSource CompileWorldPositionOffsetGraphForSelection() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    RenderMaterialGraphNode color{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 80,
+    };
+    color.parameter.defaultValueHint = "0.2 0.4 0.6 1";
+    RenderMaterialGraphNode offset{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantVector,
+        .positionX = 80,
+        .positionY = 220,
+    };
+    offset.parameter.defaultValueHint = "0.35 0 0";
+    graph.nodes.push_back(color);
+    graph.nodes.push_back(offset);
+
+    RenderMaterialGraphLink colorLink{
+        .fromNodeId = 2U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::ConstantColor, "rgba", true),
+        .fromPin = "rgba",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false),
+        .toPin = "baseColor",
+    };
+    colorLink.id = MakeRenderMaterialGraphLinkId(colorLink);
+    graph.links.push_back(colorLink);
+
+    RenderMaterialGraphLink offsetLink{
+        .fromNodeId = 3U,
+        .fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::ConstantVector, "xyz", true),
+        .fromPin = "xyz",
+        .toNodeId = 1U,
+        .toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "worldPositionOffset", false),
+        .toPin = "worldPositionOffset",
+    };
+    offsetLink.id = MakeRenderMaterialGraphLinkId(offsetLink);
+    graph.links.push_back(offsetLink);
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x1900U });
+    Require(compiled.Succeeded() && compiled.shader.reflection.hasWorldPositionOffset,
+        "KBMAT-MAT99-19: WPO graph must compile and flag the generated vertex shader requirement");
     return compiled.shader;
 }
 
@@ -221,7 +270,47 @@ void RunSceneMeshPassProgramSelectionTest() {
                 passResources.ProgramRegistryStats().loads == registryStatsBefore.loads + 1U,
             "KBMAT-MAT66: Material type id/version changes must invalidate the graph program binding");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 6U,
+        const RenderMaterialGraphShaderSource wpoShader = CompileWorldPositionOffsetGraphForSelection();
+        Require(CookGraphForActiveBackend(wpoShader, cacheRoot.generic_string()),
+            "KBMAT-MAT99-19: WPO graph must cook fragment and generated vertex binaries for scene selection");
+        const std::uint64_t wpoVariant = RenderMaterialGraphVariantKey(wpoShader);
+        const std::uint64_t wpoPipeline = RenderMaterialGraphPipelineStateKey(wpoShader);
+        const RenderMaterialResource wpoMaterial = MakeGraphMaterialResource(
+            wpoShader.sourceHash,
+            wpoVariant,
+            wpoPipeline,
+            0xC0DEU,
+            1U,
+            true);
+        const SceneMeshPassProgramResolution wpoReady = passResources.ResolveMeshPassProgram(&wpoMaterial, MeshPassType::BaseOpaque);
+        Require(wpoReady.graphProgram && bgfx::isValid(wpoReady.program) && !wpoReady.fellBackToBuiltin &&
+                wpoReady.key.requiresGeneratedVertexShader,
+            "KBMAT-MAT99-19: WPO graph material must bind the generated scene vertex program when vs.bin exists");
+
+        const std::filesystem::path wpoVertexPath = cacheRoot /
+            ("graph_" + std::to_string(wpoShader.sourceHash)) /
+            "BaseOpaque" /
+            "dxbc" /
+            "vs.bin";
+        Require(std::filesystem::exists(wpoVertexPath), "KBMAT-MAT99-19: WPO cook must leave a scene vs.bin on disk");
+        std::filesystem::remove(wpoVertexPath, error);
+        Require(!error, "KBMAT-MAT99-19: WPO test could not remove generated vs.bin");
+        registryStatsBefore = passResources.ProgramRegistryStats();
+        const RenderMaterialResource missingWpoVsMaterial = MakeGraphMaterialResource(
+            wpoShader.sourceHash,
+            wpoVariant ^ 0x0100'0000'0000'0000ULL,
+            wpoPipeline,
+            0xC0DEU,
+            1U,
+            true);
+        const SceneMeshPassProgramResolution missingWpoVs = passResources.ResolveMeshPassProgram(&missingWpoVsMaterial, MeshPassType::BaseOpaque);
+        Require(!missingWpoVs.graphProgram && missingWpoVs.fellBackToBuiltin &&
+                missingWpoVs.status == SceneRenderMaterialProgramStatus::GraphFallback &&
+                missingWpoVs.key.requiresGeneratedVertexShader &&
+                passResources.ProgramRegistryStats().failures == registryStatsBefore.failures + 1U,
+            "KBMAT-MAT99-19: missing WPO vs.bin must not silently bind the fixed mesh vertex shader as a graph program");
+
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 7U,
             "KBMAT-MAT07: Graph program binds must be counted in submit stats");
 #endif
 

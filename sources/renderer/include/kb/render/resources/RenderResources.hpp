@@ -343,6 +343,7 @@ struct RenderMaterialGraphProgramBinding {
     std::vector<RenderMaterialGraphUniformBinding> uniforms;
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
+    bool requiresGeneratedVertexShader = false;
     // MAT-38/#25d: scene render state resolved from the graph blend mode, so a translucent graph material
     // is submitted in the transparent pass with the correct blend equation (not just previewed).
     RenderMaterialAlphaMode alphaMode = RenderMaterialAlphaMode::Opaque;

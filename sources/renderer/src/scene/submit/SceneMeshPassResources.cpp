@@ -41,6 +41,7 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
         .pass = std::move(pass),
         .backend = 0U,
         .pipelineStateKey = 0U,
+        .requiresGeneratedVertexShader = false,
         .graphProgram = false,
     };
 }
@@ -361,6 +362,8 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     if (!vertexBytes.empty()) {
         const bgfx::Memory* vertexMemory = bgfx::copy(vertexBytes.data(), static_cast<std::uint32_t>(vertexBytes.size()));
         vertex = bgfx::createShader(vertexMemory);
+    } else if (key.requiresGeneratedVertexShader) {
+        return BGFX_INVALID_HANDLE;
     } else {
         vertex = ShaderLoader::Load("vs_mesh_instanced.sc");
     }
@@ -403,6 +406,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                 .pass = GraphMeshPassName(pass),
                 .backend = static_cast<std::uint32_t>(bgfx::getRendererType()),
                 .pipelineStateKey = material->graphProgram.pipelineStateKey,
+                .requiresGeneratedVertexShader = material->graphProgram.requiresGeneratedVertexShader,
                 .graphProgram = true,
             };
             resolution.key = key;

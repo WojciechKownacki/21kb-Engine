@@ -18,6 +18,7 @@ struct MaterialProgramKey {
     std::string pass;
     std::uint32_t backend = 0U;
     std::uint64_t pipelineStateKey = 0U;
+    bool requiresGeneratedVertexShader = false;
     bool graphProgram = false;
 
     [[nodiscard]] bool operator==(const MaterialProgramKey& rhs) const noexcept;

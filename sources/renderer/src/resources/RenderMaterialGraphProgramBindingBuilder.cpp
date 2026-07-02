@@ -193,6 +193,10 @@ RenderMaterialGraphProgramBindingResult BuildRenderMaterialGraphProgramBinding(
     binding.variantKey = RenderMaterialGraphVariantKey(shader);
     binding.pipelineStateKey = RenderMaterialGraphPipelineStateKey(shader);
     binding.requiredVaryings = shader.reflection.requiredVaryings;
+    binding.requiresGeneratedVertexShader =
+        shader.reflection.hasWorldPositionOffset ||
+        shader.reflection.hasCustomizedUv0 ||
+        shader.reflection.hasDisplacement;
     binding.usesSceneDepth = shader.reflection.usesSceneDepth;
     binding.usesSceneColor = shader.reflection.usesSceneColor;
 
