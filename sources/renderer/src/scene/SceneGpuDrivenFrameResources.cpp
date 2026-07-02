@@ -59,7 +59,6 @@ SceneGpuDrivenFrameBatch SceneGpuDrivenFrameResources::Upload(std::span<const Sc
 
     std::vector<std::array<float, 4>> bounds(recordCount);
     std::vector<PackedGpuDrivenMetadata> metadata(recordCount);
-    std::vector<std::uint32_t> cleared(recordCount, 0U);
     for (std::uint32_t index = 0; index < recordCount; ++index) {
         const SceneGpuDrivenInputRecord& record = records[index];
         bounds[index] = record.worldBounds;
@@ -75,23 +74,14 @@ SceneGpuDrivenFrameBatch SceneGpuDrivenFrameResources::Upload(std::span<const Sc
 
     const std::uint32_t boundsBytes = static_cast<std::uint32_t>(bounds.size() * sizeof(bounds[0]));
     const std::uint32_t metadataBytes = static_cast<std::uint32_t>(metadata.size() * sizeof(metadata[0]));
-    const std::uint32_t listBytes = static_cast<std::uint32_t>(cleared.size() * sizeof(cleared[0]));
-    const std::array<std::uint32_t, 4U> counters{};
     const bgfx::Memory* boundsMemory = CopyMemory(bounds.data(), boundsBytes);
     const bgfx::Memory* metadataMemory = CopyMemory(metadata.data(), metadataBytes);
-    const bgfx::Memory* predicateMemory = CopyMemory(cleared.data(), listBytes);
-    const bgfx::Memory* visibleListMemory = CopyMemory(cleared.data(), listBytes);
-    const bgfx::Memory* counterMemory = CopyMemory(counters.data(), static_cast<std::uint32_t>(counters.size() * sizeof(counters[0])));
-    if (boundsMemory == nullptr || metadataMemory == nullptr || predicateMemory == nullptr ||
-        visibleListMemory == nullptr || counterMemory == nullptr) {
+    if (boundsMemory == nullptr || metadataMemory == nullptr) {
         return batch;
     }
 
     bgfx::update(boundsBuffer_, 0U, boundsMemory);
     bgfx::update(metadataBuffer_, 0U, metadataMemory);
-    bgfx::update(predicateBuffer_, 0U, predicateMemory);
-    bgfx::update(visibleListBuffer_, 0U, visibleListMemory);
-    bgfx::update(counterBuffer_, 0U, counterMemory);
 
     batch.boundsBuffer = boundsBuffer_;
     batch.metadataBuffer = metadataBuffer_;
@@ -101,9 +91,7 @@ SceneGpuDrivenFrameBatch SceneGpuDrivenFrameResources::Upload(std::span<const Sc
     batch.instanceCount = recordCount;
     batch.capacity = capacity_;
     batch.uploadBytes = static_cast<std::uint64_t>(boundsBytes) +
-        static_cast<std::uint64_t>(metadataBytes) +
-        static_cast<std::uint64_t>(listBytes) * 2ULL +
-        static_cast<std::uint64_t>(counters.size() * sizeof(counters[0]));
+        static_cast<std::uint64_t>(metadataBytes);
     return batch;
 }
 
