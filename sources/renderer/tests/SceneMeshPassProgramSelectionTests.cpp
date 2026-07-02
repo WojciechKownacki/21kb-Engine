@@ -1,6 +1,7 @@
 #include "RendererTestSupport.hpp"
 
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/scene/MeshPassType.hpp"
@@ -26,12 +27,19 @@ namespace {
     return bgfx::init(init);
 }
 
-[[nodiscard]] RenderMaterialResource MakeGraphMaterialResource(std::uint64_t graphSourceHash) {
+[[nodiscard]] RenderMaterialResource MakeGraphMaterialResource(
+    std::uint64_t graphSourceHash,
+    std::uint64_t variantKey = 0xA66A'0000'0000'0001ULL,
+    std::uint64_t pipelineStateKey = 0xA66A'0000'0000'0002ULL,
+    std::uint64_t materialTypeId = 0xC0DEU,
+    std::uint32_t materialTypeVersion = 1U) {
     RenderMaterialResource material{};
     material.graphProgram.active = true;
-    material.graphProgram.materialTypeId = 0xC0DEU;
-    material.graphProgram.materialTypeVersion = 1U;
+    material.graphProgram.materialTypeId = materialTypeId;
+    material.graphProgram.materialTypeVersion = materialTypeVersion;
     material.graphProgram.graphSourceHash = graphSourceHash;
+    material.graphProgram.variantKey = variantKey;
+    material.graphProgram.pipelineStateKey = pipelineStateKey;
     return material;
 }
 
@@ -104,12 +112,44 @@ void RunSceneMeshPassProgramSelectionTest() {
         const SceneMeshPassProgramResolution fallbackResolution = passResources.ResolveMeshPassProgram(&graphFallback, MeshPassType::BaseOpaque);
         Require(bgfx::isValid(fallbackResolution.program) && !fallbackResolution.graphProgram && fallbackResolution.fellBackToBuiltin,
             "KBMAT-MAT07: A graph material without a cooked program must fall back to the builtin program");
+        Require(fallbackResolution.status == SceneRenderMaterialProgramStatus::GraphFallback &&
+                fallbackResolution.key.graphSourceHash == graphFallback.graphProgram.graphSourceHash &&
+                fallbackResolution.key.variantKey == graphFallback.graphProgram.variantKey &&
+                fallbackResolution.key.pipelineStateKey == graphFallback.graphProgram.pipelineStateKey &&
+                fallbackResolution.materialProgramIdentity != 0U,
+            "KBMAT-MAT66: Graph fallback diagnostics must preserve material id/hash/variant/pipeline identity");
         Require(fallbackResolution.program.idx == builtinResolution.program.idx,
             "KBMAT-MAT07: The graph fallback must reuse the builtin opaque program");
         Require(passResources.ProgramBindStats().builtinFallbackBindCount == 1U,
             "KBMAT-MAT07: Builtin fallback program usage must be counted in submit stats");
         Require(passResources.ProgramBindStats().programSwitchCount >= 2U,
             "KBMAT-MAT07: Program switch stats must count distinct bound programs");
+
+        RenderResourceRegistry emptyResources;
+        SceneRenderResourceMap emptyResourceMap;
+        PackedSceneLighting emptyLighting{};
+        const std::array<float, 4U> zero4{};
+        MeshDrawCommand fallbackCommand{};
+        fallbackCommand.materialResource = &graphFallback;
+        fallbackCommand.materialAssetId = 0xDEAD1234U;
+        fallbackCommand.meshAssetId = 0x7777U;
+        const bgfx::ProgramHandle boundFallback = passResources.Bind(SceneMeshPassBindDesc{
+            .command = fallbackCommand,
+            .resources = emptyResources,
+            .resourceMap = emptyResourceMap,
+            .pass = MeshPassType::BaseOpaque,
+            .lighting = emptyLighting,
+            .cameraPosition = zero4,
+            .frameTime = zero4,
+            .dynamicParameter = zero4,
+        });
+        const SceneMeshPassProgramResolution lastFallback = passResources.LastProgramResolution();
+        Require(boundFallback.idx == fallbackResolution.program.idx &&
+                lastFallback.status == SceneRenderMaterialProgramStatus::GraphFallback &&
+                lastFallback.materialProgramIdentity == fallbackResolution.materialProgramIdentity &&
+                lastFallback.key.graphSourceHash == graphFallback.graphProgram.graphSourceHash &&
+                lastFallback.key.variantKey == graphFallback.graphProgram.variantKey,
+            "KBMAT-MAT66: Runtime bind diagnostics must preserve material/hash/variant/program status after fallback");
 
 #if defined(KB_TEST_GRAPH_SHADERC_PATH)
         const std::filesystem::path cacheRoot = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat07_program_selection";
@@ -125,12 +165,23 @@ void RunSceneMeshPassProgramSelectionTest() {
         passResources.SetGraphShaderCacheRoot(cacheRoot.generic_string());
         passResources.ResetProgramBindStats();
 
-        const RenderMaterialResource graphMaterialA = MakeGraphMaterialResource(shaderA.sourceHash);
-        const RenderMaterialResource graphMaterialB = MakeGraphMaterialResource(shaderB.sourceHash);
+        const std::uint64_t variantA = RenderMaterialGraphVariantKey(shaderA);
+        const std::uint64_t variantB = RenderMaterialGraphVariantKey(shaderB);
+        const std::uint64_t pipelineA = RenderMaterialGraphPipelineStateKey(shaderA);
+        const std::uint64_t pipelineB = RenderMaterialGraphPipelineStateKey(shaderB);
+        const RenderMaterialResource graphMaterialA = MakeGraphMaterialResource(shaderA.sourceHash, variantA, pipelineA);
+        const RenderMaterialResource graphMaterialB = MakeGraphMaterialResource(shaderB.sourceHash, variantB, pipelineB);
 
         const SceneMeshPassProgramResolution graphA = passResources.ResolveMeshPassProgram(&graphMaterialA, MeshPassType::BaseOpaque);
         Require(graphA.graphProgram && bgfx::isValid(graphA.program) && !graphA.fellBackToBuiltin,
             "KBMAT-MAT07: A cooked graph material must bind its own GPU graph program");
+        Require(graphA.status == SceneRenderMaterialProgramStatus::GraphReady &&
+                graphA.key.graphSourceHash == shaderA.sourceHash &&
+                graphA.key.variantKey == variantA &&
+                graphA.key.pipelineStateKey == pipelineA &&
+                graphA.key.materialTypeId == graphMaterialA.graphProgram.materialTypeId &&
+                graphA.key.materialTypeVersion == graphMaterialA.graphProgram.materialTypeVersion,
+            "KBMAT-MAT66: Successful graph program resolution must expose full runtime program diagnostics");
 
         const SceneMeshPassProgramResolution graphB = passResources.ResolveMeshPassProgram(&graphMaterialB, MeshPassType::BaseOpaque);
         Require(graphB.graphProgram && bgfx::isValid(graphB.program),
@@ -142,7 +193,35 @@ void RunSceneMeshPassProgramSelectionTest() {
         Require(graphAReuse.graphProgram && graphAReuse.program.idx == graphA.program.idx,
             "KBMAT-MAT07: Two materials sharing a graph program key must reuse the same program");
 
-        Require(passResources.ProgramBindStats().graphProgramBindCount == 3U,
+        MaterialProgramRegistryStats registryStatsBefore = passResources.ProgramRegistryStats();
+        const RenderMaterialResource graphMaterialVariant = MakeGraphMaterialResource(shaderA.sourceHash, variantA ^ 0x8000'0000'0000'0000ULL, pipelineA);
+        const SceneMeshPassProgramResolution graphVariant = passResources.ResolveMeshPassProgram(&graphMaterialVariant, MeshPassType::BaseOpaque);
+        Require(graphVariant.graphProgram &&
+                graphVariant.key.variantKey != graphA.key.variantKey &&
+                graphVariant.materialProgramIdentity != graphA.materialProgramIdentity &&
+                passResources.ProgramRegistryStats().loads == registryStatsBefore.loads + 1U,
+            "KBMAT-MAT66: Hot-reloaded static variant with the same source binary path must not reuse the stale program binding");
+
+        registryStatsBefore = passResources.ProgramRegistryStats();
+        const RenderMaterialResource graphMaterialPipeline = MakeGraphMaterialResource(shaderA.sourceHash, variantA, pipelineA ^ 0x4000'0000'0000'0000ULL);
+        const SceneMeshPassProgramResolution graphPipeline = passResources.ResolveMeshPassProgram(&graphMaterialPipeline, MeshPassType::BaseOpaque);
+        Require(graphPipeline.graphProgram &&
+                graphPipeline.key.pipelineStateKey != graphA.key.pipelineStateKey &&
+                graphPipeline.materialProgramIdentity != graphA.materialProgramIdentity &&
+                passResources.ProgramRegistryStats().loads == registryStatsBefore.loads + 1U,
+            "KBMAT-MAT66: Pipeline-state identity changes must acquire a distinct graph program key");
+
+        registryStatsBefore = passResources.ProgramRegistryStats();
+        const RenderMaterialResource graphMaterialType = MakeGraphMaterialResource(shaderA.sourceHash, variantA, pipelineA, 0xC0DE'0000'0000'0001ULL, 2U);
+        const SceneMeshPassProgramResolution graphType = passResources.ResolveMeshPassProgram(&graphMaterialType, MeshPassType::BaseOpaque);
+        Require(graphType.graphProgram &&
+                graphType.key.materialTypeId != graphA.key.materialTypeId &&
+                graphType.key.materialTypeVersion != graphA.key.materialTypeVersion &&
+                graphType.materialProgramIdentity != graphA.materialProgramIdentity &&
+                passResources.ProgramRegistryStats().loads == registryStatsBefore.loads + 1U,
+            "KBMAT-MAT66: Material type id/version changes must invalidate the graph program binding");
+
+        Require(passResources.ProgramBindStats().graphProgramBindCount == 6U,
             "KBMAT-MAT07: Graph program binds must be counted in submit stats");
 #endif
 
@@ -161,6 +240,12 @@ void RunSceneMeshDrawCommandKeyProgramInvalidationTest() {
     baseKey.materialHandleValue = 7U;
     baseKey.materialResourceVersion = 3U;
     baseKey.materialProgramKey = 0x1111U;
+    baseKey.materialProgramTypeId = 0x1000'0000'0000'0001ULL;
+    baseKey.materialProgramTypeVersion = 3U;
+    baseKey.materialProgramGraphSourceHash = 0x2000'0000'0000'0002ULL;
+    baseKey.materialProgramVariantKey = 0x3000'0000'0000'0003ULL;
+    baseKey.materialProgramPipelineStateKey = 0x4000'0000'0000'0004ULL;
+    baseKey.materialGraphProgram = true;
 
     SceneCachedDrawCommandKey changedProgram = baseKey;
     changedProgram.materialProgramKey = 0x2222U;
@@ -169,6 +254,18 @@ void RunSceneMeshDrawCommandKeyProgramInvalidationTest() {
         "KBMAT-MAT07: A graph program key change must produce a different draw command cache key");
     Require(hasher(baseKey) != hasher(changedProgram),
         "KBMAT-MAT07: A graph program key change must invalidate the draw command cache hash");
+
+    SceneCachedDrawCommandKey changedVariant = baseKey;
+    changedVariant.materialProgramVariantKey ^= 0x8000'0000'0000'0000ULL;
+    Require(!(baseKey == changedVariant),
+        "KBMAT-MAT66: A graph variant key change must invalidate the draw command cache key without truncation");
+    Require(hasher(baseKey) != hasher(changedVariant),
+        "KBMAT-MAT66: A graph variant key change must invalidate the draw command cache hash");
+
+    SceneCachedDrawCommandKey changedPipeline = baseKey;
+    changedPipeline.materialProgramPipelineStateKey ^= 0x4000'0000'0000'0000ULL;
+    Require(!(baseKey == changedPipeline),
+        "KBMAT-MAT66: A graph pipeline-state key change must invalidate the draw command cache key");
 
     SceneCachedDrawCommandKey sameKey = baseKey;
     Require(sameKey == baseKey && hasher(sameKey) == hasher(baseKey),

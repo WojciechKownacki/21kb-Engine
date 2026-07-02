@@ -52,6 +52,7 @@ struct EditorMaterialGraphCookPassResult {
     bool succeeded = false;
     bool cacheHit = false;
     std::string binaryPath;
+    std::uint64_t binaryByteSize = 0U;
 };
 
 struct EditorMaterialGraphCookResult {
@@ -60,6 +61,12 @@ struct EditorMaterialGraphCookResult {
     std::uint64_t graphSourceHash = 0U;
     std::uint32_t materialTypeVersion = 1U;
     std::uint64_t requestGeneration = 0U;
+    std::uint32_t elapsedMs = 0U;
+    std::uint32_t compiledPassCount = 0U;
+    std::uint32_t cacheHitPassCount = 0U;
+    std::uint32_t cacheEntryCount = 0U;
+    std::uint64_t cacheByteSize = 0U;
+    bool budgetWarning = false;
     std::vector<EditorMaterialGraphCookPassResult> passes;
     std::vector<std::string> diagnostics;
 
@@ -78,6 +85,9 @@ struct EditorMaterialGraphCookConfig {
     std::vector<std::string> passes; // graph passes to cook; defaults to BaseOpaque + ShadowDepth
     std::uint32_t materialTypeVersion = 1U;
     std::uint32_t debounceMs = 180U; // coalesce rapid edits into a single recook
+    std::uint32_t compileWarningMs = 5000U;
+    std::uint32_t cacheEntryWarningThreshold = 4096U;
+    std::uint64_t cacheByteWarningThreshold = 256ULL * 1024ULL * 1024ULL;
     kb::render::RenderMaterialGraphShaderBackend backend = kb::render::RenderMaterialGraphShaderBackend::Dxbc;
 
     // Resolve the cook backend that matches an active bgfx renderer so the cooked binary

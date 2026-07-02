@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace kb::editor {
@@ -109,6 +110,46 @@ namespace {
     return parsed;
 }
 
+[[nodiscard]] kb::render::RenderMaterialGraphParameterMetadata FunctionEndpointMetadata(
+    std::string stableId,
+    std::string displayName) {
+    return kb::render::RenderMaterialGraphParameterMetadata{
+        .stableId = std::move(stableId),
+        .displayName = std::move(displayName),
+        .defaultValueHint = "float4",
+        .overrideSupported = false,
+    };
+}
+
+[[nodiscard]] kb::render::RenderMaterialFunctionAssetData MakeDefaultMaterialFunctionAsset() {
+    kb::render::RenderMaterialFunctionAssetData function{};
+    function.graph.storageModel = "material-function-asset";
+    function.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 1U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+        .positionX = 80,
+        .positionY = 160,
+        .parameter = FunctionEndpointMetadata("Input", "Input"),
+    });
+    function.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+        .positionX = 420,
+        .positionY = 160,
+        .parameter = FunctionEndpointMetadata("Output", "Output"),
+    });
+    function.graph.links.push_back(kb::render::RenderMaterialGraphLink{
+        .fromNodeId = 1U,
+        .fromPinId = kb::render::RenderMaterialGraphStablePinId(function.graph.nodes[0], "value", true),
+        .fromPin = "value",
+        .toNodeId = 2U,
+        .toPinId = kb::render::RenderMaterialGraphStablePinId(function.graph.nodes[1], "value", false),
+        .toPin = "value",
+    });
+    function.graph.links.back().id = kb::render::MakeRenderMaterialGraphLinkId(function.graph.links.back());
+    return function;
+}
+
 void ApplySchemaDefaultsToMaterial(kb::render::RenderMaterialAssetData& material, const kb::render::RenderMaterialTypeSchema& schema) {
     for (const kb::render::RenderMaterialParameterSchema& parameter : schema.parameters) {
         const std::optional<float> defaultValue = ParseDefaultFloat(parameter.defaultValueHint);
@@ -147,6 +188,24 @@ bool EditorMaterialAssetAuthoring::Create(const std::filesystem::path& virtualFo
     }
 
     console_.Info("Materials", "Material asset created: " + path.generic_string());
+    return true;
+}
+
+bool EditorMaterialAssetAuthoring::CreateFunction(const std::filesystem::path& virtualFolder) {
+    const std::optional<std::filesystem::path> folder = gateway_.ResolveFolder(virtualFolder);
+    if (!folder.has_value()) {
+        console_.Error("Materials", "Could not resolve a physical folder for the new material function.");
+        return false;
+    }
+
+    const kb::render::RenderMaterialFunctionAssetData function = MakeDefaultMaterialFunctionAsset();
+    const std::filesystem::path path = EditorMaterialAssetGateway::UniqueFilePath(*folder, "NewMaterialFunction", kb::render::kRenderMaterialFunctionAssetExtension);
+    if (!gateway_.WriteNewMaterialFunction(path, function)) {
+        console_.Error("Materials", "Material function asset could not be written: " + path.generic_string());
+        return false;
+    }
+
+    console_.Info("Materials", "Material function asset created: " + path.generic_string());
     return true;
 }
 
