@@ -1,6 +1,7 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/scene/Scene.hpp"
 #include "kb/render/ViewIdPolicy.hpp"
 #include "rendering/EditorBgfxBackendSelector.hpp"
@@ -691,8 +692,10 @@ void EditorSceneBgfxViewport::ShutdownSessionFramebuffers() noexcept {
 }
 
 bool EditorSceneBgfxViewport::SubmitPendingPaint() {
+    EditorCrashBreadcrumbs::WriteValue("viewport", "SubmitPendingPaint begin pending", pendingPresents_.size());
     pendingSubmissions_.clear();
     if (pendingPresents_.empty()) {
+        EditorCrashBreadcrumbs::Write("viewport", "SubmitPendingPaint no pending");
         return true;
     }
 
@@ -711,7 +714,9 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
     }
 
     PendingPaintSubmitter submitter(*this);
-    return submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
+    const bool submitted = submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
+    EditorCrashBreadcrumbs::Write("viewport", submitted ? "SubmitPendingPaint end ok" : "SubmitPendingPaint end failed");
+    return submitted;
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
@@ -749,6 +754,11 @@ bool EditorSceneBgfxViewport::RenderAndPresent(HDC dc, const RECT& rect, Viewpor
 }
 
 bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings) {
+    EditorCrashBreadcrumbs::Write(
+        "viewport",
+        "QueuePresent begin key=" + std::to_string(session.key) +
+            " render=" + std::to_string(settings.renderWidth) + "x" + std::to_string(settings.renderHeight) +
+            " post=" + (settings.postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     RECT requestedPanel = rect;
     if (HostSurface* surface = FindHostSurface(session.host, session.key); surface != nullptr && surface->hasLayoutBounds) {
         requestedPanel = ClipRectToBounds(surface->layoutBounds, requestedPanel);
@@ -757,6 +767,7 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     const std::uint32_t panelWidth = RectWidth(clippedPanel);
     const std::uint32_t panelHeight = RectHeight(clippedPanel);
     if (panelWidth == 0U || panelHeight == 0U) {
+        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent hide zero panel");
         HideSession(session.host, session.key);
         return true;
     }
@@ -766,10 +777,12 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
     const std::uint32_t outputWidth = RectWidth(destination);
     const std::uint32_t outputHeight = RectHeight(destination);
     if (outputWidth == 0U || outputHeight == 0U) {
+        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent hide zero output");
         HideSession(session.host, session.key);
         return true;
     }
     if (!EnsureRenderer()) {
+        EditorCrashBreadcrumbs::Write("viewport", "QueuePresent EnsureRenderer failed");
         return false;
     }
 
@@ -785,6 +798,7 @@ bool EditorSceneBgfxViewport::QueuePresent(const RECT& rect, ViewportSession& se
         .outputWidth = outputWidth,
         .outputHeight = outputHeight,
     });
+    EditorCrashBreadcrumbs::WriteValue("viewport", "QueuePresent queued count", pendingPresents_.size());
     return true;
 }
 

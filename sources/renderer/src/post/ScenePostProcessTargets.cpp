@@ -1,8 +1,14 @@
 #include "kb/render/post/ScenePostProcessTargets.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <span>
+#include <string>
+#include <string_view>
+#include <thread>
 
 namespace kb::render {
 namespace {
@@ -37,6 +43,25 @@ constexpr std::array<const char*, ScenePostProcessTargets::kTargetCount> kTarget
     return count;
 }
 
+void WriteBreadcrumb(std::string_view category, std::string_view message) {
+    try {
+        std::error_code error;
+        const std::filesystem::path path = std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
+        std::filesystem::create_directories(path.parent_path(), error);
+        std::ofstream output{path, std::ios::out | std::ios::app};
+        if (!output.is_open()) {
+            return;
+        }
+        const auto now = std::chrono::system_clock::now();
+        const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        output << millis
+               << " tid=" << static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()))
+               << " [" << category << "] " << message << '\n';
+        output.flush();
+    } catch (...) {
+    }
+}
+
 } // namespace
 
 ScenePostProcessTargets::~ScenePostProcessTargets() {
@@ -44,33 +69,43 @@ ScenePostProcessTargets::~ScenePostProcessTargets() {
 }
 
 bool ScenePostProcessTargets::Ensure(const ScenePostProcessTargetsDesc& desc) {
+    WriteBreadcrumb("post_targets", "Ensure begin");
     if (!desc.IsValid()) {
+        WriteBreadcrumb("post_targets", "Ensure invalid desc");
         return false;
     }
 
     const std::uint32_t width = std::max(1U, desc.extent.width);
     const std::uint32_t height = std::max(1U, desc.extent.height);
     if (!IsSupportedExtent(width, height)) {
+        WriteBreadcrumb("post_targets", "Ensure unsupported extent");
         return false;
     }
 
     if (IsValid() && width_ == width && height_ == height && colorPolicy_ == desc.colorPolicy) {
+        WriteBreadcrumb("post_targets", "Ensure already valid");
         return true;
     }
 
+    WriteBreadcrumb("post_targets", "Ensure recreate begin");
     Shutdown();
-    return CreateTargets(width, height, desc.colorPolicy);
+    const bool created = CreateTargets(width, height, desc.colorPolicy);
+    WriteBreadcrumb("post_targets", created ? "Ensure recreate end ok" : "Ensure recreate end failed");
+    return created;
 }
 
 bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy) {
+    WriteBreadcrumb("post_targets", "CreateTargets begin " + std::to_string(width) + "x" + std::to_string(height));
     colorSelection_ = SelectSceneColorFormat(colorPolicy, kPostProcessColorTextureFlags);
     if (!colorSelection_.IsSupported()) {
+        WriteBreadcrumb("post_targets", "CreateTargets unsupported color format");
         Shutdown();
         return false;
     }
 
     allocated_ = true;
     for (std::size_t index = 0; index < kTargetCount; ++index) {
+        WriteBreadcrumb("post_targets", "create texture index=" + std::to_string(index));
         const bgfx::TextureFormat::Enum textureFormat = index == SelectionMask
             ? bgfx::TextureFormat::RGBA8
             : (index == MotionVectors ? bgfx::TextureFormat::RGBA16F : colorSelection_.format);
@@ -83,25 +118,32 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
             textureFormat,
             kPostProcessColorTextureFlags);
         if (!bgfx::isValid(textures_[index])) {
+            WriteBreadcrumb("post_targets", "create texture failed index=" + std::to_string(index));
             Shutdown();
             return false;
         }
+        WriteBreadcrumb("post_targets", "set texture name begin index=" + std::to_string(index) + " name=" + std::string{kTargetNames[index]});
         bgfx::setName(textures_[index], kTargetNames[index]);
+        WriteBreadcrumb("post_targets", "set texture name end index=" + std::to_string(index));
 
         if (bloomPyramidTarget) {
+            WriteBreadcrumb("post_targets", "create bloom framebuffer index=" + std::to_string(index));
             bgfx::Attachment attachment{};
             attachment.init(textures_[index]);
             frameBuffers_[index] = bgfx::createFrameBuffer(1U, &attachment, false);
         } else {
+            WriteBreadcrumb("post_targets", "create framebuffer index=" + std::to_string(index));
             frameBuffers_[index] = bgfx::createFrameBuffer(1, &textures_[index], false);
         }
         if (!bgfx::isValid(frameBuffers_[index])) {
+            WriteBreadcrumb("post_targets", "create framebuffer failed index=" + std::to_string(index));
             Shutdown();
             return false;
         }
     }
 
     if (!CreateBloomPyramidTargets(width, height)) {
+        WriteBreadcrumb("post_targets", "CreateBloomPyramidTargets failed");
         Shutdown();
         return false;
     }
@@ -109,10 +151,12 @@ bool ScenePostProcessTargets::CreateTargets(std::uint32_t width, std::uint32_t h
     width_ = width;
     height_ = height;
     colorPolicy_ = colorPolicy;
+    WriteBreadcrumb("post_targets", "CreateTargets end ok");
     return true;
 }
 
 bool ScenePostProcessTargets::CreateBloomPyramidTargets(std::uint32_t width, std::uint32_t height) {
+    WriteBreadcrumb("post_targets", "CreateBloomPyramidTargets begin");
     bloomMipCount_ = CalculateBloomMipCount(width, height);
     std::uint32_t mipWidth = width;
     std::uint32_t mipHeight = height;
@@ -121,32 +165,43 @@ bool ScenePostProcessTargets::CreateBloomPyramidTargets(std::uint32_t width, std
 
         bgfx::Attachment bloomAttachment{};
         bloomAttachment.init(textures_[Bloom], bgfx::Access::Write, 0U, 1U, mip);
+        WriteBreadcrumb("post_targets", "create bloom mip framebuffer begin mip=" + std::to_string(mip));
         bloomMipFrameBuffers_[mip] = bgfx::createFrameBuffer(1U, &bloomAttachment, false);
         if (!bgfx::isValid(bloomMipFrameBuffers_[mip])) {
+            WriteBreadcrumb("post_targets", "create bloom mip framebuffer failed mip=" + std::to_string(mip));
             return false;
         }
         char bloomName[64]{};
         static_cast<void>(std::snprintf(bloomName, sizeof(bloomName), "KB Post Bloom Mip %u", static_cast<unsigned>(mip)));
+        WriteBreadcrumb("post_targets", "set bloom mip name begin mip=" + std::to_string(mip));
         bgfx::setName(bloomMipFrameBuffers_[mip], bloomName);
+        WriteBreadcrumb("post_targets", "set bloom mip name end mip=" + std::to_string(mip));
 
         bgfx::Attachment pingAttachment{};
         pingAttachment.init(textures_[Ping], bgfx::Access::Write, 0U, 1U, mip);
+        WriteBreadcrumb("post_targets", "create ping mip framebuffer begin mip=" + std::to_string(mip));
         pingMipFrameBuffers_[mip] = bgfx::createFrameBuffer(1U, &pingAttachment, false);
         if (!bgfx::isValid(pingMipFrameBuffers_[mip])) {
+            WriteBreadcrumb("post_targets", "create ping mip framebuffer failed mip=" + std::to_string(mip));
             return false;
         }
         char pingName[64]{};
         static_cast<void>(std::snprintf(pingName, sizeof(pingName), "KB Post Bloom Ping Mip %u", static_cast<unsigned>(mip)));
+        WriteBreadcrumb("post_targets", "set ping mip name begin mip=" + std::to_string(mip));
         bgfx::setName(pingMipFrameBuffers_[mip], pingName);
+        WriteBreadcrumb("post_targets", "set ping mip name end mip=" + std::to_string(mip));
 
         mipWidth = std::max(1U, mipWidth / 2U);
         mipHeight = std::max(1U, mipHeight / 2U);
     }
 
-    return bloomMipCount_ > 0U;
+    const bool valid = bloomMipCount_ > 0U;
+    WriteBreadcrumb("post_targets", valid ? "CreateBloomPyramidTargets end ok" : "CreateBloomPyramidTargets end empty");
+    return valid;
 }
 
 void ScenePostProcessTargets::Shutdown() noexcept {
+    WriteBreadcrumb("post_targets", allocated_ ? "Shutdown begin allocated" : "Shutdown skip not allocated");
     if (!allocated_) {
         return;
     }
