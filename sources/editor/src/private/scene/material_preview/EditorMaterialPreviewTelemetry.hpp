@@ -41,7 +41,8 @@ public:
         const kb::assets::AssetManager& manager,
         kb::assets::AssetId materialAssetId,
         const kb::render::RenderMaterialAssetData* material,
-        bool previewSceneReady);
+        bool previewSceneReady,
+        kb::render::RenderMaterialGraphBuildContext graphContext = {});
 };
 
 } // namespace kb::editor
