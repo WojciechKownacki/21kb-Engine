@@ -1352,6 +1352,95 @@ void RunMaterialEditorGraphMultiSelectCopyPasteDuplicateTest() {
         "KBMAT-MAT54: Cross-material paste must preserve subgraph topology with remapped links");
 }
 
+void RunMaterialEditorGraphSelectionLayoutCommandsTest() {
+    kb::editor::MaterialEditorState materialEditor;
+    kb::render::RenderMaterialAssetData source{};
+    source.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    materialEditor.Open(kb::assets::AssetId{ 0x3602U }, source);
+
+    std::uint32_t scalarAId = 0U;
+    std::uint32_t scalarBId = 0U;
+    std::uint32_t addId = 0U;
+    std::uint32_t multiplyId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -600, 40, &scalarAId),
+        "KBMAT-MAT54B: Selection layout test should create the first upstream node");
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -240, 300, &scalarBId),
+        "KBMAT-MAT54B: Selection layout test should create the second upstream node");
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Add, 160, 160, &addId),
+        "KBMAT-MAT54B: Selection layout test should create the join node");
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Multiply, 620, -80, &multiplyId),
+        "KBMAT-MAT54B: Selection layout test should create the downstream node");
+    kb::editor::tests::Require(materialEditor.ConnectGraphPins(scalarAId, "value", addId, "a") &&
+            materialEditor.ConnectGraphPins(scalarBId, "value", addId, "b") &&
+            materialEditor.ConnectGraphPins(addId, "value", multiplyId, "a") &&
+            materialEditor.ConnectGraphPins(scalarBId, "value", multiplyId, "b") &&
+            materialEditor.ConnectGraphPins(multiplyId, "value", 1U, "baseColor"),
+        "KBMAT-MAT54B: Selection layout test should wire a real editable graph");
+
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ addId }, addId),
+        "KBMAT-MAT54B: The join node should be selectable before upstream expansion");
+    kb::editor::tests::Require(materialEditor.SelectGraphUpstream(),
+        "KBMAT-MAT54B: Select Upstream should expand selection through incoming links");
+    kb::editor::tests::Require(materialEditor.SelectedNodeCount() == 3U &&
+            materialEditor.IsNodeSelected(scalarAId) &&
+            materialEditor.IsNodeSelected(scalarBId) &&
+            materialEditor.IsNodeSelected(addId) &&
+            !materialEditor.IsNodeSelected(multiplyId) &&
+            materialEditor.SelectedNodeId() == addId,
+        "KBMAT-MAT54B: Select Upstream should include all upstream nodes and preserve the primary node");
+
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ addId }, addId),
+        "KBMAT-MAT54B: The join node should be selectable before downstream expansion");
+    kb::editor::tests::Require(materialEditor.SelectGraphDownstream(),
+        "KBMAT-MAT54B: Select Downstream should expand selection through outgoing links");
+    kb::editor::tests::Require(materialEditor.SelectedNodeCount() == 3U &&
+            materialEditor.IsNodeSelected(addId) &&
+            materialEditor.IsNodeSelected(multiplyId) &&
+            materialEditor.IsNodeSelected(1U) &&
+            !materialEditor.IsNodeSelected(scalarAId) &&
+            materialEditor.SelectedNodeId() == addId,
+        "KBMAT-MAT54B: Select Downstream should include downstream nodes through Material Output and preserve the primary node");
+
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ scalarAId, scalarBId, addId }, addId),
+        "KBMAT-MAT54B: Three graph nodes should be multi-selectable before layout commands");
+    kb::editor::tests::Require(materialEditor.AlignSelectedGraphNodes(kb::editor::MaterialEditorGraphAlignMode::Left),
+        "KBMAT-MAT54B: Align Left should move selected graph nodes as an undoable state mutation");
+    const std::optional<std::pair<std::int32_t, std::int32_t>> alignedA = materialEditor.GraphNodePosition(scalarAId);
+    const std::optional<std::pair<std::int32_t, std::int32_t>> alignedB = materialEditor.GraphNodePosition(scalarBId);
+    const std::optional<std::pair<std::int32_t, std::int32_t>> alignedAdd = materialEditor.GraphNodePosition(addId);
+    kb::editor::tests::Require(alignedA.has_value() && alignedB.has_value() && alignedAdd.has_value() &&
+            alignedA->first == -600 && alignedB->first == -600 && alignedAdd->first == -600,
+        "KBMAT-MAT54B: Align Left should place every selected node on the leftmost graph column");
+
+    kb::editor::tests::Require(materialEditor.MoveGraphNodes({
+            { scalarAId, { 0, 20 } },
+            { addId, { 200, 100 } },
+            { scalarBId, { 500, 300 } },
+        }),
+        "KBMAT-MAT54B: Layout test should reset positions before distribution");
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ scalarAId, addId, scalarBId }, addId),
+        "KBMAT-MAT54B: Distribution should preserve a deterministic primary node");
+    kb::editor::tests::Require(materialEditor.DistributeSelectedGraphNodes(kb::editor::MaterialEditorGraphDistributeAxis::Horizontal),
+        "KBMAT-MAT54B: Distribute Horizontal should space selected nodes between the left and right endpoints");
+    const std::optional<std::pair<std::int32_t, std::int32_t>> distributedAdd = materialEditor.GraphNodePosition(addId);
+    kb::editor::tests::Require(distributedAdd.has_value() && distributedAdd->first == 250 && distributedAdd->second == 100,
+        "KBMAT-MAT54B: Distribute Horizontal should move only the graph X coordinate of interior nodes");
+
+    kb::editor::tests::Require(materialEditor.MoveGraphNodes({
+            { scalarAId, { 0, 0 } },
+            { addId, { 250, 240 } },
+            { scalarBId, { 500, 600 } },
+        }),
+        "KBMAT-MAT54B: Layout test should reset vertical positions before distribution");
+    kb::editor::tests::Require(materialEditor.DistributeSelectedGraphNodes(kb::editor::MaterialEditorGraphDistributeAxis::Vertical),
+        "KBMAT-MAT54B: Distribute Vertical should space selected nodes between the top and bottom endpoints");
+    const std::optional<std::pair<std::int32_t, std::int32_t>> verticalAdd = materialEditor.GraphNodePosition(addId);
+    kb::editor::tests::Require(verticalAdd.has_value() && verticalAdd->first == 250 && verticalAdd->second == 300,
+        "KBMAT-MAT54B: Distribute Vertical should move only the graph Y coordinate of interior nodes");
+    kb::editor::tests::Require(materialEditor.SelectedNodeId() == addId && materialEditor.SelectedNodeCount() == 3U,
+        "KBMAT-MAT54B: Layout commands should keep the selected graph nodes active");
+}
+
 void RunMaterialEditorGraphCommentBoxSerializationGroupMoveTest() {
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -1551,6 +1640,28 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Fast inverse trig nodes must be available from the Utility palette category");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSobol),
         "KBMAT-MAT57: Sobol must be available from the Utility palette category");
+    const std::vector<kb::editor::MaterialEditorGraphMenuCommand> actionCommands =
+        kb::editor::MaterialEditorGraphContextMenuCommands(10U);
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::FrameSelected) &&
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::SelectUpstream) &&
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::SelectDownstream) &&
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::AlignLeft) &&
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal),
+        "KBMAT-MAT54B: Canvas action menu must expose frame, traversal, align and distribute commands");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphMenuCommandIsAction(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected) &&
+            !kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected).has_value() &&
+            kb::editor::MaterialEditorGraphContextMenuCommandName(kb::editor::MaterialEditorGraphMenuCommand::AlignMiddle) == "Align Middle",
+        "KBMAT-MAT54B: Canvas action commands should be named actions, not graph node creation commands");
+    kb::editor::tests::Require(
+        !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected, 0U, false) &&
+            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected, 0U, true) &&
+            !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::AlignLeft, 1U, false) &&
+            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::AlignLeft, 2U, false) &&
+            !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal, 2U, false) &&
+            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal, 3U, false),
+        "KBMAT-MAT54B: Canvas action enablement should match selection requirements");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
@@ -3908,6 +4019,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorGraphRuntimeStateTest();
     RunMaterialEditorGraphWorkingCopyCommandUndoRedoTest();
     RunMaterialEditorGraphMultiSelectCopyPasteDuplicateTest();
+    RunMaterialEditorGraphSelectionLayoutCommandsTest();
     RunMaterialEditorGraphCommentBoxSerializationGroupMoveTest();
     RunMaterialEditorGraphCompositeRerouteAuthoringTest();
     RunMaterialEditorGraphNodeCreationUxModelTest();

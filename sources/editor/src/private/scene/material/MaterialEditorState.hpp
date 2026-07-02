@@ -180,8 +180,33 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateLayerStack,
     CreateComposite,
     CreateComment,
+    FrameSelected,
+    SelectUpstream,
+    SelectDownstream,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+    AlignTop,
+    AlignMiddle,
+    AlignBottom,
+    DistributeHorizontal,
+    DistributeVertical,
     DisconnectSelected,
     DeleteSelected,
+};
+
+enum class MaterialEditorGraphAlignMode : std::uint8_t {
+    Left,
+    Center,
+    Right,
+    Top,
+    Middle,
+    Bottom,
+};
+
+enum class MaterialEditorGraphDistributeAxis : std::uint8_t {
+    Horizontal,
+    Vertical,
 };
 
 struct MaterialEditorParameterValue {
@@ -796,6 +821,156 @@ public:
             }
         }
         return changed;
+    }
+
+    [[nodiscard]] bool SelectGraphUpstream() {
+        return SelectGraphLinkedNodes(false);
+    }
+
+    [[nodiscard]] bool SelectGraphDownstream() {
+        return SelectGraphLinkedNodes(true);
+    }
+
+    [[nodiscard]] bool AlignSelectedGraphNodes(MaterialEditorGraphAlignMode mode) {
+        if (!workingCopy_.has_value() || selectedNodeIds_.size() < 2U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        struct SelectedNodePosition {
+            std::uint32_t nodeId = 0U;
+            std::int32_t x = 0;
+            std::int32_t y = 0;
+        };
+        std::vector<SelectedNodePosition> selectedNodes;
+        selectedNodes.reserve(selectedNodeIds_.size());
+        for (const std::uint32_t nodeId : selectedNodeIds_) {
+            const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(document.graph, nodeId);
+            if (node != nullptr) {
+                selectedNodes.push_back(SelectedNodePosition{ .nodeId = nodeId, .x = node->positionX, .y = node->positionY });
+            }
+        }
+        if (selectedNodes.size() < 2U) {
+            return false;
+        }
+
+        std::int32_t minX = selectedNodes.front().x;
+        std::int32_t maxX = selectedNodes.front().x;
+        std::int32_t minY = selectedNodes.front().y;
+        std::int32_t maxY = selectedNodes.front().y;
+        for (const SelectedNodePosition& node : selectedNodes) {
+            minX = std::min(minX, node.x);
+            maxX = std::max(maxX, node.x);
+            minY = std::min(minY, node.y);
+            maxY = std::max(maxY, node.y);
+        }
+
+        bool changed = false;
+        for (const SelectedNodePosition& selectedNode : selectedNodes) {
+            kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, selectedNode.nodeId);
+            if (node == nullptr) {
+                continue;
+            }
+            std::int32_t nextX = node->positionX;
+            std::int32_t nextY = node->positionY;
+            switch (mode) {
+            case MaterialEditorGraphAlignMode::Left:
+                nextX = minX;
+                break;
+            case MaterialEditorGraphAlignMode::Center:
+                nextX = minX + ((maxX - minX) / 2);
+                break;
+            case MaterialEditorGraphAlignMode::Right:
+                nextX = maxX;
+                break;
+            case MaterialEditorGraphAlignMode::Top:
+                nextY = minY;
+                break;
+            case MaterialEditorGraphAlignMode::Middle:
+                nextY = minY + ((maxY - minY) / 2);
+                break;
+            case MaterialEditorGraphAlignMode::Bottom:
+                nextY = maxY;
+                break;
+            }
+            if (node->positionX != nextX || node->positionY != nextY) {
+                node->positionX = nextX;
+                node->positionY = nextY;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return false;
+        }
+        SetWorkingCopy(std::move(document));
+        static_cast<void>(SetNodeSelection(selectedNodeIds_, selectedNodeId_));
+        return true;
+    }
+
+    [[nodiscard]] bool DistributeSelectedGraphNodes(MaterialEditorGraphDistributeAxis axis) {
+        if (!workingCopy_.has_value() || selectedNodeIds_.size() < 3U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        struct SelectedNodePosition {
+            std::uint32_t nodeId = 0U;
+            std::int32_t x = 0;
+            std::int32_t y = 0;
+        };
+        std::vector<SelectedNodePosition> selectedNodes;
+        selectedNodes.reserve(selectedNodeIds_.size());
+        for (const std::uint32_t nodeId : selectedNodeIds_) {
+            const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(document.graph, nodeId);
+            if (node != nullptr) {
+                selectedNodes.push_back(SelectedNodePosition{ .nodeId = nodeId, .x = node->positionX, .y = node->positionY });
+            }
+        }
+        if (selectedNodes.size() < 3U) {
+            return false;
+        }
+
+        std::ranges::sort(selectedNodes, [axis](const SelectedNodePosition& lhs, const SelectedNodePosition& rhs) {
+            if (axis == MaterialEditorGraphDistributeAxis::Horizontal && lhs.x != rhs.x) {
+                return lhs.x < rhs.x;
+            }
+            if (axis == MaterialEditorGraphDistributeAxis::Vertical && lhs.y != rhs.y) {
+                return lhs.y < rhs.y;
+            }
+            return lhs.nodeId < rhs.nodeId;
+        });
+
+        const std::int32_t first = axis == MaterialEditorGraphDistributeAxis::Horizontal ? selectedNodes.front().x : selectedNodes.front().y;
+        const std::int32_t last = axis == MaterialEditorGraphDistributeAxis::Horizontal ? selectedNodes.back().x : selectedNodes.back().y;
+        if (first == last) {
+            return false;
+        }
+
+        bool changed = false;
+        const std::int32_t span = last - first;
+        const std::int32_t divisor = static_cast<std::int32_t>(selectedNodes.size() - 1U);
+        for (std::size_t index = 1U; index + 1U < selectedNodes.size(); ++index) {
+            const std::int32_t target = first + static_cast<std::int32_t>((static_cast<std::int64_t>(span) * static_cast<std::int64_t>(index)) / divisor);
+            kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, selectedNodes[index].nodeId);
+            if (node == nullptr) {
+                continue;
+            }
+            if (axis == MaterialEditorGraphDistributeAxis::Horizontal) {
+                if (node->positionX != target) {
+                    node->positionX = target;
+                    changed = true;
+                }
+            } else if (node->positionY != target) {
+                node->positionY = target;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return false;
+        }
+        SetWorkingCopy(std::move(document));
+        static_cast<void>(SetNodeSelection(selectedNodeIds_, selectedNodeId_));
+        return true;
     }
 
     [[nodiscard]] bool SetGraphConstantValue(std::uint32_t nodeId, std::string_view valueText) {
@@ -1822,6 +1997,43 @@ public:
     }
 
 private:
+    [[nodiscard]] bool SelectGraphLinkedNodes(bool downstream) {
+        if (!workingCopy_.has_value() || selectedNodeIds_.empty()) {
+            return false;
+        }
+
+        std::vector<std::uint32_t> reached = selectedNodeIds_;
+        bool expanded = true;
+        while (expanded) {
+            expanded = false;
+            for (const kb::render::RenderMaterialGraphLink& link : workingCopy_->graph.links) {
+                const std::uint32_t sourceNodeId = downstream ? link.fromNodeId : link.toNodeId;
+                const std::uint32_t linkedNodeId = downstream ? link.toNodeId : link.fromNodeId;
+                if (sourceNodeId == 0U || linkedNodeId == 0U) {
+                    continue;
+                }
+                if (std::ranges::find(reached, sourceNodeId) != reached.end() &&
+                    std::ranges::find(reached, linkedNodeId) == reached.end()) {
+                    reached.push_back(linkedNodeId);
+                    expanded = true;
+                }
+            }
+        }
+
+        std::vector<std::uint32_t> ordered;
+        ordered.reserve(reached.size());
+        for (const kb::render::RenderMaterialGraphNode& node : workingCopy_->graph.nodes) {
+            if (std::ranges::find(reached, node.id) != reached.end()) {
+                ordered.push_back(node.id);
+            }
+        }
+        const std::uint32_t primaryNodeId =
+            std::ranges::find(ordered, selectedNodeId_) != ordered.end()
+                ? selectedNodeId_
+                : (ordered.empty() ? 0U : ordered.back());
+        return SetNodeSelection(std::move(ordered), primaryNodeId);
+    }
+
     [[nodiscard]] static std::string GraphDiagnosticLine(const kb::render::RenderMaterialGraphDiagnostic& diagnostic) {
         std::ostringstream line;
         line << kb::render::RenderMaterialGraphDiagnosticSeverityName(diagnostic.severity)

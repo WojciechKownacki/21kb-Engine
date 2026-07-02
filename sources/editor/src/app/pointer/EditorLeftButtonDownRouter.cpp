@@ -355,9 +355,14 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                     EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
                     return;
                 }
+                const MaterialEditorPanelLayout menuLayout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
+                sceneContext_.SetMaterialGraphCanvasViewport(
+                    MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
+                    MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
                 if (MaterialEditorGraphContextMenuCommandEnabled(
                         menuHit.command,
-                        sceneContext_.SelectedMaterialGraphNodeId() != 0U || sceneContext_.SelectedMaterialGraphCommentId() != 0U)) {
+                        sceneContext_.SelectedMaterialGraphNodeIds().size(),
+                        sceneContext_.SelectedMaterialGraphCommentId() != 0U)) {
                     static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(menuHit.command));
                 }
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
