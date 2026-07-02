@@ -16,10 +16,35 @@ namespace kb::render {
 
 inline constexpr std::uint32_t kRenderMaterialInstanceAssetDocumentVersion = 1U;
 
+struct RenderMaterialInstanceStaticParameterOverride {
+    std::string stableId;
+    RenderMaterialGraphNodeKind nodeKind = RenderMaterialGraphNodeKind::StaticBoolParameter;
+    std::string value;
+};
+
+struct RenderMaterialInstanceBasePropertyOverrides {
+    bool overrideBlendMode = false;
+    RenderMaterialGraphBlendMode blendMode = RenderMaterialGraphBlendMode::Opaque;
+    bool overrideShadingModel = false;
+    RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
+    bool overrideTwoSided = false;
+    bool twoSided = false;
+    bool overrideOpacityMaskClip = false;
+    float opacityMaskClip = 0.5F;
+    bool overrideDomain = false;
+    RenderMaterialDomain domain = RenderMaterialDomain::Surface;
+
+    [[nodiscard]] bool HasAny() const noexcept {
+        return overrideBlendMode || overrideShadingModel || overrideTwoSided || overrideOpacityMaskClip || overrideDomain;
+    }
+};
+
 struct RenderMaterialInstanceAssetData {
     std::uint32_t documentVersion = kRenderMaterialInstanceAssetDocumentVersion;
     bool hasExplicitDocumentVersion = false;
     kb::assets::AssetId parentMaterialAssetId{};
+    std::vector<RenderMaterialInstanceStaticParameterOverride> staticParameterOverrides;
+    RenderMaterialInstanceBasePropertyOverrides basePropertyOverrides{};
     bool hasOverrides = false;
     RenderMaterialAssetData overrides{};
 };
@@ -60,6 +85,9 @@ enum class RenderMaterialInstanceValidationDiagnosticCode : std::uint8_t {
     IncompatibleMaterialTypeVersion,
     UnknownOverrideParameter,
     IncompatibleOverrideParameterType,
+    UnknownStaticOverrideParameter,
+    IncompatibleStaticOverrideParameterType,
+    InvalidStaticOverrideValue,
 };
 
 struct RenderMaterialInstanceValidationDiagnostic {
@@ -74,6 +102,9 @@ struct RenderMaterialInstanceValidationResult {
 };
 
 [[nodiscard]] std::string_view RenderMaterialInstanceValidationDiagnosticCodeName(RenderMaterialInstanceValidationDiagnosticCode code) noexcept;
+[[nodiscard]] RenderMaterialAssetData BuildEffectiveRenderMaterialInstanceAsset(
+    const RenderMaterialAssetData& parentMaterial,
+    const RenderMaterialInstanceAssetData& instance);
 
 class RenderMaterialInstanceAssetLoader final : public kb::assets::IAssetLoader {
 public:

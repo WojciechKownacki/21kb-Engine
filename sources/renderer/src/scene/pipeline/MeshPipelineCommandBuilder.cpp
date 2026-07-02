@@ -10,6 +10,19 @@ namespace {
     return static_cast<std::uint32_t>(value & 0xFFFFFU);
 }
 
+void MixU64(std::uint64_t& seed, std::uint64_t value) noexcept {
+    seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+}
+
+[[nodiscard]] std::uint64_t GraphProgramSortIdentity(const RenderMaterialGraphProgramBinding& graphProgram) noexcept {
+    std::uint64_t identity = graphProgram.materialTypeId;
+    MixU64(identity, graphProgram.materialTypeVersion);
+    MixU64(identity, graphProgram.graphSourceHash);
+    MixU64(identity, graphProgram.variantKey);
+    MixU64(identity, graphProgram.pipelineStateKey);
+    return identity;
+}
+
 [[nodiscard]] std::uint16_t SortDepthBucket(MeshPassType pass, std::uint16_t depthBucket) noexcept {
     return pass == MeshPassType::BaseTransparent
         ? static_cast<std::uint16_t>(UINT16_MAX - depthBucket)
@@ -25,10 +38,10 @@ namespace {
     std::uint64_t meshAssetId,
     std::uint16_t depthBucket) noexcept {
     const std::uint64_t passKey = static_cast<std::uint64_t>(static_cast<std::uint8_t>(pass) & 0x0FU);
-    // Group graph-material draws by their GPU program (graph source hash) so the sort minimizes
-    // program switches; builtin materials keep grouping by their material handle.
+    // Group graph-material draws by their full GPU program identity so the sort minimizes program
+    // switches across graph hash, static variant, material type/version, and pipeline state.
     const std::uint64_t programIdentity = (materialResource != nullptr && materialResource->graphProgram.active)
-        ? materialResource->graphProgram.graphSourceHash
+        ? GraphProgramSortIdentity(materialResource->graphProgram)
         : (material.IsValid() ? material.value : materialAssetId);
     const std::uint64_t materialKey = ResourceKey20(programIdentity);
     const std::uint64_t meshKey = ResourceKey20(mesh.IsValid() ? mesh.value : meshAssetId);

@@ -1,16 +1,19 @@
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <ostream>
 #include <optional>
 #include <span>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -66,11 +69,43 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         case '%': encoded += "%25"; break;
         case ' ': encoded += "%20"; break;
         case '\t': encoded += "%09"; break;
+        case '\n': encoded += "%0A"; break;
+        case '\r': encoded += "%0D"; break;
         case '#': encoded += "%23"; break;
         default: encoded += ch; break;
         }
     }
     return encoded;
+}
+
+[[nodiscard]] std::string EncodeCustomPinSpec(std::span<const RenderMaterialGraphCustomPin> pins) {
+    if (pins.empty()) {
+        return "_";
+    }
+    std::string spec;
+    for (std::size_t index = 0U; index < pins.size(); ++index) {
+        if (index != 0U) {
+            spec += ",";
+        }
+        spec += EncodeToken(pins[index].name);
+        spec += ":";
+        spec += RenderMaterialGraphPinTypeName(pins[index].type);
+    }
+    return spec;
+}
+
+[[nodiscard]] std::string EncodeGraphNodeIdList(std::span<const std::uint32_t> nodeIds) {
+    if (nodeIds.empty()) {
+        return "_";
+    }
+    std::string text;
+    for (std::size_t index = 0U; index < nodeIds.size(); ++index) {
+        if (index != 0U) {
+            text += ",";
+        }
+        text += std::to_string(nodeIds[index]);
+    }
+    return text;
 }
 
 [[nodiscard]] std::vector<float> ParseDefaultNumbers(std::string_view text) {
@@ -103,10 +138,69 @@ void HashString64(std::uint64_t& hash, std::string_view value) noexcept {
         kind == RenderMaterialGraphNodeKind::ConstantColor;
 }
 
+[[nodiscard]] bool IsRenderMaterialGraphPassThroughNode(RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == RenderMaterialGraphNodeKind::Reroute ||
+        kind == RenderMaterialGraphNodeKind::CompositeInput ||
+        kind == RenderMaterialGraphNodeKind::CompositeOutput ||
+        kind == RenderMaterialGraphNodeKind::FunctionInput ||
+        kind == RenderMaterialGraphNodeKind::FunctionOutput;
+}
+
+[[nodiscard]] bool IsRenderMaterialGraphOrganizationNode(RenderMaterialGraphNodeKind kind) noexcept {
+    return IsRenderMaterialGraphPassThroughNode(kind) ||
+        kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration ||
+        kind == RenderMaterialGraphNodeKind::NamedRerouteUsage ||
+        kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
+        kind == RenderMaterialGraphNodeKind::LayerStack;
+}
+
+[[nodiscard]] RenderMaterialGraphPinType PassThroughPinTypeFromHint(std::string_view hint) noexcept {
+    if (const std::optional<RenderMaterialGraphPinType> parsed = ParseRenderMaterialGraphPinType(hint)) {
+        if (*parsed != RenderMaterialGraphPinType::Unknown) {
+            return *parsed;
+        }
+    }
+    return RenderMaterialGraphPinType::Float4;
+}
+
+[[nodiscard]] RenderMaterialGraphPinType PassThroughPinType(const RenderMaterialGraphNode& node) noexcept {
+    return PassThroughPinTypeFromHint(node.parameter.defaultValueHint);
+}
+
+[[nodiscard]] RenderMaterialGraphPinType FunctionEndpointPinType(const RenderMaterialGraphNode& node) noexcept {
+    return PassThroughPinTypeFromHint(node.parameter.defaultValueHint);
+}
+
+[[nodiscard]] std::string NamedRerouteKey(const RenderMaterialGraphNode& node) {
+    if (!node.parameter.stableId.empty()) {
+        return node.parameter.stableId;
+    }
+    if (!node.parameter.displayName.empty()) {
+        return node.parameter.displayName;
+    }
+    return {};
+}
+
 [[nodiscard]] bool ShouldPersistGraphNodeMetadata(const RenderMaterialGraphNode& node) noexcept {
     return IsRenderMaterialGraphParameterNode(node.kind) ||
         IsRenderMaterialGraphConstantNode(node.kind) ||
-        (node.kind == RenderMaterialGraphNodeKind::TextureSample && !node.parameter.stableId.empty()) ||
+        IsRenderMaterialGraphOrganizationNode(node.kind) ||
+        node.kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
+        node.kind == RenderMaterialGraphNodeKind::StaticSwitch ||
+        node.kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
+        node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
+        node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
+        node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
+        node.kind == RenderMaterialGraphNodeKind::LayerStack ||
+        ((node.kind == RenderMaterialGraphNodeKind::TextureSample ||
+          node.kind == RenderMaterialGraphNodeKind::TextureObject ||
+          node.kind == RenderMaterialGraphNodeKind::TextureSampleCube ||
+          node.kind == RenderMaterialGraphNodeKind::TextureObjectCube ||
+          node.kind == RenderMaterialGraphNodeKind::TextureSampleVolume ||
+          node.kind == RenderMaterialGraphNodeKind::TextureObjectVolume ||
+          node.kind == RenderMaterialGraphNodeKind::TextureSample2DArray ||
+          node.kind == RenderMaterialGraphNodeKind::TextureObject2DArray) &&
+            !node.parameter.stableId.empty()) ||
         (node.kind == RenderMaterialGraphNodeKind::Uv && !node.parameter.defaultValueHint.empty());
 }
 
@@ -147,6 +241,62 @@ void AddGraphDiagnostic(
 }
 
 [[nodiscard]] std::string StableParameterId(const RenderMaterialGraphNode& node);
+[[nodiscard]] std::string SanitizeShaderIdentifier(std::string_view text, std::string_view fallback);
+
+[[nodiscard]] bool IsCustomCodeValueType(RenderMaterialGraphPinType type) noexcept {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+    case RenderMaterialGraphPinType::Float2:
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Float4:
+    case RenderMaterialGraphPinType::Color:
+    case RenderMaterialGraphPinType::Normal:
+    case RenderMaterialGraphPinType::Bool:
+        return true;
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] bool IsShaderIdentifier(std::string_view text) noexcept {
+    if (text.empty()) {
+        return false;
+    }
+    const auto isAlpha = [](char ch) noexcept {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+    };
+    const auto isDigit = [](char ch) noexcept {
+        return ch >= '0' && ch <= '9';
+    };
+    if (!isAlpha(text.front()) && text.front() != '_') {
+        return false;
+    }
+    for (const char ch : text) {
+        if (!isAlpha(ch) && !isDigit(ch) && ch != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::string CustomCodeOutputTempKey(std::uint32_t nodeId, std::string_view outputPin) {
+    return std::to_string(nodeId) + ":" + std::string{ outputPin };
+}
+
+[[nodiscard]] std::string CustomCodeFunctionName(const RenderMaterialGraphNode& node) {
+    return "kb_custom_" + std::to_string(node.id);
+}
+
+[[nodiscard]] std::string CustomCodeTempName(const RenderMaterialGraphNode& node, std::string_view outputPin) {
+    return "custom" + std::to_string(node.id) + "_" + SanitizeShaderIdentifier(outputPin, "out");
+}
 
 void AppendIrPin(RenderMaterialGraphIrNode& irNode, RenderMaterialGraphNodeKind kind, std::string_view pin, bool outputPin) {
     RenderMaterialGraphIrPin typedPin{
@@ -160,6 +310,47 @@ void AppendIrPin(RenderMaterialGraphIrNode& irNode, RenderMaterialGraphNodeKind 
     } else {
         irNode.inputs.push_back(std::move(typedPin));
     }
+}
+
+void AppendIrPin(RenderMaterialGraphIrNode& irNode, const RenderMaterialGraphNode& node, std::string_view pin, bool outputPin) {
+    RenderMaterialGraphIrPin typedPin{
+        .name = std::string{ pin },
+        .stablePinId = RenderMaterialGraphStablePinId(node, pin, outputPin),
+        .type = RenderMaterialGraphPinDataType(node, pin, outputPin),
+        .outputPin = outputPin,
+    };
+    if (outputPin) {
+        irNode.outputs.push_back(std::move(typedPin));
+    } else {
+        irNode.inputs.push_back(std::move(typedPin));
+    }
+}
+
+void AppendCustomCodePins(RenderMaterialGraphIrNode& irNode, const RenderMaterialGraphNode& node) {
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.inputs) {
+        AppendIrPin(irNode, node, pin.name, false);
+    }
+    AppendIrPin(irNode, node, "value", true);
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.outputs) {
+        AppendIrPin(irNode, node, pin.name, true);
+    }
+}
+
+void AppendMaterialFunctionCallPins(RenderMaterialGraphIrNode& irNode, const RenderMaterialGraphNode& node) {
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.inputs) {
+        AppendIrPin(irNode, node, pin.name, false);
+    }
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.outputs) {
+        AppendIrPin(irNode, node, pin.name, true);
+    }
+}
+
+void AppendTextureSampleOutputPins(RenderMaterialGraphIrNode& irNode) {
+    AppendIrPin(irNode, irNode.kind, "color", true);
+    AppendIrPin(irNode, irNode.kind, "r", true);
+    AppendIrPin(irNode, irNode.kind, "g", true);
+    AppendIrPin(irNode, irNode.kind, "b", true);
+    AppendIrPin(irNode, irNode.kind, "a", true);
 }
 
 void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
@@ -183,6 +374,8 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "refraction", false);
         AppendIrPin(irNode, irNode.kind, "surfaceThickness", false);
         AppendIrPin(irNode, irNode.kind, "attributes", false);
+        AppendIrPin(irNode, irNode.kind, "customizedUv0", false);
+        AppendIrPin(irNode, irNode.kind, "displacement", false);
         break;
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         AppendIrPin(irNode, irNode.kind, "baseColor", false);
@@ -244,6 +437,40 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "input", false);
         AppendIrPin(irNode, irNode.kind, "result", true);
         break;
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        AppendIrPin(irNode, irNode.kind, "value", false);
+        break;
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        break;
+    case RenderMaterialGraphNodeKind::LayerStack:
+        AppendIrPin(irNode, irNode.kind, "attributes", true);
+        break;
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        AppendIrPin(irNode, irNode.kind, "low", false);
+        AppendIrPin(irNode, irNode.kind, "med", false);
+        AppendIrPin(irNode, irNode.kind, "high", false);
+        AppendIrPin(irNode, irNode.kind, "epic", false);
+        AppendIrPin(irNode, irNode.kind, "result", true);
+        break;
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        AppendIrPin(irNode, irNode.kind, "es3", false);
+        AppendIrPin(irNode, irNode.kind, "sm5", false);
+        AppendIrPin(irNode, irNode.kind, "sm6", false);
+        AppendIrPin(irNode, irNode.kind, "result", true);
+        break;
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        AppendIrPin(irNode, irNode.kind, "forward", false);
+        AppendIrPin(irNode, irNode.kind, "deferred", false);
+        AppendIrPin(irNode, irNode.kind, "result", true);
+        break;
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        AppendIrPin(irNode, irNode.kind, "vertex", false);
+        AppendIrPin(irNode, irNode.kind, "fragment", false);
+        AppendIrPin(irNode, irNode.kind, "result", true);
+        break;
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::ViewportUV:
         AppendIrPin(irNode, irNode.kind, "uv", true);
@@ -276,10 +503,18 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::PixelNormalWS:
     case RenderMaterialGraphNodeKind::VertexNormalWS:
     case RenderMaterialGraphNodeKind::VertexTangentWS:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
         AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        AppendIrPin(irNode, irNode.kind, "uv", false);
+        AppendTextureSampleOutputPins(irNode);
         break;
     case RenderMaterialGraphNodeKind::DepthFade:
         AppendIrPin(irNode, irNode.kind, "fadeDistance", false);
@@ -288,11 +523,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::TextureSample:
         AppendIrPin(irNode, irNode.kind, "texture", false);
         AppendIrPin(irNode, irNode.kind, "uv", false);
-        AppendIrPin(irNode, irNode.kind, "color", true);
-        AppendIrPin(irNode, irNode.kind, "r", true);
-        AppendIrPin(irNode, irNode.kind, "g", true);
-        AppendIrPin(irNode, irNode.kind, "b", true);
-        AppendIrPin(irNode, irNode.kind, "a", true);
+        AppendTextureSampleOutputPins(irNode);
+        break;
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        AppendIrPin(irNode, irNode.kind, "texture", false);
+        AppendIrPin(irNode, irNode.kind, "direction", false);
+        AppendTextureSampleOutputPins(irNode);
+        break;
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        AppendIrPin(irNode, irNode.kind, "texture", false);
+        AppendIrPin(irNode, irNode.kind, "uvw", false);
+        AppendTextureSampleOutputPins(irNode);
+        break;
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        AppendIrPin(irNode, irNode.kind, "texture", false);
+        AppendIrPin(irNode, irNode.kind, "uv", false);
+        AppendIrPin(irNode, irNode.kind, "layer", false);
+        AppendTextureSampleOutputPins(irNode);
         break;
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
@@ -324,6 +571,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "base", false);
         AppendIrPin(irNode, irNode.kind, "exponent", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::CustomCode:
+        AppendIrPin(irNode, irNode.kind, "A", false);
+        AppendIrPin(irNode, irNode.kind, "B", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+        AppendIrPin(irNode, irNode.kind, "input", false);
+        AppendIrPin(irNode, irNode.kind, "output", true);
+        break;
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        AppendIrPin(irNode, irNode.kind, "input", false);
+        break;
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        AppendIrPin(irNode, irNode.kind, "output", true);
         break;
     case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Absolute:
@@ -450,18 +714,37 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ParameterColor:
         AppendIrPin(irNode, irNode.kind, "rgba", true);
         break;
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        AppendIrPin(irNode, irNode.kind, "scalar", true);
+        AppendIrPin(irNode, irNode.kind, "xyz", true);
+        AppendIrPin(irNode, irNode.kind, "rgba", true);
+        AppendIrPin(irNode, irNode.kind, "r", true);
+        AppendIrPin(irNode, irNode.kind, "g", true);
+        AppendIrPin(irNode, irNode.kind, "b", true);
+        AppendIrPin(irNode, irNode.kind, "a", true);
+        break;
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
         AppendIrPin(irNode, irNode.kind, "texture", true);
         break;
     case RenderMaterialGraphNodeKind::Uv:
         AppendIrPin(irNode, irNode.kind, "uv", true);
         break;
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::VertexColor:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
         AppendIrPin(irNode, irNode.kind, "rgba", true);
         AppendIrPin(irNode, irNode.kind, "r", true);
         AppendIrPin(irNode, irNode.kind, "g", true);
@@ -479,6 +762,41 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     }
 }
 
+void AppendIrPins(RenderMaterialGraphIrNode& irNode, const RenderMaterialGraphNode& node) {
+    if (node.kind == RenderMaterialGraphNodeKind::CustomCode) {
+        AppendCustomCodePins(irNode, node);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        AppendMaterialFunctionCallPins(irNode, node);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::Reroute ||
+        node.kind == RenderMaterialGraphNodeKind::CompositeInput ||
+        node.kind == RenderMaterialGraphNodeKind::CompositeOutput) {
+        AppendIrPin(irNode, node, "input", false);
+        AppendIrPin(irNode, node, "output", true);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionInput) {
+        AppendIrPin(irNode, node, "value", true);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+        AppendIrPin(irNode, node, "value", false);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration) {
+        AppendIrPin(irNode, node, "input", false);
+        return;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+        AppendIrPin(irNode, node, "output", true);
+        return;
+    }
+    AppendIrPins(irNode);
+}
+
 [[nodiscard]] std::uint32_t DiagnosticPinId(const RenderMaterialGraphDocument& graph, const RenderMaterialGraphDiagnostic& diagnostic) noexcept {
     if (diagnostic.pinId != 0U || diagnostic.nodeId == 0U || diagnostic.pin.empty()) {
         return diagnostic.pinId;
@@ -487,9 +805,9 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     if (node == nullptr) {
         return 0U;
     }
-    std::uint32_t pinId = RenderMaterialGraphStablePinId(node->kind, diagnostic.pin, false);
+    std::uint32_t pinId = RenderMaterialGraphStablePinId(*node, diagnostic.pin, false);
     if (pinId == 0U) {
-        pinId = RenderMaterialGraphStablePinId(node->kind, diagnostic.pin, true);
+        pinId = RenderMaterialGraphStablePinId(*node, diagnostic.pin, true);
     }
     return pinId;
 }
@@ -553,8 +871,12 @@ void AttachDiagnosticContext(
     case RenderMaterialGraphPinType::Bool:
         return "false";
     case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
     case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::MaterialAttributes:
         break;
     }
     return "0.0";
@@ -567,8 +889,20 @@ void AttachDiagnosticContext(
     if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float3) {
         return "(" + expression + ").rgb";
     }
+    if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float) {
+        return "(" + expression + ").x";
+    }
     if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float4) {
         return expression;
+    }
+    if (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float) {
+        return "(" + expression + ").x";
+    }
+    if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float) {
+        return "(" + expression + ").x";
+    }
+    if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float) {
+        return "(" + expression + ").x";
     }
     if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Color) {
         return "vec4(" + expression + ", 1.0)";
@@ -597,10 +931,14 @@ void AttachDiagnosticContext(
 
 struct GraphCodegen {
     const RenderMaterialGraphDocument& graph;
+    const RenderMaterialGraphBuildContext& context;
     std::vector<RenderMaterialGraphDiagnostic>& diagnostics;
     std::vector<std::uint32_t> stack;
     std::unordered_map<std::uint32_t, std::uint32_t> fanOut;
     std::unordered_map<std::uint32_t, std::string> emittedTemp;
+    std::unordered_map<std::string, std::string> customOutputTemps;
+    std::unordered_set<std::uint32_t> emittedCustomFunctions;
+    std::vector<std::pair<std::uint32_t, std::string>> functionDefinitions;
     std::string statements;
 };
 
@@ -615,12 +953,16 @@ struct GraphCodegen {
         return "vec3";
     case RenderMaterialGraphPinType::MaterialAttributes:
         return "MaterialSurface";
+    case RenderMaterialGraphPinType::Bool:
+        return "bool";
     case RenderMaterialGraphPinType::Float4:
     case RenderMaterialGraphPinType::Color:
     case RenderMaterialGraphPinType::Unknown:
     case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
     case RenderMaterialGraphPinType::Sampler:
-    case RenderMaterialGraphPinType::Bool:
         return "vec4";
     }
     return "vec4";
@@ -629,7 +971,20 @@ struct GraphCodegen {
 [[nodiscard]] RenderMaterialGraphPinType GraphNodeCanonicalType(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
         return RenderMaterialGraphPinType::Color;
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return RenderMaterialGraphPinType::Float4;
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return RenderMaterialGraphPinType::Float4;
     case RenderMaterialGraphNodeKind::BreakVector:
         return RenderMaterialGraphPinType::Float4;
     case RenderMaterialGraphNodeKind::Desaturate:
@@ -652,15 +1007,25 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -669,6 +1034,10 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
@@ -683,10 +1052,21 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::PixelNormalWS:
     case RenderMaterialGraphNodeKind::VertexNormalWS:
     case RenderMaterialGraphNodeKind::VertexTangentWS:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
+    case RenderMaterialGraphNodeKind::CustomCode:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
         return false;
     default:
         return true;
@@ -711,11 +1091,62 @@ struct GraphCodegen {
     if (fromNode == nullptr) {
         return fallback;
     }
-    const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, link->fromPin, true);
+    const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(*fromNode, link->fromPin, true);
     return CoerceExpression(
         CompileNodeOutputExpression(cg, *fromNode, link->fromPin),
         fromType,
         expectedType);
+}
+
+[[nodiscard]] std::string CompileNamedRerouteUsageExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
+    const std::string key = NamedRerouteKey(node);
+    const RenderMaterialGraphPinType type = PassThroughPinType(node);
+    if (key.empty()) {
+        AddGraphDiagnostic(
+            cg.diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            "output",
+            "NamedRerouteUsage requires a stable reroute name.");
+        return DefaultExpressionForType(type);
+    }
+
+    const RenderMaterialGraphNode* declaration = nullptr;
+    std::uint32_t declarationCount = 0U;
+    for (const RenderMaterialGraphNode& candidate : cg.graph.nodes) {
+        if (candidate.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration &&
+            NamedRerouteKey(candidate) == key) {
+            declaration = &candidate;
+            ++declarationCount;
+        }
+    }
+    if (declarationCount != 1U || declaration == nullptr) {
+        AddGraphDiagnostic(
+            cg.diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            "output",
+            declarationCount == 0U
+                ? "NamedRerouteUsage '" + key + "' has no matching declaration."
+                : "NamedRerouteUsage '" + key + "' matches multiple declarations.");
+        return DefaultExpressionForType(type);
+    }
+    if (PassThroughPinType(*declaration) != type) {
+        AddGraphDiagnostic(
+            cg.diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::TypeMismatch,
+            node.id,
+            0U,
+            "output",
+            "NamedRerouteUsage '" + key + "' type does not match its declaration.");
+        return DefaultExpressionForType(type);
+    }
+    return CompileInputExpression(cg, *declaration, "input", type, DefaultExpressionForType(type));
 }
 
 void AddShaderGenerationDiagnostic(
@@ -727,7 +1158,7 @@ void AddShaderGenerationDiagnostic(
         .severity = RenderMaterialGraphDiagnosticSeverity::Error,
         .kind = RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
         .nodeId = node.id,
-        .pinId = RenderMaterialGraphStablePinId(node.kind, pin, true),
+        .pinId = RenderMaterialGraphStablePinId(node, pin, true),
         .pin = std::string{ pin },
         .message = std::move(message),
     });
@@ -735,6 +1166,12 @@ void AddShaderGenerationDiagnostic(
 
 [[nodiscard]] std::string ParameterUniformName(const RenderMaterialGraphNode& node, std::string_view suffix) {
     return "u_" + SanitizeShaderIdentifier(StableParameterId(node), "parameter" + std::to_string(node.id)) + std::string{ suffix };
+}
+
+[[nodiscard]] std::string CollectionParameterUniformName(const RenderMaterialGraphNode& node) {
+    const std::uint64_t collectionAssetId = RenderMaterialGraphCollectionAssetId(node);
+    const std::string key = std::to_string(collectionAssetId) + "_" + StableParameterId(node);
+    return "u_mpc_" + SanitizeShaderIdentifier(key, "collection" + std::to_string(node.id));
 }
 
 [[nodiscard]] std::string ConstantScalarExpression(const RenderMaterialGraphNode& node) {
@@ -766,20 +1203,188 @@ void AddShaderGenerationDiagnostic(
     return "vec4(" + FloatLiteral(r) + ", " + FloatLiteral(g) + ", " + FloatLiteral(b) + ", " + FloatLiteral(a) + ")";
 }
 
+[[nodiscard]] bool IsTextureObjectNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool IsTextureSampleNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] RenderMaterialGraphTextureDimension TextureDimensionForNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+        return RenderMaterialGraphTextureDimension::TextureCube;
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return RenderMaterialGraphTextureDimension::Texture3D;
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return RenderMaterialGraphTextureDimension::Texture2DArray;
+    default:
+        return RenderMaterialGraphTextureDimension::Texture2D;
+    }
+}
+
+[[nodiscard]] RenderMaterialGraphPinType TexturePinTypeForDimension(RenderMaterialGraphTextureDimension dimension) noexcept {
+    switch (dimension) {
+    case RenderMaterialGraphTextureDimension::TextureCube:
+        return RenderMaterialGraphPinType::TextureCube;
+    case RenderMaterialGraphTextureDimension::Texture3D:
+        return RenderMaterialGraphPinType::Texture3D;
+    case RenderMaterialGraphTextureDimension::Texture2DArray:
+        return RenderMaterialGraphPinType::Texture2DArray;
+    case RenderMaterialGraphTextureDimension::Texture2D:
+        return RenderMaterialGraphPinType::Texture2D;
+    }
+    return RenderMaterialGraphPinType::Texture2D;
+}
+
+[[nodiscard]] std::string_view TextureSamplerMacro(RenderMaterialGraphTextureDimension dimension) noexcept {
+    switch (dimension) {
+    case RenderMaterialGraphTextureDimension::TextureCube:
+        return "SAMPLERCUBE";
+    case RenderMaterialGraphTextureDimension::Texture3D:
+        return "SAMPLER3D";
+    case RenderMaterialGraphTextureDimension::Texture2DArray:
+        return "SAMPLER2DARRAY";
+    case RenderMaterialGraphTextureDimension::Texture2D:
+        return "SAMPLER2D";
+    }
+    return "SAMPLER2D";
+}
+
+[[nodiscard]] bool SceneTextureReadsDepth(const RenderMaterialGraphNode& node) noexcept {
+    return EqualsIgnoreCase(node.parameter.defaultValueHint, "depth") ||
+           EqualsIgnoreCase(node.parameter.defaultValueHint, "sceneDepth") ||
+           EqualsIgnoreCase(node.parameter.defaultValueHint, "SceneDepth");
+}
+
 [[nodiscard]] std::string CompileTextureInputExpression(
     const RenderMaterialGraphDocument& graph,
     const RenderMaterialGraphNode& node,
     std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    const RenderMaterialGraphTextureDimension expectedDimension = TextureDimensionForNode(node.kind);
     const RenderMaterialGraphLink* link = FindInputLink(graph, node.id, "texture");
     if (link == nullptr) {
         return ParameterUniformName(node, "_texture");
     }
     const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link->fromNodeId);
-    if (fromNode == nullptr || fromNode->kind != RenderMaterialGraphNodeKind::ParameterTexture || link->fromPin != "texture") {
-        AddShaderGenerationDiagnostic(diagnostics, node, "texture", "TextureSample texture input must be connected to a texture parameter.");
+    if (fromNode == nullptr || !IsTextureObjectNode(fromNode->kind) || link->fromPin != "texture") {
+        AddShaderGenerationDiagnostic(diagnostics, node, "texture", "Texture sample input must be connected to a texture object parameter.");
+        return "u_missingTexture";
+    }
+    if (TextureDimensionForNode(fromNode->kind) != expectedDimension) {
+        AddShaderGenerationDiagnostic(diagnostics, node, "texture", "Texture sample dimension does not match the connected texture object.");
         return "u_missingTexture";
     }
     return ParameterUniformName(*fromNode, "_texture");
+}
+
+void EmitCustomCodeFunction(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
+    if (node.kind != RenderMaterialGraphNodeKind::CustomCode ||
+        !cg.emittedCustomFunctions.insert(node.id).second) {
+        return;
+    }
+
+    std::string definition;
+    if (!node.customCode.defines.empty()) {
+        definition += node.customCode.defines;
+        if (definition.empty() || definition.back() != '\n') {
+            definition += '\n';
+        }
+    }
+    if (!node.customCode.includes.empty()) {
+        definition += node.customCode.includes;
+        if (definition.empty() || definition.back() != '\n') {
+            definition += '\n';
+        }
+    }
+    definition += GraphCodegenGlslType(node.customCode.outputType) + " " + CustomCodeFunctionName(node) + "(";
+    bool first = true;
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.inputs) {
+        if (!first) {
+            definition += ", ";
+        }
+        first = false;
+        definition += GraphCodegenGlslType(pin.type) + " " + pin.name;
+    }
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.outputs) {
+        if (!first) {
+            definition += ", ";
+        }
+        first = false;
+        definition += "inout " + GraphCodegenGlslType(pin.type) + " " + pin.name;
+    }
+    definition += ") {\n";
+    definition += node.customCode.body;
+    if (definition.empty() || definition.back() != '\n') {
+        definition += '\n';
+    }
+    definition += "}\n\n";
+    cg.functionDefinitions.push_back({ node.id, std::move(definition) });
+}
+
+[[nodiscard]] std::string EmitCustomCodeCall(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
+    if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
+        return it->second;
+    }
+
+    EmitCustomCodeFunction(cg, node);
+    const std::string id = std::to_string(node.id);
+    std::vector<std::string> arguments;
+    arguments.reserve(node.customCode.inputs.size() + node.customCode.outputs.size());
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.inputs) {
+        arguments.push_back(CompileInputExpression(cg, node, pin.name, pin.type, DefaultExpressionForType(pin.type)));
+    }
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.outputs) {
+        const std::string temp = CustomCodeTempName(node, pin.name);
+        cg.statements += "    " + GraphCodegenGlslType(pin.type) + " " + temp + " = " + DefaultExpressionForType(pin.type) + ";\n";
+        cg.customOutputTemps[CustomCodeOutputTempKey(node.id, pin.name)] = temp;
+        arguments.push_back(temp);
+    }
+
+    const std::string valueTemp = "custom" + id + "_value";
+    cg.statements += "    " + GraphCodegenGlslType(node.customCode.outputType) + " " + valueTemp + " = " + CustomCodeFunctionName(node) + "(";
+    for (std::size_t index = 0U; index < arguments.size(); ++index) {
+        if (index != 0U) {
+            cg.statements += ", ";
+        }
+        cg.statements += arguments[index];
+    }
+    cg.statements += ");\n";
+    cg.emittedTemp.emplace(node.id, valueTemp);
+    cg.customOutputTemps[CustomCodeOutputTempKey(node.id, "value")] = valueTemp;
+    return valueTemp;
+}
+
+void AppendCustomCodeFunctionDefinitions(
+    std::string& source,
+    const std::vector<std::pair<std::uint32_t, std::string>>& definitions,
+    std::unordered_set<std::uint32_t>& emittedDefinitions) {
+    for (const auto& [nodeId, definition] : definitions) {
+        if (emittedDefinitions.insert(nodeId).second) {
+            source += definition;
+        }
+    }
 }
 
 // MAT-36: default-initialise every MaterialSurface channel so MakeMaterialAttributes / unconnected
@@ -807,6 +1412,87 @@ void AddShaderGenerationDiagnostic(
 // MAT-39: parse a compile-time boolean from a node's value hint.
 [[nodiscard]] bool ParseStaticBoolHint(std::string_view hint) noexcept {
     return EqualsIgnoreCase(hint, "true") || hint == "1";
+}
+
+[[nodiscard]] std::string_view RenderMaterialGraphQualityLevelPinName(RenderMaterialGraphQualityLevel level) noexcept {
+    switch (level) {
+    case RenderMaterialGraphQualityLevel::Low: return "low";
+    case RenderMaterialGraphQualityLevel::Medium: return "med";
+    case RenderMaterialGraphQualityLevel::High: return "high";
+    case RenderMaterialGraphQualityLevel::Epic: return "epic";
+    }
+    return "high";
+}
+
+[[nodiscard]] std::string_view RenderMaterialGraphFeatureLevelPinName(RenderMaterialGraphFeatureLevel level) noexcept {
+    switch (level) {
+    case RenderMaterialGraphFeatureLevel::Es3: return "es3";
+    case RenderMaterialGraphFeatureLevel::Sm5: return "sm5";
+    case RenderMaterialGraphFeatureLevel::Sm6: return "sm6";
+    }
+    return "sm5";
+}
+
+[[nodiscard]] std::string_view RenderMaterialGraphShadingPathPinName(RenderMaterialGraphShadingPath path) noexcept {
+    switch (path) {
+    case RenderMaterialGraphShadingPath::Forward: return "forward";
+    case RenderMaterialGraphShadingPath::Deferred: return "deferred";
+    }
+    return "forward";
+}
+
+[[nodiscard]] std::string_view RenderMaterialGraphShaderStagePinName(RenderMaterialGraphShaderStage stage) noexcept {
+    switch (stage) {
+    case RenderMaterialGraphShaderStage::Fragment: return "fragment";
+    case RenderMaterialGraphShaderStage::Vertex: return "vertex";
+    }
+    return "fragment";
+}
+
+[[nodiscard]] std::string_view SelectedStaticVariantSwitchPin(
+    const RenderMaterialGraphBuildContext& context,
+    RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        return RenderMaterialGraphQualityLevelPinName(context.qualityLevel);
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        return RenderMaterialGraphFeatureLevelPinName(context.featureLevel);
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return RenderMaterialGraphShadingPathPinName(context.shadingPath);
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return RenderMaterialGraphShaderStagePinName(context.shaderStage);
+    default:
+        return "result";
+    }
+}
+
+[[nodiscard]] bool IsStaticVariantSwitchNode(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::StaticSwitch:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return true;
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool GraphContainsNodeKind(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphNodeKind kind) noexcept {
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == kind) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] std::string CompileStaticVariantSwitchExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
+    const std::string_view selectedPin = SelectedStaticVariantSwitchPin(cg.context, node.kind);
+    return CompileInputExpression(cg, node, selectedPin, RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
 }
 
 // MAT-39: resolve a StaticSwitch's compile-time selector. It reads a linked StaticBoolParameter's value if
@@ -837,17 +1523,32 @@ void AddShaderGenerationDiagnostic(
 
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput: {
+        const RenderMaterialGraphPinType type = PassThroughPinType(node);
+        return CompileInputExpression(cg, node, "input", type, DefaultExpressionForType(type));
+    }
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return CompileNamedRerouteUsageExpression(cg, node);
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return DefaultExpressionForType(PassThroughPinType(node));
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         // A compile-time boolean baked as a literal so it participates in the shader source / variant key.
         return ParseStaticBoolHint(node.parameter.defaultValueHint) ? "1.0" : "0.0";
     case RenderMaterialGraphNodeKind::StaticSwitch:
         // Only the selected branch is compiled — the other subgraph is never emitted (dead-branch elimination).
         return ResolveStaticSwitchSelector(cg.graph, node)
-            ? CompileInputExpression(cg, node, "true", RenderMaterialGraphPinType::Float4, "vec4(0.0)")
-            : CompileInputExpression(cg, node, "false", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+            ? CompileInputExpression(cg, node, "true", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)")
+            : CompileInputExpression(cg, node, "false", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return CompileStaticVariantSwitchExpression(cg, node);
     case RenderMaterialGraphNodeKind::StaticComponentMask:
         return StaticComponentMaskExpression(
-            CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4(0.0)"),
+            CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)"),
             node.parameter.defaultValueHint);
     case RenderMaterialGraphNodeKind::TextureCoordinate: {
         // MAT-45: tiling-scaled UV from a selectable coordinate set (hint = "uTile vTile [set]").
@@ -874,12 +1575,28 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "ctx.normal";
     case RenderMaterialGraphNodeKind::VertexTangentWS:
         return "ctx.tangent";
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+        return "ctx.objectOrientation";
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+        return "ctx.preSkinnedPosition";
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+        return "ctx.preSkinnedNormal";
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::ViewProperty:
         return "ctx.viewSize";
     case RenderMaterialGraphNodeKind::SceneDepth:
         // MAT-80/#18b: the opaque scene device depth at this fragment's screen position.
         return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
+    case RenderMaterialGraphNodeKind::SceneColor: {
+        const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.screenPosition");
+        return "texture2D(s_kbSceneColor, " + uv + ")";
+    }
+    case RenderMaterialGraphNodeKind::SceneTexture: {
+        const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.screenPosition");
+        return SceneTextureReadsDepth(node)
+            ? "vec4_splat(texture2D(s_kbSceneDepth, " + uv + ").x)"
+            : "texture2D(s_kbSceneColor, " + uv + ")";
+    }
     case RenderMaterialGraphNodeKind::DepthFade: {
         // MAT-80/#18b: soft fade (0 at the opaque surface, 1 further in front). abs() of the device-depth
         // separation is projection-convention robust; the transparent fragment already passed the depth
@@ -909,7 +1626,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
         const float bias = values.size() > 0U ? values[0] : 0.0F;
         const float scale = values.size() > 1U ? values[1] : 1.0F;
-        const std::string input = CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string input = CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "(((" + input + ") + vec4_splat(" + FloatLiteral(bias) + ")) * vec4_splat(" + FloatLiteral(scale) + "))";
     }
     case RenderMaterialGraphNodeKind::Rotator: {
@@ -1074,138 +1791,140 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return ParameterUniformName(node, "_xyz") + ".xyz";
     case RenderMaterialGraphNodeKind::ParameterColor:
         return ParameterUniformName(node, "_rgba");
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return CollectionParameterUniformName(node);
     case RenderMaterialGraphNodeKind::Add:
         return "(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             " + " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Subtract:
         return "(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             " - " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Multiply:
         return "(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             " * " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Divide:
         return "(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             " / max(abs(" +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
-            "), vec4(0.0001)))";
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
+            "), vec4_splat(0.0001)))";
     case RenderMaterialGraphNodeKind::Power:
         return "pow(max(" +
-            CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
-            ", vec4(0.0)), " +
-            CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", vec4_splat(0.0)), " +
+            CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ")";
     case RenderMaterialGraphNodeKind::OneMinus:
-        return "(vec4(1.0) - " +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+        return "(vec4_splat(1.0) - " +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Absolute:
         return "abs(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Minimum:
         return "min(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Maximum:
         return "max(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Saturate:
         return "clamp(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
-            ", vec4(0.0), vec4(1.0))";
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", vec4_splat(0.0), vec4_splat(1.0))";
     case RenderMaterialGraphNodeKind::Floor:
         return "floor(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Ceil:
         return "ceil(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Fraction:
         return "fract(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::SquareRoot:
         return "sqrt(max(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
-            ", vec4(0.0)))";
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", vec4_splat(0.0)))";
     case RenderMaterialGraphNodeKind::Sine:
         return "sin(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Cosine:
         return "cos(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Exponential:
-        return "exp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "exp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Exponential2:
-        return "exp2(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "exp2(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Logarithm:
-        return "log(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(0.0001)))";
+        return "log(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") + ", vec4_splat(0.0001)))";
     case RenderMaterialGraphNodeKind::Logarithm2:
-        return "log2(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(0.0001)))";
+        return "log2(max(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") + ", vec4_splat(0.0001)))";
     case RenderMaterialGraphNodeKind::SrgbToLinear: {
         // Gamma-decode the RGB channels (alpha is linear); pow keeps the standard 2.2 approximation.
-        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(pow(max((" + v + ").rgb, vec3(0.0, 0.0, 0.0)), vec3(2.2, 2.2, 2.2)), (" + v + ").a)";
     }
     case RenderMaterialGraphNodeKind::LinearToSrgb: {
-        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(pow(max((" + v + ").rgb, vec3(0.0, 0.0, 0.0)), vec3(0.454545, 0.454545, 0.454545)), (" + v + ").a)";
     }
     case RenderMaterialGraphNodeKind::Logarithm10:
         // log10(x) = ln(x) * (1/ln(10)); clamp the argument away from zero to keep the result finite.
         return "(log(max(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
-            ", vec4(0.0001))) * vec4(0.434294, 0.434294, 0.434294, 0.434294))";
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
+            ", vec4_splat(0.0001))) * vec4_splat(0.434294))";
     case RenderMaterialGraphNodeKind::HsvToRgb: {
-        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(kbHsvToRgb((" + v + ").rgb), (" + v + ").a)";
     }
     case RenderMaterialGraphNodeKind::RgbToHsv: {
-        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(kbRgbToHsv((" + v + ").rgb), (" + v + ").a)";
     }
     case RenderMaterialGraphNodeKind::DeriveNormalZ: {
         // Reconstruct the tangent-space normal's Z from its XY and renormalize (UE DeriveNormalZ).
-        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "vec4(normalize(vec3((" + v + ").xy, sqrt(clamp(1.0 - dot((" + v + ").xy, (" + v + ").xy), 0.0, 1.0)))), 1.0)";
     }
     case RenderMaterialGraphNodeKind::Fmod: {
-        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
-        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
+        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
+        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)");
         // Guard each component's divisor so a zero denominator falls back to 1.0 instead of producing NaN.
-        return "mod(" + a + ", mix(" + b + ", vec4(1.0), step(abs(" + b + "), vec4(0.0001))))";
+        return "mod(" + a + ", mix(" + b + ", vec4_splat(1.0), step(abs(" + b + "), vec4_splat(0.0001))))";
     }
     case RenderMaterialGraphNodeKind::InverseLerp: {
-        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
-        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
-        const std::string t = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
+        const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)");
+        const std::string t = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         // (value - a) / (b - a) with a guarded denominator so coincident endpoints don't divide by zero.
         const std::string den = "(" + b + " - " + a + ")";
-        return "((" + t + " - " + a + ") / mix(" + den + ", vec4(1.0), step(abs(" + den + "), vec4(0.0001))))";
+        return "((" + t + " - " + a + ") / mix(" + den + ", vec4_splat(1.0), step(abs(" + den + "), vec4_splat(0.0001))))";
     }
     case RenderMaterialGraphNodeKind::PartialDerivativeX:
         // bgfx maps dFdx to ddx/ddFdx per backend; valid in the fragment stage where the graph FS runs.
-        return "dFdx(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "dFdx(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::PartialDerivativeY:
-        return "dFdy(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "dFdy(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::SphereMask: {
         // MAT-50 SphereMask(A, B, Radius, Hardness): a soft radial mask of the distance between A and B.
         const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
@@ -1215,18 +1934,18 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const std::string a = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string b = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string inner = FloatLiteral(radius * (1.0F - hardness));
-        return "vec4(1.0 - smoothstep(" + inner + ", " + FloatLiteral(radius) + ", distance(" + a + ", " + b + ")))";
+        return "vec4_splat(1.0 - smoothstep(" + inner + ", " + FloatLiteral(radius) + ", distance(" + a + ", " + b + ")))";
     }
     case RenderMaterialGraphNodeKind::BlackBody:
         // MAT-50: map a Kelvin temperature (scalar) to the Planckian-locus RGB via the shared prelude helper.
-        return "vec4(kbBlackBody((" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(6500.0)") +
-            ").x), 1.0)";
+        return "vec4(kbBlackBody(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "6500.0") +
+            "), 1.0)";
     case RenderMaterialGraphNodeKind::Noise:
         // MAT-50: smooth value noise of the input position, broadcast to all channels.
-        return "vec4(kbValueNoise((" +
+        return "vec4(vec3_splat(kbValueNoise((" +
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") +
-            ").xyz))";
+            ").xyz)), 1.0)";
     case RenderMaterialGraphNodeKind::VectorNoise:
         // MAT-50: three decorrelated value-noise channels for a vector perturbation field.
         return "vec4(kbVectorNoise((" +
@@ -1237,8 +1956,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4((" +
             CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)") +
             ").xyz, (" +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "vec4(1.0)") +
-            ").x)";
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "1.0") +
+            "))";
     case RenderMaterialGraphNodeKind::ColorRamp: {
         // MAT-50: map the scalar "value" through a gradient of colour stops (hint = "pos r g b" per stop).
         // Consecutive stops are blended with smoothstep; the shader compiler CSEs the repeated position term.
@@ -1250,7 +1969,7 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (stops.size() < 2U) {
             stops = { { 0.0F, 0.0F, 0.0F, 0.0F }, { 1.0F, 1.0F, 1.0F, 1.0F } };
         }
-        const std::string t = "(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(0.0)") + ").x";
+        const std::string t = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "0.0");
         const auto colorLiteral = [](const std::array<float, 4>& stop) {
             return "vec3(" + FloatLiteral(stop[1]) + ", " + FloatLiteral(stop[2]) + ", " + FloatLiteral(stop[3]) + ")";
         };
@@ -1266,9 +1985,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         // (fwidth = |dFdx| + |dFdy|), so masks stay crisp without shimmering. hint = "threshold".
         const std::vector<float> numbers = ParseDefaultNumbers(node.parameter.defaultValueHint);
         const float threshold = numbers.empty() ? 0.5F : numbers[0];
-        const std::string v = "(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "vec4(0.0)") + ").x";
+        const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float, "0.0");
         const std::string width = "(abs(dFdx(" + v + ")) + abs(dFdy(" + v + ")) + 0.00001)";
-        return "vec4(smoothstep(" + FloatLiteral(threshold) + " - " + width + ", " + FloatLiteral(threshold) + " + " + width + ", " + v + "))";
+        return "vec4_splat(smoothstep(" + FloatLiteral(threshold) + " - " + width + ", " + FloatLiteral(threshold) + " + " + width + ", " + v + "))";
     }
     case RenderMaterialGraphNodeKind::Transform:
     case RenderMaterialGraphNodeKind::TransformPosition: {
@@ -1286,12 +2005,12 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         const std::string tbn = "mat3(ctx.tangent, ctx.bitangent, ctx.normal)";
         const std::string v = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
         const auto toWorld = [&](const std::string& e, const std::string& space) -> std::string {
-            if (EqualsIgnoreCase(space, "tangent")) return "(" + tbn + " * (" + e + "))";
+            if (EqualsIgnoreCase(space, "tangent")) return "mul(" + tbn + ", (" + e + "))";
             if (EqualsIgnoreCase(space, "view")) return "(mul(u_invView, vec4((" + e + "), " + w + ")).xyz)";
             return e;  // world (or unknown) is the canonical space
         };
         const auto fromWorld = [&](const std::string& e, const std::string& space) -> std::string {
-            if (EqualsIgnoreCase(space, "tangent")) return "((" + e + ") * " + tbn + ")";
+            if (EqualsIgnoreCase(space, "tangent")) return "mul((" + e + "), " + tbn + ")";
             if (EqualsIgnoreCase(space, "view")) return "(mul(u_view, vec4((" + e + "), " + w + ")).xyz)";
             return e;
         };
@@ -1337,24 +2056,24 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             ")";
     case RenderMaterialGraphNodeKind::Step:
         return "step(" +
-            CompileInputExpression(cg, node, "edge", RenderMaterialGraphPinType::Float4, "vec4(0.5)") +
+            CompileInputExpression(cg, node, "edge", RenderMaterialGraphPinType::Float4, "vec4_splat(0.5)") +
             ", " +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::SmoothStep:
         return "smoothstep(" +
-            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ", " +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::If: {
         const std::string lhs = CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float, "0.0");
         const std::string rhs = CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string less = CompileInputExpression(cg, node, "less", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
-        const std::string equal = CompileInputExpression(cg, node, "equal", RenderMaterialGraphPinType::Float4, "vec4(0.5)");
-        const std::string greater = CompileInputExpression(cg, node, "greater", RenderMaterialGraphPinType::Float4, "vec4(1.0)");
+        const std::string less = CompileInputExpression(cg, node, "less", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
+        const std::string equal = CompileInputExpression(cg, node, "equal", RenderMaterialGraphPinType::Float4, "vec4_splat(0.5)");
+        const std::string greater = CompileInputExpression(cg, node, "greater", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)");
         return "((" + lhs + " > " + rhs + ") ? " + greater + " : ((abs(" + lhs + " - " + rhs + ") <= 0.0001) ? " + equal + " : " + less + "))";
     }
     case RenderMaterialGraphNodeKind::Desaturate: {
@@ -1372,42 +2091,42 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Negate:
-        return "-(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "-(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Sign:
-        return "sign(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "sign(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Round:
-        return "round(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "round(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::Truncate: {
-        const std::string value = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)");
+        const std::string value = CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)");
         return "sign(" + value + ") * floor(abs(" + value + "))";
     }
     case RenderMaterialGraphNodeKind::Tangent:
-        return "tan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "tan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::ArcSine:
-        return "asin(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ", vec4(-1.0), vec4(1.0)))";
+        return "asin(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ", vec4_splat(-1.0), vec4_splat(1.0)))";
     case RenderMaterialGraphNodeKind::ArcCosine:
-        return "acos(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(1.0)") + ", vec4(-1.0), vec4(1.0)))";
+        return "acos(clamp(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") + ", vec4_splat(-1.0), vec4_splat(1.0)))";
     case RenderMaterialGraphNodeKind::ArcTangent:
-        return "atan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") + ")";
+        return "atan(" + CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") + ")";
     case RenderMaterialGraphNodeKind::ArcTangent2:
         return "atan(" +
-            CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Clamp:
         return "clamp(" +
-            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "min", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "max", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Lerp:
         return "mix(" +
-            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4(0.0)") +
+            CompileInputExpression(cg, node, "a", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ", " +
-            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4(1.0)") +
+            CompileInputExpression(cg, node, "b", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ", " +
             CompileInputExpression(cg, node, "t", RenderMaterialGraphPinType::Float, "0.0") +
             ")";
@@ -1422,6 +2141,10 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             : "ctx.uv0";
     case RenderMaterialGraphNodeKind::Time:
         return "ctx.time";
+    case RenderMaterialGraphNodeKind::DeltaTime:
+        return "ctx.deltaTime";
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+        return "ctx.dynamicParameter";
     case RenderMaterialGraphNodeKind::VertexColor:
         return "ctx.vertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
@@ -1434,17 +2157,58 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "ctx.worldPos";
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
         return "ctx.perInstanceRandom";
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+        return "ctx.perInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
+        return "ctx.perInstanceCustomData";
     case RenderMaterialGraphNodeKind::ObjectRadius:
         return "ctx.objectRadius";
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+        return "ctx.objectBounds";
     case RenderMaterialGraphNodeKind::TextureSample:
         return "texture2D(" +
             CompileTextureInputExpression(cg.graph, node, cg.diagnostics) +
             ", " +
             CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0") +
             ")";
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        return "textureCube(" +
+            CompileTextureInputExpression(cg.graph, node, cg.diagnostics) +
+            ", normalize(" +
+            CompileInputExpression(cg, node, "direction", RenderMaterialGraphPinType::Float3, "ctx.viewDir") +
+            "))";
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        return "texture3D(" +
+            CompileTextureInputExpression(cg.graph, node, cg.diagnostics) +
+            ", " +
+            CompileInputExpression(cg, node, "uvw", RenderMaterialGraphPinType::Float3, "vec3(ctx.uv0, 0.0)") +
+            ")";
+    case RenderMaterialGraphNodeKind::TextureSample2DArray: {
+        const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.uv0");
+        const std::string layer = CompileInputExpression(cg, node, "layer", RenderMaterialGraphPinType::Float, "0.0");
+        return "texture2DArray(" + CompileTextureInputExpression(cg.graph, node, cg.diagnostics) + ", vec3(" + uv + ", " + layer + "))";
+    }
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
         AddShaderGenerationDiagnostic(cg.diagnostics, node, "texture", "Texture parameter cannot be emitted as a numeric shader expression without a TextureSample node.");
-        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, "texture", true));
+        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node, "texture", true));
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return EmitCustomCodeCall(cg, node);
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", "FunctionInput must be inlined before shader generation.");
+        return DefaultExpressionForType(FunctionEndpointPinType(node));
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "value", "FunctionOutput must be inlined before shader generation.");
+        return DefaultExpressionForType(FunctionEndpointPinType(node));
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, {}, "MaterialFunctionCall must be inlined before shader generation.");
+        return DefaultExpressionForType(RenderMaterialGraphPinType::Float4);
+    case RenderMaterialGraphNodeKind::LayerStack:
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, "attributes", "LayerStack must be expanded before shader generation.");
+        return DefaultExpressionForType(RenderMaterialGraphPinType::MaterialAttributes);
     case RenderMaterialGraphNodeKind::MaterialOutput:
         return DefaultExpressionForType(RenderMaterialGraphPinType::Unknown);
     }
@@ -1480,11 +2244,35 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "BreakVector output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::VertexColor:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        if (node.kind == RenderMaterialGraphNodeKind::CollectionParameter) {
+            if (outputPin == "scalar") {
+                return "(" + baseRef + ").x";
+            }
+            if (outputPin == "xyz") {
+                return "(" + baseRef + ").xyz";
+            }
+        }
         if (outputPin == "r" || outputPin == "g" || outputPin == "b" || outputPin == "a") {
             return "(" + baseRef + ")." + std::string{ outputPin };
         }
         return baseRef;
+    case RenderMaterialGraphNodeKind::CustomCode:
+        if (outputPin == "value") {
+            return baseRef;
+        }
+        if (const auto it = cg.customOutputTemps.find(CustomCodeOutputTempKey(node.id, outputPin)); it != cg.customOutputTemps.end()) {
+            return it->second;
+        }
+        AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "CustomCode output pin was not emitted.");
+        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node, outputPin, true));
     default:
         return baseRef;
     }
@@ -1496,7 +2284,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     }
     if (ContainsNode(cg.stack, node.id)) {
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material graph shader generation hit a recursive node dependency.");
-        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node.kind, outputPin, true));
+        return DefaultExpressionForType(RenderMaterialGraphPinDataType(node, outputPin, true));
     }
 
     cg.stack.push_back(node.id);
@@ -1524,8 +2312,24 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
         return "color" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::ParameterTexture:
         return "texture" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return "collectionParam" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::TextureSample:
         return "textureSample" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObject:
+        return "textureObject" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        return "textureSampleCube" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+        return "textureObjectCube" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        return "textureSampleVolume" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return "textureObjectVolume" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return "textureSample2DArray" + std::to_string(node.id);
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return "textureObject2DArray" + std::to_string(node.id);
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
     case RenderMaterialGraphNodeKind::ConstantVector2:
@@ -1565,6 +2369,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
     case RenderMaterialGraphNodeKind::TransformPosition:
+    case RenderMaterialGraphNodeKind::CustomCode:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1592,13 +2397,21 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -1607,6 +2420,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
@@ -1624,6 +2441,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
     case RenderMaterialGraphNodeKind::Fmod:
     case RenderMaterialGraphNodeKind::InverseLerp:
@@ -1648,7 +2467,9 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     if (!node.parameter.textureRole.empty()) {
         return node.parameter.textureRole;
     }
-    return node.kind == RenderMaterialGraphNodeKind::TextureSample ? "baseColor" : std::string{};
+    return IsTextureSampleNode(node.kind) || IsTextureObjectNode(node.kind)
+        ? "baseColor"
+        : std::string{};
 }
 
 [[nodiscard]] RenderMaterialTextureColorSpace EffectiveTextureColorSpaceForNode(
@@ -1657,7 +2478,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     if (node.parameter.expectedTextureColorSpace != RenderMaterialTextureColorSpace::Unknown) {
         return node.parameter.expectedTextureColorSpace;
     }
-    if (node.kind == RenderMaterialGraphNodeKind::TextureSample) {
+    if (IsTextureSampleNode(node.kind) || IsTextureObjectNode(node.kind)) {
         return ExpectedColorSpaceForTextureRole(role).value_or(RenderMaterialTextureColorSpace::Srgb);
     }
     return RenderMaterialTextureColorSpace::Unknown;
@@ -1687,6 +2508,13 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -1721,6 +2549,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
     case RenderMaterialGraphNodeKind::TransformPosition:
+    case RenderMaterialGraphNodeKind::CustomCode:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1748,13 +2577,21 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -1763,6 +2600,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
@@ -1780,6 +2621,8 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
     case RenderMaterialGraphNodeKind::Fmod:
     case RenderMaterialGraphNodeKind::InverseLerp:
@@ -1798,10 +2641,18 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -1836,6 +2687,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
     case RenderMaterialGraphNodeKind::TransformPosition:
+    case RenderMaterialGraphNodeKind::CustomCode:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -1863,13 +2715,21 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -1878,6 +2738,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
@@ -1895,11 +2759,22 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
     case RenderMaterialGraphNodeKind::Fmod:
     case RenderMaterialGraphNodeKind::InverseLerp:
     case RenderMaterialGraphNodeKind::SphereMask:
     case RenderMaterialGraphNodeKind::AppendVector:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::FunctionInput:
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
         return true;
     }
     return false;
@@ -1918,6 +2793,31 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     return std::any_of(graph.links.begin(), graph.links.end(), [nodeId, pin](const RenderMaterialGraphLink& link) {
         return link.toNodeId == nodeId && link.toPin == pin;
     });
+}
+
+[[nodiscard]] bool HasOutputLink(
+    const RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId,
+    std::string_view pin) noexcept {
+    return std::any_of(graph.links.begin(), graph.links.end(), [nodeId, pin](const RenderMaterialGraphLink& link) {
+        return link.fromNodeId == nodeId && link.fromPin == pin;
+    });
+}
+
+[[nodiscard]] std::vector<const RenderMaterialGraphNode*> NamedRerouteDeclarations(
+    const RenderMaterialGraphDocument& graph,
+    std::string_view key) {
+    std::vector<const RenderMaterialGraphNode*> declarations;
+    if (key.empty()) {
+        return declarations;
+    }
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration &&
+            NamedRerouteKey(node) == key) {
+            declarations.push_back(&node);
+        }
+    }
+    return declarations;
 }
 
 [[nodiscard]] std::optional<RenderMaterialTextureColorSpace> ExpectedColorSpaceForTextureRole(std::string_view role) noexcept {
@@ -1965,6 +2865,17 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
             return true;
         }
     }
+    const RenderMaterialGraphNode* node = FindRenderMaterialGraphNode(graph, nodeId);
+    if (node != nullptr && node->kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration) {
+        const std::string key = NamedRerouteKey(*node);
+        for (const RenderMaterialGraphNode& usage : graph.nodes) {
+            if (usage.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage &&
+                NamedRerouteKey(usage) == key &&
+                VisitGraphNodeForCycle(graph, usage.id, states)) {
+                return true;
+            }
+        }
+    }
     states[stateIndex].second = 2U;
     return false;
 }
@@ -1981,6 +2892,790 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
         }
     }
     return false;
+}
+
+struct GraphEndpoint {
+    std::uint32_t nodeId = 0U;
+    std::string pin;
+};
+
+struct FunctionEndpointSignature {
+    std::string name;
+    RenderMaterialGraphPinType type = RenderMaterialGraphPinType::Float4;
+    std::uint32_t nodeId = 0U;
+};
+
+struct FunctionSignature {
+    std::vector<FunctionEndpointSignature> inputs;
+    std::vector<FunctionEndpointSignature> outputs;
+};
+
+[[nodiscard]] bool HasGraphDiagnosticError(std::span<const RenderMaterialGraphDiagnostic> diagnostics) noexcept {
+    return std::any_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+}
+
+[[nodiscard]] bool ParseUInt64Token(std::string_view text, std::uint64_t& output) noexcept {
+    if (text.empty() || text == "_") {
+        return false;
+    }
+    std::uint64_t value = 0U;
+    for (const char ch : text) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10ULL) {
+            return false;
+        }
+        value = value * 10ULL + digit;
+    }
+    output = value;
+    return true;
+}
+
+[[nodiscard]] std::uint64_t MaterialFunctionCallAssetId(const RenderMaterialGraphNode& node) noexcept {
+    std::uint64_t assetId = 0U;
+    if (ParseUInt64Token(node.parameter.stableId, assetId) && assetId != 0U) {
+        return assetId;
+    }
+    if (ParseUInt64Token(node.parameter.defaultValueHint, assetId) && assetId != 0U) {
+        return assetId;
+    }
+    return 0U;
+}
+
+[[nodiscard]] std::string FunctionEndpointName(
+    const RenderMaterialGraphNode& node,
+    std::string_view prefix,
+    std::size_t index) {
+    if (!node.parameter.stableId.empty()) {
+        return node.parameter.stableId;
+    }
+    if (!node.parameter.displayName.empty()) {
+        return node.parameter.displayName;
+    }
+    return std::string{ prefix } + std::to_string(index + 1U);
+}
+
+[[nodiscard]] FunctionSignature BuildMaterialFunctionSignature(const RenderMaterialGraphDocument& graph) {
+    FunctionSignature signature;
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::FunctionInput) {
+            signature.inputs.push_back(FunctionEndpointSignature{
+                .type = FunctionEndpointPinType(node),
+                .nodeId = node.id,
+            });
+        } else if (node.kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+            signature.outputs.push_back(FunctionEndpointSignature{
+                .type = FunctionEndpointPinType(node),
+                .nodeId = node.id,
+            });
+        }
+    }
+    const auto order = [](const FunctionEndpointSignature& lhs, const FunctionEndpointSignature& rhs) {
+        if (lhs.nodeId != rhs.nodeId) {
+            return lhs.nodeId < rhs.nodeId;
+        }
+        return lhs.name < rhs.name;
+    };
+    std::sort(signature.inputs.begin(), signature.inputs.end(), order);
+    std::sort(signature.outputs.begin(), signature.outputs.end(), order);
+    for (std::size_t index = 0U; index < signature.inputs.size(); ++index) {
+        if (const RenderMaterialGraphNode* node = FindRenderMaterialGraphNode(graph, signature.inputs[index].nodeId)) {
+            signature.inputs[index].name = FunctionEndpointName(*node, "input", index);
+        }
+    }
+    for (std::size_t index = 0U; index < signature.outputs.size(); ++index) {
+        if (const RenderMaterialGraphNode* node = FindRenderMaterialGraphNode(graph, signature.outputs[index].nodeId)) {
+            signature.outputs[index].name = FunctionEndpointName(*node, "output", index);
+        }
+    }
+    return signature;
+}
+
+[[nodiscard]] bool PinListsMatchFunctionSignature(
+    const std::vector<RenderMaterialGraphCustomPin>& callPins,
+    std::span<const FunctionEndpointSignature> functionPins) noexcept {
+    if (callPins.size() != functionPins.size()) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < callPins.size(); ++index) {
+        if (callPins[index].name != functionPins[index].name ||
+            callPins[index].type != functionPins[index].type) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void AddMaterialFunctionDiagnostic(
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
+    RenderMaterialGraphDiagnosticKind kind,
+    const RenderMaterialGraphNode& callNode,
+    std::string pin,
+    std::string message) {
+    AddGraphDiagnostic(
+        diagnostics,
+        RenderMaterialGraphDiagnosticSeverity::Error,
+        kind,
+        callNode.id,
+        0U,
+        std::move(pin),
+        std::move(message));
+}
+
+void AddLayerStackDiagnostic(
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
+    const RenderMaterialGraphNode& layerStackNode,
+    std::string message) {
+    AddGraphDiagnostic(
+        diagnostics,
+        RenderMaterialGraphDiagnosticSeverity::Error,
+        RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+        layerStackNode.id,
+        0U,
+        "attributes",
+        std::move(message));
+}
+
+[[nodiscard]] bool IsLayerStackParameterTypeSupported(RenderMaterialGraphPinType type) noexcept {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+    case RenderMaterialGraphPinType::Float2:
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Float4:
+    case RenderMaterialGraphPinType::Color:
+    case RenderMaterialGraphPinType::Normal:
+        return true;
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] std::string DefaultLayerStackParameterHint(RenderMaterialGraphPinType type) {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+        return "0";
+    case RenderMaterialGraphPinType::Float2:
+        return "0 0";
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Normal:
+        return "0 0 0";
+    case RenderMaterialGraphPinType::Float4:
+        return "0 0 0 0";
+    case RenderMaterialGraphPinType::Color:
+        return "1 1 1 1";
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return {};
+    }
+    return {};
+}
+
+[[nodiscard]] RenderMaterialGraphNodeKind LayerStackParameterNodeKind(RenderMaterialGraphPinType type) noexcept {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+        return RenderMaterialGraphNodeKind::ConstantScalar;
+    case RenderMaterialGraphPinType::Float2:
+        return RenderMaterialGraphNodeKind::ConstantVector2;
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Normal:
+        return RenderMaterialGraphNodeKind::ConstantVector;
+    case RenderMaterialGraphPinType::Float4:
+    case RenderMaterialGraphPinType::Color:
+        return RenderMaterialGraphNodeKind::ConstantColor;
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return RenderMaterialGraphNodeKind::ConstantScalar;
+    }
+    return RenderMaterialGraphNodeKind::ConstantScalar;
+}
+
+[[nodiscard]] std::string_view LayerStackParameterOutputPin(RenderMaterialGraphPinType type) noexcept {
+    switch (type) {
+    case RenderMaterialGraphPinType::Float:
+        return "value";
+    case RenderMaterialGraphPinType::Float2:
+        return "xy";
+    case RenderMaterialGraphPinType::Float3:
+    case RenderMaterialGraphPinType::Normal:
+        return "xyz";
+    case RenderMaterialGraphPinType::Float4:
+    case RenderMaterialGraphPinType::Color:
+        return "rgba";
+    case RenderMaterialGraphPinType::Unknown:
+    case RenderMaterialGraphPinType::Texture2D:
+    case RenderMaterialGraphPinType::TextureCube:
+    case RenderMaterialGraphPinType::Texture3D:
+    case RenderMaterialGraphPinType::Texture2DArray:
+    case RenderMaterialGraphPinType::Sampler:
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return "value";
+    }
+    return "value";
+}
+
+[[nodiscard]] bool ValidateLayerStackParameters(
+    const RenderMaterialGraphNode& layerStackNode,
+    std::span<const RenderMaterialGraphLayerStackParameter> parameters,
+    std::string_view ownerName,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    for (const RenderMaterialGraphLayerStackParameter& parameter : parameters) {
+        if (parameter.pinName.empty()) {
+            AddLayerStackDiagnostic(
+                diagnostics,
+                layerStackNode,
+                "LayerStack " + std::string{ ownerName } + " parameter has an empty pin name.");
+            return false;
+        }
+        if (!IsLayerStackParameterTypeSupported(parameter.type)) {
+            AddLayerStackDiagnostic(
+                diagnostics,
+                layerStackNode,
+                "LayerStack " + std::string{ ownerName } + " parameter '" + parameter.pinName +
+                    "' uses unsupported type '" + std::string{ RenderMaterialGraphPinTypeName(parameter.type) } + "'.");
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::vector<RenderMaterialGraphCustomPin> LayerStackParameterPins(
+    std::span<const RenderMaterialGraphLayerStackParameter> parameters) {
+    std::vector<RenderMaterialGraphCustomPin> pins;
+    pins.reserve(parameters.size());
+    for (const RenderMaterialGraphLayerStackParameter& parameter : parameters) {
+        pins.push_back(RenderMaterialGraphCustomPin{
+            .name = parameter.pinName,
+            .type = parameter.type,
+        });
+    }
+    return pins;
+}
+
+[[nodiscard]] bool ValidateMaterialFunctionCallSignature(
+    const RenderMaterialGraphNode& callNode,
+    std::uint64_t assetId,
+    const FunctionSignature& signature,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    const bool inputsMatch = PinListsMatchFunctionSignature(callNode.customCode.inputs, signature.inputs);
+    const bool outputsMatch = PinListsMatchFunctionSignature(callNode.customCode.outputs, signature.outputs);
+    if (inputsMatch && outputsMatch) {
+        return true;
+    }
+
+    AddMaterialFunctionDiagnostic(
+        diagnostics,
+        RenderMaterialGraphDiagnosticKind::MaterialFunctionSignatureMismatch,
+        callNode,
+        {},
+        "MaterialFunctionCall for function asset " + std::to_string(assetId) +
+            " has stale dynamic pins; expected " + std::to_string(signature.inputs.size()) +
+            " inputs and " + std::to_string(signature.outputs.size()) + " outputs.");
+    return false;
+}
+
+[[nodiscard]] std::uint32_t NextGraphNodeId(const RenderMaterialGraphDocument& graph) noexcept {
+    std::uint32_t next = 1U;
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        next = std::max(next, node.id + 1U);
+    }
+    return next;
+}
+
+[[nodiscard]] const FunctionEndpointSignature* FindFunctionEndpoint(
+    std::span<const FunctionEndpointSignature> endpoints,
+    std::uint32_t nodeId) noexcept {
+    for (const FunctionEndpointSignature& endpoint : endpoints) {
+        if (endpoint.nodeId == nodeId) {
+            return &endpoint;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] const FunctionEndpointSignature* FindFunctionEndpointByName(
+    std::span<const FunctionEndpointSignature> endpoints,
+    std::string_view name) noexcept {
+    for (const FunctionEndpointSignature& endpoint : endpoints) {
+        if (endpoint.name == name) {
+            return &endpoint;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] std::optional<GraphEndpoint> MappedFunctionEndpoint(
+    const RenderMaterialGraphDocument& functionGraph,
+    const RenderMaterialGraphLink& link,
+    const std::unordered_map<std::uint32_t, std::uint32_t>& nodeMap,
+    const std::unordered_map<std::string, GraphEndpoint>& outerInputs,
+    std::span<const FunctionEndpointSignature> functionInputs) {
+    const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(functionGraph, link.fromNodeId);
+    if (fromNode == nullptr) {
+        return std::nullopt;
+    }
+    if (fromNode->kind == RenderMaterialGraphNodeKind::FunctionInput) {
+        const FunctionEndpointSignature* input = FindFunctionEndpoint(functionInputs, fromNode->id);
+        if (input == nullptr) {
+            return std::nullopt;
+        }
+        const auto it = outerInputs.find(input->name);
+        if (it == outerInputs.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+    const auto mapped = nodeMap.find(fromNode->id);
+    if (mapped == nodeMap.end()) {
+        return std::nullopt;
+    }
+    return GraphEndpoint{ .nodeId = mapped->second, .pin = link.fromPin };
+}
+
+[[nodiscard]] RenderMaterialGraphLink MakeInlinedGraphLink(
+    const RenderMaterialGraphDocument& graph,
+    GraphEndpoint from,
+    GraphEndpoint to) {
+    RenderMaterialGraphLink link{
+        .fromNodeId = from.nodeId,
+        .fromPin = std::move(from.pin),
+        .toNodeId = to.nodeId,
+        .toPin = std::move(to.pin),
+    };
+    if (const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link.fromNodeId)) {
+        link.fromPinId = RenderMaterialGraphStablePinId(*fromNode, link.fromPin, true);
+    }
+    if (const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId)) {
+        link.toPinId = RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
+    }
+    link.id = MakeRenderMaterialGraphLinkId(link);
+    return link;
+}
+
+void AddLayerStackParameterConstants(
+    RenderMaterialGraphDocument& graph,
+    std::uint32_t& nextNodeId,
+    const RenderMaterialGraphNode& callNode,
+    std::span<const RenderMaterialGraphLayerStackParameter> parameters,
+    std::int32_t x,
+    std::int32_t y) {
+    for (std::size_t index = 0U; index < parameters.size(); ++index) {
+        const RenderMaterialGraphLayerStackParameter& parameter = parameters[index];
+        const RenderMaterialGraphNodeKind kind = LayerStackParameterNodeKind(parameter.type);
+        RenderMaterialGraphNode valueNode{
+            .id = nextNodeId++,
+            .kind = kind,
+            .positionX = x,
+            .positionY = y + static_cast<std::int32_t>(index) * 64,
+            .parameter = RenderMaterialGraphParameterMetadata{
+                .displayName = parameter.pinName,
+                .defaultValueHint = parameter.valueHint.empty()
+                    ? DefaultLayerStackParameterHint(parameter.type)
+                    : parameter.valueHint,
+                .overrideSupported = false,
+            },
+        };
+        const std::uint32_t valueNodeId = valueNode.id;
+        graph.nodes.push_back(std::move(valueNode));
+        graph.links.push_back(MakeInlinedGraphLink(
+            graph,
+            GraphEndpoint{ .nodeId = valueNodeId, .pin = std::string{ LayerStackParameterOutputPin(parameter.type) } },
+            GraphEndpoint{ .nodeId = callNode.id, .pin = parameter.pinName }));
+    }
+}
+
+[[nodiscard]] bool InlineOneMaterialFunctionCall(
+    RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphNode& callNode,
+    const RenderMaterialGraphDocument& functionGraph,
+    const FunctionSignature& signature) {
+    RenderMaterialGraphDocument out = graph;
+    out.nodes.erase(
+        std::remove_if(out.nodes.begin(), out.nodes.end(), [&callNode](const RenderMaterialGraphNode& node) {
+            return node.id == callNode.id;
+        }),
+        out.nodes.end());
+    for (RenderMaterialGraphCompositeSubgraph& composite : out.composites) {
+        composite.nodeIds.erase(
+            std::remove(composite.nodeIds.begin(), composite.nodeIds.end(), callNode.id),
+            composite.nodeIds.end());
+    }
+
+    std::unordered_map<std::string, GraphEndpoint> outerInputs;
+    std::vector<RenderMaterialGraphLink> outgoingLinks;
+    out.links.clear();
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (link.toNodeId == callNode.id) {
+            outerInputs[link.toPin] = GraphEndpoint{ .nodeId = link.fromNodeId, .pin = link.fromPin };
+        } else if (link.fromNodeId == callNode.id) {
+            outgoingLinks.push_back(link);
+        } else {
+            out.links.push_back(link);
+        }
+    }
+
+    std::unordered_map<std::uint32_t, std::uint32_t> nodeMap;
+    std::uint32_t nextNodeId = NextGraphNodeId(out);
+    for (const RenderMaterialGraphNode& node : functionGraph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::FunctionInput ||
+            node.kind == RenderMaterialGraphNodeKind::FunctionOutput ||
+            node.kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            continue;
+        }
+        RenderMaterialGraphNode cloned = node;
+        cloned.id = nextNodeId++;
+        cloned.positionX += callNode.positionX;
+        cloned.positionY += callNode.positionY;
+        nodeMap[node.id] = cloned.id;
+        out.nodes.push_back(std::move(cloned));
+    }
+
+    std::unordered_map<std::string, GraphEndpoint> resolvedOutputs;
+    for (const RenderMaterialGraphLink& link : functionGraph.links) {
+        const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(functionGraph, link.toNodeId);
+        if (toNode == nullptr || toNode->kind == RenderMaterialGraphNodeKind::FunctionInput) {
+            continue;
+        }
+
+        const std::optional<GraphEndpoint> from = MappedFunctionEndpoint(
+            functionGraph,
+            link,
+            nodeMap,
+            outerInputs,
+            signature.inputs);
+        if (!from.has_value()) {
+            continue;
+        }
+
+        if (toNode->kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+            if (const FunctionEndpointSignature* output = FindFunctionEndpoint(signature.outputs, toNode->id)) {
+                resolvedOutputs[output->name] = *from;
+            }
+            continue;
+        }
+
+        const auto mappedTo = nodeMap.find(toNode->id);
+        if (mappedTo == nodeMap.end()) {
+            continue;
+        }
+        out.links.push_back(MakeInlinedGraphLink(
+            out,
+            *from,
+            GraphEndpoint{ .nodeId = mappedTo->second, .pin = link.toPin }));
+    }
+
+    for (const RenderMaterialGraphLink& link : outgoingLinks) {
+        const auto resolved = resolvedOutputs.find(link.fromPin);
+        if (resolved == resolvedOutputs.end()) {
+            continue;
+        }
+        out.links.push_back(MakeInlinedGraphLink(
+            out,
+            resolved->second,
+            GraphEndpoint{ .nodeId = link.toNodeId, .pin = link.toPin }));
+    }
+
+    graph = std::move(out);
+    return true;
+}
+
+[[nodiscard]] RenderMaterialGraphNode MakeLayerStackFunctionCallNode(
+    std::uint32_t nodeId,
+    std::int32_t x,
+    std::int32_t y,
+    std::uint64_t functionAssetId,
+    std::string displayName,
+    std::vector<RenderMaterialGraphCustomPin> inputs) {
+    return RenderMaterialGraphNode{
+        .id = nodeId,
+        .kind = RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        .positionX = x,
+        .positionY = y,
+        .parameter = RenderMaterialGraphParameterMetadata{
+            .stableId = std::to_string(functionAssetId),
+            .displayName = std::move(displayName),
+            .description = "Expanded from a Material Layer Stack.",
+        },
+        .customCode = RenderMaterialGraphCustomCode{
+            .body = {},
+            .outputType = RenderMaterialGraphPinType::MaterialAttributes,
+            .inputs = std::move(inputs),
+            .outputs = {
+                RenderMaterialGraphCustomPin{ .name = "Attributes", .type = RenderMaterialGraphPinType::MaterialAttributes },
+            },
+        },
+    };
+}
+
+[[nodiscard]] bool ExpandOneMaterialLayerStack(
+    RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphNode& layerStackNode,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    std::vector<RenderMaterialGraphLayerStackEntry> activeEntries;
+    for (const RenderMaterialGraphLayerStackEntry& entry : layerStackNode.layerStack) {
+        if (entry.enabled) {
+            activeEntries.push_back(entry);
+        }
+    }
+    if (activeEntries.empty()) {
+        AddLayerStackDiagnostic(diagnostics, layerStackNode, "LayerStack requires at least one enabled layer function.");
+        return false;
+    }
+    for (std::size_t index = 0U; index < activeEntries.size(); ++index) {
+        if (activeEntries[index].layerFunctionAssetId == 0U) {
+            AddLayerStackDiagnostic(diagnostics, layerStackNode, "LayerStack layer " + std::to_string(index) + " is missing a layer function asset id.");
+            return false;
+        }
+        if (!ValidateLayerStackParameters(layerStackNode, activeEntries[index].layerParameters, "layer " + std::to_string(index), diagnostics)) {
+            return false;
+        }
+        if (index > 0U && activeEntries[index].blendFunctionAssetId == 0U) {
+            AddLayerStackDiagnostic(diagnostics, layerStackNode, "LayerStack layer " + std::to_string(index) + " is missing a blend function asset id.");
+            return false;
+        }
+        if (index > 0U) {
+            for (const RenderMaterialGraphLayerStackParameter& parameter : activeEntries[index].blendParameters) {
+                if (parameter.pinName == "A" || parameter.pinName == "B") {
+                    AddLayerStackDiagnostic(
+                        diagnostics,
+                        layerStackNode,
+                        "LayerStack blend " + std::to_string(index) + " parameter '" + parameter.pinName + "' is reserved for layer compositing.");
+                    return false;
+                }
+            }
+            if (!ValidateLayerStackParameters(layerStackNode, activeEntries[index].blendParameters, "blend " + std::to_string(index), diagnostics)) {
+                return false;
+            }
+        }
+    }
+
+    RenderMaterialGraphDocument out = graph;
+    out.nodes.erase(
+        std::remove_if(out.nodes.begin(), out.nodes.end(), [&layerStackNode](const RenderMaterialGraphNode& node) {
+            return node.id == layerStackNode.id;
+        }),
+        out.nodes.end());
+    for (RenderMaterialGraphCompositeSubgraph& composite : out.composites) {
+        composite.nodeIds.erase(
+            std::remove(composite.nodeIds.begin(), composite.nodeIds.end(), layerStackNode.id),
+            composite.nodeIds.end());
+    }
+
+    std::vector<RenderMaterialGraphLink> outgoingLinks;
+    out.links.clear();
+    for (const RenderMaterialGraphLink& link : graph.links) {
+        if (link.fromNodeId == layerStackNode.id) {
+            outgoingLinks.push_back(link);
+        } else if (link.toNodeId != layerStackNode.id) {
+            out.links.push_back(link);
+        }
+    }
+
+    std::uint32_t nextNodeId = NextGraphNodeId(out);
+    std::optional<GraphEndpoint> currentAttributes;
+    for (std::size_t index = 0U; index < activeEntries.size(); ++index) {
+        const RenderMaterialGraphLayerStackEntry& entry = activeEntries[index];
+        const std::string layerName = entry.layerName.empty()
+            ? "Layer " + std::to_string(index + 1U)
+            : entry.layerName;
+        RenderMaterialGraphNode layerCall = MakeLayerStackFunctionCallNode(
+            nextNodeId++,
+            layerStackNode.positionX - 360 + static_cast<std::int32_t>(index) * 220,
+            layerStackNode.positionY + static_cast<std::int32_t>(index) * 80,
+            entry.layerFunctionAssetId,
+            layerName,
+            LayerStackParameterPins(entry.layerParameters));
+        const RenderMaterialGraphNode layerCallForLinks = layerCall;
+        const std::uint32_t layerCallId = layerCall.id;
+        out.nodes.push_back(std::move(layerCall));
+        AddLayerStackParameterConstants(
+            out,
+            nextNodeId,
+            layerCallForLinks,
+            entry.layerParameters,
+            layerStackNode.positionX - 560 + static_cast<std::int32_t>(index) * 220,
+            layerStackNode.positionY + static_cast<std::int32_t>(index) * 80);
+        GraphEndpoint layerAttributes{ .nodeId = layerCallId, .pin = "Attributes" };
+        if (!currentAttributes.has_value()) {
+            currentAttributes = layerAttributes;
+            continue;
+        }
+
+        const std::string blendName = entry.blendName.empty()
+            ? "Blend " + std::to_string(index)
+            : entry.blendName;
+        std::vector<RenderMaterialGraphCustomPin> blendInputs{
+            RenderMaterialGraphCustomPin{ .name = "A", .type = RenderMaterialGraphPinType::MaterialAttributes },
+            RenderMaterialGraphCustomPin{ .name = "B", .type = RenderMaterialGraphPinType::MaterialAttributes },
+        };
+        std::vector<RenderMaterialGraphCustomPin> blendParameterPins = LayerStackParameterPins(entry.blendParameters);
+        blendInputs.insert(blendInputs.end(), blendParameterPins.begin(), blendParameterPins.end());
+        RenderMaterialGraphNode blendCall = MakeLayerStackFunctionCallNode(
+            nextNodeId++,
+            layerStackNode.positionX - 120 + static_cast<std::int32_t>(index) * 220,
+            layerStackNode.positionY + static_cast<std::int32_t>(index) * 80,
+            entry.blendFunctionAssetId,
+            blendName,
+            std::move(blendInputs));
+        const RenderMaterialGraphNode blendCallForLinks = blendCall;
+        const std::uint32_t blendCallId = blendCall.id;
+        out.nodes.push_back(std::move(blendCall));
+        out.links.push_back(MakeInlinedGraphLink(
+            out,
+            *currentAttributes,
+            GraphEndpoint{ .nodeId = blendCallId, .pin = "A" }));
+        out.links.push_back(MakeInlinedGraphLink(
+            out,
+            layerAttributes,
+            GraphEndpoint{ .nodeId = blendCallId, .pin = "B" }));
+        AddLayerStackParameterConstants(
+            out,
+            nextNodeId,
+            blendCallForLinks,
+            entry.blendParameters,
+            layerStackNode.positionX - 320 + static_cast<std::int32_t>(index) * 220,
+            layerStackNode.positionY + 96 + static_cast<std::int32_t>(index) * 80);
+        currentAttributes = GraphEndpoint{ .nodeId = blendCallId, .pin = "Attributes" };
+    }
+
+    if (currentAttributes.has_value()) {
+        for (const RenderMaterialGraphLink& link : outgoingLinks) {
+            if (link.fromPin != "attributes") {
+                continue;
+            }
+            out.links.push_back(MakeInlinedGraphLink(
+                out,
+                *currentAttributes,
+                GraphEndpoint{ .nodeId = link.toNodeId, .pin = link.toPin }));
+        }
+    }
+
+    graph = std::move(out);
+    return true;
+}
+
+[[nodiscard]] bool ExpandMaterialLayerStacks(
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    bool changed = false;
+    std::vector<std::uint32_t> layerStackNodeIds;
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::LayerStack) {
+            layerStackNodeIds.push_back(node.id);
+        }
+    }
+    for (const std::uint32_t nodeId : layerStackNodeIds) {
+        const RenderMaterialGraphNode* current = FindRenderMaterialGraphNode(graph, nodeId);
+        if (current == nullptr || current->kind != RenderMaterialGraphNodeKind::LayerStack) {
+            continue;
+        }
+        const RenderMaterialGraphNode layerStackNode = *current;
+        if (ExpandOneMaterialLayerStack(graph, layerStackNode, diagnostics)) {
+            changed = true;
+        }
+        if (HasGraphDiagnosticError(diagnostics)) {
+            break;
+        }
+    }
+    return changed;
+}
+
+[[nodiscard]] bool InlineMaterialGraphFunctionsRecursive(
+    RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphBuildContext context,
+    std::vector<std::uint64_t>& functionStack,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    bool changed = false;
+    std::vector<std::uint32_t> callNodeIds;
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            callNodeIds.push_back(node.id);
+        }
+    }
+
+    for (const std::uint32_t callNodeId : callNodeIds) {
+        const RenderMaterialGraphNode* currentCallNode = FindRenderMaterialGraphNode(graph, callNodeId);
+        if (currentCallNode == nullptr || currentCallNode->kind != RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            continue;
+        }
+        const RenderMaterialGraphNode callNode = *currentCallNode;
+        const std::uint64_t functionAssetId = MaterialFunctionCallAssetId(callNode);
+        if (functionAssetId == 0U) {
+            AddMaterialFunctionDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+                callNode,
+                {},
+                "MaterialFunctionCall requires a numeric function asset id in its stable id.");
+            continue;
+        }
+        if (std::find(functionStack.begin(), functionStack.end(), functionAssetId) != functionStack.end()) {
+            AddMaterialFunctionDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticKind::MaterialFunctionCycle,
+                callNode,
+                {},
+                "Material function asset " + std::to_string(functionAssetId) + " recursively calls itself.");
+            continue;
+        }
+        if (context.functionLibrary == nullptr) {
+            AddMaterialFunctionDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+                callNode,
+                {},
+                "MaterialFunctionCall asset " + std::to_string(functionAssetId) + " cannot be resolved without a function library.");
+            continue;
+        }
+        const RenderMaterialGraphFunctionLibraryEntry* entry = context.functionLibrary->Find(functionAssetId);
+        if (entry == nullptr) {
+            AddMaterialFunctionDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+                callNode,
+                {},
+                "MaterialFunctionCall references missing function asset " + std::to_string(functionAssetId) + ".");
+            continue;
+        }
+
+        RenderMaterialGraphDocument functionGraph = entry->graph;
+        functionStack.push_back(functionAssetId);
+        const bool nestedChanged = InlineMaterialGraphFunctionsRecursive(functionGraph, context, functionStack, diagnostics);
+        static_cast<void>(nestedChanged);
+        functionStack.pop_back();
+        if (HasGraphDiagnosticError(diagnostics)) {
+            continue;
+        }
+
+        const FunctionSignature signature = BuildMaterialFunctionSignature(functionGraph);
+        if (!ValidateMaterialFunctionCallSignature(callNode, functionAssetId, signature, diagnostics)) {
+            continue;
+        }
+        if (InlineOneMaterialFunctionCall(graph, callNode, functionGraph, signature)) {
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 } // namespace
@@ -2007,6 +3702,28 @@ std::vector<std::string> RenderMaterialGraphNodeOutputPinNames(RenderMaterialGra
     return names;
 }
 
+std::vector<std::string> RenderMaterialGraphNodeInputPinNames(const RenderMaterialGraphNode& node) {
+    RenderMaterialGraphIrNode irNode{ .nodeId = node.id, .kind = node.kind };
+    AppendIrPins(irNode, node);
+    std::vector<std::string> names;
+    names.reserve(irNode.inputs.size());
+    for (const RenderMaterialGraphIrPin& pin : irNode.inputs) {
+        names.push_back(pin.name);
+    }
+    return names;
+}
+
+std::vector<std::string> RenderMaterialGraphNodeOutputPinNames(const RenderMaterialGraphNode& node) {
+    RenderMaterialGraphIrNode irNode{ .nodeId = node.id, .kind = node.kind };
+    AppendIrPins(irNode, node);
+    std::vector<std::string> names;
+    names.reserve(irNode.outputs.size());
+    for (const RenderMaterialGraphIrPin& pin : irNode.outputs) {
+        names.push_back(pin.name);
+    }
+    return names;
+}
+
 std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::MaterialOutput:
@@ -2021,6 +3738,20 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ConstantColor";
     case RenderMaterialGraphNodeKind::TextureSample:
         return "TextureSample";
+    case RenderMaterialGraphNodeKind::TextureObject:
+        return "TextureObject";
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        return "TextureSampleCube";
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+        return "TextureObjectCube";
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        return "TextureSampleVolume";
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return "TextureObjectVolume";
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return "TextureSample2DArray";
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return "TextureObject2DArray";
     case RenderMaterialGraphNodeKind::ParameterScalar:
         return "ParameterScalar";
     case RenderMaterialGraphNodeKind::ParameterVector:
@@ -2029,6 +3760,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ParameterColor";
     case RenderMaterialGraphNodeKind::ParameterTexture:
         return "ParameterTexture";
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return "CollectionParameter";
     case RenderMaterialGraphNodeKind::Add:
         return "Add";
     case RenderMaterialGraphNodeKind::Subtract:
@@ -2159,6 +3892,10 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "UV";
     case RenderMaterialGraphNodeKind::Time:
         return "Time";
+    case RenderMaterialGraphNodeKind::DeltaTime:
+        return "DeltaTime";
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+        return "DynamicParameter";
     case RenderMaterialGraphNodeKind::VertexColor:
         return "VertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
@@ -2171,8 +3908,20 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "WorldPosition";
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
         return "PerInstanceRandom";
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+        return "PerInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
+        return "PerInstanceCustomData";
     case RenderMaterialGraphNodeKind::ObjectRadius:
         return "ObjectRadius";
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+        return "ObjectBounds";
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+        return "ObjectOrientation";
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+        return "PreSkinnedPosition";
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+        return "PreSkinnedNormal";
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         return "MakeMaterialAttributes";
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -2189,6 +3938,14 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "StaticSwitch";
     case RenderMaterialGraphNodeKind::StaticComponentMask:
         return "StaticComponentMask";
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        return "QualitySwitch";
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        return "FeatureLevelSwitch";
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return "ShadingPathSwitch";
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return "ShaderStageSwitch";
     case RenderMaterialGraphNodeKind::TextureCoordinate:
         return "TextureCoordinate";
     case RenderMaterialGraphNodeKind::Panner:
@@ -2223,8 +3980,32 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ViewSize";
     case RenderMaterialGraphNodeKind::SceneDepth:
         return "SceneDepth";
+    case RenderMaterialGraphNodeKind::SceneColor:
+        return "SceneColor";
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        return "SceneTexture";
     case RenderMaterialGraphNodeKind::DepthFade:
         return "DepthFade";
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return "CustomCode";
+    case RenderMaterialGraphNodeKind::Reroute:
+        return "Reroute";
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return "NamedRerouteDeclaration";
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return "NamedRerouteUsage";
+    case RenderMaterialGraphNodeKind::CompositeInput:
+        return "CompositeInput";
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+        return "CompositeOutput";
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        return "FunctionInput";
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        return "FunctionOutput";
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return "MaterialFunctionCall";
+    case RenderMaterialGraphNodeKind::LayerStack:
+        return "LayerStack";
     }
     return "MaterialOutput";
 }
@@ -2248,6 +4029,27 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "TextureSample")) {
         return RenderMaterialGraphNodeKind::TextureSample;
     }
+    if (EqualsIgnoreCase(text, "TextureObject")) {
+        return RenderMaterialGraphNodeKind::TextureObject;
+    }
+    if (EqualsIgnoreCase(text, "TextureSampleCube") || EqualsIgnoreCase(text, "TextureCubeSample")) {
+        return RenderMaterialGraphNodeKind::TextureSampleCube;
+    }
+    if (EqualsIgnoreCase(text, "TextureObjectCube") || EqualsIgnoreCase(text, "CubeTextureObject")) {
+        return RenderMaterialGraphNodeKind::TextureObjectCube;
+    }
+    if (EqualsIgnoreCase(text, "TextureSampleVolume") || EqualsIgnoreCase(text, "VolumeTextureSample") || EqualsIgnoreCase(text, "TextureSample3D")) {
+        return RenderMaterialGraphNodeKind::TextureSampleVolume;
+    }
+    if (EqualsIgnoreCase(text, "TextureObjectVolume") || EqualsIgnoreCase(text, "VolumeTextureObject") || EqualsIgnoreCase(text, "TextureObject3D")) {
+        return RenderMaterialGraphNodeKind::TextureObjectVolume;
+    }
+    if (EqualsIgnoreCase(text, "TextureSample2DArray") || EqualsIgnoreCase(text, "Texture2DArraySample")) {
+        return RenderMaterialGraphNodeKind::TextureSample2DArray;
+    }
+    if (EqualsIgnoreCase(text, "TextureObject2DArray") || EqualsIgnoreCase(text, "Texture2DArrayObject")) {
+        return RenderMaterialGraphNodeKind::TextureObject2DArray;
+    }
     if (EqualsIgnoreCase(text, "ParameterScalar")) {
         return RenderMaterialGraphNodeKind::ParameterScalar;
     }
@@ -2259,6 +4061,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "ParameterTexture")) {
         return RenderMaterialGraphNodeKind::ParameterTexture;
+    }
+    if (EqualsIgnoreCase(text, "CollectionParameter") || EqualsIgnoreCase(text, "MaterialParameterCollection")) {
+        return RenderMaterialGraphNodeKind::CollectionParameter;
     }
     if (EqualsIgnoreCase(text, "Add")) {
         return RenderMaterialGraphNodeKind::Add;
@@ -2401,6 +4206,12 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "Time")) {
         return RenderMaterialGraphNodeKind::Time;
     }
+    if (EqualsIgnoreCase(text, "DeltaTime") || EqualsIgnoreCase(text, "TimeDelta")) {
+        return RenderMaterialGraphNodeKind::DeltaTime;
+    }
+    if (EqualsIgnoreCase(text, "DynamicParameter") || EqualsIgnoreCase(text, "DynamicParameters")) {
+        return RenderMaterialGraphNodeKind::DynamicParameter;
+    }
     if (EqualsIgnoreCase(text, "VertexColor")) {
         return RenderMaterialGraphNodeKind::VertexColor;
     }
@@ -2419,8 +4230,26 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "PerInstanceRandom")) {
         return RenderMaterialGraphNodeKind::PerInstanceRandom;
     }
+    if (EqualsIgnoreCase(text, "PerInstanceFadeAmount") || EqualsIgnoreCase(text, "PerInstanceFade")) {
+        return RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
+    }
+    if (EqualsIgnoreCase(text, "PerInstanceCustomData") || EqualsIgnoreCase(text, "PerInstanceCustomData0")) {
+        return RenderMaterialGraphNodeKind::PerInstanceCustomData;
+    }
     if (EqualsIgnoreCase(text, "ObjectRadius")) {
         return RenderMaterialGraphNodeKind::ObjectRadius;
+    }
+    if (EqualsIgnoreCase(text, "ObjectBounds")) {
+        return RenderMaterialGraphNodeKind::ObjectBounds;
+    }
+    if (EqualsIgnoreCase(text, "ObjectOrientation")) {
+        return RenderMaterialGraphNodeKind::ObjectOrientation;
+    }
+    if (EqualsIgnoreCase(text, "PreSkinnedPosition") || EqualsIgnoreCase(text, "PreSkinnedLocalPosition")) {
+        return RenderMaterialGraphNodeKind::PreSkinnedPosition;
+    }
+    if (EqualsIgnoreCase(text, "PreSkinnedNormal") || EqualsIgnoreCase(text, "PreSkinnedLocalNormal")) {
+        return RenderMaterialGraphNodeKind::PreSkinnedNormal;
     }
     if (EqualsIgnoreCase(text, "MakeMaterialAttributes")) {
         return RenderMaterialGraphNodeKind::MakeMaterialAttributes;
@@ -2445,6 +4274,18 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "StaticComponentMask") || EqualsIgnoreCase(text, "ComponentMask") || EqualsIgnoreCase(text, "Mask")) {
         return RenderMaterialGraphNodeKind::StaticComponentMask;
+    }
+    if (EqualsIgnoreCase(text, "QualitySwitch") || EqualsIgnoreCase(text, "MaterialQualitySwitch")) {
+        return RenderMaterialGraphNodeKind::QualitySwitch;
+    }
+    if (EqualsIgnoreCase(text, "FeatureLevelSwitch")) {
+        return RenderMaterialGraphNodeKind::FeatureLevelSwitch;
+    }
+    if (EqualsIgnoreCase(text, "ShadingPathSwitch") || EqualsIgnoreCase(text, "RenderPathSwitch")) {
+        return RenderMaterialGraphNodeKind::ShadingPathSwitch;
+    }
+    if (EqualsIgnoreCase(text, "ShaderStageSwitch") || EqualsIgnoreCase(text, "StageSwitch")) {
+        return RenderMaterialGraphNodeKind::ShaderStageSwitch;
     }
     if (EqualsIgnoreCase(text, "TextureCoordinate")) {
         return RenderMaterialGraphNodeKind::TextureCoordinate;
@@ -2497,8 +4338,44 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "SceneDepth")) {
         return RenderMaterialGraphNodeKind::SceneDepth;
     }
+    if (EqualsIgnoreCase(text, "SceneColor")) {
+        return RenderMaterialGraphNodeKind::SceneColor;
+    }
+    if (EqualsIgnoreCase(text, "SceneTexture")) {
+        return RenderMaterialGraphNodeKind::SceneTexture;
+    }
     if (EqualsIgnoreCase(text, "DepthFade")) {
         return RenderMaterialGraphNodeKind::DepthFade;
+    }
+    if (EqualsIgnoreCase(text, "CustomCode") || EqualsIgnoreCase(text, "CustomHLSL") || EqualsIgnoreCase(text, "CustomShaderCode")) {
+        return RenderMaterialGraphNodeKind::CustomCode;
+    }
+    if (EqualsIgnoreCase(text, "Reroute") || EqualsIgnoreCase(text, "RerouteNode")) {
+        return RenderMaterialGraphNodeKind::Reroute;
+    }
+    if (EqualsIgnoreCase(text, "NamedRerouteDeclaration") || EqualsIgnoreCase(text, "NamedRerouteDecl") || EqualsIgnoreCase(text, "NamedReroute")) {
+        return RenderMaterialGraphNodeKind::NamedRerouteDeclaration;
+    }
+    if (EqualsIgnoreCase(text, "NamedRerouteUsage") || EqualsIgnoreCase(text, "NamedRerouteUse")) {
+        return RenderMaterialGraphNodeKind::NamedRerouteUsage;
+    }
+    if (EqualsIgnoreCase(text, "CompositeInput") || EqualsIgnoreCase(text, "SubgraphInput") || EqualsIgnoreCase(text, "TunnelInput")) {
+        return RenderMaterialGraphNodeKind::CompositeInput;
+    }
+    if (EqualsIgnoreCase(text, "CompositeOutput") || EqualsIgnoreCase(text, "SubgraphOutput") || EqualsIgnoreCase(text, "TunnelOutput")) {
+        return RenderMaterialGraphNodeKind::CompositeOutput;
+    }
+    if (EqualsIgnoreCase(text, "FunctionInput") || EqualsIgnoreCase(text, "MaterialFunctionInput")) {
+        return RenderMaterialGraphNodeKind::FunctionInput;
+    }
+    if (EqualsIgnoreCase(text, "FunctionOutput") || EqualsIgnoreCase(text, "MaterialFunctionOutput")) {
+        return RenderMaterialGraphNodeKind::FunctionOutput;
+    }
+    if (EqualsIgnoreCase(text, "MaterialFunctionCall") || EqualsIgnoreCase(text, "FunctionCall")) {
+        return RenderMaterialGraphNodeKind::MaterialFunctionCall;
+    }
+    if (EqualsIgnoreCase(text, "LayerStack") || EqualsIgnoreCase(text, "MaterialLayerStack")) {
+        return RenderMaterialGraphNodeKind::LayerStack;
     }
     if (EqualsIgnoreCase(text, "Exponential") || EqualsIgnoreCase(text, "Exp")) {
         return RenderMaterialGraphNodeKind::Exponential;
@@ -2599,6 +4476,20 @@ std::string_view RenderMaterialGraphDiagnosticKindName(RenderMaterialGraphDiagno
         return "duplicate_parameter_stable_id";
     case RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode:
         return "unsupported_render_path_node";
+    case RenderMaterialGraphDiagnosticKind::TextureSamplerLimitExceeded:
+        return "texture_sampler_limit_exceeded";
+    case RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain:
+        return "unsupported_material_domain";
+    case RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel:
+        return "unsupported_shading_model";
+    case RenderMaterialGraphDiagnosticKind::StaticPermutationExplosion:
+        return "static_permutation_explosion";
+    case RenderMaterialGraphDiagnosticKind::MissingMaterialFunction:
+        return "missing_material_function";
+    case RenderMaterialGraphDiagnosticKind::MaterialFunctionCycle:
+        return "material_function_cycle";
+    case RenderMaterialGraphDiagnosticKind::MaterialFunctionSignatureMismatch:
+        return "material_function_signature_mismatch";
     }
     return "unsupported_node";
 }
@@ -2641,10 +4532,18 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ConstantVector:
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::ParameterScalar:
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -2679,6 +4578,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
     case RenderMaterialGraphNodeKind::TransformPosition:
+    case RenderMaterialGraphNodeKind::CustomCode:
     case RenderMaterialGraphNodeKind::Cosine:
     case RenderMaterialGraphNodeKind::DotProduct:
     case RenderMaterialGraphNodeKind::CrossProduct:
@@ -2706,13 +4606,21 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -2721,6 +4629,10 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
@@ -2738,17 +4650,30 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
     case RenderMaterialGraphNodeKind::Fmod:
     case RenderMaterialGraphNodeKind::InverseLerp:
     case RenderMaterialGraphNodeKind::SphereMask:
     case RenderMaterialGraphNodeKind::AppendVector:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::FunctionInput:
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
         return RenderMaterialGraphNodeSupport::Production;
     }
     return RenderMaterialGraphNodeSupport::Unsupported;
 }
 
 bool IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath path) noexcept {
+    // MAT-65/#52: graph materials have no Deferred/GBuffer writer yet. GpuDeferred therefore remains
+    // explicitly non-production so validation emits a warning instead of pretending deferred rendering works.
     switch (path) {
     case RenderMaterialGraphRenderPath::GpuForward:
     case RenderMaterialGraphRenderPath::GpuShadow:
@@ -2846,6 +4771,48 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMater
     return status;
 }
 
+static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialGraphNodeKind kind) noexcept {
+    switch (kind) {
+    case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::DepthFade:
+        return "Requires the transparent pass scene-depth binding; covered by MAT-80/MAT-68 GPU readback.";
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        return "Requires the scene-color snapshot binding; covered by scene-texture graph tests.";
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return "Production when custom pin declarations validate; invalid code reports shader-generation diagnostics.";
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
+        return "Expanded before codegen; dependency changes participate in variant/cache identity.";
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return "Baked into source/variant identity through RenderMaterialGraphBuildContext.";
+    default:
+        return "Production on GpuForward/Preview; GpuDeferred is explicitly FallbackOnly until a real GBuffer writer exists.";
+    }
+}
+
+std::vector<RenderMaterialGraphNodeSupportMatrixEntry> BuildRenderMaterialGraphNodeSupportMatrix() {
+    const std::span<const RenderMaterialGraphNodeKind> kinds = AllRenderMaterialGraphNodeKinds();
+    std::vector<RenderMaterialGraphNodeSupportMatrixEntry> matrix;
+    matrix.reserve(kinds.size());
+    for (const RenderMaterialGraphNodeKind kind : kinds) {
+        matrix.push_back(RenderMaterialGraphNodeSupportMatrixEntry{
+            .kind = kind,
+            .authoringSupport = RenderMaterialGraphNodeSupportStatus(kind),
+            .gpuForwardSupport = RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::GpuForward),
+            .gpuShadowSupport = RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::GpuShadow),
+            .gpuDeferredSupport = RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::GpuDeferred),
+            .cpuFallbackSupport = RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::CpuFallback),
+            .previewSupport = RenderMaterialGraphNodeSupportForPath(kind, RenderMaterialGraphRenderPath::Preview),
+            .note = RenderMaterialGraphNodeSupportMatrixNote(kind),
+        });
+    }
+    return matrix;
+}
+
 std::string_view RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind kind) noexcept {
     switch (RenderMaterialGraphNodeSupportStatus(kind)) {
     case RenderMaterialGraphNodeSupport::Production:
@@ -2867,10 +4834,18 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ConstantVector,
         RenderMaterialGraphNodeKind::ConstantColor,
         RenderMaterialGraphNodeKind::TextureSample,
+        RenderMaterialGraphNodeKind::TextureObject,
+        RenderMaterialGraphNodeKind::TextureSampleCube,
+        RenderMaterialGraphNodeKind::TextureObjectCube,
+        RenderMaterialGraphNodeKind::TextureSampleVolume,
+        RenderMaterialGraphNodeKind::TextureObjectVolume,
+        RenderMaterialGraphNodeKind::TextureSample2DArray,
+        RenderMaterialGraphNodeKind::TextureObject2DArray,
         RenderMaterialGraphNodeKind::ParameterScalar,
         RenderMaterialGraphNodeKind::ParameterVector,
         RenderMaterialGraphNodeKind::ParameterColor,
         RenderMaterialGraphNodeKind::ParameterTexture,
+        RenderMaterialGraphNodeKind::CollectionParameter,
         RenderMaterialGraphNodeKind::Add,
         RenderMaterialGraphNodeKind::Subtract,
         RenderMaterialGraphNodeKind::Multiply,
@@ -2914,13 +4889,21 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ArcTangent2,
         RenderMaterialGraphNodeKind::ConstantVector2,
         RenderMaterialGraphNodeKind::Time,
+        RenderMaterialGraphNodeKind::DeltaTime,
+        RenderMaterialGraphNodeKind::DynamicParameter,
         RenderMaterialGraphNodeKind::VertexColor,
         RenderMaterialGraphNodeKind::ScreenPosition,
         RenderMaterialGraphNodeKind::LocalPosition,
         RenderMaterialGraphNodeKind::ObjectPosition,
         RenderMaterialGraphNodeKind::WorldPosition,
         RenderMaterialGraphNodeKind::PerInstanceRandom,
+        RenderMaterialGraphNodeKind::PerInstanceFadeAmount,
+        RenderMaterialGraphNodeKind::PerInstanceCustomData,
         RenderMaterialGraphNodeKind::ObjectRadius,
+        RenderMaterialGraphNodeKind::ObjectBounds,
+        RenderMaterialGraphNodeKind::ObjectOrientation,
+        RenderMaterialGraphNodeKind::PreSkinnedPosition,
+        RenderMaterialGraphNodeKind::PreSkinnedNormal,
         RenderMaterialGraphNodeKind::MakeMaterialAttributes,
         RenderMaterialGraphNodeKind::BreakMaterialAttributes,
         RenderMaterialGraphNodeKind::BlendMaterialAttributes,
@@ -2929,6 +4912,10 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::StaticBoolParameter,
         RenderMaterialGraphNodeKind::StaticSwitch,
         RenderMaterialGraphNodeKind::StaticComponentMask,
+        RenderMaterialGraphNodeKind::QualitySwitch,
+        RenderMaterialGraphNodeKind::FeatureLevelSwitch,
+        RenderMaterialGraphNodeKind::ShadingPathSwitch,
+        RenderMaterialGraphNodeKind::ShaderStageSwitch,
         RenderMaterialGraphNodeKind::TextureCoordinate,
         RenderMaterialGraphNodeKind::Panner,
         RenderMaterialGraphNodeKind::Rotator,
@@ -2946,6 +4933,8 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ViewProperty,
         RenderMaterialGraphNodeKind::ViewSize,
         RenderMaterialGraphNodeKind::SceneDepth,
+        RenderMaterialGraphNodeKind::SceneColor,
+        RenderMaterialGraphNodeKind::SceneTexture,
         RenderMaterialGraphNodeKind::DepthFade,
         RenderMaterialGraphNodeKind::Exponential,
         RenderMaterialGraphNodeKind::Exponential2,
@@ -2970,6 +4959,16 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::AntialiasedTextureMask,
         RenderMaterialGraphNodeKind::Transform,
         RenderMaterialGraphNodeKind::TransformPosition,
+        RenderMaterialGraphNodeKind::CustomCode,
+        RenderMaterialGraphNodeKind::Reroute,
+        RenderMaterialGraphNodeKind::NamedRerouteDeclaration,
+        RenderMaterialGraphNodeKind::NamedRerouteUsage,
+        RenderMaterialGraphNodeKind::CompositeInput,
+        RenderMaterialGraphNodeKind::CompositeOutput,
+        RenderMaterialGraphNodeKind::FunctionInput,
+        RenderMaterialGraphNodeKind::FunctionOutput,
+        RenderMaterialGraphNodeKind::MaterialFunctionCall,
+        RenderMaterialGraphNodeKind::LayerStack,
     };
     return std::span<const RenderMaterialGraphNodeKind>{ kKinds };
 }
@@ -2984,13 +4983,50 @@ std::string_view RenderMaterialGraphDiagnosticSeverityName(RenderMaterialGraphDi
     return "Error";
 }
 
+static std::string_view CanonicalGraphMaterialDomainName(std::string_view domain) noexcept {
+    if (domain.empty()) return "surface";
+    if (EqualsIgnoreCase(domain, "surface")) return "surface";
+    if (EqualsIgnoreCase(domain, "deferredDecal") || EqualsIgnoreCase(domain, "deferred_decal") || EqualsIgnoreCase(domain, "deferreddecal")) return "deferredDecal";
+    if (EqualsIgnoreCase(domain, "lightFunction") || EqualsIgnoreCase(domain, "light_function") || EqualsIgnoreCase(domain, "lightfunction")) return "lightFunction";
+    if (EqualsIgnoreCase(domain, "volume")) return "volume";
+    if (EqualsIgnoreCase(domain, "postProcess") || EqualsIgnoreCase(domain, "post_process") || EqualsIgnoreCase(domain, "postprocess")) return "postProcess";
+    if (EqualsIgnoreCase(domain, "userInterface") || EqualsIgnoreCase(domain, "user_interface") || EqualsIgnoreCase(domain, "userinterface") || EqualsIgnoreCase(domain, "ui")) return "userInterface";
+    return domain;
+}
+
+static std::string_view CanonicalGraphShadingModelName(std::string_view shadingModel) noexcept {
+    if (shadingModel.empty()) return "defaultLit";
+    if (EqualsIgnoreCase(shadingModel, "unlit")) return "unlit";
+    if (EqualsIgnoreCase(shadingModel, "lit") || EqualsIgnoreCase(shadingModel, "defaultLit") || EqualsIgnoreCase(shadingModel, "default_lit") || EqualsIgnoreCase(shadingModel, "defaultlit")) return "defaultLit";
+    if (EqualsIgnoreCase(shadingModel, "subsurface")) return "subsurface";
+    if (EqualsIgnoreCase(shadingModel, "clearCoat") || EqualsIgnoreCase(shadingModel, "clear_coat") || EqualsIgnoreCase(shadingModel, "clearcoat")) return "clearCoat";
+    if (EqualsIgnoreCase(shadingModel, "cloth")) return "cloth";
+    if (EqualsIgnoreCase(shadingModel, "hair")) return "hair";
+    if (EqualsIgnoreCase(shadingModel, "eye")) return "eye";
+    if (EqualsIgnoreCase(shadingModel, "singleLayerWater") || EqualsIgnoreCase(shadingModel, "single_layer_water") || EqualsIgnoreCase(shadingModel, "singlelayerwater")) return "singleLayerWater";
+    if (EqualsIgnoreCase(shadingModel, "thinTranslucent") || EqualsIgnoreCase(shadingModel, "thin_translucent") || EqualsIgnoreCase(shadingModel, "thintranslucent")) return "thinTranslucent";
+    return shadingModel;
+}
+
+static std::string_view CanonicalGraphBlendModeName(std::string_view blendMode) noexcept {
+    if (blendMode.empty()) return "opaque";
+    if (EqualsIgnoreCase(blendMode, "opaque")) return "opaque";
+    if (EqualsIgnoreCase(blendMode, "masked") || EqualsIgnoreCase(blendMode, "mask")) return "masked";
+    if (EqualsIgnoreCase(blendMode, "translucent") || EqualsIgnoreCase(blendMode, "transparent") || EqualsIgnoreCase(blendMode, "alpha")) return "translucent";
+    if (EqualsIgnoreCase(blendMode, "additive")) return "additive";
+    if (EqualsIgnoreCase(blendMode, "modulate")) return "modulate";
+    if (EqualsIgnoreCase(blendMode, "alphaComposite") || EqualsIgnoreCase(blendMode, "alpha_composite") || EqualsIgnoreCase(blendMode, "alphacomposite") || EqualsIgnoreCase(blendMode, "premultipliedAlpha") || EqualsIgnoreCase(blendMode, "premultiplied_alpha")) return "alphaComposite";
+    if (EqualsIgnoreCase(blendMode, "alphaHoldout") || EqualsIgnoreCase(blendMode, "alpha_holdout") || EqualsIgnoreCase(blendMode, "alphaholdout")) return "alphaHoldout";
+    return blendMode;
+}
+
 RenderMaterialGraphDocument MakeDefaultRenderMaterialGraphDocument() {
     RenderMaterialGraphDocument graph{};
     graph.documentVersion = kRenderMaterialGraphDocumentVersion;
     graph.hasExplicitDocumentVersion = true;
     graph.hasExplicitArtifactFailurePolicy = true;
     graph.materialDomain = "surface";
-    graph.shadingModel = "lit";
+    graph.shadingModel = "defaultLit";
     graph.storageModel = "inline-kbmat";
     graph.diagnosticSchemaVersion = 1U;
     graph.persistCompileDiagnostics = true;
@@ -3005,9 +5041,9 @@ RenderMaterialGraphDocument MakeDefaultRenderMaterialGraphDocument() {
 
 void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterialGraphDocument& graph) {
     output << "graphVersion " << (graph.documentVersion == 0U ? kRenderMaterialGraphDocumentVersion : graph.documentVersion) << '\n';
-    output << "graphMaterialDomain " << (graph.materialDomain.empty() ? "surface" : graph.materialDomain) << '\n';
-    output << "graphShadingModel " << (graph.shadingModel.empty() ? "lit" : graph.shadingModel) << '\n';
-    output << "graphBlendMode " << (graph.blendMode.empty() ? "opaque" : graph.blendMode) << '\n';
+    output << "graphMaterialDomain " << CanonicalGraphMaterialDomainName(graph.materialDomain) << '\n';
+    output << "graphShadingModel " << CanonicalGraphShadingModelName(graph.shadingModel) << '\n';
+    output << "graphBlendMode " << CanonicalGraphBlendModeName(graph.blendMode) << '\n';
     output << "graphStorageModel " << (graph.storageModel.empty() ? "inline-kbmat" : graph.storageModel) << '\n';
     output << "graphDiagnosticSchemaVersion " << (graph.diagnosticSchemaVersion == 0U ? 1U : graph.diagnosticSchemaVersion) << '\n';
     output << "graphPersistCompileDiagnostics " << (graph.persistCompileDiagnostics ? "true" : "false") << '\n';
@@ -3039,16 +5075,59 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
                 << node.parameter.editorOrder << ' '
                 << (node.parameter.description.empty() ? "_" : EncodeToken(node.parameter.description)) << '\n';
         }
+        if (node.kind == RenderMaterialGraphNodeKind::CustomCode ||
+            node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            output << "graphCustomCode "
+                << node.id << ' '
+                << RenderMaterialGraphPinTypeName(node.customCode.outputType) << ' '
+                << EncodeCustomPinSpec(node.customCode.inputs) << ' '
+                << EncodeCustomPinSpec(node.customCode.outputs) << ' '
+                << (node.customCode.defines.empty() ? "_" : EncodeToken(node.customCode.defines)) << ' '
+                << (node.customCode.includes.empty() ? "_" : EncodeToken(node.customCode.includes)) << ' '
+                << (node.customCode.body.empty() ? "_" : EncodeToken(node.customCode.body)) << '\n';
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::LayerStack) {
+            for (std::size_t index = 0U; index < node.layerStack.size(); ++index) {
+                const RenderMaterialGraphLayerStackEntry& entry = node.layerStack[index];
+                output << "graphLayerStackEntry "
+                    << node.id << ' '
+                    << index << ' '
+                    << entry.layerFunctionAssetId << ' '
+                    << entry.blendFunctionAssetId << ' '
+                    << (entry.enabled ? "true" : "false") << ' '
+                    << (entry.layerName.empty() ? "_" : EncodeToken(entry.layerName)) << ' '
+                    << (entry.blendName.empty() ? "_" : EncodeToken(entry.blendName)) << ' '
+                    << (entry.linkState.empty() ? "_" : EncodeToken(entry.linkState)) << '\n';
+                for (const RenderMaterialGraphLayerStackParameter& parameter : entry.layerParameters) {
+                    output << "graphLayerStackParameter "
+                        << node.id << ' '
+                        << index << ' '
+                        << "layer" << ' '
+                        << (parameter.pinName.empty() ? "_" : EncodeToken(parameter.pinName)) << ' '
+                        << RenderMaterialGraphPinTypeName(parameter.type) << ' '
+                        << (parameter.valueHint.empty() ? "_" : EncodeToken(parameter.valueHint)) << '\n';
+                }
+                for (const RenderMaterialGraphLayerStackParameter& parameter : entry.blendParameters) {
+                    output << "graphLayerStackParameter "
+                        << node.id << ' '
+                        << index << ' '
+                        << "blend" << ' '
+                        << (parameter.pinName.empty() ? "_" : EncodeToken(parameter.pinName)) << ' '
+                        << RenderMaterialGraphPinTypeName(parameter.type) << ' '
+                        << (parameter.valueHint.empty() ? "_" : EncodeToken(parameter.valueHint)) << '\n';
+                }
+            }
+        }
     }
     for (const RenderMaterialGraphLink& link : graph.links) {
         const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link.fromNodeId);
         const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
         const std::uint32_t fromPinId = link.fromPinId != 0U || fromNode == nullptr
             ? link.fromPinId
-            : RenderMaterialGraphStablePinId(fromNode->kind, link.fromPin, true);
+            : RenderMaterialGraphStablePinId(*fromNode, link.fromPin, true);
         const std::uint32_t toPinId = link.toPinId != 0U || toNode == nullptr
             ? link.toPinId
-            : RenderMaterialGraphStablePinId(toNode->kind, link.toPin, false);
+            : RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
         const std::uint32_t linkId = link.id != 0U
             ? link.id
             : MakeRenderMaterialGraphLinkId(RenderMaterialGraphLink{
@@ -3066,9 +5145,46 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
             << toPinId << ' '
             << link.toPin << '\n';
     }
+    for (const RenderMaterialGraphCommentBox& comment : graph.comments) {
+        output << "graphComment "
+            << comment.id << ' '
+            << comment.positionX << ' '
+            << comment.positionY << ' '
+            << comment.width << ' '
+            << comment.height << ' '
+            << comment.color << ' '
+            << (comment.text.empty() ? "_" : EncodeToken(comment.text)) << '\n';
+    }
+    for (const RenderMaterialGraphCompositeSubgraph& composite : graph.composites) {
+        output << "graphComposite "
+            << composite.id << ' '
+            << composite.positionX << ' '
+            << composite.positionY << ' '
+            << composite.width << ' '
+            << composite.height << ' '
+            << composite.color << ' '
+            << (composite.collapsed ? "true" : "false") << ' '
+            << (composite.name.empty() ? "_" : EncodeToken(composite.name)) << ' '
+            << EncodeGraphNodeIdList(composite.nodeIds) << '\n';
+    }
 }
 
 bool RenderMaterialGraphIrBuildResult::Succeeded() const noexcept {
+    return std::none_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
+        return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
+    });
+}
+
+const RenderMaterialGraphFunctionLibraryEntry* RenderMaterialGraphFunctionLibrary::Find(std::uint64_t assetId) const noexcept {
+    for (const RenderMaterialGraphFunctionLibraryEntry& entry : entries) {
+        if (entry.assetId == assetId) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+bool RenderMaterialGraphFunctionInlineResult::Succeeded() const noexcept {
     return std::none_of(diagnostics.begin(), diagnostics.end(), [](const RenderMaterialGraphDiagnostic& diagnostic) {
         return diagnostic.severity == RenderMaterialGraphDiagnosticSeverity::Error;
     });
@@ -3110,6 +5226,30 @@ void RenderMaterialGraphCompileArtifactCache::Store(RenderMaterialGraphCompileAr
         }
     }
     artifacts_.push_back(std::move(artifact));
+    EnforceCapacity();
+}
+
+void RenderMaterialGraphCompileArtifactCache::SetCapacity(std::size_t maxEntries) noexcept {
+    maxEntries_ = maxEntries;
+    EnforceCapacity();
+}
+
+std::size_t RenderMaterialGraphCompileArtifactCache::Capacity() const noexcept {
+    return maxEntries_;
+}
+
+std::size_t RenderMaterialGraphCompileArtifactCache::EvictionCount() const noexcept {
+    return evictionCount_;
+}
+
+void RenderMaterialGraphCompileArtifactCache::EnforceCapacity() noexcept {
+    if (maxEntries_ == 0U) {
+        return;
+    }
+    while (artifacts_.size() > maxEntries_) {
+        artifacts_.erase(artifacts_.begin());
+        ++evictionCount_;
+    }
 }
 
 bool RenderMaterialGraphCompileArtifactCache::Invalidate(const RenderMaterialGraphCompileArtifactCacheKey& key) {
@@ -3134,16 +5274,76 @@ std::size_t RenderMaterialGraphCompileArtifactCache::InvalidateGraphContentHash(
 
 void RenderMaterialGraphCompileArtifactCache::Clear() noexcept {
     artifacts_.clear();
+    evictionCount_ = 0U;
 }
 
 std::size_t RenderMaterialGraphCompileArtifactCache::Size() const noexcept {
     return artifacts_.size();
 }
 
-RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifactCacheKey(
+std::vector<std::uint64_t> DiscoverRenderMaterialGraphFunctionDependencies(const RenderMaterialGraphDocument& graph) {
+    std::vector<std::uint64_t> dependencies;
+    const auto appendUnique = [&dependencies](std::uint64_t assetId) {
+        if (assetId == 0U || std::find(dependencies.begin(), dependencies.end(), assetId) != dependencies.end()) {
+            return;
+        }
+        dependencies.push_back(assetId);
+    };
+    for (const RenderMaterialGraphNode& node : graph.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            appendUnique(MaterialFunctionCallAssetId(node));
+        } else if (node.kind == RenderMaterialGraphNodeKind::LayerStack) {
+            for (const RenderMaterialGraphLayerStackEntry& entry : node.layerStack) {
+                appendUnique(entry.layerFunctionAssetId);
+                appendUnique(entry.blendFunctionAssetId);
+            }
+        }
+    }
+    std::sort(dependencies.begin(), dependencies.end());
+    return dependencies;
+}
+
+RenderMaterialGraphFunctionInlineResult InlineRenderMaterialGraphFunctions(
     const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphBuildContext context) {
+    RenderMaterialGraphFunctionInlineResult result{
+        .graph = graph,
+    };
+    static_cast<void>(ExpandMaterialLayerStacks(result.graph, result.diagnostics));
+    if (!result.Succeeded()) {
+        return result;
+    }
+    if (!GraphContainsNodeKind(result.graph, RenderMaterialGraphNodeKind::MaterialFunctionCall)) {
+        return result;
+    }
+
+    std::vector<std::uint64_t> functionStack;
+    bool changed = true;
+    std::size_t guard = 0U;
+    while (changed && guard < 128U && result.Succeeded()) {
+        changed = InlineMaterialGraphFunctionsRecursive(result.graph, context, functionStack, result.diagnostics);
+        ++guard;
+    }
+    if (guard == 128U && result.Succeeded()) {
+        AddGraphDiagnostic(
+            result.diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::MaterialFunctionCycle,
+            0U,
+            0U,
+            {},
+            "Material function inlining exceeded the expansion guard.");
+    }
+    return result;
+}
+
+RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifactCacheKey(
+    const RenderMaterialGraphDocument& sourceGraph,
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies,
-    std::uint64_t shaderIncludeHash) {
+    std::uint64_t shaderIncludeHash,
+    RenderMaterialGraphBuildContext context) {
+    RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(sourceGraph, context);
+    const RenderMaterialGraphDocument& graph = inlineResult.Succeeded() ? inlineResult.graph : sourceGraph;
     std::ostringstream canonicalGraph;
     WriteRenderMaterialGraphDocument(canonicalGraph, graph);
 
@@ -3151,6 +5351,30 @@ RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifa
     HashString64(graphHash, canonicalGraph.str());
 
     std::vector<RenderMaterialGraphDependencyHashInput> sortedDependencies(dependencies.begin(), dependencies.end());
+    if (context.functionLibrary != nullptr) {
+        std::vector<std::uint64_t> pending = DiscoverRenderMaterialGraphFunctionDependencies(sourceGraph);
+        std::vector<std::uint64_t> visited;
+        while (!pending.empty()) {
+            const std::uint64_t assetId = pending.back();
+            pending.pop_back();
+            if (std::find(visited.begin(), visited.end(), assetId) != visited.end()) {
+                continue;
+            }
+            visited.push_back(assetId);
+            if (const RenderMaterialGraphFunctionLibraryEntry* entry = context.functionLibrary->Find(assetId)) {
+                sortedDependencies.push_back(RenderMaterialGraphDependencyHashInput{
+                    .assetId = entry->assetId,
+                    .contentHash = entry->contentHash,
+                    .name = entry->name,
+                });
+                for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(entry->graph)) {
+                    if (std::find(visited.begin(), visited.end(), nestedAssetId) == visited.end()) {
+                        pending.push_back(nestedAssetId);
+                    }
+                }
+            }
+        }
+    }
     std::sort(sortedDependencies.begin(), sortedDependencies.end(), [](const RenderMaterialGraphDependencyHashInput& lhs, const RenderMaterialGraphDependencyHashInput& rhs) {
         if (lhs.assetId != rhs.assetId) {
             return lhs.assetId < rhs.assetId;
@@ -3169,6 +5393,18 @@ RenderMaterialGraphCompileArtifactCacheKey BuildRenderMaterialGraphCompileArtifa
     HashString64(combined, std::to_string(graphHash));
     HashString64(combined, std::to_string(dependencyHash));
     HashString64(combined, std::to_string(shaderIncludeHash));
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::QualitySwitch)) {
+        HashString64(combined, std::string{ RenderMaterialGraphQualityLevelPinName(context.qualityLevel) });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::FeatureLevelSwitch)) {
+        HashString64(combined, std::string{ RenderMaterialGraphFeatureLevelPinName(context.featureLevel) });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShadingPathSwitch)) {
+        HashString64(combined, std::string{ RenderMaterialGraphShadingPathPinName(context.shadingPath) });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShaderStageSwitch)) {
+        HashString64(combined, std::string{ RenderMaterialGraphShaderStagePinName(context.shaderStage) });
+    }
     return RenderMaterialGraphCompileArtifactCacheKey{
         .graphContentHash = graphHash,
         .dependencyHash = dependencyHash,
@@ -3184,11 +5420,21 @@ RenderMaterialGraphCompileArtifactCacheResult CompileRenderMaterialGraphWithArti
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies,
     std::uint64_t shaderIncludeHash) {
     RenderMaterialGraphCompileArtifactCacheResult result{};
-    result.key = BuildRenderMaterialGraphCompileArtifactCacheKey(graph, dependencies, shaderIncludeHash);
+    result.key = BuildRenderMaterialGraphCompileArtifactCacheKey(graph, dependencies, shaderIncludeHash, context);
     if (const RenderMaterialGraphCompileArtifact* cached = cache.Find(result.key)) {
         result.compile.shader = cached->shader;
-        result.compile.diagnostics = ValidateRenderMaterialGraphDocument(graph);
-        AttachDiagnosticContext(graph, context, result.compile.diagnostics);
+        RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(graph, context);
+        result.compile.diagnostics = std::move(inlineResult.diagnostics);
+        if (inlineResult.Succeeded()) {
+            std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(inlineResult.graph);
+            AttachDiagnosticContext(inlineResult.graph, context, validationDiagnostics);
+            result.compile.diagnostics.insert(
+                result.compile.diagnostics.end(),
+                std::make_move_iterator(validationDiagnostics.begin()),
+                std::make_move_iterator(validationDiagnostics.end()));
+        } else {
+            AttachDiagnosticContext(graph, context, result.compile.diagnostics);
+        }
         result.cacheHit = true;
         return result;
     }
@@ -3204,9 +5450,16 @@ RenderMaterialGraphCompileArtifactCacheResult CompileRenderMaterialGraphWithArti
 }
 
 RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
-    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphDocument& sourceGraph,
     RenderMaterialGraphBuildContext context) {
     RenderMaterialGraphIrBuildResult result{};
+    RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(sourceGraph, context);
+    result.diagnostics = std::move(inlineResult.diagnostics);
+    if (!inlineResult.Succeeded()) {
+        AttachDiagnosticContext(sourceGraph, context, result.diagnostics);
+        return result;
+    }
+    const RenderMaterialGraphDocument graph = std::move(inlineResult.graph);
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (!IsKnownNodeKind(node.kind)) {
@@ -3216,7 +5469,7 @@ RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
             .nodeId = node.id,
             .kind = node.kind,
         };
-        AppendIrPins(irNode);
+        AppendIrPins(irNode, node);
         result.ir.nodes.push_back(std::move(irNode));
     }
 
@@ -3227,14 +5480,14 @@ RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
             continue;
         }
 
-        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, link.fromPin, true);
-        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(toNode->kind, link.toPin, false);
+        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(*fromNode, link.fromPin, true);
+        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(*toNode, link.toPin, false);
         const std::uint32_t fromPinId = link.fromPinId != 0U
             ? link.fromPinId
-            : RenderMaterialGraphStablePinId(fromNode->kind, link.fromPin, true);
+            : RenderMaterialGraphStablePinId(*fromNode, link.fromPin, true);
         const std::uint32_t toPinId = link.toPinId != 0U
             ? link.toPinId
-            : RenderMaterialGraphStablePinId(toNode->kind, link.toPin, false);
+            : RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
         const std::uint32_t linkId = link.id != 0U
             ? link.id
             : MakeRenderMaterialGraphLinkId(RenderMaterialGraphLink{
@@ -3270,18 +5523,35 @@ RenderMaterialGraphIrBuildResult BuildRenderMaterialGraphIr(
         }
     }
 
-    result.diagnostics = ValidateRenderMaterialGraphDocument(graph);
-    AttachDiagnosticContext(graph, context, result.diagnostics);
+    std::vector<RenderMaterialGraphDiagnostic> validationDiagnostics = ValidateRenderMaterialGraphDocument(graph);
+    AttachDiagnosticContext(graph, context, validationDiagnostics);
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        std::make_move_iterator(validationDiagnostics.begin()),
+        std::make_move_iterator(validationDiagnostics.end()));
     return result;
 }
 
 RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
-    const RenderMaterialGraphDocument& graph,
+    const RenderMaterialGraphDocument& sourceGraph,
     RenderMaterialGraphBuildContext context) {
     g_renderMaterialGraphCompileInvocationCount.fetch_add(1U, std::memory_order_relaxed);
     RenderMaterialGraphCompileResult result{};
-    RenderMaterialGraphIrBuildResult ir = BuildRenderMaterialGraphIr(graph, context);
-    result.diagnostics = std::move(ir.diagnostics);
+    RenderMaterialGraphFunctionInlineResult inlineResult = InlineRenderMaterialGraphFunctions(sourceGraph, context);
+    result.diagnostics = std::move(inlineResult.diagnostics);
+    if (!inlineResult.Succeeded()) {
+        AttachDiagnosticContext(sourceGraph, context, result.diagnostics);
+        return result;
+    }
+
+    const RenderMaterialGraphDocument graph = std::move(inlineResult.graph);
+    RenderMaterialGraphBuildContext inlinedContext = context;
+    inlinedContext.functionLibrary = nullptr;
+    RenderMaterialGraphIrBuildResult ir = BuildRenderMaterialGraphIr(graph, inlinedContext);
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        std::make_move_iterator(ir.diagnostics.begin()),
+        std::make_move_iterator(ir.diagnostics.end()));
     if (!ir.Succeeded()) {
         return result;
     }
@@ -3321,7 +5591,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     constexpr std::size_t kStaticSwitchPermutationWarnThreshold = 8U; // 2^8 = 256 permutations.
     std::size_t staticSwitchCount = 0U;
     for (const RenderMaterialGraphNode& staticNode : graph.nodes) {
-        if (staticNode.kind == RenderMaterialGraphNodeKind::StaticSwitch) {
+        if (IsStaticVariantSwitchNode(staticNode.kind)) {
             ++staticSwitchCount;
         }
     }
@@ -3363,21 +5633,33 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         std::string name;
         std::string stableId;
         RenderMaterialGraphNodeKind kind;
+        RenderMaterialGraphReflectionUniformSource source = RenderMaterialGraphReflectionUniformSource::MaterialParameter;
+        std::uint64_t collectionAssetId = 0U;
+        std::string collectionParameterStableId;
+        std::array<float, 4U> defaultValue{};
     };
     struct ReflectionTextureEntry {
         std::string samplerName;
         std::string stableId;
         RenderMaterialTextureColorSpace colorSpace;
         RenderMaterialGraphSamplerState samplerState;
+        RenderMaterialGraphTextureDimension dimension;
     };
 
     std::vector<ReflectionUniformEntry> uniformEntries;
     std::vector<ReflectionTextureEntry> textureEntries;
     bool needsUv0 = false;
     bool usesSceneDepth = false;
+    bool usesSceneColor = false;
     bool usesHsv = false;
     bool usesBlackBody = false;
     bool usesNoise = false;
+    bool usesVertexColor = false;
+    bool usesPerInstanceRandom = false;
+    bool usesPerInstanceFadeAmount = false;
+    bool usesPerInstanceCustomData = false;
+    bool usesPreSkinnedPosition = false;
+    bool usesPreSkinnedNormal = false;
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (std::find(reachable.begin(), reachable.end(), node.id) == reachable.end()) {
@@ -3389,6 +5671,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             // MAT-80/#18b: these nodes sample the opaque scene depth (screen-space) which the scene binds
             // into the graph fragment shader for the transparent pass.
             usesSceneDepth = true;
+            break;
+        case RenderMaterialGraphNodeKind::SceneColor:
+            usesSceneColor = true;
+            break;
+        case RenderMaterialGraphNodeKind::SceneTexture:
+            if (SceneTextureReadsDepth(node)) {
+                usesSceneDepth = true;
+            } else {
+                usesSceneColor = true;
+            }
             break;
         case RenderMaterialGraphNodeKind::HsvToRgb:
         case RenderMaterialGraphNodeKind::RgbToHsv:
@@ -3413,12 +5705,75 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::ParameterColor:
             uniformEntries.push_back({ ParameterUniformName(node, "_rgba"), StableParameterId(node), node.kind });
             break;
+        case RenderMaterialGraphNodeKind::CollectionParameter:
+            uniformEntries.push_back(ReflectionUniformEntry{
+                .name = CollectionParameterUniformName(node),
+                .stableId = StableParameterId(node),
+                .kind = node.kind,
+                .source = RenderMaterialGraphReflectionUniformSource::ParameterCollection,
+                .collectionAssetId = RenderMaterialGraphCollectionAssetId(node),
+                .collectionParameterStableId = StableParameterId(node),
+            });
+            break;
         case RenderMaterialGraphNodeKind::TextureSample:
+        case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        case RenderMaterialGraphNodeKind::TextureSample2DArray:
             if (!HasInputLink(graph, node.id, "texture")) {
                 const std::string textureRole = EffectiveTextureRoleForNode(node);
-                textureEntries.push_back({ ParameterUniformName(node, "_texture"), StableParameterId(node), EffectiveTextureColorSpaceForNode(node, textureRole), node.parameter.samplerState });
+                textureEntries.push_back({
+                    ParameterUniformName(node, "_texture"),
+                    StableParameterId(node),
+                    EffectiveTextureColorSpaceForNode(node, textureRole),
+                    node.parameter.samplerState,
+                    TextureDimensionForNode(node.kind),
+                });
             }
             needsUv0 = true;
+            break;
+        case RenderMaterialGraphNodeKind::TextureSampleCube:
+            if (!HasInputLink(graph, node.id, "texture")) {
+                const std::string textureRole = EffectiveTextureRoleForNode(node);
+                textureEntries.push_back({
+                    ParameterUniformName(node, "_texture"),
+                    StableParameterId(node),
+                    EffectiveTextureColorSpaceForNode(node, textureRole),
+                    node.parameter.samplerState,
+                    TextureDimensionForNode(node.kind),
+                });
+            }
+            break;
+        case RenderMaterialGraphNodeKind::ParameterTexture:
+        case RenderMaterialGraphNodeKind::TextureObject:
+        case RenderMaterialGraphNodeKind::TextureObjectCube:
+        case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        case RenderMaterialGraphNodeKind::TextureObject2DArray: {
+            const std::string textureRole = EffectiveTextureRoleForNode(node);
+            textureEntries.push_back({
+                ParameterUniformName(node, "_texture"),
+                StableParameterId(node),
+                EffectiveTextureColorSpaceForNode(node, textureRole),
+                node.parameter.samplerState,
+                TextureDimensionForNode(node.kind),
+            });
+            break;
+        }
+        case RenderMaterialGraphNodeKind::VertexColor:
+            usesVertexColor = true;
+            break;
+        case RenderMaterialGraphNodeKind::PerInstanceRandom:
+            usesPerInstanceRandom = true;
+            break;
+        case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+            usesPerInstanceFadeAmount = true;
+            break;
+        case RenderMaterialGraphNodeKind::PerInstanceCustomData:
+            usesPerInstanceCustomData = true;
+            break;
+        case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+            usesPreSkinnedPosition = true;
+            break;
+        case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+            usesPreSkinnedNormal = true;
             break;
         case RenderMaterialGraphNodeKind::Uv:
         case RenderMaterialGraphNodeKind::TextureCoordinate:
@@ -3434,7 +5789,16 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     }
 
     std::sort(uniformEntries.begin(), uniformEntries.end(), [](const ReflectionUniformEntry& a, const ReflectionUniformEntry& b) {
-        return a.stableId < b.stableId;
+        if (a.source != b.source) {
+            return static_cast<std::uint8_t>(a.source) < static_cast<std::uint8_t>(b.source);
+        }
+        if (a.collectionAssetId != b.collectionAssetId) {
+            return a.collectionAssetId < b.collectionAssetId;
+        }
+        if (a.stableId != b.stableId) {
+            return a.stableId < b.stableId;
+        }
+        return a.name < b.name;
     });
     std::sort(textureEntries.begin(), textureEntries.end(), [](const ReflectionTextureEntry& a, const ReflectionTextureEntry& b) {
         return a.stableId < b.stableId;
@@ -3462,14 +5826,19 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     }
     for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(textureEntries.size()); ++index) {
         const std::uint32_t stage = kRenderMaterialGraphTextureBaseSlot + index;
-        source += "SAMPLER2D(" + textureEntries[index].samplerName + ", " + std::to_string(stage) + ");\n";
+        source += std::string{ TextureSamplerMacro(textureEntries[index].dimension) } + "(" +
+            textureEntries[index].samplerName + ", " + std::to_string(stage) + ");\n";
+    }
+    if (usesSceneColor) {
+        // MAT-31: transparent graph materials can sample an opaque scene-color snapshot bound at slot 4.
+        source += "SAMPLER2D(s_kbSceneColor, 4);\n";
     }
     if (usesSceneDepth) {
         // MAT-80/#18b: the opaque scene depth is bound by the scene at the reserved slot 5 (a graph fragment
         // shader does not use the builtin PBR sampler slots 0-5; 6+ are the graph's own textures).
         source += "SAMPLER2D(s_kbSceneDepth, 5);\n";
     }
-    if (!uniformEntries.empty() || !textureEntries.empty() || usesSceneDepth) {
+    if (!uniformEntries.empty() || !textureEntries.empty() || usesSceneColor || usesSceneDepth) {
         source += "\n";
     }
 
@@ -3483,11 +5852,19 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 viewDir;\n";
     source += "    vec4 vertexColor;\n";
     source += "    float time;\n";
+    source += "    float deltaTime;\n";
+    source += "    vec4 dynamicParameter;\n";
     source += "    vec2 screenPosition;\n";
     source += "    vec3 localPosition;\n";
     source += "    vec3 objectPosition;\n";
     source += "    float perInstanceRandom;\n";
+    source += "    float perInstanceFadeAmount;\n";
+    source += "    float perInstanceCustomData;\n";
     source += "    float objectRadius;\n";
+    source += "    vec4 objectBounds;\n";
+    source += "    vec3 objectOrientation;\n";
+    source += "    vec3 preSkinnedPosition;\n";
+    source += "    vec3 preSkinnedNormal;\n";
     // MAT-46: world/object-space inputs populated by the wrapper in every pass so the nodes are shadow-safe.
     source += "    vec3 cameraPosition;\n";
     source += "    vec3 lightVector;\n";
@@ -3573,7 +5950,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
     }
 
-    GraphCodegen cg{ .graph = graph, .diagnostics = result.diagnostics };
+    RenderMaterialGraphBuildContext fragmentContext = context;
+    fragmentContext.shaderStage = RenderMaterialGraphShaderStage::Fragment;
+    GraphCodegen cg{ .graph = graph, .context = fragmentContext, .diagnostics = result.diagnostics };
     for (const RenderMaterialGraphLink& link : graph.links) {
         ++cg.fanOut[link.fromNodeId];
     }
@@ -3581,35 +5960,59 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         return CompileInputExpression(cg, *outputNode, outputPin, outputType, std::move(fallback));
     };
 
-    source += "MaterialSurface EvaluateMaterialGraph(MaterialGraphContext ctx) {\n";
-    source += "    MaterialSurface material;\n";
+    const bool useMaterialAttributes = HasInputLink(graph, outputNode->id, "attributes");
+    std::string attributesExpr;
+    std::string baseColorExpr;
+    std::string metallicExpr;
+    std::string roughnessExpr;
+    std::string normalExpr;
+    std::string occlusionExpr;
+    std::string emissiveExpr;
+    std::string alphaExpr;
+    std::string alphaClipThresholdExpr;
+    std::string specularExpr;
+    std::string anisotropyExpr;
+    std::string tangentExpr;
+    std::string subsurfaceColorExpr;
+    std::string clearCoatExpr;
+    std::string clearCoatRoughnessExpr;
+    std::string refractionExpr;
+    std::string surfaceThicknessExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (UE's "Use Material Attributes" mode); the per-channel pins are bypassed entirely.
-    if (HasInputLink(graph, outputNode->id, "attributes")) {
-        const std::string attributesExpr = compileOutput("attributes", RenderMaterialGraphPinType::MaterialAttributes, "");
+    if (useMaterialAttributes) {
+        attributesExpr = compileOutput("attributes", RenderMaterialGraphPinType::MaterialAttributes, "");
+    } else {
+        baseColorExpr = compileOutput("baseColor", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
+        metallicExpr = compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0");
+        roughnessExpr = compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0");
+        normalExpr = compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+        occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
+        emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
+        alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
+        alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
+        // MAT-35: advanced fragment-domain surface outputs. They extend the surface contract; advanced shading
+        // models (#24) consume them, the base forward lighting uses the core PBR subset.
+        specularExpr = compileOutput("specular", RenderMaterialGraphPinType::Float, "0.5");
+        anisotropyExpr = compileOutput("anisotropy", RenderMaterialGraphPinType::Float, "0.0");
+        tangentExpr = compileOutput("tangent", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
+        subsurfaceColorExpr = compileOutput("subsurfaceColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
+        clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "0.0");
+        clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.0");
+        refractionExpr = compileOutput("refraction", RenderMaterialGraphPinType::Float, "0.0");
+        surfaceThicknessExpr = compileOutput("surfaceThickness", RenderMaterialGraphPinType::Float, "0.0");
+    }
+
+    std::unordered_set<std::uint32_t> emittedCustomFunctionDefinitions;
+    AppendCustomCodeFunctionDefinitions(source, cg.functionDefinitions, emittedCustomFunctionDefinitions);
+
+    source += "MaterialSurface EvaluateMaterialGraph(MaterialGraphContext ctx) {\n";
+    source += "    MaterialSurface material;\n";
+    if (useMaterialAttributes) {
         source += cg.statements;
         source += "    material = " + attributesExpr + ";\n";
     } else {
-        const std::string baseColorExpr = compileOutput("baseColor", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
-        const std::string metallicExpr = compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string roughnessExpr = compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0");
-        const std::string normalExpr = compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
-        const std::string occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
-        const std::string emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
-        const std::string alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
-        const std::string alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
-        // MAT-35: advanced fragment-domain surface outputs. They extend the surface contract; advanced shading
-        // models (#24) consume them, the base forward lighting uses the core PBR subset.
-        const std::string specularExpr = compileOutput("specular", RenderMaterialGraphPinType::Float, "0.5");
-        const std::string anisotropyExpr = compileOutput("anisotropy", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string tangentExpr = compileOutput("tangent", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
-        const std::string subsurfaceColorExpr = compileOutput("subsurfaceColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
-        const std::string clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string refractionExpr = compileOutput("refraction", RenderMaterialGraphPinType::Float, "0.0");
-        const std::string surfaceThicknessExpr = compileOutput("surfaceThickness", RenderMaterialGraphPinType::Float, "0.0");
-
         source += cg.statements;
         source += "    material.baseColor = " + baseColorExpr + ";\n";
         source += "    material.metallic = " + metallicExpr + ";\n";
@@ -3631,20 +6034,40 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    return material;\n";
     source += "}\n";
 
-    // MAT-81: world position offset is a vertex-domain output. Compile it with a fresh codegen so the
-    // generated function only contains the WPO subgraph, then the generated vertex shader evaluates it
-    // with a vertex-populated context and offsets the world position before projection.
+    // MAT-67/#54: vertex-domain outputs compile with fresh codegen so each generated function only
+    // contains its own subgraph. The generated vertex shader evaluates them with a vertex-populated
+    // context and writes real geometry/UV state before rasterization.
+    const auto appendVertexOutputFunction = [&](
+        std::string_view inputPin,
+        RenderMaterialGraphPinType type,
+        std::string_view defaultExpr,
+        std::string_view returnType,
+        std::string_view functionName) {
+        RenderMaterialGraphBuildContext vertexContext = context;
+        vertexContext.shaderStage = RenderMaterialGraphShaderStage::Vertex;
+        GraphCodegen vertexCg{ .graph = graph, .context = vertexContext, .diagnostics = result.diagnostics };
+        for (const RenderMaterialGraphLink& link : graph.links) {
+            ++vertexCg.fanOut[link.fromNodeId];
+        }
+        const std::string expr = CompileInputExpression(vertexCg, *outputNode, inputPin, type, std::string{ defaultExpr });
+        AppendCustomCodeFunctionDefinitions(source, vertexCg.functionDefinitions, emittedCustomFunctionDefinitions);
+        source += "\n";
+        source += std::string{ returnType } + " " + std::string{ functionName } + "(MaterialGraphContext ctx) {\n";
+        source += vertexCg.statements;
+        source += "    return " + expr + ";\n";
+        source += "}\n";
+    };
     const bool hasWorldPositionOffset = HasInputLink(graph, outputNode->id, "worldPositionOffset");
     if (hasWorldPositionOffset) {
-        GraphCodegen wpoCg{ .graph = graph, .diagnostics = result.diagnostics };
-        for (const RenderMaterialGraphLink& link : graph.links) {
-            ++wpoCg.fanOut[link.fromNodeId];
-        }
-        const std::string wpoExpr = CompileInputExpression(wpoCg, *outputNode, "worldPositionOffset", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
-        source += "\nvec3 EvaluateWorldPositionOffset(MaterialGraphContext ctx) {\n";
-        source += wpoCg.statements;
-        source += "    return " + wpoExpr + ";\n";
-        source += "}\n";
+        appendVertexOutputFunction("worldPositionOffset", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", "vec3", "EvaluateWorldPositionOffset");
+    }
+    const bool hasCustomizedUv0 = HasInputLink(graph, outputNode->id, "customizedUv0");
+    if (hasCustomizedUv0) {
+        appendVertexOutputFunction("customizedUv0", RenderMaterialGraphPinType::Float2, "ctx.uv0", "vec2", "EvaluateCustomizedUv0");
+    }
+    const bool hasDisplacement = HasInputLink(graph, outputNode->id, "displacement");
+    if (hasDisplacement) {
+        appendVertexOutputFunction("displacement", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", "vec3", "EvaluateDisplacement");
     }
 
     AttachDiagnosticContext(graph, context, result.diagnostics);
@@ -3661,6 +6084,10 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             .name = u.name,
             .stableId = u.stableId,
             .kind = u.kind,
+            .source = u.source,
+            .collectionAssetId = u.collectionAssetId,
+            .collectionParameterStableId = u.collectionParameterStableId,
+            .defaultValue = u.defaultValue,
         });
     }
     for (std::uint32_t index = 0U; index < static_cast<std::uint32_t>(textureEntries.size()); ++index) {
@@ -3670,15 +6097,37 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             .slot = kRenderMaterialGraphTextureBaseSlot + index,
             .colorSpace = textureEntries[index].colorSpace,
             .samplerState = textureEntries[index].samplerState,
+            .dimension = textureEntries[index].dimension,
         });
     }
     if (needsUv0) {
         reflection.requiredVaryings.push_back("uv0");
     }
+    if (usesVertexColor) {
+        reflection.requiredVaryings.push_back("vertexColor");
+    }
+    if (usesPerInstanceRandom) {
+        reflection.requiredVaryings.push_back("perInstanceRandom");
+    }
+    if (usesPerInstanceFadeAmount) {
+        reflection.requiredVaryings.push_back("perInstanceFadeAmount");
+    }
+    if (usesPerInstanceCustomData) {
+        reflection.requiredVaryings.push_back("perInstanceCustomData0");
+    }
+    if (usesPreSkinnedPosition) {
+        reflection.requiredVaryings.push_back("preSkinnedPosition");
+    }
+    if (usesPreSkinnedNormal) {
+        reflection.requiredVaryings.push_back("preSkinnedNormal");
+    }
     reflection.hasWorldPositionOffset = hasWorldPositionOffset;
+    reflection.hasCustomizedUv0 = hasCustomizedUv0;
+    reflection.hasDisplacement = hasDisplacement;
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;
+    reflection.usesSceneColor = usesSceneColor;
 
     result.shader = RenderMaterialGraphShaderSource{
         .entryPoint = "EvaluateMaterialGraph",
@@ -3693,12 +6142,95 @@ std::uint64_t RenderMaterialGraphCompileInvocationCount() noexcept {
     return g_renderMaterialGraphCompileInvocationCount.load(std::memory_order_relaxed);
 }
 
+void ValidateCustomCodePin(
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics,
+    const RenderMaterialGraphNode& node,
+    const RenderMaterialGraphCustomPin& pin,
+    std::string_view role,
+    std::unordered_set<std::string>& names) {
+    if (!IsShaderIdentifier(pin.name)) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            std::string{ role },
+            "CustomCode " + std::string{ role } + " pin name '" + pin.name + "' is not a valid shader identifier.");
+    }
+    if (!names.insert(pin.name).second) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            pin.name,
+            "CustomCode pin name '" + pin.name + "' is declared more than once.");
+    }
+    if (!IsCustomCodeValueType(pin.type)) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            pin.name,
+            "CustomCode pin '" + pin.name + "' uses unsupported type '" + std::string{ RenderMaterialGraphPinTypeName(pin.type) } + "'.");
+    }
+}
+
+void ValidateCustomCodeNode(
+    const RenderMaterialGraphNode& node,
+    std::vector<RenderMaterialGraphDiagnostic>& diagnostics) {
+    if (node.customCode.body.empty()) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            "body",
+            "CustomCode node requires a shader body.");
+    }
+    if (!IsCustomCodeValueType(node.customCode.outputType)) {
+        AddGraphDiagnostic(
+            diagnostics,
+            RenderMaterialGraphDiagnosticSeverity::Error,
+            RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+            node.id,
+            0U,
+            "value",
+            "CustomCode value output uses unsupported type '" + std::string{ RenderMaterialGraphPinTypeName(node.customCode.outputType) } + "'.");
+    }
+
+    std::unordered_set<std::string> names;
+    names.insert("value");
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.inputs) {
+        ValidateCustomCodePin(diagnostics, node, pin, "input", names);
+    }
+    for (const RenderMaterialGraphCustomPin& pin : node.customCode.outputs) {
+        if (pin.name == "value") {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                node.id,
+                0U,
+                pin.name,
+                "CustomCode additional output cannot be named 'value'.");
+        }
+        ValidateCustomCodePin(diagnostics, node, pin, "output", names);
+    }
+}
+
 std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphRenderPath renderPath) {
     std::vector<RenderMaterialGraphDiagnostic> diagnostics;
     const RenderMaterialGraphNode* outputNode = nullptr;
     std::unordered_map<std::string, std::uint32_t> parameterStableIds;
+    std::unordered_map<std::string, std::uint32_t> collectionParameterStableIds;
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (!IsKnownNodeKind(node.kind)) {
             AddGraphDiagnostic(
@@ -3734,8 +6266,120 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
         if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput && outputNode == nullptr) {
             outputNode = &node;
         }
-        const bool textureSampleLocalSlot = node.kind == RenderMaterialGraphNodeKind::TextureSample && !HasInputLink(graph, node.id, "texture");
-        if (IsRenderMaterialGraphParameterNode(node.kind) || textureSampleLocalSlot) {
+        if (node.kind == RenderMaterialGraphNodeKind::CustomCode) {
+            ValidateCustomCodeNode(node, diagnostics);
+        }
+        if (IsRenderMaterialGraphOrganizationNode(node.kind)) {
+            const std::string& typeHint = node.parameter.defaultValueHint;
+            if (!typeHint.empty() && !ParseRenderMaterialGraphPinType(typeHint).has_value()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::TypeMismatch,
+                    node.id,
+                    0U,
+                    node.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage ? "output" : "input",
+                    "Material graph organization node uses unsupported pass-through type '" + typeHint + "'.");
+            }
+        }
+        if (IsRenderMaterialGraphPassThroughNode(node.kind) &&
+            HasOutputLink(graph, node.id, "output") &&
+            !HasInputLink(graph, node.id, "input")) {
+            AddGraphDiagnostic(
+                diagnostics,
+                RenderMaterialGraphDiagnosticSeverity::Error,
+                RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput,
+                node.id,
+                0U,
+                "input",
+                "Material graph pass-through node output is used but its input is disconnected.");
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration) {
+            const std::string key = NamedRerouteKey(node);
+            if (key.empty()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "input",
+                    "NamedRerouteDeclaration requires a stable reroute name.");
+            } else if (NamedRerouteDeclarations(graph, key).size() > 1U) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "input",
+                    "NamedRerouteDeclaration '" + key + "' is duplicated.");
+            }
+            if (!key.empty()) {
+                bool used = false;
+                for (const RenderMaterialGraphNode& candidate : graph.nodes) {
+                    if (candidate.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage &&
+                        NamedRerouteKey(candidate) == key) {
+                        used = true;
+                        break;
+                    }
+                }
+                if (used && !HasInputLink(graph, node.id, "input")) {
+                    AddGraphDiagnostic(
+                        diagnostics,
+                        RenderMaterialGraphDiagnosticSeverity::Error,
+                        RenderMaterialGraphDiagnosticKind::DisconnectedRequiredOutput,
+                        node.id,
+                        0U,
+                        "input",
+                        "NamedRerouteDeclaration '" + key + "' is used but its input is disconnected.");
+                }
+            }
+        }
+        if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+            const std::string key = NamedRerouteKey(node);
+            const std::vector<const RenderMaterialGraphNode*> declarations = NamedRerouteDeclarations(graph, key);
+            if (key.empty()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "output",
+                    "NamedRerouteUsage requires a stable reroute name.");
+            } else if (declarations.empty()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "output",
+                    "NamedRerouteUsage '" + key + "' has no matching declaration.");
+            } else if (declarations.size() > 1U) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "output",
+                    "NamedRerouteUsage '" + key + "' matches multiple declarations.");
+            } else if (PassThroughPinType(*declarations.front()) != PassThroughPinType(node)) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::TypeMismatch,
+                    node.id,
+                    0U,
+                    "output",
+                    "NamedRerouteUsage '" + key + "' type does not match its declaration.");
+            }
+        }
+        const bool textureSampleLocalSlot = IsTextureSampleNode(node.kind) && !HasInputLink(graph, node.id, "texture");
+        const bool textureObjectParameterSlot = IsTextureObjectNode(node.kind);
+        if (IsRenderMaterialGraphParameterNode(node.kind) || textureSampleLocalSlot || textureObjectParameterSlot) {
             const std::string stableId = StableParameterId(node);
             const auto [it, inserted] = parameterStableIds.emplace(stableId, node.id);
             if (!inserted) {
@@ -3749,7 +6393,45 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                     "Material graph parameter stable id '" + stableId + "' is already used by node " + std::to_string(it->second) + ".");
             }
         }
-        if (node.kind == RenderMaterialGraphNodeKind::ParameterTexture || textureSampleLocalSlot) {
+        if (node.kind == RenderMaterialGraphNodeKind::CollectionParameter) {
+            const std::uint64_t collectionAssetId = RenderMaterialGraphCollectionAssetId(node);
+            const std::string stableId = StableParameterId(node);
+            if (collectionAssetId == 0U) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "collection",
+                    "CollectionParameter node requires a material parameter collection asset id.");
+            }
+            if (stableId.empty()) {
+                AddGraphDiagnostic(
+                    diagnostics,
+                    RenderMaterialGraphDiagnosticSeverity::Error,
+                    RenderMaterialGraphDiagnosticKind::ShaderGenerationFailed,
+                    node.id,
+                    0U,
+                    "stableId",
+                    "CollectionParameter node requires a stable parameter id.");
+            }
+            if (collectionAssetId != 0U && !stableId.empty()) {
+                const std::string key = std::to_string(collectionAssetId) + ":" + stableId;
+                const auto [it, inserted] = collectionParameterStableIds.emplace(key, node.id);
+                if (!inserted) {
+                    AddGraphDiagnostic(
+                        diagnostics,
+                        RenderMaterialGraphDiagnosticSeverity::Error,
+                        RenderMaterialGraphDiagnosticKind::DuplicateParameterStableId,
+                        node.id,
+                        0U,
+                        {},
+                        "Material graph collection parameter '" + key + "' is already used by node " + std::to_string(it->second) + ".");
+                }
+            }
+        }
+        if (textureObjectParameterSlot || textureSampleLocalSlot) {
             const std::string textureRole = EffectiveTextureRoleForNode(node);
             const RenderMaterialTextureColorSpace textureColorSpace = EffectiveTextureColorSpaceForNode(node, textureRole);
             const std::optional<RenderMaterialTextureColorSpace> expectedForRole = ExpectedColorSpaceForTextureRole(textureRole);
@@ -3811,11 +6493,11 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 "Material graph link references a missing node.");
             continue;
         }
-        if (!IsRenderMaterialGraphOutputPin(fromNode->kind, link.fromPin) ||
-            !IsRenderMaterialGraphInputPin(toNode->kind, link.toPin) ||
-            !AreRenderMaterialGraphPinsCompatible(fromNode->kind, link.fromPin, toNode->kind, link.toPin)) {
-            const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, link.fromPin, true);
-            const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(toNode->kind, link.toPin, false);
+        if (!IsRenderMaterialGraphOutputPin(*fromNode, link.fromPin) ||
+            !IsRenderMaterialGraphInputPin(*toNode, link.toPin) ||
+            !AreRenderMaterialGraphPinsCompatible(*fromNode, link.fromPin, *toNode, link.toPin)) {
+            const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(*fromNode, link.fromPin, true);
+            const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(*toNode, link.toPin, false);
             AddGraphDiagnostic(
                 diagnostics,
                 RenderMaterialGraphDiagnosticSeverity::Error,
@@ -3882,7 +6564,9 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
             pin == "clearCoatRoughness" ||
             pin == "refraction" ||
             pin == "surfaceThickness" ||
-            pin == "attributes";
+            pin == "attributes" ||
+            pin == "customizedUv0" ||
+            pin == "displacement";
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         return pin == "baseColor" || pin == "metallic" || pin == "roughness" || pin == "normal" ||
             pin == "emissive" || pin == "occlusion" || pin == "alpha";
@@ -3899,6 +6583,14 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "value" || pin == "true" || pin == "false";
     case RenderMaterialGraphNodeKind::StaticComponentMask:
         return pin == "input";
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        return pin == "low" || pin == "med" || pin == "high" || pin == "epic";
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        return pin == "es3" || pin == "sm5" || pin == "sm6";
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return pin == "forward" || pin == "deferred";
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return pin == "vertex" || pin == "fragment";
     case RenderMaterialGraphNodeKind::Panner:
     case RenderMaterialGraphNodeKind::Rotator:
         return pin == "coordinate" || pin == "time";
@@ -3910,8 +6602,27 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "axis" || pin == "angle" || pin == "position";
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "fadeDistance";
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return pin == "input";
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        return pin == "value";
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+    case RenderMaterialGraphNodeKind::LayerStack:
+        return false;
     case RenderMaterialGraphNodeKind::TextureSample:
         return pin == "texture" || pin == "uv";
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        return pin == "texture" || pin == "direction";
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        return pin == "texture" || pin == "uvw";
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        return pin == "texture" || pin == "uv" || pin == "layer";
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        return pin == "uv";
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -3929,6 +6640,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "a" || pin == "b" || pin == "value";
     case RenderMaterialGraphNodeKind::Power:
         return pin == "base" || pin == "exponent";
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return pin == "A" || pin == "B";
     case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Absolute:
     case RenderMaterialGraphNodeKind::Saturate:
@@ -3998,15 +6711,30 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::ParameterVector:
     case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::FunctionInput:
         return false;
     }
     return false;
@@ -4090,24 +6818,47 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ParameterColor:
         return pin == "rgba";
     case RenderMaterialGraphNodeKind::TextureSample:
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
         return pin == "color" || pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::VertexColor:
         return pin == "rgba" || pin == "r" || pin == "g" || pin == "b" || pin == "a";
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return pin == "value" || pin == "scalar" || pin == "xyz" || pin == "rgba" ||
+            pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::ScreenPosition:
         return pin == "xy";
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
-        return pin == "xyz";
+        return pin == "value" || pin == "xyz";
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
         return pin == "texture";
     case RenderMaterialGraphNodeKind::NormalUnpack:
         return pin == "normal";
     case RenderMaterialGraphNodeKind::Uv:
         return pin == "uv";
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+        return pin == "value";
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+        return pin == "rgba" || pin == "r" || pin == "g" || pin == "b" || pin == "a";
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+        return pin == "value" || pin == "xyz";
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
         return pin == "value";
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         return pin == "attributes";
@@ -4125,6 +6876,10 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "value";
     case RenderMaterialGraphNodeKind::StaticSwitch:
     case RenderMaterialGraphNodeKind::StaticComponentMask:
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
     case RenderMaterialGraphNodeKind::ConstantBiasScale:
     case RenderMaterialGraphNodeKind::RotateAboutAxis:
         return pin == "result";
@@ -4146,10 +6901,62 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
+    case RenderMaterialGraphNodeKind::CustomCode:
+        return pin == "value";
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        return pin == "value";
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return false;
+    case RenderMaterialGraphNodeKind::LayerStack:
+        return pin == "attributes";
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return pin == "output";
     case RenderMaterialGraphNodeKind::MaterialOutput:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::FunctionOutput:
         return false;
     }
     return false;
+}
+
+bool IsRenderMaterialGraphInputPin(const RenderMaterialGraphNode& node, std::string_view pin) noexcept {
+    if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        return std::any_of(node.customCode.inputs.begin(), node.customCode.inputs.end(), [pin](const RenderMaterialGraphCustomPin& customPin) {
+            return customPin.name == pin;
+        });
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+        return pin == "value";
+    }
+    if (node.kind != RenderMaterialGraphNodeKind::CustomCode) {
+        return IsRenderMaterialGraphInputPin(node.kind, pin);
+    }
+    return std::any_of(node.customCode.inputs.begin(), node.customCode.inputs.end(), [pin](const RenderMaterialGraphCustomPin& customPin) {
+        return customPin.name == pin;
+    });
+}
+
+bool IsRenderMaterialGraphOutputPin(const RenderMaterialGraphNode& node, std::string_view pin) noexcept {
+    if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        return std::any_of(node.customCode.outputs.begin(), node.customCode.outputs.end(), [pin](const RenderMaterialGraphCustomPin& customPin) {
+            return customPin.name == pin;
+        });
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionInput) {
+        return pin == "value";
+    }
+    if (node.kind != RenderMaterialGraphNodeKind::CustomCode) {
+        return IsRenderMaterialGraphOutputPin(node.kind, pin);
+    }
+    if (pin == "value") {
+        return true;
+    }
+    return std::any_of(node.customCode.outputs.begin(), node.customCode.outputs.end(), [pin](const RenderMaterialGraphCustomPin& customPin) {
+        return customPin.name == pin;
+    });
 }
 
 std::string_view RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType type) noexcept {
@@ -4168,14 +6975,68 @@ std::string_view RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType type)
         return "color";
     case RenderMaterialGraphPinType::Texture2D:
         return "texture2D";
+    case RenderMaterialGraphPinType::TextureCube:
+        return "textureCube";
+    case RenderMaterialGraphPinType::Texture3D:
+        return "texture3D";
+    case RenderMaterialGraphPinType::Texture2DArray:
+        return "texture2DArray";
     case RenderMaterialGraphPinType::Sampler:
         return "sampler";
     case RenderMaterialGraphPinType::Normal:
         return "normal";
     case RenderMaterialGraphPinType::Bool:
         return "bool";
+    case RenderMaterialGraphPinType::MaterialAttributes:
+        return "materialAttributes";
     }
     return "unknown";
+}
+
+std::optional<RenderMaterialGraphPinType> ParseRenderMaterialGraphPinType(std::string_view text) noexcept {
+    if (EqualsIgnoreCase(text, "float") || EqualsIgnoreCase(text, "scalar")) {
+        return RenderMaterialGraphPinType::Float;
+    }
+    if (EqualsIgnoreCase(text, "float2") || EqualsIgnoreCase(text, "vec2")) {
+        return RenderMaterialGraphPinType::Float2;
+    }
+    if (EqualsIgnoreCase(text, "float3") || EqualsIgnoreCase(text, "vec3")) {
+        return RenderMaterialGraphPinType::Float3;
+    }
+    if (EqualsIgnoreCase(text, "float4") || EqualsIgnoreCase(text, "vec4")) {
+        return RenderMaterialGraphPinType::Float4;
+    }
+    if (EqualsIgnoreCase(text, "color")) {
+        return RenderMaterialGraphPinType::Color;
+    }
+    if (EqualsIgnoreCase(text, "texture2D")) {
+        return RenderMaterialGraphPinType::Texture2D;
+    }
+    if (EqualsIgnoreCase(text, "textureCube")) {
+        return RenderMaterialGraphPinType::TextureCube;
+    }
+    if (EqualsIgnoreCase(text, "texture3D") || EqualsIgnoreCase(text, "textureVolume")) {
+        return RenderMaterialGraphPinType::Texture3D;
+    }
+    if (EqualsIgnoreCase(text, "texture2DArray")) {
+        return RenderMaterialGraphPinType::Texture2DArray;
+    }
+    if (EqualsIgnoreCase(text, "sampler")) {
+        return RenderMaterialGraphPinType::Sampler;
+    }
+    if (EqualsIgnoreCase(text, "normal")) {
+        return RenderMaterialGraphPinType::Normal;
+    }
+    if (EqualsIgnoreCase(text, "bool")) {
+        return RenderMaterialGraphPinType::Bool;
+    }
+    if (EqualsIgnoreCase(text, "materialAttributes") || EqualsIgnoreCase(text, "MaterialSurface")) {
+        return RenderMaterialGraphPinType::MaterialAttributes;
+    }
+    if (EqualsIgnoreCase(text, "unknown")) {
+        return RenderMaterialGraphPinType::Unknown;
+    }
+    return std::nullopt;
 }
 
 RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind kind, std::string_view pin, bool outputPin) noexcept {
@@ -4185,7 +7046,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (pin == "attributes") return RenderMaterialGraphPinType::MaterialAttributes;
         if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor") return RenderMaterialGraphPinType::Color;
         if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "worldPositionOffset" || pin == "tangent") return RenderMaterialGraphPinType::Float3;
+        if (pin == "customizedUv0") return RenderMaterialGraphPinType::Float2;
+        if (pin == "worldPositionOffset" || pin == "tangent" || pin == "displacement") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
@@ -4230,6 +7092,22 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
         if (pin == "input") return RenderMaterialGraphPinType::Float4;
         return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+        if (pin == "low" || pin == "med" || pin == "high" || pin == "epic") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+        if (pin == "es3" || pin == "sm5" || pin == "sm6") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+        if (pin == "forward" || pin == "deferred") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+        if (pin == "vertex" || pin == "fragment") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::ViewportUV:
         return (outputPin && pin == "uv") ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
@@ -4266,13 +7144,56 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneDepth:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
+        if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::DepthFade:
         if (outputPin) return pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
         if (pin == "fadeDistance") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+        if (!outputPin && pin == "input") return RenderMaterialGraphPinType::Float4;
+        if (outputPin && pin == "output") return RenderMaterialGraphPinType::Float4;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return (!outputPin && pin == "input") ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return (outputPin && pin == "output") ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        return (!outputPin && pin == "value") ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::LayerStack:
+        return (outputPin && pin == "attributes") ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2D;
         if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
+        if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::TextureCube;
+        if (!outputPin && pin == "direction") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
+        if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture3D;
+        if (!outputPin && pin == "uvw") return RenderMaterialGraphPinType::Float3;
+        if (outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
+        if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        if (!outputPin && pin == "texture") return RenderMaterialGraphPinType::Texture2DArray;
+        if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "layer") return RenderMaterialGraphPinType::Float;
         if (outputPin && pin == "color") return RenderMaterialGraphPinType::Color;
         if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
@@ -4287,8 +7208,22 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
         return outputPin && pin == "rgba" ? RenderMaterialGraphPinType::Color : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        if (!outputPin) return RenderMaterialGraphPinType::Unknown;
+        if (pin == "scalar" || pin == "r" || pin == "g" || pin == "b" || pin == "a") return RenderMaterialGraphPinType::Float;
+        if (pin == "xyz") return RenderMaterialGraphPinType::Float3;
+        if (pin == "rgba" || pin == "value") return RenderMaterialGraphPinType::Color;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ParameterTexture:
         return outputPin && pin == "texture" ? RenderMaterialGraphPinType::Texture2D : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureObject:
+        return outputPin && pin == "texture" ? RenderMaterialGraphPinType::Texture2D : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+        return outputPin && pin == "texture" ? RenderMaterialGraphPinType::TextureCube : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+        return outputPin && pin == "texture" ? RenderMaterialGraphPinType::Texture3D : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
+        return outputPin && pin == "texture" ? RenderMaterialGraphPinType::Texture2DArray : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Add:
     case RenderMaterialGraphNodeKind::Subtract:
     case RenderMaterialGraphNodeKind::Multiply:
@@ -4308,6 +7243,9 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Power:
         if (!outputPin && (pin == "base" || pin == "exponent")) return RenderMaterialGraphPinType::Float4;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::CustomCode:
+        if (!outputPin && (pin == "A" || pin == "B")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Absolute:
@@ -4402,9 +7340,24 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::Uv:
         return outputPin && pin == "uv" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+        if (outputPin && pin == "rgba") return RenderMaterialGraphPinType::Color;
+        if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+        return outputPin && (pin == "value" || pin == "xyz") ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::VertexColor:
         if (outputPin && pin == "rgba") return RenderMaterialGraphPinType::Color;
         if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
@@ -4414,7 +7367,59 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
-        return outputPin && pin == "xyz" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+        return outputPin && (pin == "value" || pin == "xyz") ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
+    }
+    return RenderMaterialGraphPinType::Unknown;
+}
+
+RenderMaterialGraphPinType RenderMaterialGraphPinDataType(const RenderMaterialGraphNode& node, std::string_view pin, bool outputPin) noexcept {
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionInput) {
+        return (outputPin && pin == "value") ? FunctionEndpointPinType(node) : RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+        return (!outputPin && pin == "value") ? FunctionEndpointPinType(node) : RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        const std::vector<RenderMaterialGraphCustomPin>& pins = outputPin ? node.customCode.outputs : node.customCode.inputs;
+        for (const RenderMaterialGraphCustomPin& customPin : pins) {
+            if (customPin.name == pin) {
+                return customPin.type;
+            }
+        }
+        return RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::Reroute ||
+        node.kind == RenderMaterialGraphNodeKind::CompositeInput ||
+        node.kind == RenderMaterialGraphNodeKind::CompositeOutput) {
+        if ((!outputPin && pin == "input") || (outputPin && pin == "output")) {
+            return PassThroughPinType(node);
+        }
+        return RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration) {
+        return (!outputPin && pin == "input") ? PassThroughPinType(node) : RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+        return (outputPin && pin == "output") ? PassThroughPinType(node) : RenderMaterialGraphPinType::Unknown;
+    }
+    if (node.kind != RenderMaterialGraphNodeKind::CustomCode) {
+        return RenderMaterialGraphPinDataType(node.kind, pin, outputPin);
+    }
+    if (outputPin) {
+        if (pin == "value") {
+            return node.customCode.outputType;
+        }
+        for (const RenderMaterialGraphCustomPin& customPin : node.customCode.outputs) {
+            if (customPin.name == pin) {
+                return customPin.type;
+            }
+        }
+        return RenderMaterialGraphPinType::Unknown;
+    }
+    for (const RenderMaterialGraphCustomPin& customPin : node.customCode.inputs) {
+        if (customPin.name == pin) {
+            return customPin.type;
+        }
     }
     return RenderMaterialGraphPinType::Unknown;
 }
@@ -4464,6 +7469,16 @@ bool AreRenderMaterialGraphPinsCompatible(
         RenderMaterialGraphPinDataType(toKind, toPin, false));
 }
 
+bool AreRenderMaterialGraphPinsCompatible(
+    const RenderMaterialGraphNode& fromNode,
+    std::string_view fromPin,
+    const RenderMaterialGraphNode& toNode,
+    std::string_view toPin) noexcept {
+    return AreRenderMaterialGraphPinsCompatible(
+        RenderMaterialGraphPinDataType(fromNode, fromPin, true),
+        RenderMaterialGraphPinDataType(toNode, toPin, false));
+}
+
 std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, std::string_view pin, bool outputPin) noexcept {
     const std::uint16_t nodeKind = static_cast<std::uint16_t>(kind) + 1U;
     const std::uint8_t direction = outputPin ? 2U : 1U;
@@ -4487,10 +7502,40 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "refraction") return PinId(nodeKind, direction, 16U);
         if (!outputPin && pin == "surfaceThickness") return PinId(nodeKind, direction, 17U);
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 18U);
+        if (!outputPin && pin == "customizedUv0") return PinId(nodeKind, direction, 19U);
+        if (!outputPin && pin == "displacement") return PinId(nodeKind, direction, 20U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::TextureSampleCube:
+        if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "direction") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::TextureSampleVolume:
+        if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "uvw") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::TextureSample2DArray:
+        if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "layer") return PinId(nodeKind, direction, 3U);
         if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
         if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
@@ -4513,6 +7558,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::Power:
         if (!outputPin && pin == "base") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "exponent") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::CustomCode:
+        if (!outputPin && pin == "A") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "B") return PinId(nodeKind, direction, 2U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::OneMinus:
@@ -4638,15 +7688,48 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ParameterColor:
         if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
         return 0U;
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "scalar") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 5U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 6U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 7U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 8U);
+        return 0U;
     case RenderMaterialGraphNodeKind::ParameterTexture:
+    case RenderMaterialGraphNodeKind::TextureObject:
+    case RenderMaterialGraphNodeKind::TextureObjectCube:
+    case RenderMaterialGraphNodeKind::TextureObjectVolume:
+    case RenderMaterialGraphNodeKind::TextureObject2DArray:
         if (outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Uv:
         if (outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::DynamicParameter:
+        if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
@@ -4701,6 +7784,29 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "result") return PinId(nodeKind, direction, 2U);
         return 0U;
+    case RenderMaterialGraphNodeKind::QualitySwitch:
+        if (!outputPin && pin == "low") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "med") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "high") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "epic") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 5U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        if (!outputPin && pin == "es3") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "sm5") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "sm6") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 4U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        if (!outputPin && pin == "forward") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "deferred") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 3U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        if (!outputPin && pin == "vertex") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "fragment") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 3U);
+        return 0U;
     case RenderMaterialGraphNodeKind::TextureCoordinate:
     case RenderMaterialGraphNodeKind::ViewportUV:
         if (outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
@@ -4738,9 +7844,41 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::SceneDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
+    case RenderMaterialGraphNodeKind::SceneColor:
+    case RenderMaterialGraphNodeKind::SceneTexture:
+        if (!outputPin && pin == "uv") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "color") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
+        return 0U;
     case RenderMaterialGraphNodeKind::DepthFade:
         if (!outputPin && pin == "fadeDistance") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 2U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
+        if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "output") return PinId(nodeKind, direction, 2U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        if (!outputPin && pin == "input") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        if (outputPin && pin == "output") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::FunctionInput:
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::FunctionOutput:
+        if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return 0U;
+    case RenderMaterialGraphNodeKind::LayerStack:
+        if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::VertexColor:
         if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
@@ -4755,8 +7893,56 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "xyz") return PinId(nodeKind, direction, 1U);
         return 0U;
+    }
+    return 0U;
+}
+
+std::uint32_t RenderMaterialGraphStablePinId(const RenderMaterialGraphNode& node, std::string_view pin, bool outputPin) noexcept {
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionInput) {
+        return (outputPin && pin == "value")
+            ? PinId(static_cast<std::uint16_t>(node.kind) + 1U, 2U, 1U)
+            : 0U;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::FunctionOutput) {
+        return (!outputPin && pin == "value")
+            ? PinId(static_cast<std::uint16_t>(node.kind) + 1U, 1U, 1U)
+            : 0U;
+    }
+    if (node.kind == RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        const std::vector<RenderMaterialGraphCustomPin>& pins = outputPin ? node.customCode.outputs : node.customCode.inputs;
+        for (std::size_t index = 0U; index < pins.size(); ++index) {
+            if (pins[index].name == pin) {
+                return PinId(
+                    static_cast<std::uint16_t>(node.kind) + 1U,
+                    outputPin ? 2U : 1U,
+                    static_cast<std::uint16_t>(index + 1U));
+            }
+        }
+        return 0U;
+    }
+    if (node.kind != RenderMaterialGraphNodeKind::CustomCode) {
+        return RenderMaterialGraphStablePinId(node.kind, pin, outputPin);
+    }
+    const std::uint16_t nodeKind = static_cast<std::uint16_t>(node.kind) + 1U;
+    const std::uint8_t direction = outputPin ? 2U : 1U;
+    if (outputPin) {
+        if (pin == "value") {
+            return PinId(nodeKind, direction, 1U);
+        }
+        for (std::size_t index = 0U; index < node.customCode.outputs.size(); ++index) {
+            if (node.customCode.outputs[index].name == pin) {
+                return PinId(nodeKind, direction, static_cast<std::uint16_t>(index + 2U));
+            }
+        }
+        return 0U;
+    }
+    for (std::size_t index = 0U; index < node.customCode.inputs.size(); ++index) {
+        if (node.customCode.inputs[index].name == pin) {
+            return PinId(nodeKind, direction, static_cast<std::uint16_t>(index + 1U));
+        }
     }
     return 0U;
 }
@@ -4780,6 +7966,8 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::ParameterTexture:
         return true;
+    case RenderMaterialGraphNodeKind::CollectionParameter:
+        return false;
     case RenderMaterialGraphNodeKind::MaterialOutput:
     case RenderMaterialGraphNodeKind::ConstantScalar:
     case RenderMaterialGraphNodeKind::ConstantVector2:
@@ -4847,13 +8035,26 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::NormalUnpack:
     case RenderMaterialGraphNodeKind::Uv:
     case RenderMaterialGraphNodeKind::Time:
+    case RenderMaterialGraphNodeKind::DeltaTime:
+    case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
+    case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
+    case RenderMaterialGraphNodeKind::ObjectBounds:
+    case RenderMaterialGraphNodeKind::ObjectOrientation:
+    case RenderMaterialGraphNodeKind::PreSkinnedPosition:
+    case RenderMaterialGraphNodeKind::PreSkinnedNormal:
+    case RenderMaterialGraphNodeKind::Reroute:
+    case RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case RenderMaterialGraphNodeKind::CompositeInput:
+    case RenderMaterialGraphNodeKind::CompositeOutput:
         return false;
     }
     return false;
@@ -4870,13 +8071,14 @@ RenderMaterialTypeSchema BuildRenderMaterialGraphParameterSchema(
 
     for (const RenderMaterialGraphNode& node : graph.nodes) {
         if (!IsRenderMaterialGraphParameterNode(node.kind) &&
-            (node.kind != RenderMaterialGraphNodeKind::TextureSample || HasInputLink(graph, node.id, "texture"))) {
+            (!IsTextureSampleNode(node.kind) || HasInputLink(graph, node.id, "texture")) &&
+            !IsTextureObjectNode(node.kind)) {
             continue;
         }
 
         const std::string stableId = StableParameterId(node);
         const std::string displayName = DisplayNameForParameter(node);
-        if (node.kind == RenderMaterialGraphNodeKind::ParameterTexture || node.kind == RenderMaterialGraphNodeKind::TextureSample) {
+        if (IsTextureObjectNode(node.kind) || IsTextureSampleNode(node.kind)) {
             const std::string textureRole = EffectiveTextureRoleForNode(node);
             schema.textureSlots.push_back(RenderMaterialTextureSlotSchema{
                 .name = displayName,
@@ -4924,7 +8126,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
 
     RenderMaterialTypeSchema schema = BuildRenderMaterialGraphParameterSchema(graph, typeName, typeVersion);
     schema.alphaModes = { "OPAQUE", "MASK", "BLEND" };
-    schema.unsupportedAdvancedFeatures = { "transparentRuntimePass" };
+    schema.unsupportedAdvancedFeatures = { "transparentRuntimePass", "tessellation" };
 
     const std::string graphFragmentShader = "graph_fs_" + std::to_string(compile.shader.sourceHash);
     std::vector<RenderMaterialTypeRequiredResource> requiredResources{
@@ -4938,6 +8140,40 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
             .name = slot.assetIdFieldName,
             .kind = "texture",
             .required = false,
+        });
+    }
+
+    std::vector<RenderMaterialTypePermutationKey> permutationKeys{
+        RenderMaterialTypePermutationKey{ .name = "alphaMode", .defaultValue = "OPAQUE", .allowedValues = std::vector<std::string>{ "OPAQUE", "MASK", "BLEND" } },
+        RenderMaterialTypePermutationKey{ .name = "doubleSided", .defaultValue = "false", .allowedValues = std::vector<std::string>{ "false", "true" } },
+        RenderMaterialTypePermutationKey{ .name = "graphSourceHash", .defaultValue = std::to_string(compile.shader.sourceHash), .allowedValues = std::vector<std::string>{ std::to_string(compile.shader.sourceHash) } },
+    };
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::QualitySwitch)) {
+        permutationKeys.push_back(RenderMaterialTypePermutationKey{
+            .name = "qualityLevel",
+            .defaultValue = std::string{ RenderMaterialGraphQualityLevelPinName(context.qualityLevel) },
+            .allowedValues = std::vector<std::string>{ "low", "med", "high", "epic" },
+        });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::FeatureLevelSwitch)) {
+        permutationKeys.push_back(RenderMaterialTypePermutationKey{
+            .name = "featureLevel",
+            .defaultValue = std::string{ RenderMaterialGraphFeatureLevelPinName(context.featureLevel) },
+            .allowedValues = std::vector<std::string>{ "es3", "sm5", "sm6" },
+        });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShadingPathSwitch)) {
+        permutationKeys.push_back(RenderMaterialTypePermutationKey{
+            .name = "shadingPath",
+            .defaultValue = std::string{ RenderMaterialGraphShadingPathPinName(context.shadingPath) },
+            .allowedValues = std::vector<std::string>{ "forward", "deferred" },
+        });
+    }
+    if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShaderStageSwitch)) {
+        permutationKeys.push_back(RenderMaterialTypePermutationKey{
+            .name = "shaderStage",
+            .defaultValue = std::string{ RenderMaterialGraphShaderStagePinName(context.shaderStage) },
+            .allowedValues = std::vector<std::string>{ "fragment", "vertex" },
         });
     }
 
@@ -4956,11 +8192,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
             RenderMaterialTypeRenderPass{ .name = "ShadowDepth", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_shadow_instanced", .fragmentShader = "fs_mesh_shadow_instanced" },
             RenderMaterialTypeRenderPass{ .name = "BaseTransparent", .support = RenderMaterialFeatureSupport::Supported, .vertexShader = "vs_mesh_instanced", .fragmentShader = graphFragmentShader },
         },
-        .permutationKeys = std::vector<RenderMaterialTypePermutationKey>{
-            RenderMaterialTypePermutationKey{ .name = "alphaMode", .defaultValue = "OPAQUE", .allowedValues = std::vector<std::string>{ "OPAQUE", "MASK", "BLEND" } },
-            RenderMaterialTypePermutationKey{ .name = "doubleSided", .defaultValue = "false", .allowedValues = std::vector<std::string>{ "false", "true" } },
-            RenderMaterialTypePermutationKey{ .name = "graphSourceHash", .defaultValue = std::to_string(compile.shader.sourceHash), .allowedValues = std::vector<std::string>{ std::to_string(compile.shader.sourceHash) } },
-        },
+        .permutationKeys = std::move(permutationKeys),
         .requiredResources = std::move(requiredResources),
         .schema = std::move(schema),
     };
@@ -5071,7 +8303,7 @@ bool RenderMaterialGraphRuntimeStateUsesFallback(RenderMaterialGraphRuntimeState
 }
 
 bool HasGraphAuthoringData(const RenderMaterialGraphDocument& graph) noexcept {
-    if (!graph.links.empty()) {
+    if (!graph.links.empty() || !graph.comments.empty() || !graph.composites.empty()) {
         return true;
     }
     for (const RenderMaterialGraphNode& node : graph.nodes) {

@@ -34,7 +34,9 @@ public:
         std::span<const std::uint64_t> selectedEntityIds = {},
         SceneGpuDrivenFeatureSupport gpuDrivenSupport = {},
         std::array<float, 4> frameTime = {},
-        bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE) const;
+        std::array<float, 4> dynamicParameter = {},
+        bgfx::TextureHandle sceneDepthTexture = BGFX_INVALID_HANDLE,
+        bgfx::TextureHandle sceneColorTexture = BGFX_INVALID_HANDLE) const;
     [[nodiscard]] static SceneRenderSubmitStats ValidateResourcesInto(
         const RenderScene& renderScene,
         const RenderResourceRegistry& resources,

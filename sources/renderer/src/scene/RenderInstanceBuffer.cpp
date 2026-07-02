@@ -32,12 +32,13 @@ RenderInstanceData RenderInstanceBuffer::Pack(const SceneRenderMeshInstance& ins
         color[3] = -std::max(color[3], 0.000001F);
     }
 
-    // The model is affine, so its last row (column .w of i_data0..2: indices 3,7,11) is always
-    // (0,0,0) and unused by the transform. Pack per-instance scalars there (MAT-77); the vertex
-    // shader extracts them and re-zeroes the columns before rebuilding the matrix.
+    // The model is affine, so the .w lanes are material-graph data lanes. The vertex shader extracts
+    // them and rebuilds the matrix with (0,0,0,1) in the last row before transforming vertices.
     std::array<float, 16> model = instance.model;
     model[3] = PerInstanceRandomFromEntity(instance.entityId);
     model[7] = instance.worldBounds.radius;
+    model[11] = instance.fadeAmount;
+    model[15] = instance.customData0;
 
     return RenderInstanceData{
         .model = model,

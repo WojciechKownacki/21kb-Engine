@@ -56,6 +56,29 @@ namespace {
         return false;
     }
 
+    if (sceneContext.IsMaterialGraphContextMenuOpen()) {
+        bool handled = true;
+        switch (key) {
+        case VK_BACK:
+            sceneContext.BackspaceMaterialGraphContextMenuSearch();
+            break;
+        case VK_ESCAPE:
+            static_cast<void>(sceneContext.CloseMaterialGraphContextMenu());
+            static_cast<void>(sceneContext.CancelMaterialGraphPinConnection());
+            break;
+        default:
+            handled = false;
+            break;
+        }
+        if (handled) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != mainWindow) {
+                InvalidateRect(mainWindow, nullptr, FALSE);
+            }
+            return true;
+        }
+    }
+
     if (sceneContext.IsMaterialGraphConstantInlineEditing()) {
         switch (key) {
         case VK_BACK:
@@ -77,12 +100,42 @@ namespace {
         return true;
     }
 
+    if (ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU)) {
+        const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
+        bool graphClipboardShortcut = false;
+        switch (key) {
+        case 'C':
+            graphClipboardShortcut = true;
+            static_cast<void>(sceneContext.CopySelectedMaterialGraphNodes());
+            break;
+        case 'V':
+            graphClipboardShortcut = true;
+            static_cast<void>(sceneContext.PasteMaterialGraphNodes(materialId, 32, 32));
+            break;
+        case 'D':
+            graphClipboardShortcut = true;
+            static_cast<void>(sceneContext.DuplicateSelectedMaterialGraphNodes(materialId, 32, 32));
+            break;
+        default:
+            break;
+        }
+        if (graphClipboardShortcut) {
+            InvalidateRect(messageWindow, nullptr, FALSE);
+            if (messageWindow != mainWindow) {
+                InvalidateRect(mainWindow, nullptr, FALSE);
+            }
+            return true;
+        }
+    }
+
     if (key != VK_DELETE) {
         return false;
     }
 
-    if (sceneContext.SelectedMaterialGraphNodeId() != 0U) {
+    if (!sceneContext.SelectedMaterialGraphNodeIds().empty()) {
         static_cast<void>(sceneContext.DeleteSelectedMaterialGraphNode(sceneContext.MaterialEditor().OpenAssetId()));
+    } else if (sceneContext.SelectedMaterialGraphCommentId() != 0U) {
+        static_cast<void>(sceneContext.DeleteSelectedMaterialGraphComment(sceneContext.MaterialEditor().OpenAssetId()));
     }
     InvalidateRect(messageWindow, nullptr, FALSE);
     if (messageWindow != mainWindow) {
@@ -92,7 +145,21 @@ namespace {
 }
 
 [[nodiscard]] bool HandleMaterialGraphChar(HWND mainWindow, HWND messageWindow, EditorSceneContext& sceneContext, wchar_t character) {
-    if (!sceneContext.IsMaterialGraphFocused() || !sceneContext.IsMaterialGraphConstantInlineEditing()) {
+    if (!sceneContext.IsMaterialGraphFocused()) {
+        return false;
+    }
+    if (sceneContext.IsMaterialGraphContextMenuOpen()) {
+        if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
+            return false;
+        }
+        sceneContext.AppendMaterialGraphContextMenuSearchText(character);
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+    if (!sceneContext.IsMaterialGraphConstantInlineEditing()) {
         return false;
     }
     if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {

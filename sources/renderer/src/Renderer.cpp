@@ -335,6 +335,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
     // (SceneDepth / DepthFade) read real geometry depth.
     sceneRenderer_->SetSceneDepthTexture(desc.target.depthTexture);
+    sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
 
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
@@ -451,12 +452,17 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         MeshPassType::BaseOpaque,
         shadowBinding.IsValid() ? &shadowBinding : nullptr);
     if (desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent) {
+        if (bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
+            bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
+            sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
+        }
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
             viewportPlan.viewIds.transparentScene,
             RenderPassKind::TransparentScene,
             MeshPassType::BaseTransparent,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
+        sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
     }
     if (desc.selectionMaskEnabled) {
         editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);

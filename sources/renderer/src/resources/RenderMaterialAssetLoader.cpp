@@ -3,6 +3,8 @@
 #include "engine/assets/AssetManager.hpp"
 #include "engine/assets/AssetRegistry.hpp"
 #include "resources/RenderMaterialAssetParser.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
 #include <algorithm>
@@ -268,6 +270,8 @@ std::string_view RenderMaterialAssetParseDiagnosticCodeName(RenderMaterialAssetP
         return "invalid_graph_field";
     case RenderMaterialAssetParseDiagnosticCode::UnsupportedGraphVersion:
         return "unsupported_graph_version";
+    case RenderMaterialAssetParseDiagnosticCode::GraphMigration:
+        return "graph_migration";
     case RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode:
         return "invalid_graph_node";
     case RenderMaterialAssetParseDiagnosticCode::DuplicateGraphNode:
@@ -608,6 +612,20 @@ std::vector<kb::assets::AssetId> RenderMaterialAssetLoader::DiscoverMaterialDepe
         AppendUnique(dependencies, *graphSourcePathDependency);
     }
     AppendUnique(dependencies, kb::assets::AssetId{ material.graph.lastGoodArtifact.assetId });
+    for (const std::uint64_t functionAssetId : DiscoverRenderMaterialGraphFunctionDependencies(material.graph)) {
+        const kb::assets::AssetId id{ functionAssetId };
+        const kb::assets::AssetMetadata* functionMetadata = registry.Find(id);
+        if (functionMetadata != nullptr && functionMetadata->type == kRenderMaterialFunctionAssetType) {
+            AppendUnique(dependencies, id);
+        }
+    }
+    for (const std::uint64_t collectionAssetId : DiscoverRenderMaterialGraphParameterCollectionDependencies(material.graph)) {
+        const kb::assets::AssetId id{ collectionAssetId };
+        const kb::assets::AssetMetadata* collectionMetadata = registry.Find(id);
+        if (collectionMetadata != nullptr && collectionMetadata->type == kRenderMaterialParameterCollectionAssetType) {
+            AppendUnique(dependencies, id);
+        }
+    }
 
     const std::array<std::uint64_t, 13U> textureAssetIds{
         material.desc.albedoTextureAssetId,

@@ -22,6 +22,7 @@ constexpr UINT_PTR kAssetMenuNewMaterialGraph = 2009;
 constexpr UINT_PTR kAssetMenuNewMaterialType = 2010;
 constexpr UINT_PTR kAssetMenuCreateMaterialFromGraph = 2011;
 constexpr UINT_PTR kAssetMenuCreateMaterialFromMaterialType = 2012;
+constexpr UINT_PTR kAssetMenuNewMaterialFunction = 2013;
 constexpr UINT_PTR kAssetMenuDirectionalLight = 2101;
 constexpr UINT_PTR kAssetMenuPointLight = 2102;
 constexpr UINT_PTR kAssetMenuSpotLight = 2103;
@@ -40,6 +41,8 @@ constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
         return kAssetMenuNewLuaScript;
     case EditorAssetContextCommand::NewMaterial:
         return kAssetMenuNewMaterial;
+    case EditorAssetContextCommand::NewMaterialFunction:
+        return kAssetMenuNewMaterialFunction;
     case EditorAssetContextCommand::NewMaterialGraph:
         return kAssetMenuNewMaterialGraph;
     case EditorAssetContextCommand::NewMaterialType:
@@ -87,6 +90,8 @@ constexpr UINT_PTR kAssetMenuExtractMaterials = 2301;
         return EditorAssetContextCommand::NewLuaScript;
     case kAssetMenuNewMaterial:
         return EditorAssetContextCommand::NewMaterial;
+    case kAssetMenuNewMaterialFunction:
+        return EditorAssetContextCommand::NewMaterialFunction;
     case kAssetMenuNewMaterialGraph:
         return EditorAssetContextCommand::NewMaterialGraph;
     case kAssetMenuNewMaterialType:

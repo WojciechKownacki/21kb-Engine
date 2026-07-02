@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetMetadata.hpp"
 #include "engine/assets/AssetRegistry.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <utility>
 
 namespace kb::render {
 namespace {
@@ -157,6 +160,75 @@ void AppendTexturePathDependency(
     return graphDependencies;
 }
 
+struct CookMaterialFunctionLibraryBuildResult {
+    RenderMaterialGraphFunctionLibrary library;
+    std::vector<RenderMaterialGraphDiagnostic> diagnostics;
+};
+
+void AppendCookFunctionDiagnostic(
+    CookMaterialFunctionLibraryBuildResult& result,
+    std::uint64_t assetId,
+    const std::filesystem::path& path,
+    std::string message) {
+    result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
+        .severity = RenderMaterialGraphDiagnosticSeverity::Error,
+        .kind = RenderMaterialGraphDiagnosticKind::MissingMaterialFunction,
+        .assetId = assetId,
+        .sourcePath = path.generic_string(),
+        .message = std::move(message),
+    });
+}
+
+[[nodiscard]] CookMaterialFunctionLibraryBuildResult BuildCookMaterialFunctionLibrary(
+    const RenderMaterialGraphDocument& graph,
+    const kb::assets::AssetRegistry& registry) {
+    CookMaterialFunctionLibraryBuildResult result{};
+    std::vector<std::uint64_t> pending = DiscoverRenderMaterialGraphFunctionDependencies(graph);
+    std::unordered_set<std::uint64_t> visited;
+    while (!pending.empty()) {
+        const std::uint64_t assetId = pending.back();
+        pending.pop_back();
+        if (assetId == 0U || !visited.insert(assetId).second) {
+            continue;
+        }
+
+        const kb::assets::AssetMetadata* metadata = registry.Find(kb::assets::AssetId{ assetId });
+        if (metadata == nullptr || metadata->type != kRenderMaterialFunctionAssetType) {
+            AppendCookFunctionDiagnostic(
+                result,
+                assetId,
+                {},
+                "Material function asset " + std::to_string(assetId) + " is missing or has the wrong asset type.");
+            continue;
+        }
+
+        const RenderMaterialAssetParseResult loaded = RenderMaterialFunctionAssetLoader::LoadFunctionWithDiagnostics(metadata->physicalPath, metadata->id);
+        if (!loaded.asset.has_value()) {
+            AppendCookFunctionDiagnostic(
+                result,
+                assetId,
+                metadata->physicalPath,
+                loaded.diagnostics.empty()
+                    ? "Material function asset " + std::to_string(assetId) + " could not be loaded."
+                    : "Material function asset could not be loaded: " + loaded.ErrorMessage());
+            continue;
+        }
+
+        result.library.entries.push_back(RenderMaterialGraphFunctionLibraryEntry{
+            .assetId = metadata->id.value,
+            .contentHash = metadata->contentHash,
+            .name = metadata->virtualPath.generic_string(),
+            .graph = loaded.asset->graph,
+        });
+        for (const std::uint64_t nestedAssetId : DiscoverRenderMaterialGraphFunctionDependencies(loaded.asset->graph)) {
+            if (!visited.contains(nestedAssetId)) {
+                pending.push_back(nestedAssetId);
+            }
+        }
+    }
+    return result;
+}
+
 void HashDesc(std::uint64_t& hash, const RenderMaterialDesc& desc) noexcept {
     for (const float value : desc.baseColor) HashFloat(hash, value);
     for (const float value : desc.emissiveColor) HashFloat(hash, value);
@@ -242,16 +314,23 @@ RenderMaterialCookPayload RenderMaterialCookPayloadBuilder::Build(
     payload.graphBacked = IsGraphBackedMaterial(material);
     if (payload.graphBacked) {
         const std::vector<RenderMaterialGraphDependencyHashInput> graphDependencies = BuildGraphDependencyHashes(payload.textureDependencies, registry);
-        payload.graphCompileKey = BuildRenderMaterialGraphCompileArtifactCacheKey(material.graph, graphDependencies, 0U);
+        CookMaterialFunctionLibraryBuildResult functionLibrary = BuildCookMaterialFunctionLibrary(material.graph, registry);
+        RenderMaterialGraphBuildContext graphContext{
+            .assetId = metadata.id.value,
+            .sourcePath = metadata.virtualPath.generic_string(),
+            .functionLibrary = &functionLibrary.library,
+        };
+        payload.graphCompileKey = BuildRenderMaterialGraphCompileArtifactCacheKey(material.graph, graphDependencies, 0U, graphContext);
         const RenderMaterialGraphCompileResult graphCompile = CompileRenderMaterialGraphToShaderSource(
             material.graph,
-            RenderMaterialGraphBuildContext{
-                .assetId = metadata.id.value,
-                .sourcePath = metadata.virtualPath.generic_string(),
-            });
+            graphContext);
         payload.graphCompileSucceeded = graphCompile.Succeeded();
         payload.graphShader = graphCompile.shader;
-        payload.graphDiagnostics = graphCompile.diagnostics;
+        payload.graphDiagnostics = std::move(functionLibrary.diagnostics);
+        payload.graphDiagnostics.insert(
+            payload.graphDiagnostics.end(),
+            graphCompile.diagnostics.begin(),
+            graphCompile.diagnostics.end());
     }
     payload.payloadHash = BuildPayloadHash(payload);
     return payload;

@@ -21,6 +21,7 @@ struct ResolvedRuntimeMaterialDesc {
     RenderMaterialDesc desc{};
     std::uint32_t unresolvedTexturePathCount = 0;
     RenderMaterialGraphProgramBinding graphProgram{};
+    std::vector<RenderMaterialGraphDiagnostic> graphDiagnostics;
 };
 
 enum class RuntimeMaterialResolveStatus : std::uint8_t {

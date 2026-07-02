@@ -745,12 +745,16 @@ void RunRenderInstanceBufferPacksPerInstanceScalarsTest() {
     instanceA.model[15] = 1.0F;
     instanceA.entityId = 1001U;
     instanceA.worldBounds.radius = 2.5F;
+    instanceA.fadeAmount = 0.35F;
+    instanceA.customData0 = 0.65F;
 
     const RenderInstanceData packedA = RenderInstanceBuffer::Pack(instanceA);
-    // MAT-77: per-instance scalars ride the affine model's unused column .w (indices 3,7); index 11 stays free.
+    // MAT-77/MAT-47: per-instance scalars ride the affine model's .w lanes; shaders rebuild
+    // the matrix with (0,0,0,1) before transforming vertices.
     Require(NearlyEqual(packedA.model[7], 2.5F), "KBMAT-MAT77: ObjectRadius must pack the world bounds radius into i_data1.w");
     Require(packedA.model[3] >= 0.0F && packedA.model[3] < 1.0F, "KBMAT-MAT77: PerInstanceRandom must lie in [0,1)");
-    Require(NearlyEqual(packedA.model[11], 0.0F), "KBMAT-MAT77: the unused third per-instance lane (i_data2.w) must stay zero");
+    Require(NearlyEqual(packedA.model[11], 0.35F), "KBMAT-MAT47: PerInstanceFadeAmount must pack into i_data2.w");
+    Require(NearlyEqual(packedA.model[15], 0.65F), "KBMAT-MAT47: PerInstanceCustomData0 must pack into i_data3.w");
     // The matrix basis/translation columns are untouched (only the unused .w lanes are repurposed).
     Require(NearlyEqual(packedA.model[0], 1.0F) && NearlyEqual(packedA.model[5], 1.0F) && NearlyEqual(packedA.model[10], 1.0F),
         "KBMAT-MAT77: packing per-instance scalars must not disturb the affine basis");
@@ -1467,14 +1471,14 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(renderScene);
     Require(stats.lightingPath == static_cast<std::uint32_t>(SceneRenderLightingPath::ClusteredForwardPlus) + 1U, "SceneRenderer validation did not report clustered lighting path");
     Require(stats.lightClusterCount == 24U, "SceneRenderer validation did not report clustered light grid size");
-    // KBMAT-MAT82: clustered forward+ is declared but not implemented (no clustered light list reaches the
+    // KBMAT-MAT64/#51: clustered forward+ is declared but not implemented (no clustered light list reaches the
     // shader), so the renderer must report it as a non-production path rather than falsely claim it ran.
-    Require(!stats.lightingPathProduction, "KBMAT-MAT82: ClusteredForwardPlus must be reported as a non-production lighting path");
+    Require(!stats.lightingPathProduction, "KBMAT-MAT64: ClusteredForwardPlus must be reported as a non-production lighting path");
     Require(!IsSceneRenderLightingPathProduction(SceneRenderLightingPath::ClusteredForwardPlus) &&
             !IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Deferred) &&
             !IsSceneRenderLightingPathProduction(SceneRenderLightingPath::VisibilityBuffer) &&
             IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Forward),
-            "KBMAT-MAT82: only the Forward lighting path is production; clustered/deferred/visibility are non-production");
+            "KBMAT-MAT64: only the Forward lighting path is production; clustered/deferred/visibility are non-production");
     Require(stats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::ImageBased) + 1U, "SceneRenderer validation did not report IBL environment mode");
     Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");

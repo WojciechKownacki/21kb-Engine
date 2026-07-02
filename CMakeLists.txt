@@ -190,6 +190,7 @@ if(KB_BUILD_RENDERER)
     include(CMake/KbBgfxRuntimeShaders.cmake)
     add_subdirectory(sources/renderer renderer)
     add_subdirectory(samples/render_smoke render_smoke)
+    add_subdirectory(samples/standalone_player standalone_player)
 endif()
 
 if(KB_BUILD_EDITOR)
