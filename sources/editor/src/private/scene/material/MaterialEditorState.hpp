@@ -245,6 +245,7 @@ struct MaterialEditorParameter {
 };
 
 enum class MaterialEditorGraphNodePropertyKind : std::uint8_t {
+    Text,
     Numeric,
     Color,
     Enum,
@@ -759,16 +760,43 @@ public:
         return inlineConstantEditNodeId_ != 0U;
     }
 
+    [[nodiscard]] bool IsGraphNodeRenameEditing() const noexcept {
+        return renameNodeId_ != 0U;
+    }
+
     [[nodiscard]] bool IsGraphConstantInlineEditing(std::uint32_t nodeId) const noexcept {
         return inlineConstantEditNodeId_ == nodeId && nodeId != 0U;
+    }
+
+    [[nodiscard]] bool IsGraphNodeRenameEditing(std::uint32_t nodeId) const noexcept {
+        return renameNodeId_ == nodeId && nodeId != 0U;
     }
 
     [[nodiscard]] std::uint32_t GraphConstantInlineEditNodeId() const noexcept {
         return inlineConstantEditNodeId_;
     }
 
+    [[nodiscard]] std::uint32_t GraphNodeRenameEditNodeId() const noexcept {
+        return renameNodeId_;
+    }
+
     [[nodiscard]] std::string_view GraphConstantInlineEditBuffer() const noexcept {
         return inlineConstantEditBuffer_;
+    }
+
+    [[nodiscard]] std::string_view GraphNodeRenameEditBuffer() const noexcept {
+        return renameBuffer_;
+    }
+
+    [[nodiscard]] std::string GraphNodeDisplayName(std::uint32_t nodeId) const {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return {};
+        }
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node == nullptr) {
+            return {};
+        }
+        return GraphNodeDisplayNameForNode(*node);
     }
 
     [[nodiscard]] bool AddGraphNode(
@@ -1193,6 +1221,15 @@ public:
             return properties;
         }
 
+        properties.push_back(MaterialEditorGraphNodeProperty{
+            .nodeId = node->id,
+            .stableId = "node.name",
+            .displayName = "Name",
+            .kind = MaterialEditorGraphNodePropertyKind::Text,
+            .type = kb::render::RenderMaterialParameterType::Enum,
+            .value = EnumValue(IsGraphNodeRenameEditing(node->id) ? std::string{ GraphNodeRenameEditBuffer() } : GraphNodeDisplayNameForNode(*node)),
+        });
+
         if (IsGraphConstantNode(node->kind)) {
             std::array<float, 4U> values{ 0.0F, 0.0F, 0.0F, 1.0F };
             if (const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(node->kind, node->parameter.defaultValueHint)) {
@@ -1334,6 +1371,93 @@ public:
     void CancelGraphConstantInlineEdit() noexcept {
         inlineConstantEditNodeId_ = 0U;
         inlineConstantEditBuffer_.clear();
+    }
+
+    [[nodiscard]] bool BeginGraphNodeRenameEdit(std::uint32_t nodeId) {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return false;
+        }
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node == nullptr) {
+            return false;
+        }
+        CancelGraphConstantInlineEdit();
+        renameNodeId_ = nodeId;
+        renameBuffer_ = GraphNodeDisplayNameForNode(*node);
+        renameSelectAll_ = true;
+        SelectNode(nodeId);
+        return true;
+    }
+
+    void AppendGraphNodeRenameEditText(wchar_t character) {
+        if (renameNodeId_ == 0U || character < 32 || character > 126) {
+            return;
+        }
+        ReplaceSelectedGraphNodeRenameText();
+        renameBuffer_.push_back(static_cast<char>(character));
+    }
+
+    void InsertGraphNodeRenameEditText(std::string_view text) {
+        if (renameNodeId_ == 0U) {
+            return;
+        }
+        ReplaceSelectedGraphNodeRenameText();
+        for (const char ch : text) {
+            const unsigned char value = static_cast<unsigned char>(ch);
+            if (value >= 32U && value <= 126U) {
+                renameBuffer_.push_back(static_cast<char>(value));
+            }
+        }
+    }
+
+    void BackspaceGraphNodeRenameEdit() {
+        if (renameNodeId_ == 0U) {
+            return;
+        }
+        if (renameSelectAll_) {
+            ClearGraphNodeRenameEditText();
+        } else if (!renameBuffer_.empty()) {
+            renameBuffer_.pop_back();
+        }
+    }
+
+    void ClearGraphNodeRenameEditText() {
+        if (renameNodeId_ != 0U) {
+            renameBuffer_.clear();
+            renameSelectAll_ = false;
+        }
+    }
+
+    void SelectAllGraphNodeRenameEditText() noexcept {
+        if (renameNodeId_ != 0U) {
+            renameSelectAll_ = true;
+        }
+    }
+
+    void CancelGraphNodeRenameEdit() noexcept {
+        renameNodeId_ = 0U;
+        renameBuffer_.clear();
+        renameSelectAll_ = false;
+    }
+
+    [[nodiscard]] bool RenameGraphNode(std::uint32_t nodeId, std::string_view displayName) {
+        if (!workingCopy_.has_value() || nodeId == 0U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
+        if (node == nullptr) {
+            return false;
+        }
+        const std::string normalized = NormalizeGraphNodeDisplayName(displayName, node->kind);
+        if (node->parameter.displayName == normalized) {
+            return false;
+        }
+        node->parameter.displayName = normalized;
+        SetWorkingCopy(std::move(document));
+        SelectNode(nodeId);
+        return true;
     }
 
     [[nodiscard]] bool DeleteGraphNode(std::uint32_t nodeId) {
@@ -1850,6 +1974,7 @@ public:
         findQuery_.clear();
         findResults_.clear();
         CloseGraphNodeEnumDropdown();
+        CancelGraphNodeRenameEdit();
         RefreshParameters();
         RefreshGraphDiagnostics();
     }
@@ -1873,6 +1998,7 @@ public:
         findQuery_.clear();
         findResults_.clear();
         CloseGraphNodeEnumDropdown();
+        CancelGraphNodeRenameEdit();
         diagnostics_.clear();
         graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = false;
@@ -1939,6 +2065,9 @@ public:
         if (inlineConstantEditNodeId_ != 0U && inlineConstantEditNodeId_ != nodeId) {
             CancelGraphConstantInlineEdit();
         }
+        if (renameNodeId_ != 0U && renameNodeId_ != nodeId) {
+            CancelGraphNodeRenameEdit();
+        }
         if (graphNodeEnumDropdownNodeId_ != 0U && graphNodeEnumDropdownNodeId_ != nodeId) {
             CloseGraphNodeEnumDropdown();
         }
@@ -1959,6 +2088,9 @@ public:
         }
         if (inlineConstantEditNodeId_ != 0U && inlineConstantEditNodeId_ != nodeId) {
             CancelGraphConstantInlineEdit();
+        }
+        if (renameNodeId_ != 0U && renameNodeId_ != nodeId) {
+            CancelGraphNodeRenameEdit();
         }
         if (graphNodeEnumDropdownNodeId_ != 0U && graphNodeEnumDropdownNodeId_ != nodeId) {
             CloseGraphNodeEnumDropdown();
@@ -1982,6 +2114,9 @@ public:
         selectedNodeId_ = selectedNodeIds_.empty() ? 0U : selectedNodeIds_.back();
         if (inlineConstantEditNodeId_ == nodeId) {
             CancelGraphConstantInlineEdit();
+        }
+        if (renameNodeId_ == nodeId) {
+            CancelGraphNodeRenameEdit();
         }
         if (graphNodeEnumDropdownNodeId_ == nodeId) {
             CloseGraphNodeEnumDropdown();
@@ -2011,6 +2146,9 @@ public:
         if (inlineConstantEditNodeId_ != 0U && std::ranges::find(sanitized, inlineConstantEditNodeId_) == sanitized.end()) {
             CancelGraphConstantInlineEdit();
         }
+        if (renameNodeId_ != 0U && std::ranges::find(sanitized, renameNodeId_) == sanitized.end()) {
+            CancelGraphNodeRenameEdit();
+        }
         if (graphNodeEnumDropdownNodeId_ != 0U && std::ranges::find(sanitized, graphNodeEnumDropdownNodeId_) == sanitized.end()) {
             CloseGraphNodeEnumDropdown();
         }
@@ -2030,6 +2168,9 @@ public:
         }
         if (inlineConstantEditNodeId_ != 0U) {
             CancelGraphConstantInlineEdit();
+        }
+        if (renameNodeId_ != 0U) {
+            CancelGraphNodeRenameEdit();
         }
         CloseGraphNodeEnumDropdown();
         selectedNodeId_ = 0U;
@@ -2437,6 +2578,29 @@ private:
         default:
             return ConstantDisplayName(kind);
         }
+    }
+
+    [[nodiscard]] static std::string GraphNodeDisplayNameForNode(const kb::render::RenderMaterialGraphNode& node) {
+        if (!node.parameter.displayName.empty()) {
+            return node.parameter.displayName;
+        }
+        return std::string{ GraphNodeDisplayName(node.kind) };
+    }
+
+    [[nodiscard]] static std::string NormalizeGraphNodeDisplayName(
+        std::string_view displayName,
+        kb::render::RenderMaterialGraphNodeKind kind) {
+        const std::size_t first = displayName.find_first_not_of(" \t\r\n");
+        if (first == std::string_view::npos) {
+            return std::string{ GraphNodeDisplayName(kind) };
+        }
+        const std::size_t last = displayName.find_last_not_of(" \t\r\n");
+        std::string normalized{ displayName.substr(first, last - first + 1U) };
+        constexpr std::size_t kMaxGraphNodeDisplayNameLength = 64U;
+        if (normalized.size() > kMaxGraphNodeDisplayNameLength) {
+            normalized.resize(kMaxGraphNodeDisplayNameLength);
+        }
+        return normalized;
     }
 
     [[nodiscard]] static std::vector<MaterialEditorGraphNodePropertyOption> GraphNodeEnumOptions(
@@ -3079,6 +3243,7 @@ private:
             selectedNodeId_ = 0U;
             selectedCommentId_ = 0U;
             CancelGraphConstantInlineEdit();
+            CancelGraphNodeRenameEdit();
             CloseGraphNodeEnumDropdown();
             return;
         }
@@ -3097,11 +3262,21 @@ private:
         if (inlineConstantEditNodeId_ != 0U && std::ranges::find(selectedNodeIds_, inlineConstantEditNodeId_) == selectedNodeIds_.end()) {
             CancelGraphConstantInlineEdit();
         }
+        if (renameNodeId_ != 0U && std::ranges::find(selectedNodeIds_, renameNodeId_) == selectedNodeIds_.end()) {
+            CancelGraphNodeRenameEdit();
+        }
         if (graphNodeEnumDropdownNodeId_ != 0U && std::ranges::find(selectedNodeIds_, graphNodeEnumDropdownNodeId_) == selectedNodeIds_.end()) {
             CloseGraphNodeEnumDropdown();
         }
         if (selectedCommentId_ != 0U && FindGraphComment(workingCopy_->graph, selectedCommentId_) == nullptr) {
             selectedCommentId_ = 0U;
+        }
+    }
+
+    void ReplaceSelectedGraphNodeRenameText() {
+        if (renameSelectAll_) {
+            renameBuffer_.clear();
+            renameSelectAll_ = false;
         }
     }
 
@@ -4024,6 +4199,9 @@ private:
     std::optional<GraphClipboard> graphClipboard_;
     std::uint32_t inlineConstantEditNodeId_ = 0U;
     std::string inlineConstantEditBuffer_;
+    std::uint32_t renameNodeId_ = 0U;
+    std::string renameBuffer_;
+    bool renameSelectAll_ = false;
     std::uint32_t graphNodeEnumDropdownNodeId_ = 0U;
     std::string graphNodeEnumDropdownPropertyId_;
 };
