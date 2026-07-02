@@ -4214,15 +4214,15 @@ void RunMaterialDomainGatingTest() {
     Require(FindGraphDiagnostic(surfaceResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain) == nullptr,
         "KBMAT-MAT34: the production Surface domain must not emit an unsupported-domain diagnostic");
 
-    // A declared-but-unimplemented domain falls back to Surface with a warning (no error, real shader).
+    // A declared-but-unimplemented domain fails instead of being silently compiled as Surface.
     RenderMaterialGraphDocument volumeGraph = surfaceGraph;
     volumeGraph.materialDomain = "volume";
     const RenderMaterialGraphCompileResult volumeResult = CompileRenderMaterialGraphToShaderSource(volumeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0341U });
-    Require(volumeResult.Succeeded(), "KBMAT-MAT34: a non-production domain must still produce a fallback shader (warning, not error)");
-    Require(!volumeResult.shader.source.empty(), "KBMAT-MAT34: the Surface fallback shader source must be produced");
+    Require(!volumeResult.Succeeded(), "KBMAT-MAT34: a non-production domain must fail instead of compiling as Surface");
+    Require(volumeResult.shader.source.empty(), "KBMAT-MAT34: a non-production domain must not produce a Surface shader");
     const RenderMaterialGraphDiagnostic* domainDiag = FindGraphDiagnostic(volumeResult.diagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain);
-    Require(domainDiag != nullptr && domainDiag->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT34: an unimplemented domain must emit a warning diagnostic with the Surface fallback");
+    Require(domainDiag != nullptr && domainDiag->severity == RenderMaterialGraphDiagnosticSeverity::Error,
+        "KBMAT-MAT34: an unimplemented domain must emit an error diagnostic without a Surface fallback");
 
     Require(IsRenderMaterialDomainProduction(RenderMaterialDomain::Surface), "KBMAT-MAT34: Surface domain must be production");
     Require(!IsRenderMaterialDomainProduction(RenderMaterialDomain::DeferredDecal) &&
