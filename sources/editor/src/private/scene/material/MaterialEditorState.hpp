@@ -191,6 +191,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     AlignBottom,
     DistributeHorizontal,
     DistributeVertical,
+    PromoteToParameter,
     DisconnectSelected,
     DeleteSelected,
 };
@@ -970,6 +971,64 @@ public:
         }
         SetWorkingCopy(std::move(document));
         static_cast<void>(SetNodeSelection(selectedNodeIds_, selectedNodeId_));
+        return true;
+    }
+
+    [[nodiscard]] bool CanPromoteSelectedGraphNodeToParameter() const {
+        if (!workingCopy_.has_value() || selectedNodeId_ == 0U || selectedNodeIds_.size() != 1U) {
+            return false;
+        }
+        const kb::render::RenderMaterialGraphNode* node =
+            kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, selectedNodeId_);
+        return node != nullptr && PromotedParameterKind(node->kind).has_value();
+    }
+
+    [[nodiscard]] bool PromoteSelectedGraphNodeToParameter(std::uint32_t* promotedNodeId = nullptr) {
+        if (!workingCopy_.has_value() || selectedNodeId_ == 0U || selectedNodeIds_.size() != 1U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, selectedNodeId_);
+        if (node == nullptr) {
+            return false;
+        }
+        const kb::render::RenderMaterialGraphNodeKind sourceKind = node->kind;
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> targetKind = PromotedParameterKind(sourceKind);
+        if (!targetKind.has_value()) {
+            return false;
+        }
+
+        const std::string sourcePin = PromotedSourceOutputPin(sourceKind);
+        const std::string targetPin = PromotedTargetOutputPin(*targetKind);
+        kb::render::RenderMaterialGraphParameterMetadata metadata = DefaultParameterMetadata(*targetKind, node->id);
+        metadata.defaultValueHint = PromotedParameterDefaultValueHint(*node, *targetKind);
+        if (node->parameter.hasRange) {
+            metadata.hasRange = node->parameter.hasRange;
+            metadata.rangeMin = node->parameter.rangeMin;
+            metadata.rangeMax = node->parameter.rangeMax;
+        }
+        metadata.overrideSupported = true;
+
+        node->kind = *targetKind;
+        node->parameter = std::move(metadata);
+        const std::uint32_t targetPinId = kb::render::RenderMaterialGraphStablePinId(*node, targetPin, true);
+        if (targetPinId == 0U) {
+            return false;
+        }
+        for (kb::render::RenderMaterialGraphLink& link : document.graph.links) {
+            if (link.fromNodeId == node->id && link.fromPin == sourcePin) {
+                link.fromPin = targetPin;
+                link.fromPinId = targetPinId;
+                link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+            }
+        }
+
+        SetWorkingCopy(std::move(document));
+        static_cast<void>(SetNodeSelection({ selectedNodeId_ }, selectedNodeId_));
+        if (promotedNodeId != nullptr) {
+            *promotedNodeId = selectedNodeId_;
+        }
         return true;
     }
 
@@ -1997,6 +2056,66 @@ public:
     }
 
 private:
+    [[nodiscard]] static std::optional<kb::render::RenderMaterialGraphNodeKind> PromotedParameterKind(
+        kb::render::RenderMaterialGraphNodeKind sourceKind) noexcept {
+        switch (sourceKind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+            return kb::render::RenderMaterialGraphNodeKind::ParameterScalar;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return kb::render::RenderMaterialGraphNodeKind::ParameterVector;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return kb::render::RenderMaterialGraphNodeKind::ParameterColor;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] static std::string PromotedSourceOutputPin(kb::render::RenderMaterialGraphNodeKind sourceKind) {
+        switch (sourceKind) {
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
+            return "xy";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
+            return "xyz";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
+            return "rgba";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+        default:
+            return "value";
+        }
+    }
+
+    [[nodiscard]] static std::string PromotedTargetOutputPin(kb::render::RenderMaterialGraphNodeKind targetKind) {
+        switch (targetKind) {
+        case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
+            return "xyz";
+        case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
+            return "rgba";
+        case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
+        default:
+            return "value";
+        }
+    }
+
+    [[nodiscard]] static std::string PromotedParameterDefaultValueHint(
+        const kb::render::RenderMaterialGraphNode& sourceNode,
+        kb::render::RenderMaterialGraphNodeKind targetKind) {
+        std::array<float, 4U> values{};
+        if (const std::optional<std::array<float, 4U>> parsed = ParseConstantValue(sourceNode.kind, sourceNode.parameter.defaultValueHint)) {
+            values = *parsed;
+        }
+        switch (targetKind) {
+        case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
+            return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, values);
+        case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
+            return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantVector, values);
+        case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
+            return ConstantDefaultValueHint(kb::render::RenderMaterialGraphNodeKind::ConstantColor, values);
+        default:
+            return sourceNode.parameter.defaultValueHint;
+        }
+    }
+
     [[nodiscard]] bool SelectGraphLinkedNodes(bool downstream) {
         if (!workingCopy_.has_value() || selectedNodeIds_.empty()) {
             return false;

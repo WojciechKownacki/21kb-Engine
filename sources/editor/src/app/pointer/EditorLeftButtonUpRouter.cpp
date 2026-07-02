@@ -173,6 +173,14 @@ void EditorLeftButtonUpRouter::Handle(HWND messageWindow, int x, int y) {
     }
 
     if (pointerDrag_.Potential()) {
+        if (pointerDrag_.kind == EditorPointerDragKind::MaterialGraphPaletteCommand && !pointerDrag_.Active()) {
+            const MaterialEditorGraphMenuCommand command = pointerDrag_.materialGraphCommand;
+            pointerDrag_.Clear();
+            static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(command));
+            ReleaseCapture();
+            EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+            return;
+        }
         const bool wasDragging = pointerDrag_.Active();
         const bool handledDrop = EditorPointerDragInteraction::Complete(messageWindow, mainWindow_, x, y, dockModel_, floatingWindows_, metrics_, sceneContext_, pointerDrag_);
         // A press without a drag is a plain click: commit the deferred asset

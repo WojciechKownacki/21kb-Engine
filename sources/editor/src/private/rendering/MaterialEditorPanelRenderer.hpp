@@ -2125,6 +2125,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::AlignBottom,
             MaterialEditorGraphMenuCommand::DistributeHorizontal,
             MaterialEditorGraphMenuCommand::DistributeVertical,
+            MaterialEditorGraphMenuCommand::PromoteToParameter,
             MaterialEditorGraphMenuCommand::DisconnectSelected,
             MaterialEditorGraphMenuCommand::DeleteSelected,
         };
@@ -2290,6 +2291,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::AlignBottom: return "Align Bottom";
     case MaterialEditorGraphMenuCommand::DistributeHorizontal: return "Distribute Horizontal";
     case MaterialEditorGraphMenuCommand::DistributeVertical: return "Distribute Vertical";
+    case MaterialEditorGraphMenuCommand::PromoteToParameter: return "Promote to Parameter";
     case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
     case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected";
     case MaterialEditorGraphMenuCommand::None: return "";
@@ -2310,6 +2312,7 @@ inline bool MaterialEditorGraphMenuCommandIsAction(MaterialEditorGraphMenuComman
     case MaterialEditorGraphMenuCommand::AlignBottom:
     case MaterialEditorGraphMenuCommand::DistributeHorizontal:
     case MaterialEditorGraphMenuCommand::DistributeVertical:
+    case MaterialEditorGraphMenuCommand::PromoteToParameter:
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
     case MaterialEditorGraphMenuCommand::DeleteSelected:
         return true;
@@ -2338,6 +2341,8 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(
     case MaterialEditorGraphMenuCommand::DistributeHorizontal:
     case MaterialEditorGraphMenuCommand::DistributeVertical:
         return selectedNodeCount >= 3U;
+    case MaterialEditorGraphMenuCommand::PromoteToParameter:
+        return selectedNodeCount == 1U;
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return selectedNodeCount > 0U;
     case MaterialEditorGraphMenuCommand::DeleteSelected:
@@ -2498,6 +2503,12 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     default:
         return std::nullopt;
     }
+}
+
+inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGraphMenuCommand command) noexcept {
+    return MaterialEditorGraphMenuCommandNodeKind(command).has_value() ||
+        command == MaterialEditorGraphMenuCommand::CreateComment ||
+        command == MaterialEditorGraphMenuCommand::CreateComposite;
 }
 
 [[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphPaletteAllCommands() {
