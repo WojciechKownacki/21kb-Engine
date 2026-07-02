@@ -602,6 +602,11 @@ struct RenderMaterialGraphReflection {
     bool hasWorldPositionOffset = false;
     bool hasCustomizedUv0 = false;
     bool hasDisplacement = false;
+    bool hasClearCoatNormal = false;
+    bool hasBentNormal = false;
+    bool hasTangentOutput = false;
+    bool hasThinTranslucentOutput = false;
+    bool hasSingleLayerWaterOutput = false;
     // MAT-37: resolved surface shading model. Drives the fragment wrapper lighting branch and the program
     // key (Unlit and DefaultLit produce different wrappers). Non-production models fall back to DefaultLit.
     RenderMaterialShadingModel shadingModel = RenderMaterialShadingModel::DefaultLit;
@@ -796,10 +801,15 @@ enum class MaterialSurfaceRenderQueue : std::uint8_t {
 struct MaterialSurface {
     float baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float normal[3] = {0.0f, 0.0f, 1.0f};
+    float clearCoatNormal[3] = {0.0f, 0.0f, 1.0f};
+    float bentNormal[3] = {0.0f, 0.0f, 1.0f};
+    float tangentOutput[3] = {1.0f, 0.0f, 0.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
     float occlusion = 1.0f;
     float emissive[3] = {0.0f, 0.0f, 0.0f};
+    float thinTranslucentOutput[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float singleLayerWaterOutput[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     float alpha = 1.0f;
     float alphaClipThreshold = 0.5f;
     MaterialSurfaceAlphaMode alphaMode = MaterialSurfaceAlphaMode::Opaque;

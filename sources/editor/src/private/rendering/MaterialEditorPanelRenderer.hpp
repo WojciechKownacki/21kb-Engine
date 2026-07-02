@@ -269,7 +269,14 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return SIZE{ 420, 232 };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return SIZE{ 250, 204 };
+        return SIZE{ 282, 468 };
+    case kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes:
+    case kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes:
+    case kb::render::RenderMaterialGraphNodeKind::GetMaterialAttributes:
+    case kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes:
+        return SIZE{ 282, 438 };
+    case kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes:
+        return SIZE{ 220, 96 };
     case kb::render::RenderMaterialGraphNodeKind::Add:
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
@@ -1006,7 +1013,33 @@ inline MaterialEditorGraphPinDragState MaterialEditorPanelRenderer::GraphPinDrag
 inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return { "baseColor", "normal", "roughness", "metallic", "emissive", "occlusion", "alpha", "worldPositionOffset", "customizedUv0", "displacement" };
+        return {
+            "baseColor",
+            "normal",
+            "clearCoatNormal",
+            "bentNormal",
+            "roughness",
+            "metallic",
+            "emissive",
+            "occlusion",
+            "alpha",
+            "alphaClipThreshold",
+            "specular",
+            "anisotropy",
+            "tangent",
+            "tangentOutput",
+            "subsurfaceColor",
+            "clearCoat",
+            "clearCoatRoughness",
+            "refraction",
+            "surfaceThickness",
+            "thinTranslucentOutput",
+            "singleLayerWaterOutput",
+            "attributes",
+            "worldPositionOffset",
+            "customizedUv0",
+            "displacement",
+        };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { "texture", "uv" };
     case kb::render::RenderMaterialGraphNodeKind::Add:

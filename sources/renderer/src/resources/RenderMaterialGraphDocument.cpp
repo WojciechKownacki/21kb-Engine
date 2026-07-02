@@ -361,6 +361,8 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "metallic", false);
         AppendIrPin(irNode, irNode.kind, "roughness", false);
         AppendIrPin(irNode, irNode.kind, "normal", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoatNormal", false);
+        AppendIrPin(irNode, irNode.kind, "bentNormal", false);
         AppendIrPin(irNode, irNode.kind, "emissive", false);
         AppendIrPin(irNode, irNode.kind, "occlusion", false);
         AppendIrPin(irNode, irNode.kind, "alpha", false);
@@ -369,11 +371,14 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "specular", false);
         AppendIrPin(irNode, irNode.kind, "anisotropy", false);
         AppendIrPin(irNode, irNode.kind, "tangent", false);
+        AppendIrPin(irNode, irNode.kind, "tangentOutput", false);
         AppendIrPin(irNode, irNode.kind, "subsurfaceColor", false);
         AppendIrPin(irNode, irNode.kind, "clearCoat", false);
         AppendIrPin(irNode, irNode.kind, "clearCoatRoughness", false);
         AppendIrPin(irNode, irNode.kind, "refraction", false);
         AppendIrPin(irNode, irNode.kind, "surfaceThickness", false);
+        AppendIrPin(irNode, irNode.kind, "thinTranslucentOutput", false);
+        AppendIrPin(irNode, irNode.kind, "singleLayerWaterOutput", false);
         AppendIrPin(irNode, irNode.kind, "attributes", false);
         AppendIrPin(irNode, irNode.kind, "customizedUv0", false);
         AppendIrPin(irNode, irNode.kind, "displacement", false);
@@ -383,9 +388,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "metallic", false);
         AppendIrPin(irNode, irNode.kind, "roughness", false);
         AppendIrPin(irNode, irNode.kind, "normal", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoatNormal", false);
+        AppendIrPin(irNode, irNode.kind, "bentNormal", false);
         AppendIrPin(irNode, irNode.kind, "emissive", false);
         AppendIrPin(irNode, irNode.kind, "occlusion", false);
         AppendIrPin(irNode, irNode.kind, "alpha", false);
+        AppendIrPin(irNode, irNode.kind, "alphaClipThreshold", false);
+        AppendIrPin(irNode, irNode.kind, "specular", false);
+        AppendIrPin(irNode, irNode.kind, "anisotropy", false);
+        AppendIrPin(irNode, irNode.kind, "tangent", false);
+        AppendIrPin(irNode, irNode.kind, "tangentOutput", false);
+        AppendIrPin(irNode, irNode.kind, "subsurfaceColor", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoat", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoatRoughness", false);
+        AppendIrPin(irNode, irNode.kind, "refraction", false);
+        AppendIrPin(irNode, irNode.kind, "surfaceThickness", false);
+        AppendIrPin(irNode, irNode.kind, "thinTranslucentOutput", false);
+        AppendIrPin(irNode, irNode.kind, "singleLayerWaterOutput", false);
         AppendIrPin(irNode, irNode.kind, "attributes", true);
         break;
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
@@ -394,9 +413,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "metallic", true);
         AppendIrPin(irNode, irNode.kind, "roughness", true);
         AppendIrPin(irNode, irNode.kind, "normal", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoatNormal", true);
+        AppendIrPin(irNode, irNode.kind, "bentNormal", true);
         AppendIrPin(irNode, irNode.kind, "emissive", true);
         AppendIrPin(irNode, irNode.kind, "occlusion", true);
         AppendIrPin(irNode, irNode.kind, "alpha", true);
+        AppendIrPin(irNode, irNode.kind, "alphaClipThreshold", true);
+        AppendIrPin(irNode, irNode.kind, "specular", true);
+        AppendIrPin(irNode, irNode.kind, "anisotropy", true);
+        AppendIrPin(irNode, irNode.kind, "tangent", true);
+        AppendIrPin(irNode, irNode.kind, "tangentOutput", true);
+        AppendIrPin(irNode, irNode.kind, "subsurfaceColor", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoat", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoatRoughness", true);
+        AppendIrPin(irNode, irNode.kind, "refraction", true);
+        AppendIrPin(irNode, irNode.kind, "surfaceThickness", true);
+        AppendIrPin(irNode, irNode.kind, "thinTranslucentOutput", true);
+        AppendIrPin(irNode, irNode.kind, "singleLayerWaterOutput", true);
         break;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         AppendIrPin(irNode, irNode.kind, "a", false);
@@ -410,9 +443,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "metallic", true);
         AppendIrPin(irNode, irNode.kind, "roughness", true);
         AppendIrPin(irNode, irNode.kind, "normal", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoatNormal", true);
+        AppendIrPin(irNode, irNode.kind, "bentNormal", true);
         AppendIrPin(irNode, irNode.kind, "emissive", true);
         AppendIrPin(irNode, irNode.kind, "occlusion", true);
         AppendIrPin(irNode, irNode.kind, "alpha", true);
+        AppendIrPin(irNode, irNode.kind, "alphaClipThreshold", true);
+        AppendIrPin(irNode, irNode.kind, "specular", true);
+        AppendIrPin(irNode, irNode.kind, "anisotropy", true);
+        AppendIrPin(irNode, irNode.kind, "tangent", true);
+        AppendIrPin(irNode, irNode.kind, "tangentOutput", true);
+        AppendIrPin(irNode, irNode.kind, "subsurfaceColor", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoat", true);
+        AppendIrPin(irNode, irNode.kind, "clearCoatRoughness", true);
+        AppendIrPin(irNode, irNode.kind, "refraction", true);
+        AppendIrPin(irNode, irNode.kind, "surfaceThickness", true);
+        AppendIrPin(irNode, irNode.kind, "thinTranslucentOutput", true);
+        AppendIrPin(irNode, irNode.kind, "singleLayerWaterOutput", true);
         break;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         AppendIrPin(irNode, irNode.kind, "attributes", false);
@@ -420,9 +467,23 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "metallic", false);
         AppendIrPin(irNode, irNode.kind, "roughness", false);
         AppendIrPin(irNode, irNode.kind, "normal", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoatNormal", false);
+        AppendIrPin(irNode, irNode.kind, "bentNormal", false);
         AppendIrPin(irNode, irNode.kind, "emissive", false);
         AppendIrPin(irNode, irNode.kind, "occlusion", false);
         AppendIrPin(irNode, irNode.kind, "alpha", false);
+        AppendIrPin(irNode, irNode.kind, "alphaClipThreshold", false);
+        AppendIrPin(irNode, irNode.kind, "specular", false);
+        AppendIrPin(irNode, irNode.kind, "anisotropy", false);
+        AppendIrPin(irNode, irNode.kind, "tangent", false);
+        AppendIrPin(irNode, irNode.kind, "tangentOutput", false);
+        AppendIrPin(irNode, irNode.kind, "subsurfaceColor", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoat", false);
+        AppendIrPin(irNode, irNode.kind, "clearCoatRoughness", false);
+        AppendIrPin(irNode, irNode.kind, "refraction", false);
+        AppendIrPin(irNode, irNode.kind, "surfaceThickness", false);
+        AppendIrPin(irNode, irNode.kind, "thinTranslucentOutput", false);
+        AppendIrPin(irNode, irNode.kind, "singleLayerWaterOutput", false);
         AppendIrPin(irNode, irNode.kind, "attributesOut", true);
         break;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
@@ -1454,6 +1515,8 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".metallic = 0.0;\n"
         "    " + v + ".roughness = 1.0;\n"
         "    " + v + ".normal = vec3(0.0, 0.0, 1.0);\n"
+        "    " + v + ".clearCoatNormal = vec3(0.0, 0.0, 1.0);\n"
+        "    " + v + ".bentNormal = vec3(0.0, 0.0, 1.0);\n"
         "    " + v + ".occlusion = 1.0;\n"
         "    " + v + ".emissive = vec3(0.0, 0.0, 0.0);\n"
         "    " + v + ".alpha = 1.0;\n"
@@ -1461,11 +1524,14 @@ void AppendCustomCodeFunctionDefinitions(
         "    " + v + ".specular = 0.5;\n"
         "    " + v + ".anisotropy = 0.0;\n"
         "    " + v + ".tangent = vec3(1.0, 0.0, 0.0);\n"
+        "    " + v + ".tangentOutput = vec3(1.0, 0.0, 0.0);\n"
         "    " + v + ".subsurfaceColor = vec3(0.0, 0.0, 0.0);\n"
         "    " + v + ".clearCoat = 0.0;\n"
         "    " + v + ".clearCoatRoughness = 0.0;\n"
         "    " + v + ".refraction = 0.0;\n"
-        "    " + v + ".surfaceThickness = 0.0;\n";
+        "    " + v + ".surfaceThickness = 0.0;\n"
+        "    " + v + ".thinTranslucentOutput = vec4(0.0, 0.0, 0.0, 0.0);\n"
+        "    " + v + ".singleLayerWaterOutput = vec4(0.0, 0.0, 0.0, 0.0);\n";
 }
 
 // MAT-39: parse a compile-time boolean from a node's value hint.
@@ -1741,9 +1807,23 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".metallic = " + CompileInputExpression(cg, node, "metallic", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
         cg.statements += "    " + tmp + ".roughness = " + CompileInputExpression(cg, node, "roughness", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.statements += "    " + tmp + ".normal = " + CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
+        cg.statements += "    " + tmp + ".clearCoatNormal = " + CompileInputExpression(cg, node, "clearCoatNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
+        cg.statements += "    " + tmp + ".bentNormal = " + CompileInputExpression(cg, node, "bentNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
         cg.statements += "    " + tmp + ".emissive = " + CompileInputExpression(cg, node, "emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ".rgb;\n";
         cg.statements += "    " + tmp + ".occlusion = " + CompileInputExpression(cg, node, "occlusion", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
         cg.statements += "    " + tmp + ".alpha = " + CompileInputExpression(cg, node, "alpha", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        cg.statements += "    " + tmp + ".alphaClipThreshold = " + CompileInputExpression(cg, node, "alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        cg.statements += "    " + tmp + ".specular = " + CompileInputExpression(cg, node, "specular", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        cg.statements += "    " + tmp + ".anisotropy = " + CompileInputExpression(cg, node, "anisotropy", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".tangent = " + CompileInputExpression(cg, node, "tangent", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".tangentOutput = " + CompileInputExpression(cg, node, "tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".subsurfaceColor = " + CompileInputExpression(cg, node, "subsurfaceColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ".rgb;\n";
+        cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".surfaceThickness = " + CompileInputExpression(cg, node, "surfaceThickness", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        cg.statements += "    " + tmp + ".thinTranslucentOutput = " + CompileInputExpression(cg, node, "thinTranslucentOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)") + ";\n";
+        cg.statements += "    " + tmp + ".singleLayerWaterOutput = " + CompileInputExpression(cg, node, "singleLayerWaterOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)") + ";\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1775,6 +1855,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".metallic = mix((" + a + ").metallic, (" + b + ").metallic, " + fv + ");\n";
         cg.statements += "    " + tmp + ".roughness = mix((" + a + ").roughness, (" + b + ").roughness, " + fv + ");\n";
         cg.statements += "    " + tmp + ".normal = normalize(mix((" + a + ").normal, (" + b + ").normal, " + fv + "));\n";
+        cg.statements += "    " + tmp + ".clearCoatNormal = normalize(mix((" + a + ").clearCoatNormal, (" + b + ").clearCoatNormal, " + fv + "));\n";
+        cg.statements += "    " + tmp + ".bentNormal = normalize(mix((" + a + ").bentNormal, (" + b + ").bentNormal, " + fv + "));\n";
         cg.statements += "    " + tmp + ".occlusion = mix((" + a + ").occlusion, (" + b + ").occlusion, " + fv + ");\n";
         cg.statements += "    " + tmp + ".emissive = mix((" + a + ").emissive, (" + b + ").emissive, " + fv + ");\n";
         cg.statements += "    " + tmp + ".alpha = mix((" + a + ").alpha, (" + b + ").alpha, " + fv + ");\n";
@@ -1782,11 +1864,14 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         cg.statements += "    " + tmp + ".specular = mix((" + a + ").specular, (" + b + ").specular, " + fv + ");\n";
         cg.statements += "    " + tmp + ".anisotropy = mix((" + a + ").anisotropy, (" + b + ").anisotropy, " + fv + ");\n";
         cg.statements += "    " + tmp + ".tangent = mix((" + a + ").tangent, (" + b + ").tangent, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".tangentOutput = normalize(mix((" + a + ").tangentOutput, (" + b + ").tangentOutput, " + fv + "));\n";
         cg.statements += "    " + tmp + ".subsurfaceColor = mix((" + a + ").subsurfaceColor, (" + b + ").subsurfaceColor, " + fv + ");\n";
         cg.statements += "    " + tmp + ".clearCoat = mix((" + a + ").clearCoat, (" + b + ").clearCoat, " + fv + ");\n";
         cg.statements += "    " + tmp + ".clearCoatRoughness = mix((" + a + ").clearCoatRoughness, (" + b + ").clearCoatRoughness, " + fv + ");\n";
         cg.statements += "    " + tmp + ".refraction = mix((" + a + ").refraction, (" + b + ").refraction, " + fv + ");\n";
         cg.statements += "    " + tmp + ".surfaceThickness = mix((" + a + ").surfaceThickness, (" + b + ").surfaceThickness, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".thinTranslucentOutput = mix((" + a + ").thinTranslucentOutput, (" + b + ").thinTranslucentOutput, " + fv + ");\n";
+        cg.statements += "    " + tmp + ".singleLayerWaterOutput = mix((" + a + ").singleLayerWaterOutput, (" + b + ").singleLayerWaterOutput, " + fv + ");\n";
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
     }
@@ -1828,6 +1913,12 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (FindInputLink(cg.graph, node.id, "normal") != nullptr) {
             cg.statements += "    " + tmp + ".normal = " + CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
         }
+        if (FindInputLink(cg.graph, node.id, "clearCoatNormal") != nullptr) {
+            cg.statements += "    " + tmp + ".clearCoatNormal = " + CompileInputExpression(cg, node, "clearCoatNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "bentNormal") != nullptr) {
+            cg.statements += "    " + tmp + ".bentNormal = " + CompileInputExpression(cg, node, "bentNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)") + ";\n";
+        }
         if (FindInputLink(cg.graph, node.id, "emissive") != nullptr) {
             cg.statements += "    " + tmp + ".emissive = " + CompileInputExpression(cg, node, "emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ".rgb;\n";
         }
@@ -1836,6 +1927,42 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         }
         if (FindInputLink(cg.graph, node.id, "alpha") != nullptr) {
             cg.statements += "    " + tmp + ".alpha = " + CompileInputExpression(cg, node, "alpha", RenderMaterialGraphPinType::Float, "1.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "alphaClipThreshold") != nullptr) {
+            cg.statements += "    " + tmp + ".alphaClipThreshold = " + CompileInputExpression(cg, node, "alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "specular") != nullptr) {
+            cg.statements += "    " + tmp + ".specular = " + CompileInputExpression(cg, node, "specular", RenderMaterialGraphPinType::Float, "0.5") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "anisotropy") != nullptr) {
+            cg.statements += "    " + tmp + ".anisotropy = " + CompileInputExpression(cg, node, "anisotropy", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "tangent") != nullptr) {
+            cg.statements += "    " + tmp + ".tangent = " + CompileInputExpression(cg, node, "tangent", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "tangentOutput") != nullptr) {
+            cg.statements += "    " + tmp + ".tangentOutput = " + CompileInputExpression(cg, node, "tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "subsurfaceColor") != nullptr) {
+            cg.statements += "    " + tmp + ".subsurfaceColor = " + CompileInputExpression(cg, node, "subsurfaceColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)") + ".rgb;\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "clearCoat") != nullptr) {
+            cg.statements += "    " + tmp + ".clearCoat = " + CompileInputExpression(cg, node, "clearCoat", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "clearCoatRoughness") != nullptr) {
+            cg.statements += "    " + tmp + ".clearCoatRoughness = " + CompileInputExpression(cg, node, "clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "refraction") != nullptr) {
+            cg.statements += "    " + tmp + ".refraction = " + CompileInputExpression(cg, node, "refraction", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "surfaceThickness") != nullptr) {
+            cg.statements += "    " + tmp + ".surfaceThickness = " + CompileInputExpression(cg, node, "surfaceThickness", RenderMaterialGraphPinType::Float, "0.0") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "thinTranslucentOutput") != nullptr) {
+            cg.statements += "    " + tmp + ".thinTranslucentOutput = " + CompileInputExpression(cg, node, "thinTranslucentOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)") + ";\n";
+        }
+        if (FindInputLink(cg.graph, node.id, "singleLayerWaterOutput") != nullptr) {
+            cg.statements += "    " + tmp + ".singleLayerWaterOutput = " + CompileInputExpression(cg, node, "singleLayerWaterOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)") + ";\n";
         }
         cg.emittedTemp.emplace(node.id, tmp);
         return tmp;
@@ -2326,9 +2453,23 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
         if (outputPin == "metallic") return "(" + baseRef + ").metallic";
         if (outputPin == "roughness") return "(" + baseRef + ").roughness";
         if (outputPin == "normal") return "(" + baseRef + ").normal";
+        if (outputPin == "clearCoatNormal") return "(" + baseRef + ").clearCoatNormal";
+        if (outputPin == "bentNormal") return "(" + baseRef + ").bentNormal";
         if (outputPin == "emissive") return "vec4((" + baseRef + ").emissive, 1.0)";
         if (outputPin == "occlusion") return "(" + baseRef + ").occlusion";
         if (outputPin == "alpha") return "(" + baseRef + ").alpha";
+        if (outputPin == "alphaClipThreshold") return "(" + baseRef + ").alphaClipThreshold";
+        if (outputPin == "specular") return "(" + baseRef + ").specular";
+        if (outputPin == "anisotropy") return "(" + baseRef + ").anisotropy";
+        if (outputPin == "tangent") return "(" + baseRef + ").tangent";
+        if (outputPin == "tangentOutput") return "(" + baseRef + ").tangentOutput";
+        if (outputPin == "subsurfaceColor") return "vec4((" + baseRef + ").subsurfaceColor, 1.0)";
+        if (outputPin == "clearCoat") return "(" + baseRef + ").clearCoat";
+        if (outputPin == "clearCoatRoughness") return "(" + baseRef + ").clearCoatRoughness";
+        if (outputPin == "refraction") return "(" + baseRef + ").refraction";
+        if (outputPin == "surfaceThickness") return "(" + baseRef + ").surfaceThickness";
+        if (outputPin == "thinTranslucentOutput") return "(" + baseRef + ").thinTranslucentOutput";
+        if (outputPin == "singleLayerWaterOutput") return "(" + baseRef + ").singleLayerWaterOutput";
         AddShaderGenerationDiagnostic(cg.diagnostics, node, outputPin, "Material attribute output pin is not supported.");
         return "0.0";
     case RenderMaterialGraphNodeKind::BreakVector:
@@ -6079,6 +6220,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float metallic;\n";
     source += "    float roughness;\n";
     source += "    vec3 normal;\n";
+    source += "    vec3 clearCoatNormal;\n";
+    source += "    vec3 bentNormal;\n";
     source += "    float occlusion;\n";
     source += "    vec3 emissive;\n";
     source += "    float alpha;\n";
@@ -6086,11 +6229,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    float specular;\n";
     source += "    float anisotropy;\n";
     source += "    vec3 tangent;\n";
+    source += "    vec3 tangentOutput;\n";
     source += "    vec3 subsurfaceColor;\n";
     source += "    float clearCoat;\n";
     source += "    float clearCoatRoughness;\n";
     source += "    float refraction;\n";
     source += "    float surfaceThickness;\n";
+    source += "    vec4 thinTranslucentOutput;\n";
+    source += "    vec4 singleLayerWaterOutput;\n";
     source += "};\n\n";
 
     if (usesHsv) {
@@ -6246,6 +6392,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string metallicExpr;
     std::string roughnessExpr;
     std::string normalExpr;
+    std::string clearCoatNormalExpr;
+    std::string bentNormalExpr;
     std::string occlusionExpr;
     std::string emissiveExpr;
     std::string alphaExpr;
@@ -6253,11 +6401,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     std::string specularExpr;
     std::string anisotropyExpr;
     std::string tangentExpr;
+    std::string tangentOutputExpr;
     std::string subsurfaceColorExpr;
     std::string clearCoatExpr;
     std::string clearCoatRoughnessExpr;
     std::string refractionExpr;
     std::string surfaceThicknessExpr;
+    std::string thinTranslucentOutputExpr;
+    std::string singleLayerWaterOutputExpr;
 
     // MAT-36: when a single MaterialAttributes set is wired into MaterialOutput.attributes it drives the
     // whole surface (UE's "Use Material Attributes" mode); the per-channel pins are bypassed entirely.
@@ -6268,6 +6419,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         metallicExpr = compileOutput("metallic", RenderMaterialGraphPinType::Float, "0.0");
         roughnessExpr = compileOutput("roughness", RenderMaterialGraphPinType::Float, "1.0");
         normalExpr = compileOutput("normal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+        clearCoatNormalExpr = compileOutput("clearCoatNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
+        bentNormalExpr = compileOutput("bentNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
         occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
         emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
         alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
@@ -6277,11 +6430,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         specularExpr = compileOutput("specular", RenderMaterialGraphPinType::Float, "0.5");
         anisotropyExpr = compileOutput("anisotropy", RenderMaterialGraphPinType::Float, "0.0");
         tangentExpr = compileOutput("tangent", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
+        tangentOutputExpr = compileOutput("tangentOutput", RenderMaterialGraphPinType::Float3, "vec3(1.0, 0.0, 0.0)");
         subsurfaceColorExpr = compileOutput("subsurfaceColor", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
         clearCoatExpr = compileOutput("clearCoat", RenderMaterialGraphPinType::Float, "0.0");
         clearCoatRoughnessExpr = compileOutput("clearCoatRoughness", RenderMaterialGraphPinType::Float, "0.0");
         refractionExpr = compileOutput("refraction", RenderMaterialGraphPinType::Float, "0.0");
         surfaceThicknessExpr = compileOutput("surfaceThickness", RenderMaterialGraphPinType::Float, "0.0");
+        thinTranslucentOutputExpr = compileOutput("thinTranslucentOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)");
+        singleLayerWaterOutputExpr = compileOutput("singleLayerWaterOutput", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 0.0)");
     }
 
     std::unordered_set<std::uint32_t> emittedCustomFunctionDefinitions;
@@ -6298,6 +6454,8 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.metallic = " + metallicExpr + ";\n";
         source += "    material.roughness = " + roughnessExpr + ";\n";
         source += "    material.normal = " + normalExpr + ";\n";
+        source += "    material.clearCoatNormal = " + clearCoatNormalExpr + ";\n";
+        source += "    material.bentNormal = " + bentNormalExpr + ";\n";
         source += "    material.occlusion = " + occlusionExpr + ";\n";
         source += "    material.emissive = " + emissiveExpr + ".rgb;\n";
         source += "    material.alpha = " + alphaExpr + ";\n";
@@ -6305,11 +6463,14 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    material.specular = " + specularExpr + ";\n";
         source += "    material.anisotropy = " + anisotropyExpr + ";\n";
         source += "    material.tangent = " + tangentExpr + ";\n";
+        source += "    material.tangentOutput = " + tangentOutputExpr + ";\n";
         source += "    material.subsurfaceColor = " + subsurfaceColorExpr + ".rgb;\n";
         source += "    material.clearCoat = " + clearCoatExpr + ";\n";
         source += "    material.clearCoatRoughness = " + clearCoatRoughnessExpr + ";\n";
         source += "    material.refraction = " + refractionExpr + ";\n";
         source += "    material.surfaceThickness = " + surfaceThicknessExpr + ";\n";
+        source += "    material.thinTranslucentOutput = " + thinTranslucentOutputExpr + ";\n";
+        source += "    material.singleLayerWaterOutput = " + singleLayerWaterOutputExpr + ";\n";
     }
     source += "    return material;\n";
     source += "}\n";
@@ -6349,6 +6510,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     if (hasDisplacement) {
         appendVertexOutputFunction("displacement", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)", "vec3", "EvaluateDisplacement");
     }
+    const bool hasClearCoatNormal = useMaterialAttributes || HasInputLink(graph, outputNode->id, "clearCoatNormal");
+    const bool hasBentNormal = useMaterialAttributes || HasInputLink(graph, outputNode->id, "bentNormal");
+    const bool hasTangentOutput = useMaterialAttributes || HasInputLink(graph, outputNode->id, "tangentOutput");
+    const bool hasThinTranslucentOutput = useMaterialAttributes || HasInputLink(graph, outputNode->id, "thinTranslucentOutput");
+    const bool hasSingleLayerWaterOutput = useMaterialAttributes || HasInputLink(graph, outputNode->id, "singleLayerWaterOutput");
 
     AttachDiagnosticContext(graph, context, result.diagnostics);
     if (!result.Succeeded()) {
@@ -6404,6 +6570,11 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     reflection.hasWorldPositionOffset = hasWorldPositionOffset;
     reflection.hasCustomizedUv0 = hasCustomizedUv0;
     reflection.hasDisplacement = hasDisplacement;
+    reflection.hasClearCoatNormal = hasClearCoatNormal;
+    reflection.hasBentNormal = hasBentNormal;
+    reflection.hasTangentOutput = hasTangentOutput;
+    reflection.hasThinTranslucentOutput = hasThinTranslucentOutput;
+    reflection.hasSingleLayerWaterOutput = hasSingleLayerWaterOutput;
     reflection.shadingModel = resolvedShadingModel;
     reflection.blendMode = resolvedBlendMode;
     reflection.usesSceneDepth = usesSceneDepth;
@@ -6831,6 +7002,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
             pin == "metallic" ||
             pin == "roughness" ||
             pin == "normal" ||
+            pin == "clearCoatNormal" ||
+            pin == "bentNormal" ||
             pin == "emissive" ||
             pin == "occlusion" ||
             pin == "alpha" ||
@@ -6839,17 +7012,24 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
             pin == "specular" ||
             pin == "anisotropy" ||
             pin == "tangent" ||
+            pin == "tangentOutput" ||
             pin == "subsurfaceColor" ||
             pin == "clearCoat" ||
             pin == "clearCoatRoughness" ||
             pin == "refraction" ||
             pin == "surfaceThickness" ||
+            pin == "thinTranslucentOutput" ||
+            pin == "singleLayerWaterOutput" ||
             pin == "attributes" ||
             pin == "customizedUv0" ||
             pin == "displacement";
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         return pin == "baseColor" || pin == "metallic" || pin == "roughness" || pin == "normal" ||
-            pin == "emissive" || pin == "occlusion" || pin == "alpha";
+            pin == "clearCoatNormal" || pin == "bentNormal" || pin == "emissive" || pin == "occlusion" ||
+            pin == "alpha" || pin == "alphaClipThreshold" || pin == "specular" || pin == "anisotropy" ||
+            pin == "tangent" || pin == "tangentOutput" || pin == "subsurfaceColor" || pin == "clearCoat" ||
+            pin == "clearCoatRoughness" || pin == "refraction" || pin == "surfaceThickness" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput";
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
         return pin == "attributes";
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
@@ -6858,7 +7038,11 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "attributes";
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         return pin == "attributes" || pin == "baseColor" || pin == "metallic" || pin == "roughness" ||
-            pin == "normal" || pin == "emissive" || pin == "occlusion" || pin == "alpha";
+            pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal" || pin == "emissive" ||
+            pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" || pin == "specular" ||
+            pin == "anisotropy" || pin == "tangent" || pin == "tangentOutput" || pin == "subsurfaceColor" ||
+            pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "refraction" ||
+            pin == "surfaceThickness" || pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput";
     case RenderMaterialGraphNodeKind::StaticSwitch:
         return pin == "value" || pin == "true" || pin == "false";
     case RenderMaterialGraphNodeKind::StaticComponentMask:
@@ -7160,12 +7344,20 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "attributes";
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
         return pin == "baseColor" || pin == "metallic" || pin == "roughness" || pin == "normal" ||
-            pin == "emissive" || pin == "occlusion" || pin == "alpha";
+            pin == "clearCoatNormal" || pin == "bentNormal" || pin == "emissive" || pin == "occlusion" ||
+            pin == "alpha" || pin == "alphaClipThreshold" || pin == "specular" || pin == "anisotropy" ||
+            pin == "tangent" || pin == "tangentOutput" || pin == "subsurfaceColor" || pin == "clearCoat" ||
+            pin == "clearCoatRoughness" || pin == "refraction" || pin == "surfaceThickness" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput";
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         return pin == "attributes";
     case RenderMaterialGraphNodeKind::GetMaterialAttributes:
         return pin == "baseColor" || pin == "metallic" || pin == "roughness" || pin == "normal" ||
-            pin == "emissive" || pin == "occlusion" || pin == "alpha";
+            pin == "clearCoatNormal" || pin == "bentNormal" || pin == "emissive" || pin == "occlusion" ||
+            pin == "alpha" || pin == "alphaClipThreshold" || pin == "specular" || pin == "anisotropy" ||
+            pin == "tangent" || pin == "tangentOutput" || pin == "subsurfaceColor" || pin == "clearCoat" ||
+            pin == "clearCoatRoughness" || pin == "refraction" || pin == "surfaceThickness" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput";
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         return pin == "attributesOut";
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
@@ -7341,24 +7533,33 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::MaterialOutput:
         if (outputPin) return RenderMaterialGraphPinType::Unknown;
         if (pin == "attributes") return RenderMaterialGraphPinType::MaterialAttributes;
-        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor") return RenderMaterialGraphPinType::Color;
-        if (pin == "normal") return RenderMaterialGraphPinType::Normal;
+        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput") return RenderMaterialGraphPinType::Color;
+        if (pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal") return RenderMaterialGraphPinType::Normal;
         if (pin == "customizedUv0") return RenderMaterialGraphPinType::Float2;
-        if (pin == "worldPositionOffset" || pin == "tangent" || pin == "displacement") return RenderMaterialGraphPinType::Float3;
+        if (pin == "worldPositionOffset" || pin == "tangent" || pin == "tangentOutput" || pin == "displacement") return RenderMaterialGraphPinType::Float3;
         if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
             pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" || pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::MakeMaterialAttributes:
         if (outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
-        if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
-        if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha") return RenderMaterialGraphPinType::Float;
+        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput") return RenderMaterialGraphPinType::Color;
+        if (pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal") return RenderMaterialGraphPinType::Normal;
+        if (pin == "tangent" || pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
+        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
+            pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" ||
+            pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::BreakMaterialAttributes:
         if (!outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
-        if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
-        if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha") return RenderMaterialGraphPinType::Float;
+        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput") return RenderMaterialGraphPinType::Color;
+        if (pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal") return RenderMaterialGraphPinType::Normal;
+        if (pin == "tangent" || pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
+        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
+            pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" ||
+            pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
@@ -7367,16 +7568,24 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::GetMaterialAttributes:
         if (!outputPin) return pin == "attributes" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
-        if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
-        if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha") return RenderMaterialGraphPinType::Float;
+        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput") return RenderMaterialGraphPinType::Color;
+        if (pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal") return RenderMaterialGraphPinType::Normal;
+        if (pin == "tangent" || pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
+        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
+            pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" ||
+            pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (outputPin) return pin == "attributesOut" ? RenderMaterialGraphPinType::MaterialAttributes : RenderMaterialGraphPinType::Unknown;
         if (pin == "attributes") return RenderMaterialGraphPinType::MaterialAttributes;
-        if (pin == "baseColor" || pin == "emissive") return RenderMaterialGraphPinType::Color;
-        if (pin == "normal") return RenderMaterialGraphPinType::Normal;
-        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha") return RenderMaterialGraphPinType::Float;
+        if (pin == "baseColor" || pin == "emissive" || pin == "subsurfaceColor" ||
+            pin == "thinTranslucentOutput" || pin == "singleLayerWaterOutput") return RenderMaterialGraphPinType::Color;
+        if (pin == "normal" || pin == "clearCoatNormal" || pin == "bentNormal") return RenderMaterialGraphPinType::Normal;
+        if (pin == "tangent" || pin == "tangentOutput") return RenderMaterialGraphPinType::Float3;
+        if (pin == "metallic" || pin == "roughness" || pin == "occlusion" || pin == "alpha" || pin == "alphaClipThreshold" ||
+            pin == "specular" || pin == "anisotropy" || pin == "clearCoat" || pin == "clearCoatRoughness" ||
+            pin == "refraction" || pin == "surfaceThickness") return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
@@ -7832,6 +8041,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 18U);
         if (!outputPin && pin == "customizedUv0") return PinId(nodeKind, direction, 19U);
         if (!outputPin && pin == "displacement") return PinId(nodeKind, direction, 20U);
+        if (!outputPin && pin == "clearCoatNormal") return PinId(nodeKind, direction, 21U);
+        if (!outputPin && pin == "bentNormal") return PinId(nodeKind, direction, 22U);
+        if (!outputPin && pin == "tangentOutput") return PinId(nodeKind, direction, 23U);
+        if (!outputPin && pin == "thinTranslucentOutput") return PinId(nodeKind, direction, 24U);
+        if (!outputPin && pin == "singleLayerWaterOutput") return PinId(nodeKind, direction, 25U);
         return 0U;
     case RenderMaterialGraphNodeKind::TextureSample:
         if (!outputPin && pin == "texture") return PinId(nodeKind, direction, 1U);
@@ -8091,6 +8305,20 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "emissive") return PinId(nodeKind, direction, 6U);
         if (pin == "occlusion") return PinId(nodeKind, direction, 7U);
         if (pin == "alpha") return PinId(nodeKind, direction, 8U);
+        if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
+        if (pin == "specular") return PinId(nodeKind, direction, 10U);
+        if (pin == "anisotropy") return PinId(nodeKind, direction, 11U);
+        if (pin == "tangent") return PinId(nodeKind, direction, 12U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 13U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 14U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 15U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 16U);
+        if (pin == "surfaceThickness") return PinId(nodeKind, direction, 17U);
+        if (pin == "clearCoatNormal") return PinId(nodeKind, direction, 18U);
+        if (pin == "bentNormal") return PinId(nodeKind, direction, 19U);
+        if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "thinTranslucentOutput") return PinId(nodeKind, direction, 21U);
+        if (pin == "singleLayerWaterOutput") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::BlendMaterialAttributes:
         if (outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -8107,6 +8335,20 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "emissive") return PinId(nodeKind, direction, 6U);
         if (pin == "occlusion") return PinId(nodeKind, direction, 7U);
         if (pin == "alpha") return PinId(nodeKind, direction, 8U);
+        if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
+        if (pin == "specular") return PinId(nodeKind, direction, 10U);
+        if (pin == "anisotropy") return PinId(nodeKind, direction, 11U);
+        if (pin == "tangent") return PinId(nodeKind, direction, 12U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 13U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 14U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 15U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 16U);
+        if (pin == "surfaceThickness") return PinId(nodeKind, direction, 17U);
+        if (pin == "clearCoatNormal") return PinId(nodeKind, direction, 18U);
+        if (pin == "bentNormal") return PinId(nodeKind, direction, 19U);
+        if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "thinTranslucentOutput") return PinId(nodeKind, direction, 21U);
+        if (pin == "singleLayerWaterOutput") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::SetMaterialAttributes:
         if (!outputPin && pin == "attributes") return PinId(nodeKind, direction, 1U);
@@ -8118,6 +8360,20 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (pin == "occlusion") return PinId(nodeKind, direction, 7U);
         if (pin == "alpha") return PinId(nodeKind, direction, 8U);
         if (outputPin && pin == "attributesOut") return PinId(nodeKind, direction, 9U);
+        if (pin == "alphaClipThreshold") return PinId(nodeKind, direction, 9U);
+        if (pin == "specular") return PinId(nodeKind, direction, 10U);
+        if (pin == "anisotropy") return PinId(nodeKind, direction, 11U);
+        if (pin == "tangent") return PinId(nodeKind, direction, 12U);
+        if (pin == "subsurfaceColor") return PinId(nodeKind, direction, 13U);
+        if (pin == "clearCoat") return PinId(nodeKind, direction, 14U);
+        if (pin == "clearCoatRoughness") return PinId(nodeKind, direction, 15U);
+        if (pin == "refraction") return PinId(nodeKind, direction, 16U);
+        if (pin == "surfaceThickness") return PinId(nodeKind, direction, 17U);
+        if (pin == "clearCoatNormal") return PinId(nodeKind, direction, 18U);
+        if (pin == "bentNormal") return PinId(nodeKind, direction, 19U);
+        if (pin == "tangentOutput") return PinId(nodeKind, direction, 20U);
+        if (pin == "thinTranslucentOutput") return PinId(nodeKind, direction, 21U);
+        if (pin == "singleLayerWaterOutput") return PinId(nodeKind, direction, 22U);
         return 0U;
     case RenderMaterialGraphNodeKind::StaticBoolParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
