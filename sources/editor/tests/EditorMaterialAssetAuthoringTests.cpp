@@ -1658,6 +1658,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should expose Texture Sample Volume by 3D texture aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, "array layer"),
         "KBMAT-MAT57: Palette search should expose Texture Sample 2D Array by array/layer aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateDeltaTime, "time delta"),
+        "KBMAT-MAT57: Palette search should expose Delta Time by time-delta aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter, "dynamic parameters rgba"),
+        "KBMAT-MAT57: Palette search should expose Dynamic Parameter by runtime parameter aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData, "custom data instance"),
+        "KBMAT-MAT57: Palette search should expose Per Instance Custom Data by instance-data aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal, "pre skinned local normal"),
+        "KBMAT-MAT57: Palette search should expose Pre-Skinned Normal by skinning aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign, "twosidedsign"),
         "KBMAT-MAT57: Palette search should expose TwoSidedSign by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor, "opaque snapshot"),
@@ -1707,6 +1715,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor) &&
             kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSceneTexture),
         "KBMAT-MAT57: Scene Color and Scene Texture must be available from the Inputs palette category");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateDeltaTime) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal),
+        "KBMAT-MAT57: Time, dynamic parameter, per-instance and pre-skinned data nodes must be available from the Inputs palette category");
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> mathCommands =
         kb::editor::MaterialEditorGraphContextMenuCommands(5U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(mathCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSwitch),
@@ -1853,6 +1869,26 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSobol);
     kb::editor::tests::Require(sobolKind.has_value() && *sobolKind == kb::render::RenderMaterialGraphNodeKind::Sobol,
         "KBMAT-MAT57: CreateSobol command should map to the Sobol graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> deltaTimeKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateDeltaTime);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> dynamicParameterKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> perInstanceFadeKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> perInstanceCustomDataKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> preSkinnedPositionKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> preSkinnedNormalKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal);
+    kb::editor::tests::Require(
+        deltaTimeKind == kb::render::RenderMaterialGraphNodeKind::DeltaTime &&
+            dynamicParameterKind == kb::render::RenderMaterialGraphNodeKind::DynamicParameter &&
+            perInstanceFadeKind == kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount &&
+            perInstanceCustomDataKind == kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData &&
+            preSkinnedPositionKind == kb::render::RenderMaterialGraphNodeKind::PreSkinnedPosition &&
+            preSkinnedNormalKind == kb::render::RenderMaterialGraphNodeKind::PreSkinnedNormal,
+        "KBMAT-MAT57: Runtime input palette commands must map to their renderer graph node kinds");
     std::uint32_t createdNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(*colorKind, -240, 96, &createdNodeId),
         "KBMAT-MAT57: Drag-from-pin should be able to create the selected compatible node");
@@ -1880,6 +1916,93 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             kb::render::RenderMaterialGraphPinDataType(*sceneColorNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
             kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color,
         "KBMAT-MAT57: Scene sampling palette nodes must expose real typed color output pins");
+
+    const auto compilePaletteRuntimeInput = [](
+        kb::editor::MaterialEditorGraphMenuCommand command,
+        std::string_view outputPin,
+        std::string_view materialInputPin,
+        std::string_view expectedSourceToken,
+        std::optional<std::string_view> expectedVarying,
+        std::uint64_t assetId,
+        const char* message) {
+        kb::editor::MaterialEditorState editor;
+        kb::render::RenderMaterialAssetData asset{};
+        asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        asset.graph.shadingModel = "unlit";
+        editor.Open(kb::assets::AssetId{ assetId }, asset);
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(kind.has_value() && editor.AddGraphNode(*kind, -160, 96, &nodeId), message);
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, nodeId);
+        kb::editor::tests::Require(node != nullptr && kb::render::IsRenderMaterialGraphOutputPin(*node, outputPin),
+            "KBMAT-MAT57: Palette-created runtime input node must expose the selected output pin");
+        kb::editor::tests::Require(editor.ConnectGraphPins(nodeId, outputPin, 1U, materialInputPin),
+            "KBMAT-MAT57: Palette-created runtime input node must connect to a real material output pin");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            editor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = assetId });
+        kb::editor::tests::Require(compiled.Succeeded(), message);
+        kb::editor::tests::Require(compiled.shader.source.find(expectedSourceToken) != std::string::npos,
+            "KBMAT-MAT57: Palette-created runtime input node must emit the expected shader context read");
+        if (expectedVarying.has_value()) {
+            kb::editor::tests::Require(
+                std::ranges::find(compiled.shader.reflection.requiredVaryings, std::string{ *expectedVarying }) !=
+                    compiled.shader.reflection.requiredVaryings.end(),
+                "KBMAT-MAT57: Palette-created runtime input node must request its required vertex varying");
+        } else {
+            kb::editor::tests::Require(compiled.shader.reflection.requiredVaryings.empty(),
+                "KBMAT-MAT57: Uniform-backed runtime input nodes must not request vertex varyings");
+        }
+    };
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateDeltaTime,
+        "value",
+        "alpha",
+        "ctx.deltaTime",
+        std::nullopt,
+        0x3961U,
+        "KBMAT-MAT57: MaterialEditorState must create DeltaTime nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter,
+        "rgba",
+        "baseColor",
+        "ctx.dynamicParameter",
+        std::nullopt,
+        0x3962U,
+        "KBMAT-MAT57: MaterialEditorState must create DynamicParameter nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount,
+        "value",
+        "alpha",
+        "ctx.perInstanceFadeAmount",
+        "perInstanceFadeAmount",
+        0x3963U,
+        "KBMAT-MAT57: MaterialEditorState must create PerInstanceFadeAmount nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData,
+        "value",
+        "alpha",
+        "ctx.perInstanceCustomData",
+        "perInstanceCustomData0",
+        0x3964U,
+        "KBMAT-MAT57: MaterialEditorState must create PerInstanceCustomData nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedPosition,
+        "value",
+        "emissive",
+        "ctx.preSkinnedPosition",
+        "preSkinnedPosition",
+        0x3965U,
+        "KBMAT-MAT57: MaterialEditorState must create PreSkinnedPosition nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePreSkinnedNormal,
+        "value",
+        "normal",
+        "ctx.preSkinnedNormal",
+        "preSkinnedNormal",
+        0x3966U,
+        "KBMAT-MAT57: MaterialEditorState must create PreSkinnedNormal nodes from the palette");
 
     const auto compilePaletteTextureSample = [](
         kb::editor::MaterialEditorGraphMenuCommand command,
