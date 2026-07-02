@@ -509,6 +509,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
@@ -1077,6 +1078,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::PreSkinnedNormal:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -1606,6 +1608,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::ViewProperty:
         return "ctx.viewSize";
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
+        return "ctx.twoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
         // MAT-80/#18b: the opaque scene device depth at this fragment's screen position.
         return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
@@ -2463,6 +2467,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -2644,6 +2649,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -2783,6 +2789,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -4005,6 +4012,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ViewProperty";
     case RenderMaterialGraphNodeKind::ViewSize:
         return "ViewSize";
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
+        return "TwoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
         return "SceneDepth";
     case RenderMaterialGraphNodeKind::SceneColor:
@@ -4367,6 +4376,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "ViewSize")) {
         return RenderMaterialGraphNodeKind::ViewSize;
     }
+    if (EqualsIgnoreCase(text, "TwoSidedSign")) {
+        return RenderMaterialGraphNodeKind::TwoSidedSign;
+    }
     if (EqualsIgnoreCase(text, "SceneDepth")) {
         return RenderMaterialGraphNodeKind::SceneDepth;
     }
@@ -4682,6 +4694,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -4966,6 +4979,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::VertexTangentWS,
         RenderMaterialGraphNodeKind::ViewProperty,
         RenderMaterialGraphNodeKind::ViewSize,
+        RenderMaterialGraphNodeKind::TwoSidedSign,
         RenderMaterialGraphNodeKind::SceneDepth,
         RenderMaterialGraphNodeKind::SceneColor,
         RenderMaterialGraphNodeKind::SceneTexture,
@@ -5903,6 +5917,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     source += "    vec3 cameraPosition;\n";
     source += "    vec3 lightVector;\n";
     source += "    vec2 viewSize;\n";
+    source += "    float twoSidedSign;\n";
     // MAT-80/#18b: this fragment's device depth (gl_FragCoord.z), so DepthFade can compare it against the
     // sampled opaque scene depth for a soft edge where translucency meets solid geometry.
     source += "    float fragmentDepth;\n";
@@ -6934,6 +6949,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
@@ -7178,6 +7194,8 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
+        return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneDepth:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneColor:
@@ -7887,6 +7905,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::VertexTangentWS:
     case RenderMaterialGraphNodeKind::ViewProperty:
     case RenderMaterialGraphNodeKind::ViewSize:
+    case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;

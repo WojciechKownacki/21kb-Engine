@@ -159,6 +159,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateVertexTangentWS,
     CreateViewProperty,
     CreateViewSize,
+    CreateTwoSidedSign,
     CreateSceneDepth,
     CreateDepthFade,
     CreateCustomCode,
@@ -2078,6 +2079,8 @@ private:
             return "Texture Object";
         case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
             return "Collection Parameter";
+        case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
+            return "Two Sided Sign";
         default:
             return ConstantDisplayName(kind);
         }

@@ -115,6 +115,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     VertexTangentWS,
     ViewProperty,
     ViewSize,
+    TwoSidedSign,
     SceneColor,
     SceneTexture,
     SceneDepth,
@@ -829,6 +830,7 @@ struct MaterialGraphContext {
     float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
     float lightVector[3] = {0.0f, 1.0f, 0.0f};
     float viewSize[2] = {0.0f, 0.0f};
+    float twoSidedSign = 1.0f;
     float fragmentDepth = 0.0f;
 };
 

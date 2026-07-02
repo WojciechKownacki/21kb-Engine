@@ -210,6 +210,7 @@ std::string BuildGraphFragmentWrapperSource(
     // MAT-46: world-space view/light inputs. The shadow pass has no lighting uniforms, so it uses explicit
     // neutral constants; only the forward pass reads the real camera/light/viewport state.
     wrapper += "    ctx.viewSize = u_viewRect.zw;\n";
+    wrapper += "    ctx.twoSidedSign = gl_FrontFacing ? 1.0 : -1.0;\n";
     // MAT-80/#18b: this fragment's device depth, so DepthFade can compare against the sampled scene depth.
     wrapper += "    ctx.fragmentDepth = gl_FragCoord.z;\n";
     if (shadowPass) {
@@ -312,6 +313,7 @@ std::string BuildGraphVertexWrapperSource(const RenderMaterialGraphShaderSource&
     vs += "    ctx.cameraPosition = vec3(0.0, 0.0, 0.0);\n";
     vs += "    ctx.lightVector = vec3(0.0, 1.0, 0.0);\n";
     vs += "    ctx.viewSize = vec2(0.0, 0.0);\n";
+    vs += "    ctx.twoSidedSign = 1.0;\n";
     vs += "    ctx.fragmentDepth = 0.0;\n";
     vs += "    vec2 materialUv0 = a_texcoord0;\n";
     if (shader.reflection.hasCustomizedUv0) {
