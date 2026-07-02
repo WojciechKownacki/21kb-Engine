@@ -44,6 +44,7 @@ bool MaterialProgramKey::operator==(const MaterialProgramKey& rhs) const noexcep
         pass == rhs.pass &&
         backend == rhs.backend &&
         pipelineStateKey == rhs.pipelineStateKey &&
+        requiresGeneratedVertexShader == rhs.requiresGeneratedVertexShader &&
         graphProgram == rhs.graphProgram;
 }
 
@@ -56,6 +57,7 @@ std::uint64_t MaterialProgramKeyIdentityHash(const MaterialProgramKey& key) noex
     HashString(hash, key.pass);
     HashU32(hash, key.backend);
     HashU64(hash, key.pipelineStateKey);
+    HashByte(hash, key.requiresGeneratedVertexShader ? 1U : 0U);
     HashByte(hash, key.graphProgram ? 1U : 0U);
     return hash;
 }
