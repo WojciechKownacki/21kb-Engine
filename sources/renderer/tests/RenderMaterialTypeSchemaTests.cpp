@@ -18,6 +18,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include <ranges>
 #include <span>
 #include <sstream>
 #include <string>
@@ -3845,6 +3846,18 @@ void RunMaterialGraphSurfaceContractDefaultsTest() {
     Require(NearlyEqual(s.alphaClipThreshold, 0.5F), "KBMAT-MAT01: MaterialSurface default alphaClipThreshold must be 0.5");
     Require(NearlyEqual(s.normal[0], 0.0F) && NearlyEqual(s.normal[1], 0.0F) && NearlyEqual(s.normal[2], 1.0F),
         "KBMAT-MAT01: MaterialSurface default normal must be up (0,0,1)");
+    Require(NearlyEqual(s.clearCoatNormal[0], 0.0F) && NearlyEqual(s.clearCoatNormal[1], 0.0F) && NearlyEqual(s.clearCoatNormal[2], 1.0F),
+        "KBMAT-MAT50: MaterialSurface default clearCoatNormal must be up (0,0,1)");
+    Require(NearlyEqual(s.bentNormal[0], 0.0F) && NearlyEqual(s.bentNormal[1], 0.0F) && NearlyEqual(s.bentNormal[2], 1.0F),
+        "KBMAT-MAT50: MaterialSurface default bentNormal must be up (0,0,1)");
+    Require(NearlyEqual(s.tangentOutput[0], 1.0F) && NearlyEqual(s.tangentOutput[1], 0.0F) && NearlyEqual(s.tangentOutput[2], 0.0F),
+        "KBMAT-MAT50: MaterialSurface default tangentOutput must be +X");
+    Require(NearlyEqual(s.thinTranslucentOutput[0], 0.0F) && NearlyEqual(s.thinTranslucentOutput[1], 0.0F) &&
+            NearlyEqual(s.thinTranslucentOutput[2], 0.0F) && NearlyEqual(s.thinTranslucentOutput[3], 0.0F),
+        "KBMAT-MAT50: MaterialSurface default thinTranslucentOutput must be transparent black");
+    Require(NearlyEqual(s.singleLayerWaterOutput[0], 0.0F) && NearlyEqual(s.singleLayerWaterOutput[1], 0.0F) &&
+            NearlyEqual(s.singleLayerWaterOutput[2], 0.0F) && NearlyEqual(s.singleLayerWaterOutput[3], 0.0F),
+        "KBMAT-MAT50: MaterialSurface default singleLayerWaterOutput must be transparent black");
     Require(s.alphaMode == MaterialSurfaceAlphaMode::Opaque, "KBMAT-MAT01: MaterialSurface default alphaMode must be Opaque");
     Require(s.blendMode == MaterialSurfaceBlendMode::Opaque, "KBMAT-MAT01: MaterialSurface default blendMode must be Opaque");
     Require(s.renderQueue == MaterialSurfaceRenderQueue::Opaque, "KBMAT-MAT01: MaterialSurface default renderQueue must be Opaque");
@@ -4050,6 +4063,107 @@ void RunMaterialOutputPinsCodegenTest() {
     // Unconnected pins fall back to their defaults.
     Require(src.find("material.surfaceThickness = 0.0;") != std::string::npos, "KBMAT-MAT35: an unconnected pin must emit its default value");
     Require(src.find("material.anisotropy = 0.0;") != std::string::npos, "KBMAT-MAT35: an unconnected anisotropy pin must emit its default");
+}
+
+void RunMaterialCustomOutputsSchemaAndCodegenTest() {
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.9 0.1 0.05 1" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.05 0.1 0.9 1" } });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "clearCoatNormal"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "bentNormal"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 3U, "xyz", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "tangentOutput"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "thinTranslucentOutput"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 5U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "singleLayerWaterOutput"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "clearCoat"));
+
+    const RenderMaterialGraphIrBuildResult ir = BuildRenderMaterialGraphIr(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0500U });
+    Require(ir.Succeeded(), "KBMAT-MAT50: custom output graph must build IR");
+    const RenderMaterialGraphIrNode* output = nullptr;
+    for (const RenderMaterialGraphIrNode& node : ir.ir.nodes) {
+        if (node.kind == RenderMaterialGraphNodeKind::MaterialOutput) {
+            output = &node;
+            break;
+        }
+    }
+    Require(output != nullptr, "KBMAT-MAT50: custom output IR must contain MaterialOutput");
+
+    struct PinCase {
+        const char* name;
+        RenderMaterialGraphPinType type;
+    };
+    const std::array<PinCase, 5U> customPins{ {
+        { "clearCoatNormal", RenderMaterialGraphPinType::Normal },
+        { "bentNormal", RenderMaterialGraphPinType::Normal },
+        { "tangentOutput", RenderMaterialGraphPinType::Float3 },
+        { "thinTranslucentOutput", RenderMaterialGraphPinType::Color },
+        { "singleLayerWaterOutput", RenderMaterialGraphPinType::Color },
+    } };
+    for (const PinCase& pinCase : customPins) {
+        const auto found = std::ranges::find_if(output->inputs, [&pinCase](const RenderMaterialGraphIrPin& pin) {
+            return pin.name == pinCase.name;
+        });
+        Require(found != output->inputs.end(), "KBMAT-MAT50: MaterialOutput must expose every custom output pin in IR");
+        Require(found->type == pinCase.type, "KBMAT-MAT50: MaterialOutput custom output pin has the wrong type");
+        Require(found->stablePinId == RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, pinCase.name, false),
+            "KBMAT-MAT50: MaterialOutput custom output pin must have a stable id");
+    }
+
+    const RenderMaterialGraphCompileResult direct = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0500U });
+    Require(direct.Succeeded(), "KBMAT-MAT50: custom output graph must compile");
+    Require(direct.shader.reflection.hasClearCoatNormal && direct.shader.reflection.hasBentNormal &&
+            direct.shader.reflection.hasTangentOutput && direct.shader.reflection.hasThinTranslucentOutput &&
+            direct.shader.reflection.hasSingleLayerWaterOutput,
+        "KBMAT-MAT50: custom output links must set reflection flags");
+    const std::string& src = direct.shader.source;
+    Require(src.find("vec3 clearCoatNormal;") != std::string::npos && src.find("vec3 bentNormal;") != std::string::npos &&
+            src.find("vec3 tangentOutput;") != std::string::npos && src.find("vec4 thinTranslucentOutput;") != std::string::npos &&
+            src.find("vec4 singleLayerWaterOutput;") != std::string::npos,
+        "KBMAT-MAT50: MaterialSurface shader struct must declare custom output fields");
+    Require(src.find("material.clearCoatNormal = ") != std::string::npos &&
+            src.find("material.bentNormal = ") != std::string::npos &&
+            src.find("material.tangentOutput = ") != std::string::npos &&
+            src.find("material.thinTranslucentOutput = ") != std::string::npos &&
+            src.find("material.singleLayerWaterOutput = ") != std::string::npos,
+        "KBMAT-MAT50: MaterialOutput must assign every custom output field");
+
+    const std::string wrapper = BuildGraphFragmentWrapperSource(direct.shader, "BaseOpaque");
+    Require(wrapper.find("surface.clearCoatNormal") != std::string::npos &&
+            wrapper.find("surface.bentNormal") != std::string::npos &&
+            wrapper.find("surface.tangentOutput") != std::string::npos &&
+            wrapper.find("surface.thinTranslucentOutput") != std::string::npos &&
+            wrapper.find("surface.singleLayerWaterOutput") != std::string::npos,
+        "KBMAT-MAT50: custom outputs must be consumed by the forward fragment wrapper");
+
+    RenderMaterialGraphDocument attrsGraph = MakeDefaultRenderMaterialGraphDocument();
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantVector, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1" } });
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.2 0.6 0.9 1" } });
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeMaterialAttributes });
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::SetMaterialAttributes });
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::GetMaterialAttributes });
+    attrsGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::BreakMaterialAttributes });
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "clearCoatNormal"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "thinTranslucentOutput"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeMaterialAttributes, 4U, "attributes", RenderMaterialGraphNodeKind::SetMaterialAttributes, 5U, "attributes"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantVector, 2U, "xyz", RenderMaterialGraphNodeKind::SetMaterialAttributes, 5U, "bentNormal"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::SetMaterialAttributes, 5U, "singleLayerWaterOutput"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SetMaterialAttributes, 5U, "attributesOut", RenderMaterialGraphNodeKind::GetMaterialAttributes, 6U, "attributes"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::GetMaterialAttributes, 6U, "singleLayerWaterOutput", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "singleLayerWaterOutput"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SetMaterialAttributes, 5U, "attributesOut", RenderMaterialGraphNodeKind::BreakMaterialAttributes, 7U, "attributes"));
+    attrsGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::BreakMaterialAttributes, 7U, "bentNormal", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "bentNormal"));
+
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::MakeMaterialAttributes, "thinTranslucentOutput", false) == RenderMaterialGraphPinType::Color &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::BreakMaterialAttributes, "bentNormal", true) == RenderMaterialGraphPinType::Normal &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::SetMaterialAttributes, "singleLayerWaterOutput", false) == RenderMaterialGraphPinType::Color,
+        "KBMAT-MAT50: MaterialAttributes nodes must expose typed custom output channels");
+    const RenderMaterialGraphCompileResult attrs = CompileRenderMaterialGraphToShaderSource(attrsGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0501U });
+    Require(attrs.Succeeded(), "KBMAT-MAT50: custom outputs must survive Make/Set/Get/Break MaterialAttributes");
+    Require(attrs.shader.source.find("attrs4.clearCoatNormal") != std::string::npos &&
+            attrs.shader.source.find("attrsSet5.bentNormal") != std::string::npos &&
+            attrs.shader.source.find("singleLayerWaterOutput") != std::string::npos,
+        "KBMAT-MAT50: MaterialAttributes codegen must carry custom output fields");
 }
 
 void RunMaterialDomainGatingTest() {
@@ -5693,6 +5807,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialGraphTimeAnimationNodeCodegenTest();
     RunMaterialGraphTextureSamplerLimitTest();
     RunMaterialOutputPinsCodegenTest();
+    RunMaterialCustomOutputsSchemaAndCodegenTest();
     RunMaterialDomainGatingTest();
     RunMaterialShadingModelGatingTest();
     RunMaterialGraphBlendModeTest();
