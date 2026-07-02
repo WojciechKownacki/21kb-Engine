@@ -5898,16 +5898,18 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         return result;
     }
 
-    // MAT-34: only the Surface domain is implemented. A graph requesting another domain falls back to a
-    // Surface shader with a warning so it still renders (no false claim of e.g. post-process/decal output).
+    // MAT-34: only the Surface domain has a production graph pipeline. Declared domains without a runtime
+    // pass fail compilation instead of silently compiling as Surface.
     const RenderMaterialDomain requestedDomain = ParseRenderMaterialDomain(graph.materialDomain);
     if (!IsRenderMaterialDomainProduction(requestedDomain)) {
         result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
             .kind = RenderMaterialGraphDiagnosticKind::UnsupportedMaterialDomain,
             .message = "Material domain '" + std::string{ RenderMaterialDomainName(requestedDomain) } +
-                "' is declared but not implemented; compiling as the Surface domain (fallback).",
+                "' is declared but has no production graph runtime pass.",
         });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
     }
 
     // MAT-37: resolve the surface shading model. Production models have real fragment-wrapper branches;
