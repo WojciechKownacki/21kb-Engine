@@ -1717,6 +1717,8 @@ void RunMaterialGraphLastGoodArtifactPolicyRoundTripAndDecisionTest() {
 
 void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Scalar") == RenderMaterialGraphNodeKind::ConstantScalar, "Material graph MVP should parse Scalar alias");
+    Require(ParseRenderMaterialGraphNodeKind("ConstantBool") == RenderMaterialGraphNodeKind::ConstantBool, "Material graph MVP should parse ConstantBool node");
+    Require(ParseRenderMaterialGraphNodeKind("Bool") == RenderMaterialGraphNodeKind::ConstantBool, "Material graph MVP should parse Bool alias");
     Require(ParseRenderMaterialGraphNodeKind("Constant2Vector") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse UE Constant2Vector alias");
     Require(ParseRenderMaterialGraphNodeKind("XY") == RenderMaterialGraphNodeKind::ConstantVector2, "Material graph MVP should parse XY alias");
     Require(ParseRenderMaterialGraphNodeKind("Vector") == RenderMaterialGraphNodeKind::ConstantVector, "Material graph MVP should parse Vector alias");
@@ -1861,6 +1863,7 @@ void RunMaterialGraphRejectsInvalidLinksTest() {
 
 void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantScalar, "value", true) == RenderMaterialGraphPinType::Float, "KBMAT-GRAPH-0103: Scalar output should be float");
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantBool, "value", true) == RenderMaterialGraphPinType::Bool, "KBMAT-GRAPH-0103: ConstantBool output should be bool");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Uv, "uv", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: UV output should be float2");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true) == RenderMaterialGraphPinType::Float2, "KBMAT-GRAPH-0103: Constant2Vector output should be float2");
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector, "xyz", true) == RenderMaterialGraphPinType::Float3, "KBMAT-GRAPH-0103: Vector output should be float3");
@@ -1869,6 +1872,9 @@ void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::NormalUnpack, "normal", true) == RenderMaterialGraphPinType::Normal, "KBMAT-GRAPH-0103: NormalUnpack output should be normal");
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Sampler) == "sampler", "KBMAT-GRAPH-0103: Pin type enum should expose sampler");
     Require(RenderMaterialGraphPinTypeName(RenderMaterialGraphPinType::Bool) == "bool", "KBMAT-GRAPH-0103: Pin type enum should expose bool");
+    Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Bool, RenderMaterialGraphPinType::Float), "KBMAT-GRAPH-0103: Bool should feed float inputs through explicit coercion");
+    Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Bool, RenderMaterialGraphPinType::Color), "KBMAT-GRAPH-0103: Bool should feed color inputs through explicit coercion");
+    Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Float, RenderMaterialGraphPinType::Bool), "KBMAT-GRAPH-0103: Float should feed bool inputs through explicit coercion");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Color, RenderMaterialGraphPinType::Float4), "KBMAT-GRAPH-0103: Color should feed float4 operator inputs");
     Require(AreRenderMaterialGraphPinsCompatible(
                 RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true),
@@ -1894,6 +1900,19 @@ void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(result.diagnostics.back().message.find("texture2D") != std::string::npos &&
             result.diagnostics.back().message.find("color") != std::string::npos,
         "KBMAT-GRAPH-0103: Typed pin mismatch diagnostic should name source and target types");
+
+    RenderMaterialGraphDocument boolGraph = MakeDefaultRenderMaterialGraphDocument();
+    boolGraph.shadingModel = "unlit";
+    boolGraph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantBool,
+        .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "true" },
+    });
+    boolGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantBool, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const RenderMaterialGraphCompileResult boolCompile = CompileRenderMaterialGraphToShaderSource(boolGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0103B00U });
+    Require(boolCompile.Succeeded(), "KBMAT-GRAPH-0103: ConstantBool -> BaseColor graph should compile through bool-to-color coercion");
+    Require(boolCompile.shader.source.find("true") != std::string::npos && boolCompile.shader.source.find("? 1.0 : 0.0") != std::string::npos,
+        "KBMAT-GRAPH-0103: ConstantBool codegen should emit an explicit bool-to-numeric coercion");
 }
 
 void RunMaterialGraphParameterNodesGenerateMaterialTypeSchemaTest() {

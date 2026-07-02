@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -48,6 +49,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateTextureParameter,
     CreateUv,
     CreateScalar,
+    CreateBool,
     CreateVector2,
     CreateVector,
     CreateColor,
@@ -941,6 +943,20 @@ public:
                 values = *parsed;
             }
             const std::optional<kb::render::RenderMaterialParameterRange> range = ConstantRange(*node);
+            if (node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
+                const std::string boolText = ConstantBoolDefaultValueHint(values[0] != 0.0F);
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = "constant.bool",
+                    .displayName = "Value",
+                    .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                    .type = kb::render::RenderMaterialParameterType::Bool,
+                    .value = EnumValue(boolText),
+                    .options = GraphNodeEnumOptions(node->kind, "constant.bool"),
+                    .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "constant.bool"),
+                });
+                return properties;
+            }
             if (node->kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor) {
                 properties.push_back(MaterialEditorGraphNodeProperty{
                     .nodeId = node->id,
@@ -1045,7 +1061,9 @@ public:
             return;
         }
         const char ch = static_cast<char>(character);
-        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',' || ch == '-' || ch == '+' || ch == ' ') {
+        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == ',' || ch == '-' || ch == '+' || ch == ' ' ||
+            ch == 't' || ch == 'T' || ch == 'r' || ch == 'R' || ch == 'u' || ch == 'U' || ch == 'e' || ch == 'E' ||
+            ch == 'f' || ch == 'F' || ch == 'a' || ch == 'A' || ch == 'l' || ch == 'L' || ch == 's' || ch == 'S') {
             inlineConstantEditBuffer_.push_back(ch);
         }
     }
@@ -1869,6 +1887,7 @@ private:
 
     [[nodiscard]] static bool IsGraphConstantNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
         return kind == kb::render::RenderMaterialGraphNodeKind::ConstantScalar ||
+            kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool ||
             kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector2 ||
             kind == kb::render::RenderMaterialGraphNodeKind::ConstantVector ||
             kind == kb::render::RenderMaterialGraphNodeKind::ConstantColor;
@@ -1878,6 +1897,8 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             return "Scalar";
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+            return "Bool";
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return "XY";
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -1892,6 +1913,7 @@ private:
     [[nodiscard]] static std::size_t ConstantComponentCount(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
             return 1U;
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return 2U;
@@ -1914,6 +1936,12 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             if (input >> value[0]) {
+                return value;
+            }
+            return std::nullopt;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+            if (const std::optional<bool> parsed = ParseConstantBool(text)) {
+                value[0] = *parsed ? 1.0F : 0.0F;
                 return value;
             }
             return std::nullopt;
@@ -1940,6 +1968,27 @@ private:
         }
     }
 
+    [[nodiscard]] static std::optional<bool> ParseConstantBool(std::string_view text) noexcept {
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (const unsigned char ch : text) {
+            if (!std::isspace(ch)) {
+                normalized.push_back(static_cast<char>(std::tolower(ch)));
+            }
+        }
+        if (normalized == "true" || normalized == "1") {
+            return true;
+        }
+        if (normalized == "false" || normalized == "0") {
+            return false;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] static std::string ConstantBoolDefaultValueHint(bool value) {
+        return value ? "true" : "false";
+    }
+
     [[nodiscard]] static std::string FloatText(float value) {
         std::ostringstream output;
         output << value;
@@ -1952,6 +2001,8 @@ private:
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
             return FloatText(value[0]);
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+            return ConstantBoolDefaultValueHint(value[0] != 0.0F);
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return FloatText(value[0]) + " " + FloatText(value[1]);
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
@@ -1997,6 +2048,7 @@ private:
         kb::render::RenderMaterialGraphNodeKind kind) noexcept {
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
             return { "Value", "", "", "" };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
             return { "X", "Y", "", "" };
@@ -2031,6 +2083,12 @@ private:
         kb::render::RenderMaterialGraphNodeKind kind,
         std::string_view propertyId) {
         if (propertyId != "uvSet") {
+            if (propertyId == "constant.bool" && kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
+                return {
+                    MaterialEditorGraphNodePropertyOption{ .value = "false", .label = "False" },
+                    MaterialEditorGraphNodePropertyOption{ .value = "true", .label = "True" },
+                };
+            }
             return {};
         }
         if (kind == kb::render::RenderMaterialGraphNodeKind::Uv ||
@@ -2774,6 +2832,12 @@ private:
                 .hasRange = true,
                 .rangeMin = 0.0F,
                 .rangeMax = 1.0F,
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBool:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Bool",
+                .defaultValueHint = "false",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
