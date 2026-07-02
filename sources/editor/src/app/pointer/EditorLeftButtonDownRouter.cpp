@@ -418,6 +418,10 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                                 y)) {
                         static_cast<void>(sceneContext_.SelectMaterialGraphNode(property->nodeId));
                         switch (property->kind) {
+                        case MaterialEditorGraphNodePropertyHitKind::TextField:
+                            sceneContext_.CloseMaterialGraphNodeEnumDropdown();
+                            static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property->nodeId));
+                            break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
                             if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property->value)) {
                                 static_cast<void>(sceneContext_.SetMaterialGraphConstantColorValue(materialId, property->nodeId, *color));

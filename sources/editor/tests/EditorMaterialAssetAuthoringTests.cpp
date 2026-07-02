@@ -2109,8 +2109,11 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT58: Color picker values should be clamped through node metadata");
 
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> scalarProperties = materialEditor.GraphNodeProperties(scalarNodeId);
-    kb::editor::tests::Require(!scalarProperties.empty() && scalarProperties[0].range.has_value() &&
-            scalarProperties[0].range->min == -2.0F && scalarProperties[0].range->max == 2.0F,
+    const auto scalarProperty = std::ranges::find_if(scalarProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Numeric;
+    });
+    kb::editor::tests::Require(scalarProperty != scalarProperties.end() && scalarProperty->range.has_value() &&
+            scalarProperty->range->min == -2.0F && scalarProperty->range->max == 2.0F,
         "KBMAT-MAT58: Slider properties should read their min/max from graph metadata");
     kb::editor::tests::Require(materialEditor.SetGraphConstantComponentValue(scalarNodeId, 0U, 7.5F),
         "KBMAT-MAT58: Slider setter should accept a numeric edit request");
@@ -2122,46 +2125,65 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantBool, -420, 188, &boolNodeId),
         "KBMAT-MAT58: Material Editor should create a bool constant for typed property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
-    kb::editor::tests::Require(boolProperties.size() == 1U &&
-            boolProperties[0].kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
-            boolProperties[0].type == kb::render::RenderMaterialParameterType::Bool &&
-            boolProperties[0].value.text == "false" &&
-            boolProperties[0].options.size() == 2U &&
-            boolProperties[0].options[0].value == "false" &&
-            boolProperties[0].options[1].value == "true",
+    auto boolProperty = std::ranges::find_if(boolProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "constant.bool";
+    });
+    kb::editor::tests::Require(boolProperty != boolProperties.end() &&
+            boolProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            boolProperty->type == kb::render::RenderMaterialParameterType::Bool &&
+            boolProperty->value.text == "false" &&
+            boolProperty->options.size() == 2U &&
+            boolProperty->options[0].value == "false" &&
+            boolProperty->options[1].value == "true",
         "KBMAT-MAT58: ConstantBool should expose a typed False/True property model");
     materialEditor.ToggleGraphNodeEnumDropdown(boolNodeId, "constant.bool");
     boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
-    kb::editor::tests::Require(boolProperties[0].dropdownOpen,
+    boolProperty = std::ranges::find_if(boolProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "constant.bool";
+    });
+    kb::editor::tests::Require(boolProperty != boolProperties.end() && boolProperty->dropdownOpen,
         "KBMAT-MAT58: ConstantBool property should track dropdown open state");
     kb::editor::tests::Require(materialEditor.SetGraphNodeEnumValue(boolNodeId, "constant.bool", "true"),
         "KBMAT-MAT58: ConstantBool enum edit should update node metadata");
     boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
+    boolProperty = std::ranges::find_if(boolProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "constant.bool";
+    });
     const kb::render::RenderMaterialGraphNode* boolNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, boolNodeId);
     kb::editor::tests::Require(boolNode != nullptr &&
             boolNode->parameter.defaultValueHint == "true" &&
-            boolProperties[0].value.text == "true",
+            boolProperty != boolProperties.end() &&
+            boolProperty->value.text == "true",
         "KBMAT-MAT58: ConstantBool enum edit should persist the selected bool value");
 
     std::uint32_t uvNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Uv, -220, 220, &uvNodeId),
         "KBMAT-MAT58: Material Editor should create a UV node for enum property editing");
     std::vector<kb::editor::MaterialEditorGraphNodeProperty> uvProperties = materialEditor.GraphNodeProperties(uvNodeId);
-    kb::editor::tests::Require(uvProperties.size() == 1U &&
-            uvProperties[0].kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
-            uvProperties[0].options.size() == 2U &&
-            uvProperties[0].options[0].label == "UV0" &&
-            uvProperties[0].options[1].label == "UV1",
+    auto uvProperty = std::ranges::find_if(uvProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet";
+    });
+    kb::editor::tests::Require(uvProperty != uvProperties.end() &&
+            uvProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            uvProperty->options.size() == 2U &&
+            uvProperty->options[0].label == "UV0" &&
+            uvProperty->options[1].label == "UV1",
         "KBMAT-MAT58: Enum dropdown should expose its typed option list");
     materialEditor.ToggleGraphNodeEnumDropdown(uvNodeId, "uvSet");
     uvProperties = materialEditor.GraphNodeProperties(uvNodeId);
-    kb::editor::tests::Require(uvProperties[0].dropdownOpen,
+    uvProperty = std::ranges::find_if(uvProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet";
+    });
+    kb::editor::tests::Require(uvProperty != uvProperties.end() && uvProperty->dropdownOpen,
         "KBMAT-MAT58: Enum property model should track dropdown open state");
     kb::editor::tests::Require(materialEditor.SetGraphNodeEnumValue(uvNodeId, "uvSet", "1"),
         "KBMAT-MAT58: Enum dropdown option should update the node metadata");
     uvProperties = materialEditor.GraphNodeProperties(uvNodeId);
-    kb::editor::tests::Require(uvProperties[0].value.text == "1",
+    uvProperty = std::ranges::find_if(uvProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet";
+    });
+    kb::editor::tests::Require(uvProperty != uvProperties.end() && uvProperty->value.text == "1",
         "KBMAT-MAT58: UV enum edit should persist the selected option value");
 
 #if defined(_WIN32)
@@ -2170,10 +2192,12 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     uvProperties = materialEditor.GraphNodeProperties(uvNodeId);
     const kb::editor::MaterialEditorPanelDetailsRows details =
         kb::editor::MaterialEditorPanelRenderer::DetailsRows(materialEditor.Parameters(), uvNodeId, uvProperties);
-    kb::editor::tests::Require(!details.nodePropertyRows.empty() && details.nodePropertyRows[0].dropdownOpen,
+    kb::editor::tests::Require(std::ranges::any_of(details.nodePropertyRows, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet" && property.dropdownOpen;
+    }),
         "KBMAT-MAT58: Details panel rows should be backed by typed node properties");
     const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
-    const int optionY = layout.detailsPanel.top + 34 + 22 + kb::editor::MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight + 6;
+    const int optionY = layout.detailsPanel.top + 34 + 22 + (2 * kb::editor::MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight) + 6;
     const std::optional<kb::editor::MaterialEditorGraphNodePropertyHit> optionHit =
         kb::editor::MaterialEditorPanelRenderer::GraphNodePropertyAt(content, uvProperties, layout.detailsPanel.left + 44, optionY);
     kb::editor::tests::Require(optionHit.has_value() &&
@@ -2203,9 +2227,11 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT58: Created TextureObject must carry runtime texture slot metadata defaults");
     const std::vector<kb::editor::MaterialEditorGraphNodeProperty> textureObjectProperties =
         materialEditor.GraphNodeProperties(textureObjectNodeId);
-    kb::editor::tests::Require(textureObjectProperties.size() == 1U &&
-            textureObjectProperties[0].kind == kb::editor::MaterialEditorGraphNodePropertyKind::TextureAsset &&
-            textureObjectProperties[0].type == kb::render::RenderMaterialParameterType::Texture &&
+    const auto textureObjectProperty = std::ranges::find_if(textureObjectProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::TextureAsset;
+    });
+    kb::editor::tests::Require(textureObjectProperty != textureObjectProperties.end() &&
+            textureObjectProperty->type == kb::render::RenderMaterialParameterType::Texture &&
             kb::render::RenderMaterialGraphPinDataType(*textureObjectNode, "texture", true) == kb::render::RenderMaterialGraphPinType::Texture2D,
         "KBMAT-MAT58: TextureObject must expose a texture picker property and typed Texture2D output");
 }
