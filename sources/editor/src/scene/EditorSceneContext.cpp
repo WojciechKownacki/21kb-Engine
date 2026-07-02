@@ -2489,6 +2489,15 @@ bool EditorSceneContext::ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int
     return true;
 }
 
+void EditorSceneContext::SetMaterialGraphCanvasViewport(int width, int height) noexcept {
+    if (width > 0) {
+        materialGraphCanvasWidth_ = width;
+    }
+    if (height > 0) {
+        materialGraphCanvasHeight_ = height;
+    }
+}
+
 void EditorSceneContext::SetMaterialEditorFindQuery(std::string query) {
     materialEditor_.SetFindQuery(std::move(query));
 }
@@ -2504,6 +2513,147 @@ bool EditorSceneContext::FocusMaterialEditorFindResult(std::size_t resultIndex, 
     materialGraphPanX_ = (canvasWidth / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphX) * materialGraphZoom_));
     materialGraphPanY_ = (canvasHeight / 2) - static_cast<int>(std::lround(static_cast<float>(target->graphY) * materialGraphZoom_));
     materialGraphFocused_ = true;
+    return true;
+}
+
+bool EditorSceneContext::FrameSelectedMaterialGraphNodes() {
+    return FrameSelectedMaterialGraphNodes(materialGraphCanvasWidth_, materialGraphCanvasHeight_);
+}
+
+bool EditorSceneContext::FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight) {
+    if (!materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    const kb::render::RenderMaterialGraphDocument& graph = materialEditor_.WorkingCopy()->graph;
+
+    bool hasBounds = false;
+    std::int32_t left = 0;
+    std::int32_t top = 0;
+    std::int32_t right = 0;
+    std::int32_t bottom = 0;
+    const auto includeBounds = [&hasBounds, &left, &top, &right, &bottom](
+                                   std::int32_t nextLeft,
+                                   std::int32_t nextTop,
+                                   std::int32_t nextRight,
+                                   std::int32_t nextBottom) {
+        if (!hasBounds) {
+            left = nextLeft;
+            top = nextTop;
+            right = nextRight;
+            bottom = nextBottom;
+            hasBounds = true;
+            return;
+        }
+        left = std::min(left, nextLeft);
+        top = std::min(top, nextTop);
+        right = std::max(right, nextRight);
+        bottom = std::max(bottom, nextBottom);
+    };
+
+    for (const std::uint32_t nodeId : materialEditor_.SelectedNodeIds()) {
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(graph, nodeId);
+        if (node == nullptr) {
+            continue;
+        }
+#if defined(_WIN32)
+        const SIZE nodeSize = MaterialEditorPanelGraphNodeSize(node->kind);
+        const std::int32_t width = static_cast<std::int32_t>(nodeSize.cx);
+        const std::int32_t height = static_cast<std::int32_t>(nodeSize.cy);
+#else
+        const std::int32_t width = 240;
+        const std::int32_t height = 160;
+#endif
+        includeBounds(node->positionX, node->positionY, node->positionX + std::max<std::int32_t>(1, width), node->positionY + std::max<std::int32_t>(1, height));
+    }
+
+    if (const std::uint32_t commentId = materialEditor_.SelectedCommentId(); commentId != 0U) {
+        if (const std::optional<kb::render::RenderMaterialGraphCommentBox> comment = materialEditor_.GraphComment(commentId)) {
+            includeBounds(
+                comment->positionX,
+                comment->positionY,
+                comment->positionX + std::max<std::int32_t>(1, comment->width),
+                comment->positionY + std::max<std::int32_t>(1, comment->height));
+        }
+    }
+
+    if (!hasBounds) {
+        return false;
+    }
+
+    SetMaterialGraphCanvasViewport(canvasWidth, canvasHeight);
+    constexpr float minZoom = 0.45F;
+    constexpr float maxZoom = 1.60F;
+    constexpr int padding = 48;
+    const std::int32_t boundsWidth = std::max<std::int32_t>(1, right - left);
+    const std::int32_t boundsHeight = std::max<std::int32_t>(1, bottom - top);
+    const int fitWidth = std::max(1, materialGraphCanvasWidth_ - (padding * 2));
+    const int fitHeight = std::max(1, materialGraphCanvasHeight_ - (padding * 2));
+    float nextZoom = std::min(
+        static_cast<float>(fitWidth) / static_cast<float>(boundsWidth),
+        static_cast<float>(fitHeight) / static_cast<float>(boundsHeight));
+    nextZoom = std::clamp(nextZoom, minZoom, maxZoom);
+
+    const float centerX = static_cast<float>(left) + (static_cast<float>(boundsWidth) * 0.5F);
+    const float centerY = static_cast<float>(top) + (static_cast<float>(boundsHeight) * 0.5F);
+    const int nextPanX = (materialGraphCanvasWidth_ / 2) - static_cast<int>(std::lround(centerX * nextZoom));
+    const int nextPanY = (materialGraphCanvasHeight_ / 2) - static_cast<int>(std::lround(centerY * nextZoom));
+    const bool changed =
+        std::fabs(materialGraphZoom_ - nextZoom) >= 0.0001F ||
+        materialGraphPanX_ != nextPanX ||
+        materialGraphPanY_ != nextPanY ||
+        !materialGraphFocused_;
+    materialGraphZoom_ = nextZoom;
+    materialGraphPanX_ = nextPanX;
+    materialGraphPanY_ = nextPanY;
+    materialGraphFocused_ = true;
+    return changed;
+}
+
+bool EditorSceneContext::SelectMaterialGraphUpstream() {
+    return materialEditor_.SelectGraphUpstream();
+}
+
+bool EditorSceneContext::SelectMaterialGraphDownstream() {
+    return materialEditor_.SelectGraphDownstream();
+}
+
+bool EditorSceneContext::AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.AlignSelectedGraphNodes(mode)) {
+        console_.Warning("Materials", "Select at least two material graph nodes to align.");
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Align Material Graph Nodes", std::move(before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds), beforeSelectedCommentId)) {
+        console_.Warning("Materials", "Material graph alignment could not be recorded.");
+        return false;
+    }
+    console_.Info("Materials", "Aligned material graph selection.");
+    return true;
+}
+
+bool EditorSceneContext::DistributeSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphDistributeAxis axis) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.DistributeSelectedGraphNodes(axis)) {
+        console_.Warning("Materials", "Select at least three spread-out material graph nodes to distribute.");
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Distribute Material Graph Nodes", std::move(before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds), beforeSelectedCommentId)) {
+        console_.Warning("Materials", "Material graph distribution could not be recorded.");
+        return false;
+    }
+    console_.Info("Materials", "Distributed material graph selection.");
     return true;
 }
 
@@ -3783,9 +3933,7 @@ bool EditorSceneContext::IsMaterialGraphPaletteFavorite(MaterialEditorGraphMenuC
 }
 
 bool EditorSceneContext::ToggleMaterialGraphPaletteFavorite(MaterialEditorGraphMenuCommand command) {
-    if (command == MaterialEditorGraphMenuCommand::None ||
-        command == MaterialEditorGraphMenuCommand::DisconnectSelected ||
-        command == MaterialEditorGraphMenuCommand::DeleteSelected) {
+    if (command == MaterialEditorGraphMenuCommand::None || MaterialEditorGraphMenuCommandIsAction(command)) {
         return false;
     }
     const auto found = std::find(materialGraphPaletteFavorites_.begin(), materialGraphPaletteFavorites_.end(), command);
@@ -4141,6 +4289,28 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphComposite(id, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateComment:
         return AddMaterialGraphComment(id, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::FrameSelected:
+        return FrameSelectedMaterialGraphNodes();
+    case MaterialEditorGraphMenuCommand::SelectUpstream:
+        return SelectMaterialGraphUpstream();
+    case MaterialEditorGraphMenuCommand::SelectDownstream:
+        return SelectMaterialGraphDownstream();
+    case MaterialEditorGraphMenuCommand::AlignLeft:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Left);
+    case MaterialEditorGraphMenuCommand::AlignCenter:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Center);
+    case MaterialEditorGraphMenuCommand::AlignRight:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Right);
+    case MaterialEditorGraphMenuCommand::AlignTop:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Top);
+    case MaterialEditorGraphMenuCommand::AlignMiddle:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Middle);
+    case MaterialEditorGraphMenuCommand::AlignBottom:
+        return AlignSelectedMaterialGraphNodes(id, MaterialEditorGraphAlignMode::Bottom);
+    case MaterialEditorGraphMenuCommand::DistributeHorizontal:
+        return DistributeSelectedMaterialGraphNodes(id, MaterialEditorGraphDistributeAxis::Horizontal);
+    case MaterialEditorGraphMenuCommand::DistributeVertical:
+        return DistributeSelectedMaterialGraphNodes(id, MaterialEditorGraphDistributeAxis::Vertical);
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return DisconnectSelectedMaterialGraphNodeLinks(id);
     case MaterialEditorGraphMenuCommand::DeleteSelected:
