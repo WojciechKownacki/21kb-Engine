@@ -30,6 +30,8 @@ namespace {
 [[nodiscard]] kb::project::ProjectSceneLightingPath LightingPathForOption(int index) noexcept {
     switch (index) {
     case 1:
+        return kb::project::ProjectSceneLightingPath::ForwardPlus;
+    case 2:
         return kb::project::ProjectSceneLightingPath::Deferred;
     case 0:
     default:

@@ -82,10 +82,10 @@ bool SceneDeferredLightingPass::Initialize() {
     normalSampler_ = bgfx::createUniform("s_gbufferNormal", bgfx::UniformType::Sampler);
     materialSampler_ = bgfx::createUniform("s_gbufferMaterial", bgfx::UniformType::Sampler);
     depthSampler_ = bgfx::createUniform("s_gbufferDepth", bgfx::UniformType::Sampler);
-    lightDirKindUniform_ = bgfx::createUniform("u_deferredLightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
-    lightPositionRangeUniform_ = bgfx::createUniform("u_deferredLightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
-    lightColorIntensityUniform_ = bgfx::createUniform("u_deferredLightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
-    lightSpotUniform_ = bgfx::createUniform("u_deferredLightSpot", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
+    lightDirKindUniform_ = bgfx::createUniform("u_deferredLightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
+    lightPositionRangeUniform_ = bgfx::createUniform("u_deferredLightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
+    lightColorIntensityUniform_ = bgfx::createUniform("u_deferredLightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
+    lightSpotUniform_ = bgfx::createUniform("u_deferredLightSpot", bgfx::UniformType::Vec4, kMaxSceneForwardPlusLights);
     lightParamsUniform_ = bgfx::createUniform("u_deferredLightParams", bgfx::UniformType::Vec4);
     ambientColorUniform_ = bgfx::createUniform("u_deferredAmbientColor", bgfx::UniformType::Vec4);
     environmentZenithUniform_ = bgfx::createUniform("u_deferredEnvironmentZenith", bgfx::UniformType::Vec4);
@@ -261,10 +261,10 @@ bool SceneDeferredLightingPass::Submit(const SceneDeferredLightingPassDesc& desc
                 << " ambient=(" << lighting.ambient[0] << ',' << lighting.ambient[1] << ',' << lighting.ambient[2] << ',' << lighting.ambient[3] << ')';
         WriteRendererDebugLog("deferred_lighting", message.str());
     }
-    bgfx::setUniform(lightDirKindUniform_, lighting.dirKind.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightPositionRangeUniform_, lighting.positionRange.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightColorIntensityUniform_, lighting.colorIntensity.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightSpotUniform_, lighting.spot.data(), kMaxSceneForwardLights);
+    bgfx::setUniform(lightDirKindUniform_, lighting.dirKind.data(), kMaxSceneForwardPlusLights);
+    bgfx::setUniform(lightPositionRangeUniform_, lighting.positionRange.data(), kMaxSceneForwardPlusLights);
+    bgfx::setUniform(lightColorIntensityUniform_, lighting.colorIntensity.data(), kMaxSceneForwardPlusLights);
+    bgfx::setUniform(lightSpotUniform_, lighting.spot.data(), kMaxSceneForwardPlusLights);
     bgfx::setUniform(lightParamsUniform_, lighting.params.data());
     bgfx::setUniform(ambientColorUniform_, lighting.ambient.data());
     bgfx::setUniform(environmentZenithUniform_, lighting.environmentZenith.data());

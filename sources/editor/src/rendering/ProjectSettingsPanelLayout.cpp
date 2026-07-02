@@ -63,7 +63,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     const int lightingPathRowTop = graphicsRowTop + kRowHeight + kRowGap;
     rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
     rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
-    rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathForwardPlusButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardPlusButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardPlusButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
 
     const int postRowTop = lightingPathRowTop + kRowHeight + kRowGap;
     rects.postProcessLabel = RECT{ left, postRowTop, left + kLabelWidth, postRowTop + kRowHeight };
@@ -136,6 +137,8 @@ RECT ProjectSettingsPanelLayout::LightingPathOptionButton(const ProjectSettingsP
     case 0:
         return rects.lightingPathForwardButton;
     case 1:
+        return rects.lightingPathForwardPlusButton;
+    case 2:
         return rects.lightingPathDeferredButton;
     default:
         return {};

@@ -3494,10 +3494,17 @@ void RunForwardGraphVariantSwitchesTest() {
     Require(pathForward.r > pathForward.b + 40U, "KBMAT-MAT52: ShadingPathSwitch forward branch must render red on the GPU");
     Require(pathDeferred.b > pathDeferred.r + 40U, "KBMAT-MAT52: ShadingPathSwitch deferred branch must render blue on the GPU");
 
+    const RenderMaterialGraphDocument forwardPlusGraph = buildSwitchGraph(RenderMaterialGraphNodeKind::ShadingPathSwitch, "forwardPlus", "deferred");
+    const ForwardRenderProbe pathForwardPlus = render(
+        forwardPlusGraph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x5206U, .shadingPath = RenderMaterialGraphShadingPath::ForwardPlus },
+        baseDir / "path_forward_plus");
+    Require(pathForwardPlus.r > pathForwardPlus.b + 40U, "KBMAT-MAT52: ShadingPathSwitch forward+ branch must render red on the GPU");
+
     const RenderMaterialGraphDocument stageGraph = buildSwitchGraph(RenderMaterialGraphNodeKind::ShaderStageSwitch, "vertex", "fragment");
     const ForwardRenderProbe stageFragment = render(
         stageGraph,
-        RenderMaterialGraphBuildContext{ .assetId = 0x5206U },
+        RenderMaterialGraphBuildContext{ .assetId = 0x5207U },
         baseDir / "stage_fragment");
     Require(stageFragment.b > stageFragment.r + 40U, "KBMAT-MAT52: ShaderStageSwitch fragment branch must render blue on the GPU");
 
