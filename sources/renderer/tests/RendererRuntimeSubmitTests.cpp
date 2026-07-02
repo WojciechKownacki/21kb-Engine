@@ -885,6 +885,36 @@ void RunRuntimeMaterialResolverEvaluatesConstantAndMathGraphTest() {
     Require(NearlyEqual(advancedMathResolved.desc.metallicFactor, 0.523599F), "KBMAT-RUNTIME: ArcSine graph did not evaluate into Metallic");
     Require(NearlyEqual(advancedMathResolved.desc.occlusionStrength, 0.785398F), "KBMAT-RUNTIME: ArcTangent graph did not evaluate into Occlusion");
     Require(NearlyEqual(advancedMathResolved.desc.emissiveColor[0], 1.047198F), "KBMAT-RUNTIME: ArcCosine graph did not evaluate into Emissive");
+
+    RenderMaterialAssetData fastTrigMaterial{};
+    fastTrigMaterial.graph.nodes = {
+        MakeGraphNode(1U, RenderMaterialGraphNodeKind::MaterialOutput),
+        MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(3U, RenderMaterialGraphNodeKind::ArcSineFast),
+        MakeGraphNode(4U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"),
+        MakeGraphNode(5U, RenderMaterialGraphNodeKind::ArcCosineFast),
+        MakeGraphNode(6U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(7U, RenderMaterialGraphNodeKind::ArcTangentFast),
+        MakeGraphNode(8U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(9U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "1"),
+        MakeGraphNode(10U, RenderMaterialGraphNodeKind::ArcTangent2Fast),
+    };
+    fastTrigMaterial.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "y"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "x"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    const ResolvedRuntimeMaterialDesc fastTrigResolved = RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, materialMetadata, fastTrigMaterial);
+    Require(NearlyEqual(fastTrigResolved.desc.metallicFactor, 0.523403F), "KBMAT-RUNTIME: ArcSineFast graph did not evaluate into Metallic");
+    Require(NearlyEqual(fastTrigResolved.desc.emissiveColor[0], 1.047394F), "KBMAT-RUNTIME: ArcCosineFast graph did not evaluate into Emissive");
+    Require(NearlyEqual(fastTrigResolved.desc.occlusionStrength, 0.785814F), "KBMAT-RUNTIME: ArcTangentFast graph did not evaluate into Occlusion");
+    Require(NearlyEqual(fastTrigResolved.desc.baseColor[3], 0.785814F), "KBMAT-RUNTIME: ArcTangent2Fast graph did not evaluate into Alpha");
 }
 
 void RunRendererUsesResolverDefaultFallbackForMissingMaterialTest() {

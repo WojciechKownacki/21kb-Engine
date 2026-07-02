@@ -2533,9 +2533,9 @@ void RunForwardGraphMaterialLayerStackRendersTest() {
     harness.Shutdown();
 }
 
-// MAT-50: the exp/log/sRGB unary math nodes must each emit their real GLSL intrinsic and cook to a
-// binary. A white constant is routed through the node into emissive; we assert the generated source
-// carries the expected intrinsic and that the fragment shader cooks to a real DXBC binary.
+// MAT-50: math utility nodes must each emit their real GLSL intrinsic/helper and cook to a binary.
+// A white constant is routed through the node into emissive; we assert the generated source carries
+// the expected symbol and that the fragment shader cooks to a real DXBC binary.
 void RunForwardGraphExpLogSrgbNodesCookTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_explogsrgb";
     std::error_code error;
@@ -2578,6 +2578,11 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         // Transform/TransformPosition default to tangent->world, which multiplies by the interpolated TBN.
         { RenderMaterialGraphNodeKind::Transform, "mat3(ctx.tangent", "value", 0x5015U },
         { RenderMaterialGraphNodeKind::TransformPosition, "mat3(ctx.tangent", "value", 0x5016U },
+        // UE-style fast inverse trig nodes emit shared polynomial helpers and must still cook to DXBC.
+        { RenderMaterialGraphNodeKind::ArcSineFast, "kbAsinFast(", "value", 0x5018U },
+        { RenderMaterialGraphNodeKind::ArcCosineFast, "kbAcosFast(", "value", 0x5019U },
+        { RenderMaterialGraphNodeKind::ArcTangentFast, "kbAtanFast(", "value", 0x501AU },
+        { RenderMaterialGraphNodeKind::ArcTangent2Fast, "kbAtan2Fast(", "y", 0x501BU },
     };
 
     for (const Case& testCase : cases) {
@@ -2591,11 +2596,11 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         graph.links.push_back(MakeLink(testCase.kind, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
 
         const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = testCase.assetId });
-        Require(compiled.Succeeded(), "KBMAT-MAT50: exp/log/sRGB math graph must compile");
-        Require(compiled.shader.source.find(testCase.intrinsic) != std::string::npos, "KBMAT-MAT50: math node must emit its GLSL intrinsic in the generated source");
+        Require(compiled.Succeeded(), "KBMAT-MAT50: math utility graph must compile");
+        Require(compiled.shader.source.find(testCase.intrinsic) != std::string::npos, "KBMAT-MAT50: math node must emit its GLSL intrinsic/helper in the generated source");
 
         const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
-        Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: exp/log/sRGB math graph must cook");
+        Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: math utility graph must cook");
         const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
         Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT50: the math node shader must cook to a real binary");
     }
