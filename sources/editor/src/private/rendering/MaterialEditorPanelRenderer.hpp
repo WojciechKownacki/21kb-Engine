@@ -35,10 +35,16 @@ enum class MaterialEditorPanelCommand {
     Save,
     Revert,
     Validate,
+    PreviewPrimitive,
+    PreviewScene,
+    PreviewNode,
 };
 
-inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanelToolbarCommands{
+inline constexpr std::array<MaterialEditorPanelCommand, 8U> kMaterialEditorPanelToolbarCommands{
     MaterialEditorPanelCommand::Info,
+    MaterialEditorPanelCommand::PreviewPrimitive,
+    MaterialEditorPanelCommand::PreviewScene,
+    MaterialEditorPanelCommand::PreviewNode,
     MaterialEditorPanelCommand::ApplyToSelection,
     MaterialEditorPanelCommand::Save,
     MaterialEditorPanelCommand::Revert,
@@ -59,6 +65,12 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
         return "Revert";
     case MaterialEditorPanelCommand::Validate:
         return "Validate";
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+        return "Shape";
+    case MaterialEditorPanelCommand::PreviewScene:
+        return "Scene";
+    case MaterialEditorPanelCommand::PreviewNode:
+        return "Node";
     }
     return "None";
 }
@@ -78,6 +90,12 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
         return sceneContext.RevertMaterialEditorAsset(materialId);
     case MaterialEditorPanelCommand::Validate:
         return sceneContext.ValidateMaterialEditorAsset(materialId);
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+        return sceneContext.CycleMaterialPreviewPrimitive();
+    case MaterialEditorPanelCommand::PreviewScene:
+        return sceneContext.CycleMaterialPreviewSceneLightingPreset();
+    case MaterialEditorPanelCommand::PreviewNode:
+        return sceneContext.ToggleMaterialPreviewNodePreview();
     case MaterialEditorPanelCommand::None:
         return false;
     }
@@ -91,6 +109,9 @@ inline constexpr std::array<MaterialEditorPanelCommand, 5U> kMaterialEditorPanel
     case MaterialEditorPanelCommand::Save:
     case MaterialEditorPanelCommand::Revert:
     case MaterialEditorPanelCommand::Validate:
+    case MaterialEditorPanelCommand::PreviewPrimitive:
+    case MaterialEditorPanelCommand::PreviewScene:
+    case MaterialEditorPanelCommand::PreviewNode:
         return true;
     case MaterialEditorPanelCommand::None:
         return false;
@@ -198,6 +219,9 @@ struct MaterialEditorPanelLayout {
 #if defined(_WIN32)
     RECT applyButton{};
     RECT infoButton{};
+    RECT previewPrimitiveButton{};
+    RECT previewSceneButton{};
+    RECT previewNodeButton{};
     RECT saveButton{};
     RECT revertButton{};
     RECT validateButton{};
@@ -498,7 +522,10 @@ inline MaterialEditorPanelLayout MaterialEditorPanelRenderer::ResolveLayout(cons
     layout.revertButton = RECT{ layout.validateButton.left - buttonGap - 62, buttonTop, layout.validateButton.left - buttonGap, buttonBottom };
     layout.saveButton = RECT{ layout.revertButton.left - buttonGap - 54, buttonTop, layout.revertButton.left - buttonGap, buttonBottom };
     layout.applyButton = RECT{ layout.saveButton.left - buttonGap - 118, buttonTop, layout.saveButton.left - buttonGap, buttonBottom };
-    layout.infoButton = RECT{ layout.applyButton.left - buttonGap - 54, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
+    layout.previewNodeButton = RECT{ layout.applyButton.left - buttonGap - 58, buttonTop, layout.applyButton.left - buttonGap, buttonBottom };
+    layout.previewSceneButton = RECT{ layout.previewNodeButton.left - buttonGap - 62, buttonTop, layout.previewNodeButton.left - buttonGap, buttonBottom };
+    layout.previewPrimitiveButton = RECT{ layout.previewSceneButton.left - buttonGap - 66, buttonTop, layout.previewSceneButton.left - buttonGap, buttonBottom };
+    layout.infoButton = RECT{ layout.previewPrimitiveButton.left - buttonGap - 54, buttonTop, layout.previewPrimitiveButton.left - buttonGap, buttonBottom };
 
     layout.graphCanvas = RECT{
         content.left,
@@ -536,6 +563,15 @@ inline MaterialEditorPanelCommand MaterialEditorPanelRenderer::CommandAt(const R
     }
     if (MaterialEditorPanelPointInRect(layout.applyButton, x, y)) {
         return MaterialEditorPanelCommand::ApplyToSelection;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewPrimitiveButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewPrimitive;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewSceneButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewScene;
+    }
+    if (MaterialEditorPanelPointInRect(layout.previewNodeButton, x, y)) {
+        return MaterialEditorPanelCommand::PreviewNode;
     }
     if (MaterialEditorPanelPointInRect(layout.saveButton, x, y)) {
         return MaterialEditorPanelCommand::Save;

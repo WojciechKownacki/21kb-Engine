@@ -62,6 +62,7 @@
 #include "scene/material/EditorMaterialTextureSlotValidation.hpp"
 #include "scene/material/EditorEmbeddedMaterialExtractor.hpp"
 #include "scene/material_preview/EditorMaterialGraphCookService.hpp"
+#include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewScene.hpp"
 #include "rendering/MaterialEditorPanelRenderer.hpp"
 #include "scene/transform_edit/EditorSceneTransformCommitBuilder.hpp"
@@ -2339,12 +2340,89 @@ const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::Ass
     const kb::render::RenderMaterialAssetData* workingCopy = nullptr;
     if (materialEditor_.OpenAssetId() == id && materialEditor_.WorkingCopy().has_value()) {
         workingCopy = &*materialEditor_.WorkingCopy();
+        materialNodePreviewWorkingCopy_.reset();
+        if (materialPreviewNodePreviewEnabled_) {
+            materialNodePreviewWorkingCopy_ =
+                EditorMaterialNodePreviewBuilder::Build(*materialEditor_.WorkingCopy(), materialEditor_.SelectedNodeId());
+            if (materialNodePreviewWorkingCopy_.has_value()) {
+                workingCopy = &*materialNodePreviewWorkingCopy_;
+            }
+        }
+    } else {
+        materialNodePreviewWorkingCopy_.reset();
     }
     return materialPreviewScene_->SceneFor(*scene_, id, workingCopy);
 }
 
 const EditorMaterialPreviewTelemetry& EditorSceneContext::MaterialPreviewTelemetry() const noexcept {
     return materialPreviewScene_->Telemetry();
+}
+
+const EditorMaterialPreviewPrimitivePolicy& EditorSceneContext::MaterialPreviewPrimitivePolicy() const noexcept {
+    return materialPreviewScene_->PrimitivePolicy();
+}
+
+bool EditorSceneContext::SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) {
+    const bool changed = materialPreviewScene_->SetPrimitivePolicy(policy);
+    if (changed) {
+        MarkSceneRenderDirty();
+    }
+    return changed;
+}
+
+bool EditorSceneContext::CycleMaterialPreviewPrimitive() {
+    switch (materialPreviewScene_->PrimitivePolicy().kind) {
+    case EditorMaterialPreviewPrimitiveKind::Sphere:
+        return SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Cylinder());
+    case EditorMaterialPreviewPrimitiveKind::Cylinder:
+        return SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Cube());
+    case EditorMaterialPreviewPrimitiveKind::Cube:
+        return SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Plane());
+    case EditorMaterialPreviewPrimitiveKind::Plane:
+    case EditorMaterialPreviewPrimitiveKind::CustomMesh:
+    case EditorMaterialPreviewPrimitiveKind::Fallback:
+        return SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy::Sphere());
+    }
+    return false;
+}
+
+const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSceneSettings() const noexcept {
+    return materialPreviewScene_->SceneSettings();
+}
+
+bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings) {
+    const bool changed = materialPreviewScene_->SetSceneSettings(settings);
+    if (changed) {
+        MarkSceneRenderDirty();
+    }
+    return changed;
+}
+
+bool EditorSceneContext::CycleMaterialPreviewSceneLightingPreset() {
+    const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
+    return SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettingsForPreset(
+        NextEditorMaterialPreviewLightingPreset(current.lightingPreset)));
+}
+
+bool EditorSceneContext::MaterialPreviewNodePreviewEnabled() const noexcept {
+    return materialPreviewNodePreviewEnabled_;
+}
+
+bool EditorSceneContext::SetMaterialPreviewNodePreviewEnabled(bool enabled) noexcept {
+    if (materialPreviewNodePreviewEnabled_ == enabled) {
+        return false;
+    }
+    materialPreviewNodePreviewEnabled_ = enabled;
+    materialNodePreviewWorkingCopy_.reset();
+    if (materialPreviewScene_ != nullptr) {
+        materialPreviewScene_->Clear();
+    }
+    MarkSceneRenderDirty();
+    return true;
+}
+
+bool EditorSceneContext::ToggleMaterialPreviewNodePreview() noexcept {
+    return SetMaterialPreviewNodePreviewEnabled(!materialPreviewNodePreviewEnabled_);
 }
 
 std::uint64_t EditorSceneContext::MaterialPreviewRevision() const noexcept {
@@ -2411,25 +2489,50 @@ bool EditorSceneContext::IsMaterialGraphNodeSelected(std::uint32_t nodeId) const
 }
 
 bool EditorSceneContext::SelectMaterialGraphNode(std::uint32_t nodeId) {
-    return materialEditor_.SelectNode(nodeId);
+    const bool changed = materialEditor_.SelectNode(nodeId);
+    if (changed && materialPreviewNodePreviewEnabled_) {
+        materialNodePreviewWorkingCopy_.reset();
+        materialPreviewScene_->Clear();
+        MarkSceneRenderDirty();
+    }
+    return changed;
 }
 
 bool EditorSceneContext::SelectMaterialGraphNode(std::uint32_t nodeId, bool additive, bool toggle) {
+    bool changed = false;
     if (toggle) {
-        return materialEditor_.ToggleNodeSelection(nodeId);
+        changed = materialEditor_.ToggleNodeSelection(nodeId);
+    } else if (additive) {
+        changed = materialEditor_.AddNodeToSelection(nodeId);
+    } else {
+        changed = materialEditor_.SelectNode(nodeId);
     }
-    if (additive) {
-        return materialEditor_.AddNodeToSelection(nodeId);
+    if (changed && materialPreviewNodePreviewEnabled_) {
+        materialNodePreviewWorkingCopy_.reset();
+        materialPreviewScene_->Clear();
+        MarkSceneRenderDirty();
     }
-    return materialEditor_.SelectNode(nodeId);
+    return changed;
 }
 
 bool EditorSceneContext::SetMaterialGraphNodeSelection(std::vector<std::uint32_t> nodeIds, std::uint32_t primaryNodeId) {
-    return materialEditor_.SetNodeSelection(std::move(nodeIds), primaryNodeId);
+    const bool changed = materialEditor_.SetNodeSelection(std::move(nodeIds), primaryNodeId);
+    if (changed && materialPreviewNodePreviewEnabled_) {
+        materialNodePreviewWorkingCopy_.reset();
+        materialPreviewScene_->Clear();
+        MarkSceneRenderDirty();
+    }
+    return changed;
 }
 
 bool EditorSceneContext::ClearMaterialGraphNodeSelection() {
-    return materialEditor_.ClearNodeSelection();
+    const bool changed = materialEditor_.ClearNodeSelection();
+    if (changed && materialPreviewNodePreviewEnabled_) {
+        materialNodePreviewWorkingCopy_.reset();
+        materialPreviewScene_->Clear();
+        MarkSceneRenderDirty();
+    }
+    return changed;
 }
 
 std::uint32_t EditorSceneContext::SelectedMaterialGraphCommentId() const noexcept {
