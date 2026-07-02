@@ -48,6 +48,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -1776,6 +1777,101 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57B: Palette drag-to-canvas should only start for commands that create canvas objects");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter, "promote parameter"),
         "KBMAT-MAT57B: Global palette search should expose Promote to Parameter by name");
+
+    const std::vector<kb::editor::MaterialEditorGraphMenuCommand> allPaletteCommands =
+        kb::editor::MaterialEditorGraphPaletteAllCommands();
+    kb::editor::tests::Require(allPaletteCommands.size() >= 150U,
+        "KBMAT-MAT57C: Production palette coverage should include the complete material node catalog");
+    for (std::size_t categoryIndex = 0U; categoryIndex < kb::editor::kMaterialEditorGraphBaseCategoryCount; ++categoryIndex) {
+        const std::vector<kb::editor::MaterialEditorGraphMenuCommand> categoryCommands =
+            kb::editor::MaterialEditorGraphContextMenuCommands(categoryIndex);
+        kb::editor::tests::Require(!categoryCommands.empty(),
+            "KBMAT-MAT57C: Every production palette category should expose commands");
+        for (const kb::editor::MaterialEditorGraphMenuCommand command : categoryCommands) {
+            kb::editor::tests::Require(command != kb::editor::MaterialEditorGraphMenuCommand::None,
+                "KBMAT-MAT57C: Production palette categories must not expose placeholder commands");
+            kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(allPaletteCommands, command),
+                "KBMAT-MAT57C: Flattened palette coverage must include every category command");
+        }
+    }
+    for (const kb::editor::MaterialEditorGraphMenuCommand command : allPaletteCommands) {
+        const std::string_view commandName = kb::editor::MaterialEditorGraphContextMenuCommandName(command);
+        if (commandName.empty()) {
+            std::cerr << "KBMAT-MAT57C unnamed palette command id=" << static_cast<std::uint32_t>(command) << '\n';
+        }
+        kb::editor::tests::Require(!commandName.empty(),
+            "KBMAT-MAT57C: Every palette command must have a display name");
+        kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(command, commandName),
+            "KBMAT-MAT57C: Palette search must match every command's display name");
+
+        const bool isAction = kb::editor::MaterialEditorGraphMenuCommandIsAction(command);
+        const bool isCanvasOnlyObject = command == kb::editor::MaterialEditorGraphMenuCommand::CreateComment ||
+            command == kb::editor::MaterialEditorGraphMenuCommand::CreateComposite;
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        if (isAction) {
+            kb::editor::tests::Require(!kind.has_value() && !kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(command),
+                "KBMAT-MAT57C: Canvas actions must not masquerade as node-creation commands");
+            continue;
+        }
+        if (isCanvasOnlyObject) {
+            kb::editor::tests::Require(!kind.has_value() && kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(command),
+                "KBMAT-MAT57C: Comment and composite commands should create canvas-only objects");
+            continue;
+        }
+        if (!kind.has_value()) {
+            std::cerr << "KBMAT-MAT57C missing node kind for palette command '" << commandName << "'\n";
+        }
+        kb::editor::tests::Require(kind.has_value() && kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(command),
+            "KBMAT-MAT57C: Every node palette command must map to a runtime graph kind");
+
+        kb::editor::MaterialEditorState coverageEditor;
+        kb::render::RenderMaterialAssetData coverageMaterial{};
+        coverageMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        coverageEditor.Open(kb::assets::AssetId{ 0x57C000U + static_cast<std::uint64_t>(command) }, coverageMaterial);
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(coverageEditor.AddGraphNode(*kind, -96, 48, &nodeId),
+            "KBMAT-MAT57C: Every palette node command must create a graph node through MaterialEditorState");
+        const kb::render::RenderMaterialGraphNode* node =
+            kb::render::FindRenderMaterialGraphNode(coverageEditor.WorkingCopy()->graph, nodeId);
+        kb::editor::tests::Require(node != nullptr &&
+                node->kind == *kind &&
+                node->positionX == -96 &&
+                node->positionY == 48,
+            "KBMAT-MAT57C: Palette-created nodes must persist with the requested kind and position");
+
+        const std::vector<std::string> inputPins = kb::render::RenderMaterialGraphNodeInputPinNames(*node);
+        const std::vector<std::string> outputPins = kb::render::RenderMaterialGraphNodeOutputPinNames(*node);
+        if (inputPins.empty() && outputPins.empty()) {
+            std::cerr << "KBMAT-MAT57C palette node has no pins: " << kb::render::RenderMaterialGraphNodeKindName(*kind) << '\n';
+        }
+        kb::editor::tests::Require(!inputPins.empty() || !outputPins.empty(),
+            "KBMAT-MAT57C: Every palette-created graph node must expose runtime pins");
+        for (const std::string& pin : inputPins) {
+            const bool validPin = kb::render::IsRenderMaterialGraphInputPin(*node, pin);
+            const std::uint32_t stablePinId = kb::render::RenderMaterialGraphStablePinId(*node, pin, false);
+            if (!validPin || stablePinId == 0U) {
+                std::cerr << "KBMAT-MAT57C invalid input pin node=" << kb::render::RenderMaterialGraphNodeKindName(*kind)
+                          << " pin=" << pin
+                          << " valid=" << validPin
+                          << " stablePinId=" << stablePinId << '\n';
+            }
+            kb::editor::tests::Require(validPin && stablePinId != 0U,
+                "KBMAT-MAT57C: Palette-created node input pins must be addressable by stable ids");
+        }
+        for (const std::string& pin : outputPins) {
+            const bool validPin = kb::render::IsRenderMaterialGraphOutputPin(*node, pin);
+            const std::uint32_t stablePinId = kb::render::RenderMaterialGraphStablePinId(*node, pin, true);
+            if (!validPin || stablePinId == 0U) {
+                std::cerr << "KBMAT-MAT57C invalid output pin node=" << kb::render::RenderMaterialGraphNodeKindName(*kind)
+                          << " pin=" << pin
+                          << " valid=" << validPin
+                          << " stablePinId=" << stablePinId << '\n';
+            }
+            kb::editor::tests::Require(validPin && stablePinId != 0U,
+                "KBMAT-MAT57C: Palette-created node output pins must be addressable by stable ids");
+        }
+    }
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
