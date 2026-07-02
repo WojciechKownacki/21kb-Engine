@@ -163,6 +163,7 @@ std::string BuildGraphFragmentWrapperSource(
     const RenderMaterialGraphShaderSource& shader,
     std::string_view pass) {
     const bool shadowPass = pass == "ShadowDepth";
+    const bool gbufferPass = pass == "GBuffer";
 
     std::string wrapper;
     wrapper += "$input v_normal, v_color0, v_texcoord0, v_worldPos, v_shadowPos, v_shadowFlags, v_tangent, v_bitangent, v_objectLocalPos, v_objectWorldPos, v_objectOrientation, v_preSkinnedNormal\n\n";
@@ -230,7 +231,34 @@ std::string BuildGraphFragmentWrapperSource(
         if (shader.reflection.blendMode == RenderMaterialGraphBlendMode::Masked) {
             wrapper += "    if (surface.alpha < surface.alphaClipThreshold)\n    {\n        discard;\n    }\n";
         }
-        if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
+        if (gbufferPass) {
+            if (shader.reflection.hasWorldPositionOffset || shader.reflection.hasDisplacement) {
+                wrapper += "    vec3 geometryNormal = normalize(cross(dFdx(v_worldPos), dFdy(v_worldPos)));\n";
+                wrapper += "    geometryNormal = dot(geometryNormal, geometryNormal) > 0.0001 ? geometryNormal : normalize(v_normal);\n";
+                wrapper += "    geometryNormal = dot(geometryNormal, v_normal) < 0.0 ? -geometryNormal : geometryNormal;\n";
+                wrapper += "    vec3 geometryTangent = normalize(v_tangent - geometryNormal * dot(geometryNormal, v_tangent));\n";
+                wrapper += "    geometryTangent = dot(geometryTangent, geometryTangent) > 0.0001 ? geometryTangent : normalize(v_tangent);\n";
+                wrapper += "    vec3 geometryBitangent = normalize(cross(geometryNormal, geometryTangent));\n";
+                wrapper += "    vec3 basisNormal = geometryNormal;\n";
+                wrapper += "    vec3 basisTangent = geometryTangent;\n";
+                wrapper += "    vec3 basisBitangent = geometryBitangent;\n";
+            } else {
+                wrapper += "    vec3 basisNormal = normalize(v_normal);\n";
+                wrapper += "    vec3 basisTangent = normalize(v_tangent);\n";
+                wrapper += "    vec3 basisBitangent = normalize(v_bitangent);\n";
+            }
+            if (shader.reflection.hasTangentOutput) {
+                wrapper += "    vec3 materialTangent = basisTangent * surface.tangentOutput.x + basisBitangent * surface.tangentOutput.y + basisNormal * surface.tangentOutput.z;\n";
+                wrapper += "    materialTangent = dot(materialTangent, materialTangent) > 0.0001 ? normalize(materialTangent) : basisTangent;\n";
+                wrapper += "    basisTangent = normalize(materialTangent - basisNormal * dot(basisNormal, materialTangent));\n";
+                wrapper += "    basisTangent = dot(basisTangent, basisTangent) > 0.0001 ? basisTangent : normalize(v_tangent);\n";
+                wrapper += "    basisBitangent = normalize(cross(basisNormal, basisTangent));\n";
+            }
+            wrapper += "    vec3 worldNormal = normalize(basisTangent * surface.normal.x + basisBitangent * surface.normal.y + basisNormal * surface.normal.z);\n";
+            wrapper += "    gl_FragData[0] = vec4(surface.baseColor.rgb, surface.alpha);\n";
+            wrapper += "    gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);\n";
+            wrapper += "    gl_FragData[2] = vec4(clamp(surface.metallic, 0.0, 1.0), clamp(surface.roughness, 0.04, 1.0), clamp(surface.occlusion, 0.0, 1.0), 1.0);\n";
+        } else if (shader.reflection.shadingModel == RenderMaterialShadingModel::Unlit) {
             // MAT-37 Unlit: the surface emissive plus base color go straight to the framebuffer with no lighting.
             wrapper += "    gl_FragColor = vec4(surface.baseColor.rgb + surface.emissive, surface.alpha);\n";
         } else {

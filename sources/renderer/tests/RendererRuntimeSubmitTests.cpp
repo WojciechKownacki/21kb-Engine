@@ -1694,9 +1694,9 @@ void RunRendererSubmitsRuntimeMeshAssetInHeadlessNoopTest() {
     Require(renderer.Initialize(surface, &config), "Renderer did not initialize in explicit headless Noop mode");
 
     const MaterialProgramRegistryStats programStats = renderer.MaterialProgramStats();
-    Require(programStats.loads == 3U,
-        "KBMAT-MAT05: Renderer init must load the builtin mesh/shadow/selection programs through the MaterialProgramRegistry");
-    Require(programStats.liveProgramCount == 3U,
+    Require(programStats.loads == 4U,
+        "KBMAT-MAT05: Renderer init must load the builtin mesh/GBuffer/shadow/selection programs through the MaterialProgramRegistry");
+    Require(programStats.liveProgramCount == 4U,
         "KBMAT-MAT05: MaterialProgramRegistry stats must be exposed through renderer diagnostics with the live builtin programs");
     Require(programStats.failures == 0U,
         "KBMAT-MAT05: Builtin program loading must not report failures under the headless Noop backend");
@@ -3494,6 +3494,62 @@ void RunGraphMaterialReportsGpuMaterialGraphModeTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest() {
+    kb::scene::Scene scene;
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .scenePassSubmitStats = 4U,
+    });
+    Require(renderer.Initialize(surface, &config), "Deferred runtime test did not initialize renderer");
+    Require(renderer.BeginFrame(), "Deferred runtime test did not begin frame");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .lightingConfig = SceneRenderLightingConfig{
+            .lightingPath = SceneRenderLightingPath::Deferred,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+        .postProcessEnabled = false,
+        .selectionMaskEnabled = false,
+        .selectionOutlineEnabled = false,
+    };
+
+    Require(renderer.SubmitScene(scene, desc), "Deferred runtime test did not submit scene");
+    const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+    Require(passStats.size() == 3U, "Deferred runtime test did not report GBuffer, lighting and transparent passes");
+    Require(passStats[0].renderPass == RenderPassKind::GBufferGeometry && passStats[0].pass == MeshPassType::GBuffer,
+        "Deferred runtime test did not submit GBuffer geometry as the first scene pass");
+    Require(passStats[1].renderPass == RenderPassKind::DeferredLighting,
+        "Deferred runtime test did not submit the deferred lighting pass after GBuffer");
+    Require(passStats[2].renderPass == RenderPassKind::TransparentScene && passStats[2].pass == MeshPassType::BaseTransparent,
+        "Deferred runtime test did not keep transparent rendering in the forward transparent pass");
+    for (const SceneRenderPassSubmitStats& pass : passStats) {
+        Require(pass.renderPass != RenderPassKind::OpaqueScene,
+            "Deferred runtime test must not use the forward opaque pass as deferred proof");
+    }
+    Require(!renderer.LastSceneDiagnostics().HasErrors(), "Deferred runtime test produced diagnostics for a valid GBuffer path");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+}
+
 void RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest() {
     kb::scene::Scene scene;
 
@@ -3601,6 +3657,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSubmitsWorkspaceSceneCubeMaterialAfterReopenTest();
     RunRendererSubmitsGltfEmbeddedMaterialInHeadlessNoopTest();
     RunGraphMaterialReportsGpuMaterialGraphModeTest();
+    RunRendererSubmitsDeferredGBufferAndLightingPassesInHeadlessNoopTest();
     RunRendererSubmitsDockedAndDetachedViewportsInSameFrameTest();
 }
 

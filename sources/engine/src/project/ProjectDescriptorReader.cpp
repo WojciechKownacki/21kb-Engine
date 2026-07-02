@@ -86,6 +86,23 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
     return true;
 }
 
+[[nodiscard]] bool ReadSceneLightingPath(ByteReader& input, ProjectDescriptor& descriptor) {
+    std::uint32_t value = 0U;
+    if (!input.ReadUInt32(value)) {
+        return false;
+    }
+    switch (value) {
+    case 0U:
+        descriptor.sceneLightingPath = ProjectSceneLightingPath::Forward;
+        return true;
+    case 1U:
+        descriptor.sceneLightingPath = ProjectSceneLightingPath::Deferred;
+        return true;
+    default:
+        return false;
+    }
+}
+
 [[nodiscard]] ProjectDescriptorReadResult ValidateMeta(const std::filesystem::path& path, const ProjectDescriptor& descriptor) {
     const ProjectDescriptorMetaReadResult metaResult = ProjectDescriptorMetaReader::Read(MetaPathFor(path));
     if (!metaResult.succeeded) {
@@ -152,6 +169,9 @@ ProjectDescriptorReadResult ProjectDescriptorReader::Read(const std::filesystem:
         if (!input.ReadString(descriptor.inputMappingContext) || !input.ReadBool(descriptor.inputEnabled)) {
             return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor input settings are invalid." };
         }
+    }
+    if (fileVersion >= 4U && !ReadSceneLightingPath(input, descriptor)) {
+        return ProjectDescriptorReadResult{ .succeeded = false, .descriptor = {}, .error = "Project descriptor scene lighting path is invalid." };
     }
 
     if (!input.Exhausted()) {

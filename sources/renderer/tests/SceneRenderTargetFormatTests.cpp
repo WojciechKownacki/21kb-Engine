@@ -1,5 +1,6 @@
 #include "RendererTestSupport.hpp"
 
+#include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
 #include "kb/render/SceneRenderTargetFormat.hpp"
 #include "kb/render/frame/RenderSceneSubmitDesc.hpp"
@@ -48,6 +49,8 @@ void SceneTargetFormatNamesAreExplicit() {
     Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA16F) == std::string_view{"RGBA16F"}, "RGBA16F format name is unstable");
     Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA16) == std::string_view{"RGBA16"}, "RGBA16 format name is unstable");
     Require(SceneTextureFormatName(bgfx::TextureFormat::RGBA8) == std::string_view{"RGBA8"}, "RGBA8 format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::BGRA8) == std::string_view{"BGRA8"}, "BGRA8 format name is unstable");
+    Require(SceneTextureFormatName(bgfx::TextureFormat::RG16F) == std::string_view{"RG16F"}, "RG16F format name is unstable");
     Require(SceneTextureFormatName(bgfx::TextureFormat::D32F) == std::string_view{"D32F"}, "D32F format name is unstable");
     Require(SceneTextureFormatName(bgfx::TextureFormat::D32) == std::string_view{"D32"}, "D32 format name is unstable");
     Require(SceneTextureFormatName(bgfx::TextureFormat::D24S8) == std::string_view{"D24S8"}, "D24S8 format name is unstable");
@@ -58,9 +61,32 @@ void SceneRenderTargetDescRequiresValidExtent() {
     Require(SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}}.IsValid(), "SceneRenderTargetDesc rejected a valid extent");
 }
 
+void SceneGBufferDescRequiresValidExtent() {
+    Require(!SceneGBufferDesc{}.IsValid(), "Default SceneGBufferDesc should be invalid");
+    Require(SceneGBufferDesc{.extent = RenderExtent{1U, 1U}}.IsValid(), "SceneGBufferDesc rejected a valid extent");
+}
+
+void SceneGBufferFormatSelectionRequiresEveryAttachment() {
+    SceneGBufferFormatSelection selection{
+        .albedoFormat = bgfx::TextureFormat::BGRA8,
+        .normalFormat = bgfx::TextureFormat::RGBA16F,
+        .materialFormat = bgfx::TextureFormat::RGBA8,
+        .depth = SceneDepthFormatSelection{
+            .format = bgfx::TextureFormat::D32F,
+            .status = SceneTargetFormatSelectionStatus::Selected,
+        },
+        .status = SceneTargetFormatSelectionStatus::Selected,
+    };
+    Require(selection.IsSupported(), "Complete GBuffer format selection should be supported");
+    selection.materialFormat = bgfx::TextureFormat::Count;
+    Require(!selection.IsSupported(), "GBuffer format selection accepted a missing material attachment");
+}
+
 void RenderTargetDescSupportsSceneFallbackFormats() {
+    Require(RenderTargetDesc{.format = RenderTargetFormat::Bgra8, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected BGRA8 format");
     Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba16, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA16 fallback format");
     Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba16F, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA16F HDR format");
+    Require(RenderTargetDesc{.format = RenderTargetFormat::Rg16F, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RG16F GBuffer format");
     Require(RenderTargetDesc{.format = RenderTargetFormat::Rgba8, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected RGBA8 fallback format");
     Require(RenderTargetDesc{.format = RenderTargetFormat::D32, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected D32 fallback depth format");
     Require(RenderTargetDesc{.format = RenderTargetFormat::D32F, .extent = RenderExtent{1U, 1U}}.IsValid(), "RenderTargetDesc rejected D32F depth format");
@@ -186,6 +212,8 @@ void RunSceneRenderTargetFormatTests() {
     SceneDepthPreferredClassificationIsStrict();
     SceneTargetFormatNamesAreExplicit();
     SceneRenderTargetDescRequiresValidExtent();
+    SceneGBufferDescRequiresValidExtent();
+    SceneGBufferFormatSelectionRequiresEveryAttachment();
     RenderTargetDescSupportsSceneFallbackFormats();
     SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled();
     DefaultPostProcessTargetsBindingIsDisabledAndInvalid();

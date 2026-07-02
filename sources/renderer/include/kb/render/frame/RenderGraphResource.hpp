@@ -30,6 +30,10 @@ constexpr RenderGraphResourceId BloomPing{ 9U };
 constexpr RenderGraphResourceId BloomCombine{ 10U };
 constexpr RenderGraphResourceId PostProcessFinal{ 11U };
 constexpr RenderGraphResourceId FinalOutput{ 12U };
+constexpr RenderGraphResourceId GBufferAlbedo{ 13U };
+constexpr RenderGraphResourceId GBufferNormal{ 14U };
+constexpr RenderGraphResourceId GBufferMaterial{ 15U };
+constexpr RenderGraphResourceId GBufferDepth{ 16U };
 constexpr std::uint16_t Max = 64U;
 
 } // namespace RenderGraphResource

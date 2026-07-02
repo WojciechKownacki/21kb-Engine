@@ -28,6 +28,9 @@ struct ProjectSettingsPanelLayoutRects {
     RECT backendAutoButton{};
     RECT backendDx12Button{};
     RECT backendVulkanButton{};
+    RECT lightingPathLabel{};
+    RECT lightingPathForwardButton{};
+    RECT lightingPathDeferredButton{};
     RECT postProcessLabel{};
     RECT postProcessCheckbox{};
     RECT antiAliasingLabel{};
@@ -68,6 +71,7 @@ public:
     [[nodiscard]] static RECT OptionListBounds(const RECT& fieldBox, int count) noexcept;
 
     [[nodiscard]] static RECT BackendOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
+    [[nodiscard]] static RECT LightingPathOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT GraphicsToggleCheckbox(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT GraphicsToggleLabel(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;
     [[nodiscard]] static RECT AntiAliasingModeButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept;

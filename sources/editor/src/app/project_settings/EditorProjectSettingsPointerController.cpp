@@ -27,6 +27,16 @@ namespace {
     }
 }
 
+[[nodiscard]] kb::project::ProjectSceneLightingPath LightingPathForOption(int index) noexcept {
+    switch (index) {
+    case 1:
+        return kb::project::ProjectSceneLightingPath::Deferred;
+    case 0:
+    default:
+        return kb::project::ProjectSceneLightingPath::Forward;
+    }
+}
+
 void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noexcept {
     switch (index) {
     case 0:
@@ -100,6 +110,8 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         return ProjectSettingsTooltipKind::InputEnabled;
     case ProjectSettingsHitKind::RenderBackendOption:
         return ProjectSettingsTooltipKind::RenderBackend;
+    case ProjectSettingsHitKind::LightingPathOption:
+        return ProjectSettingsTooltipKind::LightingPath;
     case ProjectSettingsHitKind::AntiAliasingMode:
         return ProjectSettingsTooltipKind::AntiAliasing;
     case ProjectSettingsHitKind::MsaaOption:
@@ -150,6 +162,14 @@ void ToggleGraphicsOption(EditorRenderBackendSettings& settings, int index) noex
         const EditorRenderBackend previousBackend = renderBackendSettings->Backend();
         renderBackendSettings->SetBackend(BackendForOption(hit.index));
         if (renderBackendSettings->Backend() != previousBackend) {
+            sceneContext.MarkSceneRenderDirty();
+        }
+        static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());
+        return true;
+    }
+    case ProjectSettingsHitKind::LightingPathOption: {
+        const bool changed = sceneContext.SetProjectSceneLightingPath(LightingPathForOption(hit.index));
+        if (changed) {
             sceneContext.MarkSceneRenderDirty();
         }
         static_cast<void>(sceneContext.CloseProjectSettingsDropdowns());

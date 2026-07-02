@@ -10,6 +10,8 @@ enum class RenderPassKind : std::uint8_t {
     SceneTargetSetup,
     ShadowDepth,
     OpaqueScene,
+    GBufferGeometry,
+    DeferredLighting,
     TransparentScene,
     EditorSelectionMask,
     PostProcessExposureReadback,
@@ -26,7 +28,7 @@ enum class RenderPassKind : std::uint8_t {
     EditorGizmoOverlay,
 };
 
-constexpr std::size_t RenderPassKindCount = 17U;
+constexpr std::size_t RenderPassKindCount = 19U;
 
 [[nodiscard]] const char* RenderPassKindName(RenderPassKind kind) noexcept;
 [[nodiscard]] std::span<const RenderPassKind> RequiredRenderPassKinds() noexcept;
