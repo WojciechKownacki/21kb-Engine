@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace kb::editor::tests {
 namespace {
@@ -52,6 +53,44 @@ using kb::render::RenderMaterialGraphNodeKind;
     });
     material.graph.links.push_back(MakeLink(
         RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba",
+        RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    return material;
+}
+
+[[nodiscard]] RenderMaterialAssetData MakeQualitySwitchMaterial() {
+    RenderMaterialAssetData material{};
+    material.materialType = "graph";
+    material.materialTypeVersion = 1U;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 40,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+    });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+    });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::QualitySwitch,
+        .positionX = 260,
+        .positionY = 80,
+    });
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba",
+        RenderMaterialGraphNodeKind::QualitySwitch, 4U, "low"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba",
+        RenderMaterialGraphNodeKind::QualitySwitch, 4U, "high"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::QualitySwitch, 4U, "result",
         RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     return material;
 }
@@ -208,6 +247,38 @@ void RunCookBudgetTelemetryWarningTest() {
         "KBMAT-MAT69: Budget telemetry must preserve cache-hit reporting on unchanged cooks");
 }
 
+void RunQualityVariantCookContextTest() {
+    const EditorMaterialGraphCookConfig config = MakeCookConfig("mat52_quality_preview");
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x5208U };
+    const RenderMaterialAssetData material = MakeQualitySwitchMaterial();
+
+    const EditorMaterialGraphCookResult low = service.CookNow(
+        assetId,
+        material,
+        kb::render::RenderMaterialGraphBuildContext{
+            .assetId = assetId.value,
+            .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::Low,
+        });
+    const EditorMaterialGraphCookResult high = service.CookNow(
+        assetId,
+        material,
+        kb::render::RenderMaterialGraphBuildContext{
+            .assetId = assetId.value,
+            .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High,
+        });
+
+    Require(low.HasGpuProgram() && high.HasGpuProgram(),
+        "KBMAT-MAT52: Quality preview variants must both cook real GPU binaries");
+    Require(low.graphSourceHash != 0U && high.graphSourceHash != 0U && low.graphSourceHash != high.graphSourceHash,
+        "KBMAT-MAT52: Cook service must include preview quality in the graph shader hash");
+    Require(!low.passes.empty() && !high.passes.empty() && low.passes.front().binaryPath != high.passes.front().binaryPath,
+        "KBMAT-MAT52: Quality preview variants must stage distinct shader binaries");
+}
+
 void RunAsyncDebouncedCookTest() {
     const EditorMaterialGraphCookConfig config = MakeCookConfig("mat30_async");
     std::error_code error;
@@ -308,6 +379,7 @@ void RunEditorMaterialGraphCookServiceTests() {
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
     RunSynchronousCookProducesBinaryTest();
     RunCookBudgetTelemetryWarningTest();
+    RunQualityVariantCookContextTest();
     RunAsyncDebouncedCookTest();
     RunHotReloadLastGoodTest();
 #endif

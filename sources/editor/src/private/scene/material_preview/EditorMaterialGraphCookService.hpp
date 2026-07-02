@@ -119,10 +119,16 @@ public:
 
     // Enqueue a debounced async cook of the working copy; supersedes any pending cook for the
     // same asset. Returns the request generation so callers can match completions.
-    std::uint64_t RequestCook(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material);
+    std::uint64_t RequestCook(
+        kb::assets::AssetId assetId,
+        const kb::render::RenderMaterialAssetData& material,
+        kb::render::RenderMaterialGraphBuildContext graphContext = {});
 
     // Synchronous cook used by batch paths and tests. No debounce, no worker thread.
-    [[nodiscard]] EditorMaterialGraphCookResult CookNow(kb::assets::AssetId assetId, const kb::render::RenderMaterialAssetData& material) const;
+    [[nodiscard]] EditorMaterialGraphCookResult CookNow(
+        kb::assets::AssetId assetId,
+        const kb::render::RenderMaterialAssetData& material,
+        kb::render::RenderMaterialGraphBuildContext graphContext = {}) const;
 
     // Drain completions published by the worker since the last call (UI poll, oldest first).
     [[nodiscard]] std::vector<EditorMaterialGraphCookResult> DrainResults();
@@ -136,6 +142,7 @@ public:
 private:
     struct PendingEntry {
         kb::render::RenderMaterialAssetData material;
+        kb::render::RenderMaterialGraphBuildContext graphContext{};
         std::uint64_t generation = 0U;
         std::chrono::steady_clock::time_point readyAt{};
     };

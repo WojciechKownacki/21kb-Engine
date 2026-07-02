@@ -171,6 +171,18 @@ constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverrid
     return HashBytes(output.str());
 }
 
+[[nodiscard]] kb::render::RenderMaterialGraphBuildContext MaterialPreviewGraphBuildContext(
+    kb::assets::AssetId assetId,
+    const EditorMaterialPreviewSceneSettings& settings) noexcept {
+    kb::render::RenderMaterialGraphBuildContext context{};
+    context.assetId = assetId.value;
+    context.qualityLevel = settings.qualityLevel;
+    context.featureLevel = kb::render::RenderMaterialGraphFeatureLevel::Sm5;
+    context.shadingPath = kb::render::RenderMaterialGraphShadingPath::Forward;
+    context.shaderStage = kb::render::RenderMaterialGraphShaderStage::Fragment;
+    return context;
+}
+
 [[nodiscard]] std::filesystem::path SceneMaterialWorkingCopyRuntimePath(kb::assets::AssetId materialAssetId) {
     return std::filesystem::temp_directory_path() / ("21kb_scene_material_working_" + std::to_string(materialAssetId.value) + ".kbmat");
 }
@@ -2393,6 +2405,13 @@ const EditorMaterialPreviewSceneSettings& EditorSceneContext::MaterialPreviewSce
 bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings) {
     const bool changed = materialPreviewScene_->SetSceneSettings(settings);
     if (changed) {
+        if (materialGraphCookService_ != nullptr && materialEditor_.OpenAssetId().IsValid() && materialEditor_.WorkingCopy().has_value()) {
+            const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+            static_cast<void>(materialGraphCookService_->RequestCook(
+                openAsset,
+                *materialEditor_.WorkingCopy(),
+                MaterialPreviewGraphBuildContext(openAsset, settings)));
+        }
         MarkSceneRenderDirty();
     }
     return changed;
@@ -2400,8 +2419,16 @@ bool EditorSceneContext::SetMaterialPreviewSceneSettings(EditorMaterialPreviewSc
 
 bool EditorSceneContext::CycleMaterialPreviewSceneLightingPreset() {
     const EditorMaterialPreviewSceneSettings current = materialPreviewScene_->SceneSettings();
-    return SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettingsForPreset(
-        NextEditorMaterialPreviewLightingPreset(current.lightingPreset)));
+    EditorMaterialPreviewSceneSettings next = EditorMaterialPreviewSceneSettingsForPreset(
+        NextEditorMaterialPreviewLightingPreset(current.lightingPreset));
+    next.qualityLevel = current.qualityLevel;
+    return SetMaterialPreviewSceneSettings(next);
+}
+
+bool EditorSceneContext::CycleMaterialPreviewQualityLevel() {
+    EditorMaterialPreviewSceneSettings next = materialPreviewScene_->SceneSettings();
+    next.qualityLevel = NextEditorMaterialPreviewQualityLevel(next.qualityLevel);
+    return SetMaterialPreviewSceneSettings(next);
 }
 
 bool EditorSceneContext::MaterialPreviewNodePreviewEnabled() const noexcept {
@@ -5921,7 +5948,10 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // cook service reports Stale (with the failure reason) instead of dropping to a black/error frame.
     if (materialEditor_.DiagnosticsHaveError() && materialRuntimePreviewAssetId_ == openAsset) {
         if (materialGraphCookService_ != nullptr) {
-            static_cast<void>(materialGraphCookService_->RequestCook(openAsset, *materialEditor_.WorkingCopy()));
+            static_cast<void>(materialGraphCookService_->RequestCook(
+                openAsset,
+                *materialEditor_.WorkingCopy(),
+                MaterialPreviewGraphBuildContext(openAsset, materialPreviewScene_->SceneSettings())));
         }
         return;
     }
@@ -5961,7 +5991,10 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // The working copy changed: kick a debounced GPU cook so the preview and scene render the
     // authored graph program (not the CPU PBR fallback) on the next frame (MAT-30/32/33).
     if (materialGraphCookService_ != nullptr) {
-        static_cast<void>(materialGraphCookService_->RequestCook(openAsset, *materialEditor_.WorkingCopy()));
+        static_cast<void>(materialGraphCookService_->RequestCook(
+            openAsset,
+            *materialEditor_.WorkingCopy(),
+            MaterialPreviewGraphBuildContext(openAsset, materialPreviewScene_->SceneSettings())));
     }
 }
 

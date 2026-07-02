@@ -1,5 +1,7 @@
 #pragma once
 
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
+
 #include <cstdint>
 #include <string_view>
 
@@ -13,6 +15,7 @@ enum class EditorMaterialPreviewLightingPreset : std::uint8_t {
 
 struct EditorMaterialPreviewSceneSettings {
     EditorMaterialPreviewLightingPreset lightingPreset = EditorMaterialPreviewLightingPreset::Studio;
+    kb::render::RenderMaterialGraphQualityLevel qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High;
     float cameraDistance = 4.0F;
     float verticalFovDegrees = 38.0F;
     float keyLightIntensity = 1.35F;
@@ -37,6 +40,35 @@ struct EditorMaterialPreviewSceneSettings {
         return "High Contrast";
     }
     return "Studio";
+}
+
+[[nodiscard]] inline std::string_view EditorMaterialPreviewQualityLevelName(kb::render::RenderMaterialGraphQualityLevel qualityLevel) noexcept {
+    switch (qualityLevel) {
+    case kb::render::RenderMaterialGraphQualityLevel::Low:
+        return "Low";
+    case kb::render::RenderMaterialGraphQualityLevel::Medium:
+        return "Medium";
+    case kb::render::RenderMaterialGraphQualityLevel::High:
+        return "High";
+    case kb::render::RenderMaterialGraphQualityLevel::Epic:
+        return "Epic";
+    }
+    return "High";
+}
+
+[[nodiscard]] inline kb::render::RenderMaterialGraphQualityLevel NextEditorMaterialPreviewQualityLevel(
+    kb::render::RenderMaterialGraphQualityLevel qualityLevel) noexcept {
+    switch (qualityLevel) {
+    case kb::render::RenderMaterialGraphQualityLevel::Low:
+        return kb::render::RenderMaterialGraphQualityLevel::Medium;
+    case kb::render::RenderMaterialGraphQualityLevel::Medium:
+        return kb::render::RenderMaterialGraphQualityLevel::High;
+    case kb::render::RenderMaterialGraphQualityLevel::High:
+        return kb::render::RenderMaterialGraphQualityLevel::Epic;
+    case kb::render::RenderMaterialGraphQualityLevel::Epic:
+        return kb::render::RenderMaterialGraphQualityLevel::Low;
+    }
+    return kb::render::RenderMaterialGraphQualityLevel::High;
 }
 
 [[nodiscard]] inline EditorMaterialPreviewSceneSettings EditorMaterialPreviewSceneSettingsForPreset(EditorMaterialPreviewLightingPreset preset) noexcept {

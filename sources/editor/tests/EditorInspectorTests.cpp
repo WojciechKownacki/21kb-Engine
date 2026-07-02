@@ -1417,6 +1417,44 @@ void RunMaterialPreviewGpuGraphParityTest() {
     kb::editor::tests::Require(telemetry.compileDiagnostics.empty(),
         "KBMAT-MAT15: A valid graph preview must not surface compile diagnostics");
 
+    kb::render::RenderMaterialAssetData qualityMaterial{};
+    qualityMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    qualityMaterial.graph.shadingModel = "unlit";
+    qualityMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+    });
+    qualityMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+    });
+    qualityMaterial.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::QualitySwitch,
+    });
+    qualityMaterial.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", kb::render::RenderMaterialGraphNodeKind::QualitySwitch, 4U, "low"));
+    qualityMaterial.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", kb::render::RenderMaterialGraphNodeKind::QualitySwitch, 4U, "high"));
+    qualityMaterial.graph.links.push_back(makeLink(kb::render::RenderMaterialGraphNodeKind::QualitySwitch, 4U, "result", kb::render::RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const kb::render::RenderMaterialGraphBuildContext lowQualityContext{
+        .assetId = materialId.value,
+        .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::Low,
+    };
+    const kb::render::RenderMaterialGraphBuildContext highQualityContext{
+        .assetId = materialId.value,
+        .qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High,
+    };
+    const kb::editor::EditorMaterialPreviewTelemetry lowQualityTelemetry =
+        kb::editor::EditorMaterialPreviewTelemetryBuilder::Build(scene.Assets().Manager(), materialId, &qualityMaterial, true, lowQualityContext);
+    const kb::editor::EditorMaterialPreviewTelemetry highQualityTelemetry =
+        kb::editor::EditorMaterialPreviewTelemetryBuilder::Build(scene.Assets().Manager(), materialId, &qualityMaterial, true, highQualityContext);
+    kb::editor::tests::Require(lowQualityTelemetry.graphProgramKey != 0U && highQualityTelemetry.graphProgramKey != 0U,
+        "KBMAT-MAT52: Quality preview variants must compile to visible graph program keys");
+    kb::editor::tests::Require(lowQualityTelemetry.graphProgramKey != highQualityTelemetry.graphProgramKey,
+        "KBMAT-MAT52: Quality preview must select a distinct graph shader variant for Low and High");
+
     // A broken graph (Float -> Color mismatch) must surface the error material + diagnostics, not a silent black state.
     kb::render::RenderMaterialAssetData broken{};
     broken.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
@@ -1442,12 +1480,14 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(layout.diagnosticsPanel.left >= layout.previewFrame.right, "Material diagnostics should not overlap the preview overlay");
     kb::editor::tests::Require(layout.infoButton.right <= layout.previewPrimitiveButton.left &&
             layout.previewPrimitiveButton.right <= layout.previewSceneButton.left &&
-            layout.previewSceneButton.right <= layout.previewNodeButton.left &&
+            layout.previewSceneButton.right <= layout.previewQualityButton.left &&
+            layout.previewQualityButton.right <= layout.previewNodeButton.left &&
             layout.previewNodeButton.right <= layout.applyButton.left,
         "KBMAT-PREVIEW-0003: Material Editor preview commands should sit before Apply To Selection without overlap");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewPrimitiveButton.left + 2, layout.previewPrimitiveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewPrimitive, "KBMAT-PREVIEW-0001: Material Editor should hit-test the preview primitive command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewSceneButton.left + 2, layout.previewSceneButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewScene, "KBMAT-PREVIEW-0003: Material Editor should hit-test the preview scene settings command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewQualityButton.left + 2, layout.previewQualityButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewQuality, "KBMAT-MAT52: Material Editor should hit-test the preview quality command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewNodeButton.left + 2, layout.previewNodeButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewNode, "KBMAT-PREVIEW-0004: Material Editor should hit-test the per-node preview command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.applyButton.left + 2, layout.applyButton.top + 2) == kb::editor::MaterialEditorPanelCommand::ApplyToSelection, "Material Editor should hit-test the Apply To Selection command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
@@ -1455,7 +1495,7 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewFrame.left + 2, layout.previewFrame.bottom + 14) == kb::editor::MaterialEditorPanelCommand::None,
         "Material Editor should not keep dead asset badge/link hitboxes under the preview overlay");
-    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 8U, "KBMAT-PREVIEW-0003: Material Editor toolbar should expose real preview controls only");
+    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 9U, "KBMAT-PREVIEW-0003: Material Editor toolbar should expose real preview controls only");
     for (const kb::editor::MaterialEditorPanelCommand command : kb::editor::kMaterialEditorPanelToolbarCommands) {
         const std::string name{ kb::editor::MaterialEditorPanelCommandName(command) };
         kb::editor::tests::Require(!name.empty() && name != "None", "KBMAT-1002: every Material Editor toolbar button must expose a real command label");
