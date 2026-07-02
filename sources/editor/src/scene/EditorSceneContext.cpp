@@ -3171,18 +3171,27 @@ bool EditorSceneContext::SetMaterialGraphTextureSampleAsset(kb::assets::AssetId 
     }
     if (node == nullptr ||
         (node->kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
-            node->kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture)) {
+            node->kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
+            node->kind != kb::render::RenderMaterialGraphNodeKind::TextureObject)) {
         return false;
     }
     if (node->parameter.stableId.empty()) {
-        node->parameter.stableId = node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture
-            ? "texture" + std::to_string(node->id)
-            : "textureSample" + std::to_string(node->id);
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+            node->parameter.stableId = "texture" + std::to_string(node->id);
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+            node->parameter.stableId = "textureObject" + std::to_string(node->id);
+        } else {
+            node->parameter.stableId = "textureSample" + std::to_string(node->id);
+        }
     }
     if (node->parameter.displayName.empty()) {
-        node->parameter.displayName = node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture
-            ? "Texture " + std::to_string(node->id)
-            : "Texture Sample " + std::to_string(node->id);
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+            node->parameter.displayName = "Texture " + std::to_string(node->id);
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
+            node->parameter.displayName = "Texture Object " + std::to_string(node->id);
+        } else {
+            node->parameter.displayName = "Texture Sample " + std::to_string(node->id);
+        }
     }
     if (node->parameter.textureRole.empty()) {
         node->parameter.textureRole = "baseColor";
@@ -3866,6 +3875,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureSample, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateTextureParameter:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ParameterTexture, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureObject:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureObject, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateUv:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Uv, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScalar:
