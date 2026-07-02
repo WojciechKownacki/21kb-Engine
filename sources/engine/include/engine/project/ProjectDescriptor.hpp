@@ -21,6 +21,7 @@ struct ProjectPluginReference {
 enum class ProjectSceneLightingPath : std::uint32_t {
     Forward = 0U,
     Deferred = 1U,
+    ForwardPlus = 2U,
 };
 
 struct ProjectDescriptor {

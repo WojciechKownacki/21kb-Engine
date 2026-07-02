@@ -525,6 +525,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         break;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         AppendIrPin(irNode, irNode.kind, "forward", false);
+        AppendIrPin(irNode, irNode.kind, "forwardPlus", false);
         AppendIrPin(irNode, irNode.kind, "deferred", false);
         AppendIrPin(irNode, irNode.kind, "result", true);
         break;
@@ -1565,6 +1566,7 @@ void AppendCustomCodeFunctionDefinitions(
 [[nodiscard]] std::string_view RenderMaterialGraphShadingPathPinName(RenderMaterialGraphShadingPath path) noexcept {
     switch (path) {
     case RenderMaterialGraphShadingPath::Forward: return "forward";
+    case RenderMaterialGraphShadingPath::ForwardPlus: return "forwardPlus";
     case RenderMaterialGraphShadingPath::Deferred: return "deferred";
     }
     return "forward";
@@ -7066,7 +7068,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::FeatureLevelSwitch:
         return pin == "es3" || pin == "sm5" || pin == "sm6";
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
-        return pin == "forward" || pin == "deferred";
+        return pin == "forward" || pin == "forwardPlus" || pin == "deferred";
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         return pin == "vertex" || pin == "fragment";
     case RenderMaterialGraphNodeKind::Panner:
@@ -7622,7 +7624,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
-        if (pin == "forward" || pin == "deferred") return RenderMaterialGraphPinType::Float4;
+        if (pin == "forward" || pin == "forwardPlus" || pin == "deferred") return RenderMaterialGraphPinType::Float4;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         if (outputPin) return pin == "result" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
@@ -8424,8 +8426,9 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         return 0U;
     case RenderMaterialGraphNodeKind::ShadingPathSwitch:
         if (!outputPin && pin == "forward") return PinId(nodeKind, direction, 1U);
-        if (!outputPin && pin == "deferred") return PinId(nodeKind, direction, 2U);
-        if (outputPin && pin == "result") return PinId(nodeKind, direction, 3U);
+        if (!outputPin && pin == "forwardPlus") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "deferred") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "result") return PinId(nodeKind, direction, 4U);
         return 0U;
     case RenderMaterialGraphNodeKind::ShaderStageSwitch:
         if (!outputPin && pin == "vertex") return PinId(nodeKind, direction, 1U);
@@ -8799,7 +8802,7 @@ RenderMaterialGraphMaterialTypeBuildResult BuildRenderMaterialGraphMaterialTypeD
         permutationKeys.push_back(RenderMaterialTypePermutationKey{
             .name = "shadingPath",
             .defaultValue = std::string{ RenderMaterialGraphShadingPathPinName(context.shadingPath) },
-            .allowedValues = std::vector<std::string>{ "forward", "deferred" },
+            .allowedValues = std::vector<std::string>{ "forward", "forwardPlus", "deferred" },
         });
     }
     if (GraphContainsNodeKind(graph, RenderMaterialGraphNodeKind::ShaderStageSwitch)) {
