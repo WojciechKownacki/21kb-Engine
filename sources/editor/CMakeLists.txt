@@ -5,6 +5,7 @@ add_executable(kb_editor WIN32
     include/kb/editor/theme/EditorTheme.hpp
     src/app/EditorApplication.cpp
     src/app/EditorApplicationLifecycle.cpp
+    src/app/EditorCrashBreadcrumbs.cpp
     src/app/EditorApplicationMessageDispatcher.cpp
     src/app/EditorApplicationMessageLoop.cpp
     src/app/EditorApplicationWindowProc.cpp
@@ -273,6 +274,7 @@ add_executable(kb_editor WIN32
     src/private/app/EditorApplicationMessageLoop.hpp
     src/private/app/EditorApplicationState.hpp
     src/private/app/EditorApplicationWindowProc.hpp
+    src/private/app/EditorCrashBreadcrumbs.hpp
     src/private/app/EditorEditCommandPolicy.hpp
     src/private/app/EditorEditCommandInputHandler.hpp
     src/private/app/EditorAssetBrowserContextCommandExecutor.hpp

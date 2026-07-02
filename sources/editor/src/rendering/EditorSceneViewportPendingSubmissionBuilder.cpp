@@ -1,6 +1,7 @@
 #include "rendering/EditorSceneBgfxViewport.hpp"
 
 #if defined(_WIN32)
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include <algorithm>
 #include <span>
 
@@ -30,7 +31,13 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
     }
 
     ViewportSession& session = *present.session;
+    EditorCrashBreadcrumbs::Write(
+        "viewport_submission",
+        "Build begin viewportIndex=" + std::to_string(session.viewportIndex) +
+            " key=" + std::to_string(present.settings.viewportKey) +
+            " post=" + (present.settings.postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     if (!EnsureSessionTargets(session, present.renderWidth, present.renderHeight, present.settings.postProcessEnabled)) {
+        EditorCrashBreadcrumbs::Write("viewport_submission", "EnsureSessionTargets failed");
         return false;
     }
 
@@ -39,6 +46,7 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::Build(
         .scene = present.scene,
         .desc = BuildSubmitDesc(present, surface, session, clearTarget),
     };
+    EditorCrashBreadcrumbs::Write("viewport_submission", "Build end");
     return true;
 }
 
@@ -47,21 +55,32 @@ bool EditorSceneBgfxViewport::PendingSubmissionBuilder::EnsureSessionTargets(
     std::uint32_t renderWidth,
     std::uint32_t renderHeight,
     bool postProcessEnabled) {
+    EditorCrashBreadcrumbs::Write(
+        "viewport_targets",
+        "EnsureSessionTargets begin " + std::to_string(renderWidth) + "x" + std::to_string(renderHeight) +
+            " post=" + (postProcessEnabled ? std::string{"1"} : std::string{"0"}));
     const render::RenderExtent renderExtent{renderWidth, renderHeight};
+    EditorCrashBreadcrumbs::Write("viewport_targets", "sceneTarget.Ensure begin");
     if (!session.sceneTarget.Ensure(render::SceneRenderTargetDesc{
             .extent = renderExtent,
             .colorPolicy = render::SceneColorFormatPolicy::Auto,
         })) {
+        EditorCrashBreadcrumbs::Write("viewport_targets", "sceneTarget.Ensure failed");
         return false;
     }
+    EditorCrashBreadcrumbs::Write("viewport_targets", "sceneTarget.Ensure end");
     if (!postProcessEnabled) {
+        EditorCrashBreadcrumbs::Write("viewport_targets", "postProcess disabled shutdown");
         session.postProcessTargets.Shutdown();
         return true;
     }
-    return session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
+    EditorCrashBreadcrumbs::Write("viewport_targets", "postProcessTargets.Ensure begin");
+    const bool postTargetsReady = session.postProcessTargets.Ensure(render::ScenePostProcessTargetsDesc{
         .extent = renderExtent,
         .colorPolicy = render::SceneColorFormatPolicy::Auto,
     });
+    EditorCrashBreadcrumbs::Write("viewport_targets", postTargetsReady ? "postProcessTargets.Ensure end ok" : "postProcessTargets.Ensure end failed");
+    return postTargetsReady;
 }
 
 render::RenderSceneSubmitDesc EditorSceneBgfxViewport::PendingSubmissionBuilder::BuildSubmitDesc(
