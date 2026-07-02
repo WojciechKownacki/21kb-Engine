@@ -84,6 +84,9 @@ bool EditorMouseWheelRouter::HandleMouseWheel(int x, int y, int wheelDelta) {
     if (materialEditorContent.has_value() && Contains(*materialEditorContent, x, y)) {
         const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(*materialEditorContent);
         if (Contains(layout.graphCanvas, x, y)) {
+            sceneContext_.SetMaterialGraphCanvasViewport(
+                MaterialEditorPanelRectWidth(layout.graphCanvas),
+                MaterialEditorPanelRectHeight(layout.graphCanvas));
             return sceneContext_.ZoomMaterialGraph(wheelDelta, x - layout.graphCanvas.left, y - layout.graphCanvas.top);
         }
     }

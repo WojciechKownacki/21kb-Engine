@@ -163,6 +163,9 @@ LRESULT EditorWindowPointerHandler::HandleRightButtonUp(HWND messageWindow, LPAR
                 const float zoom = std::max(0.1F, sceneContext_.MaterialGraphZoom());
                 const int graphX = static_cast<int>(static_cast<float>(x - layout.graphCanvas.left - sceneContext_.MaterialGraphPanX()) / zoom);
                 const int graphY = static_cast<int>(static_cast<float>(y - layout.graphCanvas.top - sceneContext_.MaterialGraphPanY()) / zoom);
+                sceneContext_.SetMaterialGraphCanvasViewport(
+                    MaterialEditorPanelRectWidth(layout.graphCanvas),
+                    MaterialEditorPanelRectHeight(layout.graphCanvas));
                 static_cast<void>(sceneContext_.OpenMaterialGraphContextMenu(sceneContext_.MaterialEditor().OpenAssetId(), x, y, graphX, graphY));
             }
         }

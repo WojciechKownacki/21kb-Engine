@@ -2113,7 +2113,21 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateComment,
         };
     case 10U:
-        return { MaterialEditorGraphMenuCommand::DisconnectSelected, MaterialEditorGraphMenuCommand::DeleteSelected };
+        return {
+            MaterialEditorGraphMenuCommand::FrameSelected,
+            MaterialEditorGraphMenuCommand::SelectUpstream,
+            MaterialEditorGraphMenuCommand::SelectDownstream,
+            MaterialEditorGraphMenuCommand::AlignLeft,
+            MaterialEditorGraphMenuCommand::AlignCenter,
+            MaterialEditorGraphMenuCommand::AlignRight,
+            MaterialEditorGraphMenuCommand::AlignTop,
+            MaterialEditorGraphMenuCommand::AlignMiddle,
+            MaterialEditorGraphMenuCommand::AlignBottom,
+            MaterialEditorGraphMenuCommand::DistributeHorizontal,
+            MaterialEditorGraphMenuCommand::DistributeVertical,
+            MaterialEditorGraphMenuCommand::DisconnectSelected,
+            MaterialEditorGraphMenuCommand::DeleteSelected,
+        };
     default:
         return {};
     }
@@ -2265,6 +2279,17 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateLayerStack: return "Layer Stack";
     case MaterialEditorGraphMenuCommand::CreateComposite: return "Composite";
     case MaterialEditorGraphMenuCommand::CreateComment: return "Comment Box";
+    case MaterialEditorGraphMenuCommand::FrameSelected: return "Frame Selected";
+    case MaterialEditorGraphMenuCommand::SelectUpstream: return "Select Upstream";
+    case MaterialEditorGraphMenuCommand::SelectDownstream: return "Select Downstream";
+    case MaterialEditorGraphMenuCommand::AlignLeft: return "Align Left";
+    case MaterialEditorGraphMenuCommand::AlignCenter: return "Align Center";
+    case MaterialEditorGraphMenuCommand::AlignRight: return "Align Right";
+    case MaterialEditorGraphMenuCommand::AlignTop: return "Align Top";
+    case MaterialEditorGraphMenuCommand::AlignMiddle: return "Align Middle";
+    case MaterialEditorGraphMenuCommand::AlignBottom: return "Align Bottom";
+    case MaterialEditorGraphMenuCommand::DistributeHorizontal: return "Distribute Horizontal";
+    case MaterialEditorGraphMenuCommand::DistributeVertical: return "Distribute Vertical";
     case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
     case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected";
     case MaterialEditorGraphMenuCommand::None: return "";
@@ -2272,16 +2297,60 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     return "";
 }
 
-inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenuCommand command, bool hasSelectedNode) noexcept {
+inline bool MaterialEditorGraphMenuCommandIsAction(MaterialEditorGraphMenuCommand command) noexcept {
     switch (command) {
+    case MaterialEditorGraphMenuCommand::FrameSelected:
+    case MaterialEditorGraphMenuCommand::SelectUpstream:
+    case MaterialEditorGraphMenuCommand::SelectDownstream:
+    case MaterialEditorGraphMenuCommand::AlignLeft:
+    case MaterialEditorGraphMenuCommand::AlignCenter:
+    case MaterialEditorGraphMenuCommand::AlignRight:
+    case MaterialEditorGraphMenuCommand::AlignTop:
+    case MaterialEditorGraphMenuCommand::AlignMiddle:
+    case MaterialEditorGraphMenuCommand::AlignBottom:
+    case MaterialEditorGraphMenuCommand::DistributeHorizontal:
+    case MaterialEditorGraphMenuCommand::DistributeVertical:
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
     case MaterialEditorGraphMenuCommand::DeleteSelected:
-        return hasSelectedNode;
+        return true;
+    default:
+        return false;
+    }
+}
+
+inline bool MaterialEditorGraphContextMenuCommandEnabled(
+    MaterialEditorGraphMenuCommand command,
+    std::size_t selectedNodeCount,
+    bool hasSelectedComment) noexcept {
+    switch (command) {
+    case MaterialEditorGraphMenuCommand::FrameSelected:
+        return selectedNodeCount > 0U || hasSelectedComment;
+    case MaterialEditorGraphMenuCommand::SelectUpstream:
+    case MaterialEditorGraphMenuCommand::SelectDownstream:
+        return selectedNodeCount > 0U;
+    case MaterialEditorGraphMenuCommand::AlignLeft:
+    case MaterialEditorGraphMenuCommand::AlignCenter:
+    case MaterialEditorGraphMenuCommand::AlignRight:
+    case MaterialEditorGraphMenuCommand::AlignTop:
+    case MaterialEditorGraphMenuCommand::AlignMiddle:
+    case MaterialEditorGraphMenuCommand::AlignBottom:
+        return selectedNodeCount >= 2U;
+    case MaterialEditorGraphMenuCommand::DistributeHorizontal:
+    case MaterialEditorGraphMenuCommand::DistributeVertical:
+        return selectedNodeCount >= 3U;
+    case MaterialEditorGraphMenuCommand::DisconnectSelected:
+        return selectedNodeCount > 0U;
+    case MaterialEditorGraphMenuCommand::DeleteSelected:
+        return selectedNodeCount > 0U || hasSelectedComment;
     case MaterialEditorGraphMenuCommand::None:
         return false;
     default:
         return true;
     }
+}
+
+inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenuCommand command, bool hasSelectedNode) noexcept {
+    return MaterialEditorGraphContextMenuCommandEnabled(command, hasSelectedNode ? 1U : 0U, false);
 }
 
 [[nodiscard]] inline bool MaterialEditorGraphCommandInList(
