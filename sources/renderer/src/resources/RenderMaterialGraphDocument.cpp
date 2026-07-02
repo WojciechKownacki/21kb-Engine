@@ -5910,19 +5910,20 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         });
     }
 
-    // MAT-37: resolve the surface shading model. Unlit and DefaultLit are implemented; any other model
-    // falls back to DefaultLit with a diagnostic so a graph never silently shades with an unimplemented model.
+    // MAT-37: resolve the surface shading model. Production models have real fragment-wrapper branches;
+    // declared-but-unimplemented models fail here so the runtime never silently shades them as DefaultLit.
     const RenderMaterialShadingModel requestedShadingModel = ParseRenderMaterialShadingModel(graph.shadingModel);
-    RenderMaterialShadingModel resolvedShadingModel = requestedShadingModel;
     if (!IsRenderMaterialShadingModelProduction(requestedShadingModel)) {
-        resolvedShadingModel = RenderMaterialShadingModel::DefaultLit;
         result.diagnostics.push_back(RenderMaterialGraphDiagnostic{
-            .severity = RenderMaterialGraphDiagnosticSeverity::Warning,
+            .severity = RenderMaterialGraphDiagnosticSeverity::Error,
             .kind = RenderMaterialGraphDiagnosticKind::UnsupportedShadingModel,
             .message = "Shading model '" + std::string{ RenderMaterialShadingModelName(requestedShadingModel) } +
-                "' is declared but not implemented; shading as DefaultLit (fallback).",
+                "' is declared but has no production graph runtime branch.",
         });
+        AttachDiagnosticContext(graph, context, result.diagnostics);
+        return result;
     }
+    const RenderMaterialShadingModel resolvedShadingModel = requestedShadingModel;
 
     // MAT-38: resolve the blend mode. All seven modes are implemented, so there is no fallback; the value
     // selects the masked clip in the wrapper and the transparent cook/scene blend equation downstream.
