@@ -1513,6 +1513,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should expose fast inverse trig nodes by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSwitch, "runtime switch"),
         "KBMAT-MAT57: Palette search should expose Runtime Switch by catalog alias");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSobol, "low discrepancy"),
+        "KBMAT-MAT57: Palette search should expose Sobol by low-discrepancy catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "rgba"),
         "KBMAT-MAT57: Palette search should include node pin aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateBool, "constant bool"),
@@ -1547,6 +1549,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangentFast) &&
             kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast),
         "KBMAT-MAT57: Fast inverse trig nodes must be available from the Utility palette category");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSobol),
+        "KBMAT-MAT57: Sobol must be available from the Utility palette category");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
@@ -1602,6 +1606,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSwitch);
     kb::editor::tests::Require(runtimeSwitchKind.has_value() && *runtimeSwitchKind == kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch,
         "KBMAT-MAT57: CreateSwitch command should map to the Runtime Switch graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> sobolKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSobol);
+    kb::editor::tests::Require(sobolKind.has_value() && *sobolKind == kb::render::RenderMaterialGraphNodeKind::Sobol,
+        "KBMAT-MAT57: CreateSobol command should map to the Sobol graph node kind");
     std::uint32_t createdNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(*colorKind, -240, 96, &createdNodeId),
         "KBMAT-MAT57: Drag-from-pin should be able to create the selected compatible node");

@@ -334,6 +334,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
     case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
     case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
+    case kb::render::RenderMaterialGraphNodeKind::Sobol:
         return SIZE{ 168, 92 };
     case kb::render::RenderMaterialGraphNodeKind::MakeVector:
     case kb::render::RenderMaterialGraphNodeKind::Fresnel:
@@ -2023,6 +2024,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateBlackBody,
             MaterialEditorGraphMenuCommand::CreateNoise,
             MaterialEditorGraphMenuCommand::CreateVectorNoise,
+            MaterialEditorGraphMenuCommand::CreateSobol,
             MaterialEditorGraphMenuCommand::CreateAppendVector,
             MaterialEditorGraphMenuCommand::CreateColorRamp,
             MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask,
@@ -2142,6 +2144,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateBlackBody: return "Black Body";
     case MaterialEditorGraphMenuCommand::CreateNoise: return "Noise";
     case MaterialEditorGraphMenuCommand::CreateVectorNoise: return "Vector Noise";
+    case MaterialEditorGraphMenuCommand::CreateSobol: return "Sobol";
     case MaterialEditorGraphMenuCommand::CreateAppendVector: return "Append Vector";
     case MaterialEditorGraphMenuCommand::CreateColorRamp: return "Color Ramp";
     case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return "Antialiased Mask";
@@ -2304,6 +2307,7 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateBlackBody: return kb::render::RenderMaterialGraphNodeKind::BlackBody;
     case MaterialEditorGraphMenuCommand::CreateNoise: return kb::render::RenderMaterialGraphNodeKind::Noise;
     case MaterialEditorGraphMenuCommand::CreateVectorNoise: return kb::render::RenderMaterialGraphNodeKind::VectorNoise;
+    case MaterialEditorGraphMenuCommand::CreateSobol: return kb::render::RenderMaterialGraphNodeKind::Sobol;
     case MaterialEditorGraphMenuCommand::CreateAppendVector: return kb::render::RenderMaterialGraphNodeKind::AppendVector;
     case MaterialEditorGraphMenuCommand::CreateColorRamp: return kb::render::RenderMaterialGraphNodeKind::ColorRamp;
     case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask;
@@ -2451,6 +2455,9 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     }
     if (command == MaterialEditorGraphMenuCommand::CreateSwitch) {
         haystack += " runtime switch dynamic switch index case default branch";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateSobol) {
+        haystack += " low discrepancy quasirandom quasi random blue noise sobol2d cell index seed";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";

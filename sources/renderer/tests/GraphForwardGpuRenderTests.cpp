@@ -2570,6 +2570,7 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         { RenderMaterialGraphNodeKind::BlackBody, "kbBlackBody(", "value", 0x500FU },
         { RenderMaterialGraphNodeKind::Noise, "kbValueNoise(", "value", 0x5010U },
         { RenderMaterialGraphNodeKind::VectorNoise, "kbVectorNoise(", "value", 0x5011U },
+        { RenderMaterialGraphNodeKind::Sobol, "kbSobol2(", "cell", 0x501CU },
         // AppendVector concatenates its float3 "a" with scalar "b" -> vec4(a.xyz, b.x); the grey feeds "a".
         { RenderMaterialGraphNodeKind::AppendVector, ".xyz, (", "a", 0x5012U },
         // ColorRamp blends gradient stops with smoothstep; AntialiasedTextureMask uses screen-space derivatives.
@@ -2596,6 +2597,18 @@ void RunForwardGraphExpLogSrgbNodesCookTest() {
         graph.links.push_back(MakeLink(testCase.kind, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
 
         const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = testCase.assetId });
+        if (!compiled.Succeeded()) {
+            std::fprintf(stderr, "KBMAT-MAT50: math utility graph failed for %s\n", RenderMaterialGraphNodeKindName(testCase.kind).data());
+            for (const RenderMaterialGraphDiagnostic& diagnostic : compiled.diagnostics) {
+                std::fprintf(
+                    stderr,
+                    "  %s node=%u pin=%s message=%s\n",
+                    RenderMaterialGraphDiagnosticKindName(diagnostic.kind).data(),
+                    diagnostic.nodeId,
+                    diagnostic.pin.c_str(),
+                    diagnostic.message.c_str());
+            }
+        }
         Require(compiled.Succeeded(), "KBMAT-MAT50: math utility graph must compile");
         Require(compiled.shader.source.find(testCase.intrinsic) != std::string::npos, "KBMAT-MAT50: math node must emit its GLSL intrinsic/helper in the generated source");
 
@@ -3502,6 +3515,51 @@ void RunForwardGraphNoiseRendersTest() {
     harness.Shutdown();
 }
 
+void RunForwardGraphSobolRendersTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_sobol";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT50: Harness vertex shader must cook to a DXBC binary for Sobol");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    RenderMaterialGraphNode index{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    index.parameter.defaultValueHint = "1";
+    graph.nodes.push_back(index);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Sobol });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::Sobol, 3U, "index"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Sobol, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5101U });
+    Require(compiled.Succeeded(), "KBMAT-MAT50: Sobol graph must compile");
+    Require(compiled.shader.source.find("kbSobol2(") != std::string::npos, "KBMAT-MAT50: Sobol graph must call the Sobol helper");
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: Sobol graph must cook to a shader binary");
+    const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT50: Sobol shader must cook to a real DXBC binary");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT50: Direct3D11 device unavailable; cannot run GPU Sobol proof\n");
+        Require(false, "KBMAT-MAT50: A real GPU device is required to prove Sobol renders");
+        return;
+    }
+
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
+    Require(bgfx::isValid(program), "KBMAT-MAT50: Sobol program must link on the real GPU backend");
+    const ForwardRenderProbe pixel = ForwardRenderHarness::ProbeAt(harness.RenderPixels(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE), 32U, 32U);
+    Require(pixel.r > 70U && pixel.g > 35U && pixel.b < 50U && pixel.r > pixel.g + 20U,
+        "KBMAT-MAT50: Sobol(index=1) must render the deterministic low-discrepancy sample into baseColor on the GPU");
+
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 void RunForwardGraphMaterialParameterCollectionRendersTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_material_parameter_collection";
     std::error_code error;
@@ -3652,6 +3710,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphWorldSpaceNodesTest();
     RunForwardGraphExpLogSrgbNodesCookTest();
     RunForwardGraphNoiseRendersTest();
+    RunForwardGraphSobolRendersTest();
     RunForwardGraphMaterialParameterCollectionRendersTest();
 #endif
 }

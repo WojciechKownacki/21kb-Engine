@@ -624,6 +624,12 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "value", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::Sobol:
+        AppendIrPin(irNode, irNode.kind, "cell", false);
+        AppendIrPin(irNode, irNode.kind, "index", false);
+        AppendIrPin(irNode, irNode.kind, "seed", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
     case RenderMaterialGraphNodeKind::BreakVector:
         AppendIrPin(irNode, irNode.kind, "value", false);
         AppendIrPin(irNode, irNode.kind, "x", true);
@@ -908,14 +914,29 @@ void AttachDiagnosticContext(
     if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float) {
         return "(" + expression + ").x";
     }
+    if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float2) {
+        return "(" + expression + ").xy";
+    }
     if (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float4) {
         return expression;
     }
     if (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float) {
         return "(" + expression + ").x";
     }
+    if (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float3) {
+        return "vec3(" + expression + ", 0.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float4) {
+        return "vec4(" + expression + ", 0.0, 1.0)";
+    }
+    if (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Color) {
+        return "vec4(" + expression + ", 0.0, 1.0)";
+    }
     if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float) {
         return "(" + expression + ").x";
+    }
+    if (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float2) {
+        return "(" + expression + ").xy";
     }
     if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float) {
         return "(" + expression + ").x";
@@ -928,6 +949,9 @@ void AttachDiagnosticContext(
     }
     if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float3) {
         return "(" + expression + ").xyz";
+    }
+    if (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float2) {
+        return "(" + expression + ").xy";
     }
     if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float3) {
         return expression;
@@ -1990,6 +2014,14 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "vec4(kbVectorNoise((" +
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float3, "ctx.worldPos") +
             ").xyz), 1.0)";
+    case RenderMaterialGraphNodeKind::Sobol:
+        return "kbSobol2(" +
+            CompileInputExpression(cg, node, "cell", RenderMaterialGraphPinType::Float2, "vec2(0.0, 0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "index", RenderMaterialGraphPinType::Float, "0.0") +
+            ", " +
+            CompileInputExpression(cg, node, "seed", RenderMaterialGraphPinType::Float2, "vec2(0.0, 0.0)") +
+            ")";
     case RenderMaterialGraphNodeKind::AppendVector:
         // MAT-50: concatenate a 3-component vector with a scalar into a float4 (UE's common rgb + a append).
         return "vec4((" +
@@ -2437,6 +2469,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
@@ -2624,6 +2657,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
@@ -2769,6 +2803,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
@@ -3924,6 +3959,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "Noise";
     case RenderMaterialGraphNodeKind::VectorNoise:
         return "VectorNoise";
+    case RenderMaterialGraphNodeKind::Sobol:
+        return "Sobol";
     case RenderMaterialGraphNodeKind::AppendVector:
         return "AppendVector";
     case RenderMaterialGraphNodeKind::ColorRamp:
@@ -4560,6 +4597,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "VectorNoise")) {
         return RenderMaterialGraphNodeKind::VectorNoise;
     }
+    if (EqualsIgnoreCase(text, "Sobol") || EqualsIgnoreCase(text, "Sobol2D") || EqualsIgnoreCase(text, "LowDiscrepancy")) {
+        return RenderMaterialGraphNodeKind::Sobol;
+    }
     return std::nullopt;
 }
 
@@ -4704,6 +4744,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
@@ -5097,6 +5138,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::BlackBody,
         RenderMaterialGraphNodeKind::Noise,
         RenderMaterialGraphNodeKind::VectorNoise,
+        RenderMaterialGraphNodeKind::Sobol,
         RenderMaterialGraphNodeKind::AppendVector,
         RenderMaterialGraphNodeKind::ColorRamp,
         RenderMaterialGraphNodeKind::AntialiasedTextureMask,
@@ -5799,6 +5841,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesRuntimeSwitch = false;
     bool usesBlackBody = false;
     bool usesNoise = false;
+    bool usesSobol = false;
     bool usesVertexColor = false;
     bool usesPerInstanceRandom = false;
     bool usesPerInstanceFadeAmount = false;
@@ -5849,6 +5892,9 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::VectorNoise:
             // MAT-50: the noise nodes share hash + value-noise helpers emitted into the shader prelude.
             usesNoise = true;
+            break;
+        case RenderMaterialGraphNodeKind::Sobol:
+            usesSobol = true;
             break;
         case RenderMaterialGraphNodeKind::ParameterScalar:
             uniformEntries.push_back({ ParameterUniformName(node, ""), StableParameterId(node), node.kind });
@@ -6142,6 +6188,45 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "}\n\n";
         source += "vec3 kbVectorNoise(vec3 x) {\n";
         source += "    return vec3(kbValueNoise(x), kbValueNoise(x + vec3(31.416, 47.853, 12.793)), kbValueNoise(x + vec3(57.719, 93.981, 74.321)));\n";
+        source += "}\n\n";
+    }
+
+    if (usesSobol) {
+        // MAT-50 tier2: deterministic 2D Sobol sample without UE's SobolSamplingTexture dependency.
+        source += "float kbXor16(float a, float b) {\n";
+        source += "    float result = 0.0;\n";
+        source += "    float bitValue = 1.0;\n";
+        source += "    for (int bitIndex = 0; bitIndex < 16; ++bitIndex) {\n";
+        source += "        float abit = mod(floor(a / bitValue), 2.0);\n";
+        source += "        float bbit = mod(floor(b / bitValue), 2.0);\n";
+        source += "        result += mod(abit + bbit, 2.0) * bitValue;\n";
+        source += "        bitValue *= 2.0;\n";
+        source += "    }\n";
+        source += "    return result;\n";
+        source += "}\n\n";
+        source += "vec2 kbSobolApply(vec2 result, float indexValue, float bitValue, vec2 direction) {\n";
+        source += "    float bitSet = mod(floor(indexValue / bitValue), 2.0);\n";
+        source += "    vec2 xored = vec2(kbXor16(result.x, direction.x), kbXor16(result.y, direction.y));\n";
+        source += "    return mix(result, xored, vec2_splat(bitSet));\n";
+        source += "}\n\n";
+        source += "vec2 kbSobol2(vec2 cell, float indexValue, vec2 seed) {\n";
+        source += "    vec2 origin = floor(cell);\n";
+        source += "    vec2 c = floor(abs(cell));\n";
+        source += "    vec2 result = mod(floor(vec2(c.x * 1973.0 + c.y * 9277.0, c.x * 26699.0 + c.y * 31847.0)), vec2_splat(65536.0));\n";
+        source += "    float idx = floor(max(indexValue, 0.0));\n";
+        source += "    result = kbSobolApply(result, idx, 1.0, vec2(34432.0, 19584.0));\n";
+        source += "    result = kbSobolApply(result, idx, 2.0, vec2(62016.0, 37440.0));\n";
+        source += "    result = kbSobolApply(result, idx, 4.0, vec2(33312.0, 3616.0));\n";
+        source += "    result = kbSobolApply(result, idx, 8.0, vec2(16656.0, 5648.0));\n";
+        source += "    result = kbSobolApply(result, idx, 16.0, vec2(42504.0, 30216.0));\n";
+        source += "    result = kbSobolApply(result, idx, 32.0, vec2(35330.0, 10250.0));\n";
+        source += "    result = kbSobolApply(result, idx, 64.0, vec2(57860.0, 40452.0));\n";
+        source += "    result = kbSobolApply(result, idx, 128.0, vec2(41984.0, 18050.0));\n";
+        source += "    result = kbSobolApply(result, idx, 256.0, vec2(58112.0, 42829.0));\n";
+        source += "    result = kbSobolApply(result, idx, 512.0, vec2(46848.0, 38935.0));\n";
+        source += "    vec2 seedBits = floor(fract(abs(seed)) * 65536.0);\n";
+        source += "    result = vec2(kbXor16(result.x, seedBits.x), kbXor16(result.y, seedBits.y));\n";
+        source += "    return origin + (result / 65536.0);\n";
         source += "}\n\n";
     }
 
@@ -6879,6 +6964,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "a" || pin == "b" || pin == "less" || pin == "equal" || pin == "greater";
     case RenderMaterialGraphNodeKind::RuntimeSwitch:
         return pin == "index" || pin == "default" || pin == "case0" || pin == "case1" || pin == "case2" || pin == "case3";
+    case RenderMaterialGraphNodeKind::Sobol:
+        return pin == "cell" || pin == "index" || pin == "seed";
     case RenderMaterialGraphNodeKind::Desaturate:
         return pin == "color" || pin == "fraction";
     case RenderMaterialGraphNodeKind::Fresnel:
@@ -6977,6 +7064,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
@@ -7460,6 +7548,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::CustomCode:
         if (!outputPin && (pin == "A" || pin == "B")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::Sobol:
+        if (!outputPin && (pin == "cell" || pin == "seed")) return RenderMaterialGraphPinType::Float2;
+        if (!outputPin && pin == "index") return RenderMaterialGraphPinType::Float;
+        return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::OneMinus:
     case RenderMaterialGraphNodeKind::Absolute:
     case RenderMaterialGraphNodeKind::Saturate:
@@ -7664,6 +7756,14 @@ bool AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType from, Rende
         (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float4)) {
         return true;
     }
+    if ((from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float3) ||
+        (from == RenderMaterialGraphPinType::Float3 && to == RenderMaterialGraphPinType::Float2) ||
+        (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Float4) ||
+        (from == RenderMaterialGraphPinType::Float4 && to == RenderMaterialGraphPinType::Float2) ||
+        (from == RenderMaterialGraphPinType::Float2 && to == RenderMaterialGraphPinType::Color) ||
+        (from == RenderMaterialGraphPinType::Color && to == RenderMaterialGraphPinType::Float2)) {
+        return true;
+    }
     if (from == RenderMaterialGraphPinType::Normal && to == RenderMaterialGraphPinType::Float4) {
         return true;
     }
@@ -7864,6 +7964,12 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (!outputPin && pin == "case1") return PinId(nodeKind, direction, 4U);
         if (!outputPin && pin == "case2") return PinId(nodeKind, direction, 5U);
         if (!outputPin && pin == "case3") return PinId(nodeKind, direction, 6U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::Sobol:
+        if (!outputPin && pin == "cell") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "index") return PinId(nodeKind, direction, 2U);
+        if (!outputPin && pin == "seed") return PinId(nodeKind, direction, 3U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::Desaturate:
@@ -8248,6 +8354,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::BlackBody:
     case RenderMaterialGraphNodeKind::Noise:
     case RenderMaterialGraphNodeKind::VectorNoise:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::ColorRamp:
     case RenderMaterialGraphNodeKind::AntialiasedTextureMask:
     case RenderMaterialGraphNodeKind::Transform:
