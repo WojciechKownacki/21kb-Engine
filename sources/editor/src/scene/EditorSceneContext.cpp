@@ -2628,8 +2628,36 @@ void EditorSceneContext::SetMaterialGraphCanvasViewport(int width, int height) n
     }
 }
 
+bool EditorSceneContext::IsMaterialEditorFindFocused() const noexcept {
+    return materialEditor_.IsFindFocused();
+}
+
+void EditorSceneContext::FocusMaterialEditorFind(bool focused) noexcept {
+    materialEditor_.FocusFind(focused);
+}
+
 void EditorSceneContext::SetMaterialEditorFindQuery(std::string query) {
     materialEditor_.SetFindQuery(std::move(query));
+}
+
+void EditorSceneContext::AppendMaterialEditorFindText(wchar_t character) {
+    materialEditor_.AppendFindText(character);
+}
+
+void EditorSceneContext::InsertMaterialEditorFindText(std::string_view text) {
+    materialEditor_.InsertFindText(text);
+}
+
+void EditorSceneContext::BackspaceMaterialEditorFind() {
+    materialEditor_.BackspaceFind();
+}
+
+void EditorSceneContext::ClearMaterialEditorFind() {
+    materialEditor_.ClearFindQuery();
+}
+
+bool EditorSceneContext::FocusFirstMaterialEditorFindResult() {
+    return FocusMaterialEditorFindResult(0U, materialGraphCanvasWidth_, materialGraphCanvasHeight_);
 }
 
 bool EditorSceneContext::FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight) {

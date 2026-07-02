@@ -2895,6 +2895,24 @@ void RunMaterialEditorFindInMaterialModelTest() {
 
     kb::editor::MaterialEditorState editor;
     editor.Open(kb::assets::AssetId{ 0x6300U }, material);
+    kb::editor::tests::Require(!editor.InfoPanelVisible() && !editor.IsFindFocused(),
+        "KBMAT-WORKFLOW-HOTKEYS: Find should open unfocused with the Material Editor info panel hidden");
+    editor.FocusFind(true);
+    kb::editor::tests::Require(editor.InfoPanelVisible() && editor.IsFindFocused(),
+        "KBMAT-WORKFLOW-HOTKEYS: Ctrl+F target state must focus find and show the Material Editor info panel");
+    editor.AppendFindText(L'r');
+    editor.AppendFindText(L'o');
+    editor.AppendFindText(L'u');
+    editor.AppendFindText(L'g');
+    editor.AppendFindText(L'h');
+    kb::editor::tests::Require(editor.FindQuery() == "rough" && !editor.FindResults().empty(),
+        "KBMAT-WORKFLOW-HOTKEYS: Focused Material Editor find input must append characters and refresh results");
+    editor.BackspaceFind();
+    kb::editor::tests::Require(editor.FindQuery() == "roug",
+        "KBMAT-WORKFLOW-HOTKEYS: Focused Material Editor find input must support Backspace");
+    editor.InsertFindText("h");
+    kb::editor::tests::Require(editor.FindQuery() == "rough",
+        "KBMAT-WORKFLOW-HOTKEYS: Focused Material Editor find input must support text insertion");
     editor.SetFindQuery("rough");
     kb::editor::tests::Require(std::ranges::any_of(editor.FindResults(), [](const kb::editor::MaterialEditorFindResult& result) {
             return result.nodeId == 2U &&
@@ -2925,7 +2943,11 @@ void RunMaterialEditorFindInMaterialModelTest() {
 
     kb::editor::MaterialEditorPanelDetailsRows details =
         kb::editor::MaterialEditorPanelRenderer::DetailsRows(editor.Parameters(), editor.SelectedNodeId(), {});
+    details.findQuery = std::string{ editor.FindQuery() };
+    details.findFocused = editor.IsFindFocused();
     details.findResults = editor.FindResults();
+    kb::editor::tests::Require(details.findQuery == "foam" && details.findFocused,
+        "KBMAT-WORKFLOW-HOTKEYS: Details panel model must expose focused Material Editor find query");
     kb::editor::tests::Require(!details.findResults.empty() && details.findResults[0].commentId == 1U,
         "KBMAT-MAT63: Details panel model must carry find results");
 

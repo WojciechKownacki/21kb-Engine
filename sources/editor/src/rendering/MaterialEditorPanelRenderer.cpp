@@ -2428,6 +2428,27 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
     int y = layout.detailsPanel.top + 34;
     const int rowHeight = 18;
     const int bottom = layout.detailsPanel.bottom - 10;
+    {
+        const RECT searchRect{
+            layout.detailsPanel.left + 10,
+            y,
+            layout.detailsPanel.right - 10,
+            y + 24,
+        };
+        FillRoundedRect(dc, searchRect, rows.findFocused ? RGB(34, 45, 55) : RGB(30, 34, 40), 4);
+        StrokeRoundedRect(dc, searchRect, rows.findFocused ? RGB(83, 128, 165) : RGB(62, 70, 82), 4);
+        const std::string searchText = rows.findQuery.empty() ? "Find in material" : rows.findQuery;
+        DrawText(
+            dc,
+            RECT{ searchRect.left + 8, searchRect.top, searchRect.right - 8, searchRect.bottom },
+            searchText.c_str(),
+            rows.findQuery.empty() ? RGB(151, 162, 176) : RGB(232, 237, 243),
+            9,
+            rows.findFocused ? FW_SEMIBOLD : FW_NORMAL,
+            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+        y += 32;
+    }
+
     if (!rows.instanceParentRows.empty()) {
         DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parent Chain", RGB(190, 169, 239), 10, FW_SEMIBOLD);
         y += 22;
@@ -2785,6 +2806,8 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
         details.layerTreeRows = sceneContext.MaterialEditor().LayerTreeRows();
         details.materialStats = sceneContext.MaterialEditor().MaterialStats();
         details.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
+        details.findQuery = std::string{ sceneContext.MaterialEditor().FindQuery() };
+        details.findFocused = sceneContext.MaterialEditor().IsFindFocused();
         details.findResults = sceneContext.MaterialEditor().FindResults();
         details.materialDiffRows = sceneContext.MaterialEditor().MaterialDiffRows();
         if (metadata.type == "RenderMaterialInstance") {
