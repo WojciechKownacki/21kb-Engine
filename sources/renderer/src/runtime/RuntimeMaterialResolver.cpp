@@ -25,6 +25,8 @@
 namespace kb::render {
 namespace {
 
+struct MaterialGraphRuntimeValue;
+
 [[nodiscard]] std::uint64_t HashCombine(std::uint64_t lhs, std::uint64_t rhs) noexcept {
     return lhs ^ (rhs + 0x9e3779b97f4a7c15ULL + (lhs << 6U) + (lhs >> 2U));
 }
@@ -77,6 +79,24 @@ namespace {
 [[nodiscard]] float FastAcosScalar(float value) noexcept {
     return 1.57079632679F - FastAsinScalar(value);
 }
+
+[[nodiscard]] float FractScalar(float value) noexcept {
+    return value - std::floor(value);
+}
+
+[[nodiscard]] std::uint32_t SobolSeedBits(float value) noexcept {
+    const float seed = FractScalar(std::abs(value));
+    return static_cast<std::uint32_t>(std::floor(seed * 65536.0F)) & 0xffffU;
+}
+
+[[nodiscard]] float SobolComponentToUnit(std::uint32_t value) noexcept {
+    return static_cast<float>(value & 0xffffU) / 65536.0F;
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue SobolRuntimeValue(
+    const MaterialGraphRuntimeValue& cell,
+    const MaterialGraphRuntimeValue& index,
+    const MaterialGraphRuntimeValue& seed) noexcept;
 
 [[nodiscard]] std::string ParseDiagnosticMessage(const RenderMaterialAssetParseDiagnostic& diagnostic) {
     std::string message{ RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) };
@@ -710,6 +730,7 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
         break;
     }
@@ -766,6 +787,47 @@ struct MaterialGraphRuntimeValue {
 
 [[nodiscard]] float Clamp01(float value) noexcept {
     return std::clamp(value, 0.0F, 1.0F);
+}
+
+[[nodiscard]] MaterialGraphRuntimeValue SobolRuntimeValue(
+    const MaterialGraphRuntimeValue& cell,
+    const MaterialGraphRuntimeValue& index,
+    const MaterialGraphRuntimeValue& seed) noexcept {
+    static constexpr std::array<std::array<std::uint32_t, 2U>, 10U> kDirections{ {
+        { 34432U, 19584U },
+        { 62016U, 37440U },
+        { 33312U, 3616U },
+        { 16656U, 5648U },
+        { 42504U, 30216U },
+        { 35330U, 10250U },
+        { 57860U, 40452U },
+        { 41984U, 18050U },
+        { 58112U, 42829U },
+        { 46848U, 38935U },
+    } };
+
+    const float originX = std::floor(cell.value[0]);
+    const float originY = std::floor(cell.value[1]);
+    const std::uint32_t cx = static_cast<std::uint32_t>(std::floor(std::abs(cell.value[0])));
+    const std::uint32_t cy = static_cast<std::uint32_t>(std::floor(std::abs(cell.value[1])));
+    std::uint32_t sx = ((cx * 1973U) + (cy * 9277U)) & 0xffffU;
+    std::uint32_t sy = ((cx * 26699U) + (cy * 31847U)) & 0xffffU;
+    const std::uint32_t sampleIndex = static_cast<std::uint32_t>(std::floor(std::max(index.value[0], 0.0F)));
+    for (std::uint32_t bit = 0U; bit < kDirections.size(); ++bit) {
+        if ((sampleIndex & (1U << bit)) != 0U) {
+            sx ^= kDirections[bit][0];
+            sy ^= kDirections[bit][1];
+        }
+    }
+    sx ^= SobolSeedBits(seed.value[0]);
+    sy ^= SobolSeedBits(seed.value[1]);
+    return RuntimeValue(
+        originX + SobolComponentToUnit(sx),
+        originY + SobolComponentToUnit(sy),
+        0.0F,
+        1.0F,
+        RenderMaterialGraphPinType::Float2,
+        cell.authored || index.authored || seed.authored);
 }
 
 [[nodiscard]] std::vector<float> ParseGraphDefaultNumbers(std::string_view text) {
@@ -1539,6 +1601,14 @@ struct MaterialGraphRuntimeValue {
             RenderMaterialGraphPinType::Float4);
         result.textureAssetId = MergeTextureProvenance(lhs.textureAssetId, rhs.textureAssetId);
         result.authored = lhs.authored || rhs.authored || t.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::Sobol: {
+        const MaterialGraphRuntimeValue cell = EvaluateGraphInput(materialAsset, node, "cell", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float2, false), stack);
+        const MaterialGraphRuntimeValue index = EvaluateGraphInput(materialAsset, node, "index", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue seed = EvaluateGraphInput(materialAsset, node, "seed", RuntimeValue(0.0F, 0.0F, 0.0F, 1.0F, RenderMaterialGraphPinType::Float2, false), stack);
+        result = SobolRuntimeValue(cell, index, seed);
+        result.textureAssetId = MergeTextureProvenance(MergeTextureProvenance(cell.textureAssetId, index.textureAssetId), seed.textureAssetId);
         break;
     }
     case RenderMaterialGraphNodeKind::NormalUnpack:

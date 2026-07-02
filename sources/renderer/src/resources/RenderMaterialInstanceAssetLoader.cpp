@@ -256,6 +256,7 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
         return std::nullopt;
     }
@@ -332,6 +333,7 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
+    case RenderMaterialGraphNodeKind::Sobol:
     case RenderMaterialGraphNodeKind::Uv:
         break;
     }

@@ -92,6 +92,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateBlackBody,
     CreateNoise,
     CreateVectorNoise,
+    CreateSobol,
     CreateAppendVector,
     CreateColorRamp,
     CreateAntialiasedTextureMask,
@@ -3020,6 +3021,7 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::BlackBody:
         case kb::render::RenderMaterialGraphNodeKind::Noise:
         case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
+        case kb::render::RenderMaterialGraphNodeKind::Sobol:
         case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
         case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:

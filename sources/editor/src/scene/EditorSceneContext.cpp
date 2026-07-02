@@ -3965,6 +3965,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Noise, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateVectorNoise:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VectorNoise, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSobol:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Sobol, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateAppendVector:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::AppendVector, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateColorRamp:
