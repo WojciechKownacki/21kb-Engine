@@ -63,6 +63,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     Step,
     SmoothStep,
     If,
+    RuntimeSwitch,
     Desaturate,
     Fresnel,
     Negate,

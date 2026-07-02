@@ -3008,6 +3008,65 @@ void RunForwardGraphBlendModeCompositeTest() {
     harness.Shutdown();
 }
 
+// MAT-50/#32: Runtime Switch is a dynamic index-based branch. It must emit the kbSwitch4 helper,
+// cook to DXBC, link as a real bgfx program, and render the selected case through GPU readback.
+void RunForwardGraphRuntimeSwitchTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat50_runtime_switch";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT50: Harness vertex shader must cook to a DXBC binary for Runtime Switch");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    RenderMaterialGraphNode index{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    index.parameter.defaultValueHint = "2.0";
+    RenderMaterialGraphNode fallbackRed{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    fallbackRed.parameter.defaultValueHint = "1 0 0 1";
+    RenderMaterialGraphNode greenCase{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    greenCase.parameter.defaultValueHint = "0 1 0 1";
+    RenderMaterialGraphNode blueCase{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ConstantColor };
+    blueCase.parameter.defaultValueHint = "0 0 1 1";
+    graph.nodes.push_back(index);
+    graph.nodes.push_back(fallbackRed);
+    graph.nodes.push_back(greenCase);
+    graph.nodes.push_back(blueCase);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::RuntimeSwitch });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::RuntimeSwitch, 6U, "index"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba", RenderMaterialGraphNodeKind::RuntimeSwitch, 6U, "default"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba", RenderMaterialGraphNodeKind::RuntimeSwitch, 6U, "case1"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 5U, "rgba", RenderMaterialGraphNodeKind::RuntimeSwitch, 6U, "case2"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::RuntimeSwitch, 6U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x5032U });
+    Require(compiled.Succeeded(), "KBMAT-MAT50: Runtime Switch graph must compile");
+    Require(compiled.shader.source.find("kbSwitch4(") != std::string::npos, "KBMAT-MAT50: Runtime Switch graph must emit kbSwitch4");
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT50: Runtime Switch graph must cook");
+    const RenderMaterialGraphShaderBinary* binary = result.artifact->FindBinary(RenderMaterialGraphShaderBackend::Dxbc);
+    Require(binary != nullptr && binary->byteSize > 0U, "KBMAT-MAT50: Runtime Switch fragment shader must cook to a real binary");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT50: Direct3D11 device unavailable; cannot run GPU runtime switch proof\n");
+        Require(false, "KBMAT-MAT50: A real GPU device is required to prove Runtime Switch selection");
+        return;
+    }
+
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
+    Require(bgfx::isValid(program), "KBMAT-MAT50: Runtime Switch graph program must link");
+    const ForwardRenderProbe pixel = harness.Render(program, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(pixel.b > pixel.r + 40U && pixel.b > pixel.g + 40U,
+        "KBMAT-MAT50: Runtime Switch case2 branch must render the blue constant on the GPU");
+
+    bgfx::destroy(program);
+    harness.Shutdown();
+}
+
 // MAT-39: a StaticSwitch selects one branch at compile time. The same switch graph cooked with the
 // StaticBoolParameter true renders the red branch; cooked false renders the blue branch — proving the
 // static selection drives a real per-variant program on the GPU.
@@ -3586,6 +3645,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphShadingModelTest();
     RunForwardGraphMaskedDiscardTest();
     RunForwardGraphBlendModeCompositeTest();
+    RunForwardGraphRuntimeSwitchTest();
     RunForwardGraphStaticSwitchTest();
     RunForwardGraphVariantSwitchesTest();
     RunForwardGraphCoordinateNodesTest();

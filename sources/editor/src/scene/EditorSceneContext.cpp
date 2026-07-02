@@ -3995,6 +3995,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SmoothStep, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateIf:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::If, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSwitch:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateDesaturate:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Desaturate, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateFresnel:

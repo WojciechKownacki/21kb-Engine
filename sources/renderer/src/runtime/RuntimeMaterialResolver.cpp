@@ -691,6 +691,7 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::Step:
     case RenderMaterialGraphNodeKind::SmoothStep:
     case RenderMaterialGraphNodeKind::If:
+    case RenderMaterialGraphNodeKind::RuntimeSwitch:
     case RenderMaterialGraphNodeKind::Desaturate:
     case RenderMaterialGraphNodeKind::Fresnel:
     case RenderMaterialGraphNodeKind::Negate:
@@ -1343,6 +1344,29 @@ struct MaterialGraphRuntimeValue {
         result = RuntimeValue(selected.value[0], selected.value[1], selected.value[2], selected.value[3], RenderMaterialGraphPinType::Float4);
         result.textureAssetId = selected.textureAssetId;
         result.authored = lhs.authored || rhs.authored || selected.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::RuntimeSwitch: {
+        const MaterialGraphRuntimeValue index = EvaluateGraphInput(materialAsset, node, "index", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue defaultValue = EvaluateGraphInput(materialAsset, node, "default", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case0 = EvaluateGraphInput(materialAsset, node, "case0", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case1 = EvaluateGraphInput(materialAsset, node, "case1", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case2 = EvaluateGraphInput(materialAsset, node, "case2", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue case3 = EvaluateGraphInput(materialAsset, node, "case3", RuntimeValue(0.0F, false), stack);
+        const int selectedIndex = static_cast<int>(std::floor(index.value[0] + 0.5F));
+        const MaterialGraphRuntimeValue* selected = &defaultValue;
+        if (selectedIndex == 0) {
+            selected = &case0;
+        } else if (selectedIndex == 1) {
+            selected = &case1;
+        } else if (selectedIndex == 2) {
+            selected = &case2;
+        } else if (selectedIndex == 3) {
+            selected = &case3;
+        }
+        result = RuntimeValue(selected->value[0], selected->value[1], selected->value[2], selected->value[3], RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = selected->textureAssetId;
+        result.authored = index.authored || selected->authored;
         break;
     }
     case RenderMaterialGraphNodeKind::Desaturate: {
