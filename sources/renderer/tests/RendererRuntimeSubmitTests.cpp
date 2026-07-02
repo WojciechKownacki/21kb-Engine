@@ -2170,6 +2170,120 @@ void RunRendererEnsuresGraphProgramTextureResourcesTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererRoutesGraphBlendModeToTransparentPassTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_blend_pass";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph blend pass test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path materialPath = root / "graph_additive.kbmat";
+    WriteTriangleObj(meshPath);
+
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.blendMode = "additive";
+    material.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.8 0.2 0.1 0.5"));
+    material.graph.nodes.push_back(MakeGraphNode(3U, RenderMaterialGraphNodeKind::ConstantScalar, {}, "0.5"));
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"),
+    };
+    Require(RenderMaterialAssetWriter::Save(materialPath, material), "Graph blend pass test could not save additive graph material");
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph blend pass test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph blend pass test could not register material loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph blend pass test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Graph blend pass test did not discover mesh/material assets");
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph_additive.kbmat");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Graph blend pass test discovered wrong mesh metadata");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Graph blend pass test discovered wrong material metadata");
+    const std::uint64_t materialAssetId = materialMetadata->id.value;
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Additive Material Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshMetadata->id.value,
+        .materialAssetId = materialAssetId,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .scenePassSubmitStats = 2U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 1U,
+        .syncTransformResolvingEntries = 1U,
+    });
+    Require(renderer.Initialize(surface, &config), "Graph blend pass test renderer did not initialize");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 2U,
+            .maxVisibleInstances = 2U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueAndTransparent,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Graph blend pass test did not begin frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph blend pass test did not submit scene");
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Graph blend pass test could not inspect scene resources");
+    const RenderMaterialHandle materialHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(materialHandle);
+    Require(materialHandle.IsValid() && materialResource != nullptr, "Graph blend pass test did not bind material resource");
+    Require(materialResource->graphProgram.alphaMode == RenderMaterialAlphaMode::Blend &&
+            materialResource->alphaMode == RenderMaterialAlphaMode::Blend,
+        "KBMAT-MAT99-25: graph blend mode must drive material alpha mode used by the scene pipeline");
+    Require(materialResource->graphProgram.translucencyBlend == RenderMaterialTranslucencyBlend::Additive &&
+            materialResource->translucencyBlend == RenderMaterialTranslucencyBlend::Additive,
+        "KBMAT-MAT99-25: graph additive blend mode must drive the scene translucency blend state");
+    const std::span<const SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+    Require(passStats.size() == 2U, "KBMAT-MAT99-25: graph blend pass test should report opaque and transparent passes");
+    Require(passStats[0].pass == MeshPassType::BaseOpaque && passStats[0].stats.submittedMeshCount == 0U,
+        "KBMAT-MAT99-25: additive graph material must not submit in the opaque scene pass");
+    Require(passStats[1].pass == MeshPassType::BaseTransparent && passStats[1].stats.submittedMeshCount == 1U &&
+            passStats[1].stats.submittedDrawCallCount == 1U,
+        "KBMAT-MAT99-25: additive graph material must submit in the transparent scene pass");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_material_artifact_reload";
     std::error_code error;
@@ -3477,6 +3591,7 @@ void RunRendererRuntimeSubmitTests() {
 #endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
     RunRendererEnsuresGraphProgramTextureResourcesTest();
+    RunRendererRoutesGraphBlendModeToTransparentPassTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();
     RunInvalidGraphMaterialUsesLastGoodThenRefreshesAfterFixTest();
