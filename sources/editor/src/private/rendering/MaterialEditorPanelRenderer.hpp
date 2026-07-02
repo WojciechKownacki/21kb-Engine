@@ -1234,7 +1234,7 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
         return { "xyz" };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { "rgba" };
+        return { "rgba", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return { "value", "scalar", "xyz", "rgba", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
@@ -2612,6 +2612,10 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     if (command == MaterialEditorGraphMenuCommand::CreateCollectionParameter) {
         haystack += " material parameter collection mpc global parameter global uniform";
     }
+    if (command == MaterialEditorGraphMenuCommand::CreateColor ||
+        command == MaterialEditorGraphMenuCommand::CreateColorParameter) {
+        haystack += " red green blue alpha channel channels";
+    }
     if (command == MaterialEditorGraphMenuCommand::CreateTextureObject) {
         haystack += " texture object parameter texture object sampler object";
     }
@@ -2660,6 +2664,22 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     return sawToken;
 }
 
+[[nodiscard]] inline std::string_view MaterialEditorGraphSemanticChannelPin(std::string_view pin) noexcept {
+    if (pin == "alpha" || pin == "opacity") {
+        return "a";
+    }
+    if (pin == "red") {
+        return "r";
+    }
+    if (pin == "green") {
+        return "g";
+    }
+    if (pin == "blue") {
+        return "b";
+    }
+    return pin;
+}
+
 [[nodiscard]] inline std::optional<std::string> MaterialEditorGraphCompatibleCommandPin(
     const kb::render::RenderMaterialGraphDocument& graph,
     std::uint32_t sourceNodeId,
@@ -2680,6 +2700,19 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     const kb::render::RenderMaterialGraphPinType sourceType =
         kb::render::RenderMaterialGraphPinDataType(*sourceNode, sourcePin, sourceOutput);
     if (sourceOutput) {
+        const std::string_view preferredInputPin = MaterialEditorGraphSemanticChannelPin(sourcePin);
+        if (kb::render::IsRenderMaterialGraphInputPin(*candidateKind, preferredInputPin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                sourceType,
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, preferredInputPin, false))) {
+            return std::string{ preferredInputPin };
+        }
+        if (kb::render::IsRenderMaterialGraphInputPin(*candidateKind, sourcePin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                sourceType,
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, sourcePin, false))) {
+            return std::string{ sourcePin };
+        }
         for (const std::string& inputPin : kb::render::RenderMaterialGraphNodeInputPinNames(*candidateKind)) {
             if (kb::render::AreRenderMaterialGraphPinsCompatible(
                     sourceType,
@@ -2688,6 +2721,19 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
             }
         }
     } else {
+        const std::string_view preferredOutputPin = MaterialEditorGraphSemanticChannelPin(sourcePin);
+        if (kb::render::IsRenderMaterialGraphOutputPin(*candidateKind, preferredOutputPin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, preferredOutputPin, true),
+                sourceType)) {
+            return std::string{ preferredOutputPin };
+        }
+        if (kb::render::IsRenderMaterialGraphOutputPin(*candidateKind, sourcePin) &&
+            kb::render::AreRenderMaterialGraphPinsCompatible(
+                kb::render::RenderMaterialGraphPinDataType(*candidateKind, sourcePin, true),
+                sourceType)) {
+            return std::string{ sourcePin };
+        }
         for (const std::string& outputPin : kb::render::RenderMaterialGraphNodeOutputPinNames(*candidateKind)) {
             if (kb::render::AreRenderMaterialGraphPinsCompatible(
                     kb::render::RenderMaterialGraphPinDataType(*candidateKind, outputPin, true),

@@ -796,6 +796,10 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
         AppendIrPin(irNode, irNode.kind, "rgba", true);
+        AppendIrPin(irNode, irNode.kind, "r", true);
+        AppendIrPin(irNode, irNode.kind, "g", true);
+        AppendIrPin(irNode, irNode.kind, "b", true);
+        AppendIrPin(irNode, irNode.kind, "a", true);
         break;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         AppendIrPin(irNode, irNode.kind, "value", true);

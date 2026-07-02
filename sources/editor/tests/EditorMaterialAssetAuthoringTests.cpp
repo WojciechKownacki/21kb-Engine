@@ -1662,6 +1662,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should expose Sobol by low-discrepancy catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "rgba"),
         "KBMAT-MAT57: Palette search should include node pin aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "alpha"),
+        "KBMAT-MAT57: Palette search should include Constant Color channel pin aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateBool, "constant bool"),
         "KBMAT-MAT57: Palette search should expose Constant Bool");
     kb::editor::tests::Require(!kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureParameter, "world position"),
@@ -1756,6 +1758,19 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommand::CreateColor);
     kb::editor::tests::Require(colorOutputPin.has_value() && *colorOutputPin == "rgba",
         "KBMAT-MAT57: Drag-from-input palette should select the compatible output pin for auto-connect");
+    const std::vector<kb::editor::MaterialEditorGraphMenuCommand> alphaCompatible =
+        kb::editor::MaterialEditorGraphCompatibleCommands(graph, 1U, "alpha", false);
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphCommandInList(alphaCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateColor),
+        "KBMAT-MAT57: Drag-from-alpha palette should list Constant Color because its alpha channel is a real output pin");
+    const std::optional<std::string> colorAlphaOutputPin = kb::editor::MaterialEditorGraphCompatibleCommandPin(
+        graph,
+        1U,
+        "alpha",
+        false,
+        kb::editor::MaterialEditorGraphMenuCommand::CreateColor);
+    kb::editor::tests::Require(colorAlphaOutputPin.has_value() && *colorAlphaOutputPin == "a",
+        "KBMAT-MAT57: Drag-from-alpha palette should prefer Constant Color's alpha output pin for auto-connect");
 
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -2272,7 +2287,8 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
     const kb::render::RenderMaterialGraphDocument& graphAfterConnect = materialEditor.WorkingCopy()->graph;
     const std::optional<RECT> colorRect = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graphAfterConnect, colorNodeId);
     kb::editor::tests::Require(colorRect.has_value(), "KBMAT-MAT59: Color node rect should resolve for pin hit-test");
-    const POINT colorPin = kb::editor::MaterialEditorPanelOutputPinPoint(*colorRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 0U, 1U);
+    const std::size_t colorOutputPinCount = kb::editor::MaterialEditorPanelOutputPins(kb::render::RenderMaterialGraphNodeKind::ConstantColor).size();
+    const POINT colorPin = kb::editor::MaterialEditorPanelOutputPinPoint(*colorRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 0U, colorOutputPinCount);
     const std::optional<kb::editor::MaterialEditorGraphPinHit> colorHit =
         kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graphAfterConnect, colorPin.x, colorPin.y);
     kb::editor::tests::Require(colorHit.has_value() &&
@@ -2281,6 +2297,15 @@ void RunMaterialEditorGraphPinTypeUiModelTest() {
             colorHit->pin == "rgba" &&
             colorHit->type == kb::render::RenderMaterialGraphPinType::Color,
         "KBMAT-MAT59: Graph pin hit-test should return the color output pin and its type");
+    const POINT colorAlphaPin = kb::editor::MaterialEditorPanelOutputPinPoint(*colorRect, kb::render::RenderMaterialGraphNodeKind::ConstantColor, 4U, colorOutputPinCount);
+    const std::optional<kb::editor::MaterialEditorGraphPinHit> colorAlphaHit =
+        kb::editor::MaterialEditorPanelRenderer::GraphPinAt(content, graphAfterConnect, colorAlphaPin.x, colorAlphaPin.y);
+    kb::editor::tests::Require(colorAlphaHit.has_value() &&
+            colorAlphaHit->nodeId == colorNodeId &&
+            colorAlphaHit->direction == kb::editor::MaterialEditorGraphPinDirection::Output &&
+            colorAlphaHit->pin == "a" &&
+            colorAlphaHit->type == kb::render::RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT59: Graph pin hit-test should expose Constant Color's alpha channel output pin");
 
     const std::optional<RECT> textureRect = kb::editor::MaterialEditorPanelRenderer::GraphNodeRect(content, graphAfterConnect, textureNodeId);
     kb::editor::tests::Require(textureRect.has_value(), "KBMAT-MAT59: Texture node rect should resolve for pin hit-test");
