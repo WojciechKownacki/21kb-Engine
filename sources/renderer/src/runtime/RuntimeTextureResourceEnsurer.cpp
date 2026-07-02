@@ -121,6 +121,9 @@ void RuntimeTextureResourceEnsurer::Ensure(
                 ensureTexture(slot.assetId, RenderTextureBindingColorSpace(slot.policy.expectedColorSpace));
             }
         }
+        for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
+            ensureTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
+        }
     }
 }
 

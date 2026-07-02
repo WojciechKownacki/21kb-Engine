@@ -2037,6 +2037,139 @@ void RunRendererReloadsChangedRuntimeMaterialAssetTest() {
     std::filesystem::remove_all(root, error);
 }
 
+void RunRendererEnsuresGraphProgramTextureResourcesTest() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_texture_resources";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    Require(!error, "Graph texture resource test could not create temp root");
+
+    const std::filesystem::path meshPath = root / "triangle.obj";
+    const std::filesystem::path texturePath = root / "graph_specular.kbtex";
+    const std::filesystem::path materialPath = root / "graph_texture_only.kbmat";
+    WriteTriangleObj(meshPath);
+    WriteTexture(texturePath, 220U, 64U, 32U);
+
+    kb::scene::Scene scene;
+    kb::assets::AssetManager& manager = scene.Assets().Manager();
+    Require(manager.RegisterLoader(std::make_unique<RenderMeshAssetLoader>()), "Graph texture resource test could not register mesh loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderMaterialAssetLoader>()), "Graph texture resource test could not register material loader");
+    Require(manager.RegisterLoader(std::make_unique<RenderTextureAssetLoader>()), "Graph texture resource test could not register texture loader");
+    Require(manager.Mounts().Mount("Game", root), "Graph texture resource test could not mount asset root");
+    Require(manager.DiscoverMountedAssets() >= 2U, "Graph texture resource test did not discover mesh and texture assets");
+
+    const kb::assets::AssetMetadata* meshMetadata = manager.Registry().FindByPath("/Game/triangle.obj");
+    const kb::assets::AssetMetadata* textureMetadata = manager.Registry().FindByPath("/Game/graph_specular.kbtex");
+    Require(meshMetadata != nullptr && meshMetadata->type == "RenderMesh", "Graph texture resource test discovered wrong mesh metadata");
+    Require(textureMetadata != nullptr && textureMetadata->type == "RenderTexture", "Graph texture resource test discovered wrong texture metadata");
+    const std::uint64_t meshAssetId = meshMetadata->id.value;
+    const std::uint64_t textureAssetId = textureMetadata->id.value;
+
+    RenderMaterialAssetData material{};
+    material.graph = MakeDefaultRenderMaterialGraphDocument();
+    material.graph.nodes.push_back(MakeGraphNode(2U, RenderMaterialGraphNodeKind::ConstantColor, {}, "0.18 0.24 0.32 1"));
+    RenderMaterialGraphNode textureParameter = MakeGraphNode(3U, RenderMaterialGraphNodeKind::ParameterTexture, "graphSpecularTexture");
+    textureParameter.parameter.textureRole = "baseColor";
+    textureParameter.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;
+    material.graph.nodes.push_back(std::move(textureParameter));
+    material.graph.nodes.push_back(MakeGraphNode(4U, RenderMaterialGraphNodeKind::TextureSample));
+    material.graph.links = {
+        MakeGraphLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::ParameterTexture, 3U, "texture", RenderMaterialGraphNodeKind::TextureSample, 4U, "texture"),
+        MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 4U, "r", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "specular"),
+    };
+    material.graphParameterValues.push_back(MakeTextureGraphValue("graphSpecularTexture", textureAssetId));
+    Require(RenderMaterialAssetWriter::Save(materialPath, material), "Graph texture resource test could not save graph material");
+    Require(manager.DiscoverMountedAssets() >= 3U, "Graph texture resource test did not discover graph material asset");
+    const kb::assets::AssetMetadata* materialMetadata = manager.Registry().FindByPath("/Game/graph_texture_only.kbmat");
+    Require(materialMetadata != nullptr && materialMetadata->type == "RenderMaterial", "Graph texture resource test discovered wrong material metadata");
+    const std::uint64_t materialAssetId = materialMetadata->id.value;
+
+    const kb::scene::SceneEntity entity = scene.Entities().CreateEntity(kb::scene::SceneObjectDesc{
+        .name = "Graph Texture Resource Mesh",
+        .transform = TransformAt(0.0F, 0.0F, 0.0F),
+    });
+    scene.Components().MeshRenderers().Set(entity, kb::scene::MeshRendererComponent{
+        .meshAssetId = meshAssetId,
+        .materialAssetId = materialAssetId,
+    });
+
+    HeadlessSurface surface;
+    DisplayConfig config{};
+    config.allowHeadlessNoop = true;
+    config.preferredBgfxRendererType = static_cast<std::int32_t>(bgfx::RendererType::Noop);
+
+    Renderer renderer;
+    renderer.ReserveRuntimeSceneResources(Renderer::RuntimeSceneResourceReserveDesc{
+        .sceneCount = 1U,
+        .cachedMeshes = 1U,
+        .cachedMaterials = 1U,
+        .cachedTextures = 1U,
+        .frameReferencedMeshes = 1U,
+        .frameReferencedMaterials = 1U,
+        .frameReferencedTextures = 1U,
+        .scenePassSubmitStats = 1U,
+        .renderSceneMeshProxies = 1U,
+        .renderSceneDrawGroupKeys = 1U,
+        .meshResourceSlots = 1U,
+        .materialResourceSlots = 1U,
+        .textureResourceSlots = 1U,
+        .meshBindings = 1U,
+        .materialBindings = 1U,
+        .textureBindings = 1U,
+        .syncMeshProxies = 1U,
+        .syncTransformCacheEntries = 1U,
+        .syncTransformResolvingEntries = 1U,
+    });
+    Require(renderer.Initialize(surface, &config), "Graph texture resource test renderer did not initialize");
+
+    const RenderSceneSubmitDesc desc{
+        .target = RenderSceneTargetBinding{
+            .frameBuffer = BGFX_INVALID_HANDLE,
+            .colorTexture = BGFX_INVALID_HANDLE,
+            .viewport = RenderViewportDesc{
+                .id = RenderViewportId{ 1U },
+                .extent = RenderExtent{ 64U, 64U },
+                .viewportIndex = 0U,
+            },
+        },
+        .cameraOverride = IdentityCamera(),
+        .drawBudget = SceneRenderDrawBudget{
+            .maxDrawCommands = 2U,
+            .maxVisibleInstances = 2U,
+        },
+        .meshPassMode = SceneRenderMeshPassMode::OpaqueOnly,
+        .shadowPassEnabled = false,
+    };
+
+    Require(renderer.BeginFrame(), "Graph texture resource test did not begin frame");
+    Require(renderer.SubmitScene(scene, desc), "Graph texture resource test did not submit scene");
+    const SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
+    const RenderResourceRegistry* resources = renderer.SceneResources();
+    Require(resourceMap != nullptr && resources != nullptr, "Graph texture resource test could not inspect scene resources");
+    const RenderMaterialHandle materialHandle = resourceMap->ResolveMaterial(materialAssetId);
+    const RenderMaterialResource* materialResource = resources->FindMaterial(materialHandle);
+    Require(materialHandle.IsValid() && materialResource != nullptr, "Graph texture resource test did not bind material resource");
+    Require(materialResource->albedoTextureAssetId == 0U,
+        "KBMAT-MAT99-16: graph-only texture test must not pass through the legacy albedo texture slot");
+    const auto graphTextureIt = std::find_if(
+        materialResource->graphProgram.textures.begin(),
+        materialResource->graphProgram.textures.end(),
+        [textureAssetId](const RenderMaterialGraphTextureBinding& binding) {
+            return binding.stableId == "graphSpecularTexture" && binding.textureAssetId == textureAssetId;
+        });
+    Require(graphTextureIt != materialResource->graphProgram.textures.end(),
+        "KBMAT-MAT99-16: graph material did not expose the authored texture parameter binding");
+    const RenderTextureHandle textureHandle = resourceMap->ResolveTexture(textureAssetId, graphTextureIt->colorSpace);
+    const RenderTextureResource* textureResource = resources->FindTexture(textureHandle);
+    Require(textureHandle.IsValid() && textureResource != nullptr,
+        "KBMAT-MAT99-16: runtime submit must ensure textures referenced only by graphProgram.textures");
+
+    renderer.EndFrame();
+    renderer.Shutdown();
+    std::filesystem::remove_all(root, error);
+}
+
 void RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "21kb_renderer_graph_material_artifact_reload";
     std::error_code error;
@@ -3343,6 +3476,7 @@ void RunRendererRuntimeSubmitTests() {
     RunRendererSceneRendersMultipleCookedGraphMaterialsTest();
 #endif
     RunRendererReloadsChangedRuntimeMaterialAssetTest();
+    RunRendererEnsuresGraphProgramTextureResourcesTest();
     RunGraphBackedMaterialArtifactDependencyReloadInvalidatesOnlyTouchedBindingTest();
     RunCookedGraphBackedMaterialRuntimeDoesNotCompileGraphTest();
     RunInvalidGraphMaterialUsesLastGoodThenRefreshesAfterFixTest();
