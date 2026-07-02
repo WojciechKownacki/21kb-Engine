@@ -1861,7 +1861,7 @@ void DrawGraphNode(
     GdiDrawing::FillRectColor(dc, RECT{ rect.left + 2, rect.top + headerHeight, rect.right - 2, rect.top + headerHeight + 1 }, RGB(18, 18, 18));
     StrokeRoundedRect(dc, rect, border, cornerDiameter, selected ? 2 : 1);
 
-    std::string title = GraphNodeTitle(node.kind);
+    std::string title = node.parameter.displayName.empty() ? GraphNodeTitle(node.kind) : node.parameter.displayName;
     const std::string_view supportTag = kb::render::RenderMaterialGraphNodeSupportShortTag(node.kind);
     if (!supportTag.empty()) {
         title += "  [";
@@ -2745,6 +2745,9 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
             sceneContext.MaterialEditor().Parameters(),
             sceneContext.MaterialEditor().SelectedNodeId(),
             nodeProperties);
+        if (sceneContext.MaterialEditor().SelectedNodeId() != 0U) {
+            details.title = sceneContext.MaterialEditor().GraphNodeDisplayName(sceneContext.MaterialEditor().SelectedNodeId());
+        }
         details.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
         details.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
         details.instanceStaticSwitchRows = sceneContext.MaterialEditor().InstanceStaticSwitchRows();

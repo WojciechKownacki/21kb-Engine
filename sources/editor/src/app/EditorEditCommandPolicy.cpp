@@ -7,7 +7,7 @@ namespace {
 
 [[nodiscard]] bool TextInputActive(const EditorSceneContext& sceneContext) noexcept {
     return sceneContext.Inspector().IsTextEditing() || sceneContext.AssetBrowser().IsTextEditing() || sceneContext.IsHierarchyRenaming() ||
-        sceneContext.IsHierarchySearchFocused() || sceneContext.IsMaterialGraphConstantInlineEditing();
+        sceneContext.IsHierarchySearchFocused() || sceneContext.IsMaterialGraphConstantInlineEditing() || sceneContext.IsMaterialGraphNodeRenameEditing();
 }
 
 } // namespace

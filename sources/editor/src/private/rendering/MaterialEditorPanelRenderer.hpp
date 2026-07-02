@@ -148,6 +148,7 @@ struct MaterialEditorPanelParameterHit {
 
 enum class MaterialEditorGraphNodePropertyHitKind : std::uint8_t {
     None,
+    TextField,
     Slider,
     ColorPicker,
     EnumField,
@@ -823,6 +824,9 @@ inline std::optional<MaterialEditorGraphNodePropertyHit> MaterialEditorPanelRend
                 .componentIndex = property.componentIndex,
             };
             switch (property.kind) {
+            case MaterialEditorGraphNodePropertyKind::Text:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::TextField;
+                break;
             case MaterialEditorGraphNodePropertyKind::Numeric:
                 hit.kind = MaterialEditorGraphNodePropertyHitKind::Slider;
                 break;
