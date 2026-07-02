@@ -1750,6 +1750,9 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Fresnel") == RenderMaterialGraphNodeKind::Fresnel, "Material graph surface utility should parse Fresnel node");
     Require(ParseRenderMaterialGraphNodeKind("ObjectBounds") == RenderMaterialGraphNodeKind::ObjectBounds, "MAT-46 ObjectBounds must parse as a world/object-space node");
     Require(ParseRenderMaterialGraphNodeKind("ObjectOrientation") == RenderMaterialGraphNodeKind::ObjectOrientation, "MAT-46 ObjectOrientation must parse as a world/object-space node");
+    Require(ParseRenderMaterialGraphNodeKind("TwoSidedSign") == RenderMaterialGraphNodeKind::TwoSidedSign, "MAT-46 TwoSidedSign must parse as a world/object-space node");
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TwoSidedSign, "value", true) == RenderMaterialGraphPinType::Float,
+        "MAT-46 TwoSidedSign.value must be a scalar float output");
     Require(ParseRenderMaterialGraphNodeKind("PerInstanceFadeAmount") == RenderMaterialGraphNodeKind::PerInstanceFadeAmount, "MAT-47 PerInstanceFadeAmount must parse as a vertex/instance-data node");
     Require(ParseRenderMaterialGraphNodeKind("PerInstanceCustomData0") == RenderMaterialGraphNodeKind::PerInstanceCustomData, "MAT-47 PerInstanceCustomData alias must parse as the custom-data node");
     Require(ParseRenderMaterialGraphNodeKind("PreSkinnedLocalPosition") == RenderMaterialGraphNodeKind::PreSkinnedPosition, "MAT-47 PreSkinnedLocalPosition alias must parse as PreSkinnedPosition");
@@ -3818,6 +3821,7 @@ void RunMaterialGraphContextContractDefaultsTest() {
         "KBMAT-MAT01: MaterialGraphContext default lightVector must be +Y");
     Require(NearlyEqual(ctx.viewSize[0], 0.0F) && NearlyEqual(ctx.viewSize[1], 0.0F),
         "KBMAT-MAT01: MaterialGraphContext default viewSize must be (0,0)");
+    Require(NearlyEqual(ctx.twoSidedSign, 1.0F), "KBMAT-MAT01: MaterialGraphContext default twoSidedSign must be front-facing (+1)");
     Require(NearlyEqual(ctx.fragmentDepth, 0.0F), "KBMAT-MAT01: MaterialGraphContext default fragmentDepth must be 0.0");
 
     const MaterialGraphContext fromFunc = DefaultMaterialGraphContext();
@@ -3825,7 +3829,8 @@ void RunMaterialGraphContextContractDefaultsTest() {
             NearlyEqual(fromFunc.objectOrientation[2], ctx.objectOrientation[2]) &&
             NearlyEqual(fromFunc.perInstanceFadeAmount, ctx.perInstanceFadeAmount) &&
             NearlyEqual(fromFunc.deltaTime, ctx.deltaTime) &&
-            NearlyEqual(fromFunc.dynamicParameter[3], ctx.dynamicParameter[3]),
+            NearlyEqual(fromFunc.dynamicParameter[3], ctx.dynamicParameter[3]) &&
+            NearlyEqual(fromFunc.twoSidedSign, ctx.twoSidedSign),
         "KBMAT-MAT01: DefaultMaterialGraphContext() must return values matching struct member initializers");
 }
 
@@ -4485,6 +4490,13 @@ void RunMaterialWorldSpaceNodeCodegenTest() {
     const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty);
     Require(viewSize.Succeeded() && viewSize.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewSize must emit ctx.viewSize");
     Require(viewProperty.Succeeded() && viewProperty.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewProperty must emit a view property (ctx.viewSize)");
+
+    RenderMaterialGraphDocument twoSidedSignGraph = MakeDefaultRenderMaterialGraphDocument();
+    twoSidedSignGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TwoSidedSign });
+    twoSidedSignGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TwoSidedSign, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    const RenderMaterialGraphCompileResult twoSidedSign = CompileRenderMaterialGraphToShaderSource(twoSidedSignGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0463U });
+    Require(twoSidedSign.Succeeded() && twoSidedSign.shader.source.find("ctx.twoSidedSign") != std::string::npos,
+        "KBMAT-MAT46: TwoSidedSign must emit ctx.twoSidedSign");
 }
 
 void RunMaterialGraphReflectionUniformAndTextureCountTest() {
