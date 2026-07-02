@@ -65,6 +65,7 @@ public:
     void EnsureSceneResources(const RuntimeRenderResourceEnsureContext& context);
     void ReleaseScene(kb::scene::Scene& scene, SceneRenderer* sceneRenderer) noexcept;
     void DestroyAll(SceneRenderer* sceneRenderer) noexcept;
+    void InvalidateMaterials(SceneRenderer* sceneRenderer) noexcept;
     void PruneUnused(
         std::span<const kb::scene::Scene*> submittedScenes,
         const RuntimeFrameResourceReferences& frameReferences,

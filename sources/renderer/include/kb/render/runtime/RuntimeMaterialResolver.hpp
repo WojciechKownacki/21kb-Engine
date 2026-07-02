@@ -98,6 +98,7 @@ class RuntimeMaterialResolver {
 public:
     RuntimeMaterialResolver() = default;
     explicit RuntimeMaterialResolver(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
+    void SetGraphBuildContext(RenderMaterialGraphBuildContext graphBuildContext) noexcept;
 
     [[nodiscard]] static std::uint64_t EmbeddedMaterialAssetId(std::uint64_t meshAssetId, std::uint32_t slotIndex, std::string_view materialName) noexcept;
     [[nodiscard]] static std::uint64_t MaterialRuntimeContentHash(

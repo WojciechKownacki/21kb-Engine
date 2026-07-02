@@ -42,13 +42,19 @@ private:
     bgfx::UniformHandle albedoSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle normalSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle materialSampler_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthSampler_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightDirKindUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle lightPositionRangeUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightColorIntensityUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle lightSpotUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle lightParamsUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle ambientColorUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentZenithUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentGroundUniform_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle environmentParamsUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle cameraPositionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle inverseViewProjectionUniform_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle depthParamsUniform_ = BGFX_INVALID_HANDLE;
 };
 
 } // namespace kb::render

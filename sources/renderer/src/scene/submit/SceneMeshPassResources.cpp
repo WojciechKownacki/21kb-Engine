@@ -432,10 +432,8 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                 resolution.program = graphHandle;
                 resolution.graphProgram = true;
                 resolution.status = SceneRenderMaterialProgramStatus::GraphReady;
-            } else if (pass != MeshPassType::GBuffer) {
-                resolution.fellBackToBuiltin = true;
             } else {
-                resolution.program = BGFX_INVALID_HANDLE;
+                resolution.fellBackToBuiltin = true;
             }
         }
     }
@@ -470,57 +468,20 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         .whiteTexture = fallbackWhiteTexture_,
         .normalTexture = fallbackNormalTexture_,
     };
-    if (desc.pass == MeshPassType::ShadowDepth) {
-        const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
-            material,
-            desc.resources,
-            desc.resourceMap,
-            fallbacks);
-        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
-        bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
-        bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
-        bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
+    if (resolution.graphProgram && material != nullptr) {
+        bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
         bgfx::setUniform(timeUniform_, desc.frameTime.data());
         bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
-        return resolution.program;
-    }
+        bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardLights);
+        bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardLights);
+        bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardLights);
+        bgfx::setUniform(lightSpotUniform_, desc.lighting.spot.data(), kMaxSceneForwardLights);
+        bgfx::setUniform(lightParamsUniform_, desc.lighting.params.data());
+        bgfx::setUniform(ambientColorUniform_, desc.lighting.ambient.data());
+        bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
+        bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
+        bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
 
-    const SceneMeshMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::Resolve(
-        material,
-        desc.resources,
-        desc.resourceMap,
-        fallbacks);
-    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
-    bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
-    bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
-    bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
-
-    const std::array<float, 4> disabledShadowParams{};
-    bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);
-    bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
-    bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
-    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
-    bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
-    bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
-    bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
-    bgfx::setUniform(timeUniform_, desc.frameTime.data());
-    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
-    bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightSpotUniform_, desc.lighting.spot.data(), kMaxSceneForwardLights);
-    bgfx::setUniform(lightParamsUniform_, desc.lighting.params.data());
-    bgfx::setUniform(ambientColorUniform_, desc.lighting.ambient.data());
-    bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
-    bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
-    bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
-    bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowParams.data());
-    bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
-
-    // MAT-78/#16: bind the graph material's own textures at their graph slots (>= 6). The builtin slots
-    // (0-5) above are for the flattened PBR path; a real graph shader samples its own SAMPLER2D(name, slot),
-    // so without this the graph texture is never bound and the surface renders black.
-    if (resolution.graphProgram && material != nullptr) {
         for (const RenderMaterialGraphUniformBinding& graphUniform : material->graphProgram.uniforms) {
             std::array<float, 4U> value{
                 graphUniform.value[0],
@@ -573,7 +534,57 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
             }
             bgfx::setTexture(5U, depthSampler, desc.sceneDepthTexture);
         }
+
+        return resolution.program;
     }
+
+    if (desc.pass == MeshPassType::ShadowDepth) {
+        const SceneMeshShadowMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::ResolveShadow(
+            material,
+            desc.resources,
+            desc.resourceMap,
+            fallbacks);
+        bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+        bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
+        bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
+        bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
+        bgfx::setUniform(timeUniform_, desc.frameTime.data());
+        bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
+        return resolution.program;
+    }
+
+    const SceneMeshMaterialBinding materialBinding = SceneMeshMaterialBindingResolver::Resolve(
+        material,
+        desc.resources,
+        desc.resourceMap,
+        fallbacks);
+    bgfx::setTexture(0U, albedoSampler_, materialBinding.albedoTexture);
+    bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
+    bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
+    bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
+
+    const std::array<float, 4> disabledShadowParams{};
+    bgfx::setTexture(1U, normalSampler_, materialBinding.normalTexture);
+    bgfx::setTexture(2U, metallicRoughnessSampler_, materialBinding.metallicRoughnessTexture);
+    bgfx::setTexture(3U, occlusionSampler_, materialBinding.occlusionTexture);
+    bgfx::setTexture(4U, emissiveSampler_, materialBinding.emissiveTexture);
+    bgfx::setTexture(5U, shadowSampler_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->depthTexture : fallbackWhiteTexture_);
+    bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
+    bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
+    bgfx::setUniform(timeUniform_, desc.frameTime.data());
+    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
+    bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardLights);
+    bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardLights);
+    bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardLights);
+    bgfx::setUniform(lightSpotUniform_, desc.lighting.spot.data(), kMaxSceneForwardLights);
+    bgfx::setUniform(lightParamsUniform_, desc.lighting.params.data());
+    bgfx::setUniform(ambientColorUniform_, desc.lighting.ambient.data());
+    bgfx::setUniform(environmentZenithUniform_, desc.lighting.environmentZenith.data());
+    bgfx::setUniform(environmentGroundUniform_, desc.lighting.environmentGround.data());
+    bgfx::setUniform(environmentParamsUniform_, desc.lighting.environmentParams.data());
+    bgfx::setUniform(shadowViewProjUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->lightViewProjection.data() : disabledShadowParams.data());
+    bgfx::setUniform(shadowParamsUniform_, desc.shadowMap != nullptr && desc.shadowMap->IsValid() ? desc.shadowMap->params.data() : disabledShadowParams.data());
+
     return resolution.program;
 }
 

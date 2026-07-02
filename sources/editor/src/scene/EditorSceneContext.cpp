@@ -185,6 +185,33 @@ constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverrid
     return context;
 }
 
+[[nodiscard]] kb::render::RenderMaterialGraphShadingPath MaterialGraphShadingPathForProject(
+    kb::project::ProjectSceneLightingPath path) noexcept {
+    switch (path) {
+    case kb::project::ProjectSceneLightingPath::Deferred:
+        return kb::render::RenderMaterialGraphShadingPath::Deferred;
+    case kb::project::ProjectSceneLightingPath::Forward:
+        return kb::render::RenderMaterialGraphShadingPath::Forward;
+    }
+    return kb::render::RenderMaterialGraphShadingPath::Forward;
+}
+
+[[nodiscard]] kb::render::RenderMaterialGraphBuildContext SceneMaterialGraphBuildContext(
+    kb::assets::AssetId assetId,
+    const kb::assets::AssetMetadata* metadata,
+    kb::project::ProjectSceneLightingPath lightingPath) noexcept {
+    kb::render::RenderMaterialGraphBuildContext context{};
+    context.assetId = assetId.value;
+    if (metadata != nullptr) {
+        context.sourcePath = metadata->virtualPath.generic_string();
+    }
+    context.qualityLevel = kb::render::RenderMaterialGraphQualityLevel::High;
+    context.featureLevel = kb::render::RenderMaterialGraphFeatureLevel::Sm5;
+    context.shadingPath = MaterialGraphShadingPathForProject(lightingPath);
+    context.shaderStage = kb::render::RenderMaterialGraphShaderStage::Fragment;
+    return context;
+}
+
 [[nodiscard]] std::filesystem::path SceneMaterialWorkingCopyRuntimePath(kb::assets::AssetId materialAssetId) {
     return std::filesystem::temp_directory_path() / ("21kb_scene_material_working_" + std::to_string(materialAssetId.value) + ".kbmat");
 }
@@ -5205,7 +5232,13 @@ bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLi
         return false;
     }
     project_.sceneLightingPath = path;
-    return SaveProjectDescriptor();
+    const bool saved = SaveProjectDescriptor();
+    if (saved) {
+        sceneGraphCookPending_ = true;
+        RequestOpenMaterialSceneGraphCook();
+        MarkSceneRenderDirty();
+    }
+    return saved;
 }
 
 bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
@@ -6283,6 +6316,25 @@ void EditorSceneContext::ResetSceneEditState() {
     scene_->Runtime().SynchronizeTransforms();
 }
 
+void EditorSceneContext::RequestOpenMaterialSceneGraphCook() {
+    if (scene_ == nullptr || materialGraphCookService_ == nullptr) {
+        return;
+    }
+    const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+    if (!openAsset.IsValid() || !materialEditor_.WorkingCopy().has_value()) {
+        return;
+    }
+    const kb::render::RenderMaterialAssetData& material = *materialEditor_.WorkingCopy();
+    if (material.graph.links.empty() && material.graph.nodes.size() <= 1U) {
+        return;
+    }
+    const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(openAsset);
+    static_cast<void>(materialGraphCookService_->RequestCook(
+        openAsset,
+        material,
+        SceneMaterialGraphBuildContext(openAsset, metadata, project_.sceneLightingPath)));
+}
+
 void EditorSceneContext::CookSceneGraphMaterials() {
     if (scene_ == nullptr || materialGraphCookService_ == nullptr) {
         return;
@@ -6310,8 +6362,10 @@ void EditorSceneContext::CookSceneGraphMaterials() {
 
     for (const std::uint64_t idValue : referenced) {
         const kb::assets::AssetId id{ idValue };
-        // The open material is already cooked from its live working copy (MAT-30); skip it here.
+        // The open material must be cooked from its live working copy, but with the scene/runtime
+        // graph context rather than the material-preview context.
         if (materialEditor_.OpenAssetId() == id) {
+            RequestOpenMaterialSceneGraphCook();
             continue;
         }
         const std::optional<kb::render::RenderMaterialAssetData> material = ReadMaterialDocumentAsset(id);
@@ -6323,7 +6377,11 @@ void EditorSceneContext::CookSceneGraphMaterials() {
         if (material->graph.links.empty() && material->graph.nodes.size() <= 1U) {
             continue;
         }
-        static_cast<void>(materialGraphCookService_->RequestCook(id, *material));
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
+        static_cast<void>(materialGraphCookService_->RequestCook(
+            id,
+            *material,
+            SceneMaterialGraphBuildContext(id, metadata, project_.sceneLightingPath)));
     }
 }
 

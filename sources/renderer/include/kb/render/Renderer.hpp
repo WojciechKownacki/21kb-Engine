@@ -261,6 +261,7 @@ private:
     SceneRenderDrawBudget defaultSceneDrawBudget_{};
     SceneRenderLightingConfig defaultSceneLightingConfig_{};
     ScenePostProcessSettings defaultPostProcessSettings_{};
+    std::optional<SceneRenderLightingPath> lastRuntimeMaterialLightingPath_;
     std::string graphShaderCacheRoot_;
     float frameDeltaSeconds_ = 1.0F / 60.0F;
     bool gpuDrivenRuntimeDispatchEnabled_ = true;
