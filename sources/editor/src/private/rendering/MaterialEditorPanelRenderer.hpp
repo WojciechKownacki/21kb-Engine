@@ -141,6 +141,7 @@ struct MaterialEditorPanelDetailsRows {
     MaterialEditorShaderViewerModel shaderViewer;
     std::vector<MaterialEditorFindResult> findResults;
     std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
+    std::vector<std::string> materialDiffRows;
     std::vector<MaterialDebugChannelRow> debugChannelRows;
     std::vector<std::string> parameterRows;
     std::vector<std::string> textureSlotRows;
