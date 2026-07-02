@@ -4017,6 +4017,14 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangent, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateArcTangent2:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangent2, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcSineFast:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcSineFast, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcCosineFast:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcCosineFast, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcTangentFast:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangentFast, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2Fast:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateClamp:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Clamp, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateLerp:

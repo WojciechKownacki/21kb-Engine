@@ -562,8 +562,12 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ArcSine:
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
         return { { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
         return { { "y", "Y" }, { "x", "X" } };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { { "value", "Value" }, { "min", "Min" }, { "max", "Max" } };
@@ -653,6 +657,10 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { { "value", "Value" } };
@@ -899,6 +907,14 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "Atan";
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
         return "Atan2";
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+        return "Asin Fast";
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+        return "Acos Fast";
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
+        return "Atan Fast";
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
+        return "Atan2 Fast";
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case kb::render::RenderMaterialGraphNodeKind::Lerp:

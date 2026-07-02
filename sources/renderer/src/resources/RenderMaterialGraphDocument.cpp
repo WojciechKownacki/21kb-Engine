@@ -677,10 +677,14 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ArcSine:
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
         AppendIrPin(irNode, irNode.kind, "value", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
         AppendIrPin(irNode, irNode.kind, "y", false);
         AppendIrPin(irNode, irNode.kind, "x", false);
         AppendIrPin(irNode, irNode.kind, "value", true);
@@ -2140,6 +2144,24 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             ", " +
             CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
             ")";
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+        return "kbAsinFast(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ")";
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+        return "kbAcosFast(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
+            ")";
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+        return "kbAtanFast(" +
+            CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ")";
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
+        return "kbAtan2Fast(" +
+            CompileInputExpression(cg, node, "y", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
+            ", " +
+            CompileInputExpression(cg, node, "x", RenderMaterialGraphPinType::Float4, "vec4_splat(1.0)") +
+            ")";
     case RenderMaterialGraphNodeKind::Clamp:
         return "clamp(" +
             CompileInputExpression(cg, node, "value", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
@@ -2419,6 +2441,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -2601,6 +2627,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -2741,6 +2771,10 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -3916,6 +3950,14 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "ArcTangent";
     case RenderMaterialGraphNodeKind::ArcTangent2:
         return "ArcTangent2";
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+        return "ArcSineFast";
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+        return "ArcCosineFast";
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+        return "ArcTangentFast";
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
+        return "ArcTangent2Fast";
     case RenderMaterialGraphNodeKind::Clamp:
         return "Clamp";
     case RenderMaterialGraphNodeKind::Lerp:
@@ -4229,6 +4271,18 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "ArcTangent2") || EqualsIgnoreCase(text, "Arctangent2") || EqualsIgnoreCase(text, "Atan2")) {
         return RenderMaterialGraphNodeKind::ArcTangent2;
+    }
+    if (EqualsIgnoreCase(text, "ArcSineFast") || EqualsIgnoreCase(text, "ArcsineFast") || EqualsIgnoreCase(text, "AsinFast")) {
+        return RenderMaterialGraphNodeKind::ArcSineFast;
+    }
+    if (EqualsIgnoreCase(text, "ArcCosineFast") || EqualsIgnoreCase(text, "ArccosineFast") || EqualsIgnoreCase(text, "AcosFast")) {
+        return RenderMaterialGraphNodeKind::ArcCosineFast;
+    }
+    if (EqualsIgnoreCase(text, "ArcTangentFast") || EqualsIgnoreCase(text, "ArctangentFast") || EqualsIgnoreCase(text, "AtanFast")) {
+        return RenderMaterialGraphNodeKind::ArcTangentFast;
+    }
+    if (EqualsIgnoreCase(text, "ArcTangent2Fast") || EqualsIgnoreCase(text, "Arctangent2Fast") || EqualsIgnoreCase(text, "Atan2Fast")) {
+        return RenderMaterialGraphNodeKind::ArcTangent2Fast;
     }
     if (EqualsIgnoreCase(text, "Clamp")) {
         return RenderMaterialGraphNodeKind::Clamp;
@@ -4646,6 +4700,10 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -4933,6 +4991,10 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ArcCosine,
         RenderMaterialGraphNodeKind::ArcTangent,
         RenderMaterialGraphNodeKind::ArcTangent2,
+        RenderMaterialGraphNodeKind::ArcSineFast,
+        RenderMaterialGraphNodeKind::ArcCosineFast,
+        RenderMaterialGraphNodeKind::ArcTangentFast,
+        RenderMaterialGraphNodeKind::ArcTangent2Fast,
         RenderMaterialGraphNodeKind::ConstantVector2,
         RenderMaterialGraphNodeKind::ConstantBool,
         RenderMaterialGraphNodeKind::Time,
@@ -5700,6 +5762,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
     bool usesSceneDepth = false;
     bool usesSceneColor = false;
     bool usesHsv = false;
+    bool usesFastTrig = false;
     bool usesBlackBody = false;
     bool usesNoise = false;
     bool usesVertexColor = false;
@@ -5734,6 +5797,12 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         case RenderMaterialGraphNodeKind::RgbToHsv:
             // MAT-50: the HSV<->RGB conversions call shared helper functions emitted into the shader prelude.
             usesHsv = true;
+            break;
+        case RenderMaterialGraphNodeKind::ArcSineFast:
+        case RenderMaterialGraphNodeKind::ArcCosineFast:
+        case RenderMaterialGraphNodeKind::ArcTangentFast:
+        case RenderMaterialGraphNodeKind::ArcTangent2Fast:
+            usesFastTrig = true;
             break;
         case RenderMaterialGraphNodeKind::BlackBody:
             // MAT-50: BlackBody calls a shared Planckian-locus helper emitted into the shader prelude.
@@ -5955,6 +6024,34 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         source += "    float d = q.x - min(q.w, q.y);\n";
         source += "    float e = 1.0e-10;\n";
         source += "    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);\n";
+        source += "}\n\n";
+    }
+
+    if (usesFastTrig) {
+        source += "vec4 kbAtanFast(vec4 x) {\n";
+        source += "    vec4 ax = abs(x);\n";
+        source += "    vec4 t = mix(ax, vec4_splat(1.0) / max(ax, vec4_splat(0.000001)), step(vec4_splat(1.0), ax));\n";
+        source += "    vec4 s = t * t;\n";
+        source += "    vec4 r = (((vec4_splat(-0.0464964749) * s + vec4_splat(0.15931422)) * s - vec4_splat(0.327622764)) * s + vec4_splat(0.999787841)) * t;\n";
+        source += "    r = mix(r, vec4_splat(1.57079632679) - r, step(vec4_splat(1.0), ax));\n";
+        source += "    return r * sign(x);\n";
+        source += "}\n\n";
+        source += "vec4 kbAtan2Fast(vec4 y, vec4 x) {\n";
+        source += "    vec4 ax = abs(x);\n";
+        source += "    vec4 nearZero = step(ax, vec4_splat(0.000001));\n";
+        source += "    vec4 safeX = mix(x, vec4_splat(0.000001), nearZero);\n";
+        source += "    vec4 angle = kbAtanFast(y / safeX);\n";
+        source += "    vec4 piOffset = mix(vec4_splat(-3.14159265359), vec4_splat(3.14159265359), step(vec4_splat(0.0), y));\n";
+        source += "    angle += (vec4_splat(1.0) - step(vec4_splat(0.0), x)) * piOffset;\n";
+        source += "    vec4 vertical = mix(vec4_splat(-1.57079632679), vec4_splat(1.57079632679), step(vec4_splat(0.0), y));\n";
+        source += "    return mix(angle, vertical, nearZero);\n";
+        source += "}\n\n";
+        source += "vec4 kbAsinFast(vec4 x) {\n";
+        source += "    vec4 c = clamp(x, vec4_splat(-1.0), vec4_splat(1.0));\n";
+        source += "    return kbAtan2Fast(c, sqrt(max(vec4_splat(0.0), vec4_splat(1.0) - c * c)));\n";
+        source += "}\n\n";
+        source += "vec4 kbAcosFast(vec4 x) {\n";
+        source += "    return vec4_splat(1.57079632679) - kbAsinFast(x);\n";
         source += "}\n\n";
     }
 
@@ -6743,8 +6840,12 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::ArcSine:
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
         return pin == "value";
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
         return pin == "y" || pin == "x";
     case RenderMaterialGraphNodeKind::Clamp:
         return pin == "value" || pin == "min" || pin == "max";
@@ -6849,6 +6950,10 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::Fmod:
@@ -7378,9 +7483,13 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::ArcSine:
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
         if (!outputPin && pin == "value") return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
         if (!outputPin && (pin == "y" || pin == "x")) return RenderMaterialGraphPinType::Float4;
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float4 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::Clamp:
@@ -7712,10 +7821,14 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ArcSine:
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
         if (!outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
         if (!outputPin && pin == "y") return PinId(nodeKind, direction, 1U);
         if (!outputPin && pin == "x") return PinId(nodeKind, direction, 2U);
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
@@ -8096,6 +8209,10 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
