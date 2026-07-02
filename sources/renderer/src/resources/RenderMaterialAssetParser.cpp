@@ -163,6 +163,58 @@ void AttachContext(RenderMaterialAssetParseResult& result, const RenderMaterialA
     return false;
 }
 
+[[nodiscard]] bool IsDeprecatedDefaultLitGraphShadingToken(std::string_view text) noexcept {
+    return text == "lit" || text == "default_lit" || text == "defaultlit";
+}
+
+void AddGraphMigrationDiagnostic(
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t line,
+    std::string field,
+    std::string message,
+    std::string text) {
+    diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+        .code = RenderMaterialAssetParseDiagnosticCode::GraphMigration,
+        .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
+        .line = line,
+        .field = std::move(field),
+        .message = std::move(message),
+        .text = std::move(text),
+    });
+}
+
+void MigrateRenderMaterialGraphDocument(
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t graphShadingModelLine,
+    const std::string& graphShadingModelSourceText) {
+    const std::uint32_t sourceVersion = graph.documentVersion == 0U ? 1U : graph.documentVersion;
+    if (sourceVersion > kRenderMaterialGraphDocumentVersion) {
+        return;
+    }
+
+    if (sourceVersion < 2U && IsDeprecatedDefaultLitGraphShadingToken(graph.shadingModel)) {
+        const std::string deprecatedToken = graph.shadingModel;
+        graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+        if (graphShadingModelLine > 0U) {
+            AddGraphMigrationDiagnostic(
+                diagnostics,
+                graphShadingModelLine,
+                "graphShadingModel",
+                "Migrated deprecated material graph shading token '" + deprecatedToken +
+                    "' to canonical 'defaultLit' while upgrading graph schema from version " +
+                    std::to_string(sourceVersion) + " to " + std::to_string(kRenderMaterialGraphDocumentVersion) + ".",
+                graphShadingModelSourceText);
+        }
+    }
+
+    if (graph.shadingModel.empty()) {
+        graph.shadingModel = std::string{ RenderMaterialShadingModelName(RenderMaterialShadingModel::DefaultLit) };
+    }
+    graph.documentVersion = kRenderMaterialGraphDocumentVersion;
+    graph.hasExplicitDocumentVersion = true;
+}
+
 [[nodiscard]] bool IsEnumMaterialField(std::string_view keyword) noexcept {
     return keyword == "alphaMode" ||
         keyword == "decalBlendMode" ||
@@ -466,6 +518,8 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
     std::vector<RenderMaterialAssetParseDiagnostic> diagnostics;
     bool sawMaterialProperty = false;
     std::size_t graphLastGoodArtifactLine = 0U;
+    std::size_t graphShadingModelLine = 0U;
+    std::string graphShadingModelSourceText;
     std::size_t materialTypeLine = 0U;
     std::size_t materialTypeVersionLine = 0U;
 
@@ -634,6 +688,10 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
         if ((materialKeyword == "graphLastGoodArtifactAssetId" || materialKeyword == "graphLastGoodArtifactHash") && graphLastGoodArtifactLine == 0U) {
             graphLastGoodArtifactLine = lineNumber;
         }
+        if (materialKeyword == "graphShadingModel" && graphShadingModelLine == 0U) {
+            graphShadingModelLine = lineNumber;
+            graphShadingModelSourceText = std::string{ trimmed };
+        }
 
         if (materialKeyword == "graphParameterValue") {
             RenderMaterialGraphParameterValue value{};
@@ -800,6 +858,9 @@ RenderMaterialAssetParseResult RenderMaterialAssetParser::ParseWithDiagnostics(s
         asset.graph.artifactFailurePolicy = graphMetadata.artifactFailurePolicy;
         asset.graph.hasExplicitArtifactFailurePolicy = graphMetadata.hasExplicitArtifactFailurePolicy;
         asset.graph.lastGoodArtifact = graphMetadata.lastGoodArtifact;
+    }
+    if (sawMaterialProperty) {
+        MigrateRenderMaterialGraphDocument(asset.graph, diagnostics, graphShadingModelLine, graphShadingModelSourceText);
     }
     if ((asset.graph.lastGoodArtifact.assetId == 0U) != (asset.graph.lastGoodArtifact.contentHash == 0U)) {
         diagnostics.push_back(RenderMaterialAssetParseDiagnostic{

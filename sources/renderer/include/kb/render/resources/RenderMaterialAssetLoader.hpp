@@ -126,6 +126,7 @@ enum class RenderMaterialAssetParseDiagnosticCode : std::uint8_t {
     TextureColorSpaceExpectation,
     InvalidGraphField,
     UnsupportedGraphVersion,
+    GraphMigration,
     InvalidGraphNode,
     DuplicateGraphNode,
     InvalidGraphLink,

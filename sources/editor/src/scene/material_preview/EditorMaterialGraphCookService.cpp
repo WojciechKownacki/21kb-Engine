@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <utility>
 
 #if defined(_WIN32)
@@ -138,6 +140,53 @@ namespace {
     return { "BaseOpaque", "ShadowDepth", "BaseTransparent" };
 }
 
+struct CookCacheFootprint {
+    std::uint32_t entryCount = 0U;
+    std::uint64_t byteSize = 0U;
+};
+
+[[nodiscard]] CookCacheFootprint MeasureCookCacheFootprint(std::string_view cacheRoot) {
+    CookCacheFootprint footprint{};
+    if (cacheRoot.empty()) {
+        return footprint;
+    }
+    std::error_code error;
+    const std::filesystem::path root{ std::string{ cacheRoot } };
+    if (!std::filesystem::exists(root, error)) {
+        return footprint;
+    }
+    for (std::filesystem::recursive_directory_iterator it{ root, error }, end; it != end && !error; it.increment(error)) {
+        if (!it->is_regular_file(error)) {
+            continue;
+        }
+        if (footprint.entryCount < std::numeric_limits<std::uint32_t>::max()) {
+            ++footprint.entryCount;
+        }
+        const std::uintmax_t fileSize = it->file_size(error);
+        if (!error) {
+            footprint.byteSize += fileSize;
+        }
+        error.clear();
+    }
+    return footprint;
+}
+
+void AppendCookBudgetWarnings(const EditorMaterialGraphCookConfig& config, EditorMaterialGraphCookResult& result) {
+    const auto warn = [&result](std::string message) {
+        result.budgetWarning = true;
+        result.diagnostics.push_back("[warning]: graph cook budget exceeded - " + std::move(message));
+    };
+    if (result.elapsedMs > config.compileWarningMs) {
+        warn("cook time " + std::to_string(result.elapsedMs) + "ms/" + std::to_string(config.compileWarningMs) + "ms");
+    }
+    if (result.cacheEntryCount > config.cacheEntryWarningThreshold) {
+        warn("cache entries " + std::to_string(result.cacheEntryCount) + "/" + std::to_string(config.cacheEntryWarningThreshold));
+    }
+    if (result.cacheByteSize > config.cacheByteWarningThreshold) {
+        warn("cache bytes " + std::to_string(result.cacheByteSize) + "/" + std::to_string(config.cacheByteWarningThreshold));
+    }
+}
+
 // Deterministic, side-effect-free cook of a single material graph against an explicit config.
 // Shared by the synchronous CookNow() and the background worker (which snapshots the config under
 // the service lock) so neither path races on mutable service state.
@@ -145,13 +194,27 @@ namespace {
     const EditorMaterialGraphCookConfig& config,
     kb::assets::AssetId assetId,
     const kb::render::RenderMaterialAssetData& material) {
+    const auto startedAt = std::chrono::steady_clock::now();
     EditorMaterialGraphCookResult result{};
     result.materialAssetId = assetId;
     result.materialTypeVersion = material.materialTypeVersion;
 
+    const auto finish = [&config, startedAt](EditorMaterialGraphCookResult& cookResult) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - startedAt).count();
+        cookResult.elapsedMs = elapsed <= 0
+            ? 0U
+            : static_cast<std::uint32_t>(std::min<std::int64_t>(elapsed, std::numeric_limits<std::uint32_t>::max()));
+        const CookCacheFootprint footprint = MeasureCookCacheFootprint(config.cacheRoot);
+        cookResult.cacheEntryCount = footprint.entryCount;
+        cookResult.cacheByteSize = footprint.byteSize;
+        AppendCookBudgetWarnings(config, cookResult);
+    };
+
     if (config.shadercPath.empty()) {
         result.status = EditorMaterialGraphCookStatus::CookUnavailable;
         result.diagnostics.emplace_back("[error]: graph shader cook unavailable - shaderc tool not found (set KB_GRAPH_SHADERC or build bgfx::shaderc)");
+        finish(result);
         return result;
     }
 
@@ -163,6 +226,7 @@ namespace {
     }
     if (!compiled.Succeeded()) {
         result.status = EditorMaterialGraphCookStatus::Failed;
+        finish(result);
         return result;
     }
     result.graphSourceHash = compiled.shader.sourceHash;
@@ -193,6 +257,12 @@ namespace {
             passResult.succeeded = true;
             passResult.cacheHit = binary->cacheHit;
             passResult.binaryPath = binary->binaryPath;
+            passResult.binaryByteSize = binary->byteSize;
+            if (binary->cacheHit) {
+                ++result.cacheHitPassCount;
+            } else {
+                ++result.compiledPassCount;
+            }
             allCacheHit = allCacheHit && binary->cacheHit;
         } else {
             anyFailure = true;
@@ -204,6 +274,7 @@ namespace {
     result.status = anyFailure
         ? EditorMaterialGraphCookStatus::Failed
         : (allCacheHit ? EditorMaterialGraphCookStatus::UpToDate : EditorMaterialGraphCookStatus::Ready);
+    finish(result);
     return result;
 }
 

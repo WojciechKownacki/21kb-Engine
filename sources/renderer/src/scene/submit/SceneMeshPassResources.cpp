@@ -1,11 +1,13 @@
 #include "scene/submit/SceneMeshPassResources.hpp"
 
 #include "kb/render/ShaderLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "scene/submit/SceneMeshMaterialBindingResolver.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +37,7 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
         .materialTypeId = kBuiltinMeshMaterialTypeId,
         .materialTypeVersion = kBuiltinMeshMaterialTypeVersion,
         .graphSourceHash = 0U,
+        .variantKey = 0U,
         .pass = std::move(pass),
         .backend = 0U,
         .pipelineStateKey = 0U,
@@ -77,6 +80,10 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
     default:
         return "dxbc";
     }
+}
+
+[[nodiscard]] const char* GraphBackendDirectoryForKey(std::uint32_t backend) noexcept {
+    return GraphBackendDirectoryForRenderer(static_cast<bgfx::RendererType::Enum>(backend));
 }
 
 [[nodiscard]] std::string GraphMeshPassName(MeshPassType pass) {
@@ -150,6 +157,7 @@ bool SceneMeshPassResources::Initialize() {
     materialUvTransformUniform_ = bgfx::createUniform("u_materialUvTransform", bgfx::UniformType::Vec4);
     cameraPositionUniform_ = bgfx::createUniform("u_cameraPosition", bgfx::UniformType::Vec4);
     timeUniform_ = bgfx::createUniform("u_time", bgfx::UniformType::Vec4);
+    dynamicParameterUniform_ = bgfx::createUniform("u_dynamicParameter", bgfx::UniformType::Vec4);
     lightDirKindUniform_ = bgfx::createUniform("u_lightDirKind", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
     lightPositionRangeUniform_ = bgfx::createUniform("u_lightPositionRange", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
     lightColorIntensityUniform_ = bgfx::createUniform("u_lightColorIntensity", bgfx::UniformType::Vec4, kMaxSceneForwardLights);
@@ -240,6 +248,10 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(timeUniform_);
         timeUniform_ = BGFX_INVALID_HANDLE;
     }
+    if (bgfx::isValid(dynamicParameterUniform_)) {
+        bgfx::destroy(dynamicParameterUniform_);
+        dynamicParameterUniform_ = BGFX_INVALID_HANDLE;
+    }
     if (bgfx::isValid(materialFlagsUniform_)) {
         bgfx::destroy(materialFlagsUniform_);
         materialFlagsUniform_ = BGFX_INVALID_HANDLE;
@@ -272,6 +284,20 @@ void SceneMeshPassResources::Shutdown() {
         bgfx::destroy(normalSampler_);
         normalSampler_ = BGFX_INVALID_HANDLE;
     }
+    for (auto& [name, sampler] : graphSamplerUniforms_) {
+        static_cast<void>(name);
+        if (bgfx::isValid(sampler)) {
+            bgfx::destroy(sampler);
+        }
+    }
+    graphSamplerUniforms_.clear();
+    for (auto& [name, uniform] : graphUniforms_) {
+        static_cast<void>(name);
+        if (bgfx::isValid(uniform)) {
+            bgfx::destroy(uniform);
+        }
+    }
+    graphUniforms_.clear();
     programRegistry_.Shutdown();
     meshProgram_ = BGFX_INVALID_HANDLE;
     selectionProgram_ = BGFX_INVALID_HANDLE;
@@ -294,6 +320,7 @@ bool SceneMeshPassResources::IsInitialized() const noexcept {
         bgfx::isValid(materialUvTransformUniform_) &&
         bgfx::isValid(cameraPositionUniform_) &&
         bgfx::isValid(timeUniform_) &&
+        bgfx::isValid(dynamicParameterUniform_) &&
         bgfx::isValid(lightDirKindUniform_) &&
         bgfx::isValid(lightPositionRangeUniform_) &&
         bgfx::isValid(lightColorIntensityUniform_) &&
@@ -318,7 +345,7 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     }
     const std::filesystem::path fragmentPath = std::filesystem::path{ graphShaderCacheRoot_ } /
         ("graph_" + std::to_string(key.graphSourceHash)) / key.pass /
-        GraphBackendDirectoryForRenderer(bgfx::getRendererType()) / "fs.bin";
+        GraphBackendDirectoryForKey(key.backend) / "fs.bin";
     const std::vector<std::uint8_t> fragmentBytes = ReadShaderBinaryFile(fragmentPath);
     if (fragmentBytes.empty()) {
         return BGFX_INVALID_HANDLE;
@@ -328,7 +355,7 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
     // otherwise use the fixed instanced mesh vertex shader.
     const std::filesystem::path vertexPath = std::filesystem::path{ graphShaderCacheRoot_ } /
         ("graph_" + std::to_string(key.graphSourceHash)) / key.pass /
-        GraphBackendDirectoryForRenderer(bgfx::getRendererType()) / "vs.bin";
+        GraphBackendDirectoryForKey(key.backend) / "vs.bin";
     const std::vector<std::uint8_t> vertexBytes = ReadShaderBinaryFile(vertexPath);
     bgfx::ShaderHandle vertex = BGFX_INVALID_HANDLE;
     if (!vertexBytes.empty()) {
@@ -352,24 +379,35 @@ bgfx::ProgramHandle SceneMeshPassResources::LoadProgramForKey(const MaterialProg
 void SceneMeshPassResources::ResetProgramBindStats() const noexcept {
     programBindStats_ = SceneMeshProgramBindStats{};
     lastBoundProgram_ = BGFX_INVALID_HANDLE;
+    lastProgramResolution_ = SceneMeshPassProgramResolution{};
 }
 
 SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(const RenderMaterialResource* material, MeshPassType pass) const noexcept {
     SceneMeshPassProgramResolution resolution{};
     if (IsSelectionPass(pass)) {
         resolution.program = selectionProgram_;
+        resolution.key = BuiltinMeshProgramKey("SelectionId");
+        resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
+        resolution.status = SceneRenderMaterialProgramStatus::Builtin;
     } else {
         resolution.program = pass == MeshPassType::ShadowDepth ? shadowProgram_ : meshProgram_;
+        resolution.key = BuiltinMeshProgramKey(pass == MeshPassType::ShadowDepth ? "ShadowDepth" : GraphMeshPassName(pass));
+        resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
+        resolution.status = SceneRenderMaterialProgramStatus::Builtin;
         if (material != nullptr && material->graphProgram.active && IsGraphCapablePass(pass)) {
             const MaterialProgramKey key{
                 .materialTypeId = material->graphProgram.materialTypeId,
                 .materialTypeVersion = material->graphProgram.materialTypeVersion,
                 .graphSourceHash = material->graphProgram.graphSourceHash,
+                .variantKey = material->graphProgram.variantKey,
                 .pass = GraphMeshPassName(pass),
                 .backend = static_cast<std::uint32_t>(bgfx::getRendererType()),
-                .pipelineStateKey = 0U,
+                .pipelineStateKey = material->graphProgram.pipelineStateKey,
                 .graphProgram = true,
             };
+            resolution.key = key;
+            resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(key);
+            resolution.status = SceneRenderMaterialProgramStatus::GraphFallback;
             bgfx::ProgramHandle graphHandle = programRegistry_.Find(key);
             if (!bgfx::isValid(graphHandle)) {
                 graphHandle = programRegistry_.Acquire(key);
@@ -377,6 +415,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
             if (bgfx::isValid(graphHandle)) {
                 resolution.program = graphHandle;
                 resolution.graphProgram = true;
+                resolution.status = SceneRenderMaterialProgramStatus::GraphReady;
             } else {
                 resolution.fellBackToBuiltin = true;
             }
@@ -402,6 +441,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
 bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& desc) const noexcept {
     const RenderMaterialResource* material = desc.command.materialResource;
     const SceneMeshPassProgramResolution resolution = ResolveMeshPassProgram(material, desc.pass);
+    lastProgramResolution_ = resolution;
     if (IsSelectionPass(desc.pass)) {
         const std::array<float, 16> disabledShadowViewProj{};
         bgfx::setUniform(shadowViewProjUniform_, disabledShadowViewProj.data());
@@ -422,6 +462,8 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
         bgfx::setUniform(materialParamsUniform_, materialBinding.params.data());
         bgfx::setUniform(materialFlagsUniform_, materialBinding.flags.data());
         bgfx::setUniform(materialUvTransformUniform_, materialBinding.uvTransform.data());
+        bgfx::setUniform(timeUniform_, desc.frameTime.data());
+        bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
         return resolution.program;
     }
 
@@ -444,6 +486,7 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     bgfx::setUniform(materialEmissiveUniform_, materialBinding.emissive.data());
     bgfx::setUniform(cameraPositionUniform_, desc.cameraPosition.data());
     bgfx::setUniform(timeUniform_, desc.frameTime.data());
+    bgfx::setUniform(dynamicParameterUniform_, desc.dynamicParameter.data());
     bgfx::setUniform(lightDirKindUniform_, desc.lighting.dirKind.data(), kMaxSceneForwardLights);
     bgfx::setUniform(lightPositionRangeUniform_, desc.lighting.positionRange.data(), kMaxSceneForwardLights);
     bgfx::setUniform(lightColorIntensityUniform_, desc.lighting.colorIntensity.data(), kMaxSceneForwardLights);
@@ -460,6 +503,27 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
     // (0-5) above are for the flattened PBR path; a real graph shader samples its own SAMPLER2D(name, slot),
     // so without this the graph texture is never bound and the surface renders black.
     if (resolution.graphProgram && material != nullptr) {
+        for (const RenderMaterialGraphUniformBinding& graphUniform : material->graphProgram.uniforms) {
+            std::array<float, 4U> value{
+                graphUniform.value[0],
+                graphUniform.value[1],
+                graphUniform.value[2],
+                graphUniform.value[3],
+            };
+            if (graphUniform.source == RenderMaterialGraphUniformBindingSource::ParameterCollection) {
+                if (const std::optional<RenderMaterialParameterCollectionRuntimeValue> runtimeValue =
+                        GlobalRenderMaterialParameterCollectionStore().Resolve(graphUniform.collectionAssetId, graphUniform.collectionParameterStableId)) {
+                    value = runtimeValue->value;
+                }
+            }
+
+            bgfx::UniformHandle& uniform = graphUniforms_[graphUniform.name];
+            if (!bgfx::isValid(uniform)) {
+                uniform = bgfx::createUniform(graphUniform.name.c_str(), bgfx::UniformType::Vec4);
+            }
+            bgfx::setUniform(uniform, value.data());
+        }
+
         for (const RenderMaterialGraphTextureBinding& graphTexture : material->graphProgram.textures) {
             const RenderTextureHandle resolved = desc.resourceMap.ResolveTexture(graphTexture.textureAssetId, graphTexture.colorSpace);
             const RenderTextureResource* textureResource = desc.resources.FindTexture(resolved);
@@ -472,6 +536,14 @@ bgfx::ProgramHandle SceneMeshPassResources::Bind(const SceneMeshPassBindDesc& de
                 sampler = bgfx::createUniform(graphTexture.samplerName.c_str(), bgfx::UniformType::Sampler);
             }
             bgfx::setTexture(static_cast<std::uint8_t>(graphTexture.slot), sampler, handle, graphTexture.samplerFlags);
+        }
+
+        if (material->graphProgram.usesSceneColor && bgfx::isValid(desc.sceneColorTexture)) {
+            bgfx::UniformHandle& colorSampler = graphSamplerUniforms_["s_kbSceneColor"];
+            if (!bgfx::isValid(colorSampler)) {
+                colorSampler = bgfx::createUniform("s_kbSceneColor", bgfx::UniformType::Sampler);
+            }
+            bgfx::setTexture(4U, colorSampler, desc.sceneColorTexture);
         }
 
         // MAT-80/#18b: bind the opaque scene depth at the reserved slot 5 for graphs that sample it, so

@@ -109,6 +109,8 @@ SceneRenderMeshInstance RenderSceneMeshInstanceBuilder::Build(const MeshRenderPr
         .materialSlotOverrideCount = mesh.materialSlotOverrideCount,
         .model = mesh.model,
         .color = mesh.color,
+        .fadeAmount = mesh.fadeAmount,
+        .customData0 = mesh.customData0,
         .castsShadow = mesh.castsShadow,
         .receivesShadow = mesh.receivesShadow,
     };

@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace kb::render {
 namespace {
@@ -79,6 +80,16 @@ void AddDiagnostic(
                 index += 2U;
                 continue;
             }
+            if (code == "0A") {
+                decoded += '\n';
+                index += 2U;
+                continue;
+            }
+            if (code == "0D") {
+                decoded += '\r';
+                index += 2U;
+                continue;
+            }
             if (code == "25") {
                 decoded += '%';
                 index += 2U;
@@ -136,6 +147,24 @@ void AddDiagnostic(
     return nullptr;
 }
 
+[[nodiscard]] bool FindGraphComment(const RenderMaterialGraphDocument& graph, std::uint32_t commentId) noexcept {
+    for (const RenderMaterialGraphCommentBox& comment : graph.comments) {
+        if (comment.id == commentId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool FindGraphComposite(const RenderMaterialGraphDocument& graph, std::uint32_t compositeId) noexcept {
+    for (const RenderMaterialGraphCompositeSubgraph& composite : graph.composites) {
+        if (composite.id == compositeId) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphVersion(
     std::string_view rest,
     std::size_t line,
@@ -146,7 +175,7 @@ void AddDiagnostic(
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphVersion", "Invalid material graph document version.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (version != kRenderMaterialGraphDocumentVersion) {
+    if (version > kRenderMaterialGraphDocumentVersion) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::UnsupportedGraphVersion, line, "graphVersion", "Unsupported material graph document version " + std::to_string(version) + ".", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
@@ -208,7 +237,7 @@ void AddDiagnostic(
     std::size_t line,
     RenderMaterialGraphDocument& graph,
     std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
-    if (rest != "inline-kbmat" && rest != "material-graph-asset") {
+    if (rest != "inline-kbmat" && rest != "material-graph-asset" && rest != "material-function-asset") {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphStorageModel", "Unsupported material graph storage model.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
@@ -362,9 +391,21 @@ void AddDiagnostic(
             node->kind == RenderMaterialGraphNodeKind::ConstantScalar ||
             node->kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
             node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
-            node->kind == RenderMaterialGraphNodeKind::ConstantColor);
+            node->kind == RenderMaterialGraphNodeKind::ConstantColor ||
+            node->kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
+            node->kind == RenderMaterialGraphNodeKind::StaticSwitch ||
+            node->kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
+            node->kind == RenderMaterialGraphNodeKind::Reroute ||
+            node->kind == RenderMaterialGraphNodeKind::NamedRerouteDeclaration ||
+            node->kind == RenderMaterialGraphNodeKind::NamedRerouteUsage ||
+            node->kind == RenderMaterialGraphNodeKind::CompositeInput ||
+            node->kind == RenderMaterialGraphNodeKind::CompositeOutput ||
+            node->kind == RenderMaterialGraphNodeKind::FunctionInput ||
+            node->kind == RenderMaterialGraphNodeKind::FunctionOutput ||
+            node->kind == RenderMaterialGraphNodeKind::MaterialFunctionCall ||
+            node->kind == RenderMaterialGraphNodeKind::LayerStack);
     if (!supportsMetadata) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph parameter metadata must reference an existing parameter, constant or texture sample node.", nodeIdText);
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphParameter", "Material graph parameter metadata must reference an existing parameter, constant, texture sample or graph organization node.", nodeIdText);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
 
@@ -408,6 +449,198 @@ void AddDiagnostic(
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
+[[nodiscard]] bool ParseCustomPinList(std::string_view text, std::vector<RenderMaterialGraphCustomPin>& pins) {
+    pins.clear();
+    if (text.empty() || text == "_") {
+        return true;
+    }
+    std::stringstream stream{ std::string{ text } };
+    std::string item;
+    while (std::getline(stream, item, ',')) {
+        const std::size_t separator = item.find(':');
+        if (separator == std::string::npos || separator == 0U || separator + 1U >= item.size()) {
+            return false;
+        }
+        const std::string name = DecodeToken(std::string_view{ item }.substr(0U, separator));
+        const std::optional<RenderMaterialGraphPinType> type = ParseRenderMaterialGraphPinType(std::string_view{ item }.substr(separator + 1U));
+        if (!type.has_value()) {
+            return false;
+        }
+        pins.push_back(RenderMaterialGraphCustomPin{
+            .name = name,
+            .type = *type,
+        });
+    }
+    return true;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphCustomCode(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string nodeIdText;
+    std::string outputTypeText;
+    std::string inputsText;
+    std::string outputsText;
+    std::string definesText;
+    std::string includesText;
+    std::string bodyText;
+    if (!(stream >> nodeIdText >> outputTypeText >> inputsText >> outputsText >> definesText >> includesText >> bodyText)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphCustomCode", "Material graph custom-code/function-call node requires node id, output type, inputs, outputs, defines, includes and body.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    std::uint32_t nodeId = 0U;
+    if (!ParseUInt32(nodeIdText, nodeId) || nodeId == 0U) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphCustomCode", "Material graph custom-code node id must be a positive unsigned integer.", nodeIdText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
+    if (node == nullptr ||
+        (node->kind != RenderMaterialGraphNodeKind::CustomCode &&
+         node->kind != RenderMaterialGraphNodeKind::MaterialFunctionCall)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphCustomCode", "Material graph custom-code metadata must reference an existing CustomCode or MaterialFunctionCall node.", nodeIdText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    const std::optional<RenderMaterialGraphPinType> outputType = ParseRenderMaterialGraphPinType(outputTypeText);
+    std::vector<RenderMaterialGraphCustomPin> inputs;
+    std::vector<RenderMaterialGraphCustomPin> outputs;
+    if (!outputType.has_value() ||
+        !ParseCustomPinList(inputsText, inputs) ||
+        !ParseCustomPinList(outputsText, outputs)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphCustomCode", "Material graph custom-code metadata has an invalid type or pin list.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    node->customCode = RenderMaterialGraphCustomCode{
+        .body = bodyText == "_" ? std::string{} : DecodeToken(bodyText),
+        .outputType = *outputType,
+        .inputs = std::move(inputs),
+        .outputs = std::move(outputs),
+        .defines = definesText == "_" ? std::string{} : DecodeToken(definesText),
+        .includes = includesText == "_" ? std::string{} : DecodeToken(includesText),
+    };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphLayerStackEntry(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string nodeIdText;
+    std::string indexText;
+    std::string layerFunctionText;
+    std::string blendFunctionText;
+    std::string enabledText;
+    std::string layerNameText;
+    std::string blendNameText;
+    std::string linkStateText;
+    if (!(stream >> nodeIdText >> indexText >> layerFunctionText >> blendFunctionText >> enabledText >>
+            layerNameText >> blendNameText >> linkStateText)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackEntry", "Material graph layer stack entry requires node id, index, layer function asset id, blend function asset id, enabled flag, layer name, blend name and link state.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    std::uint32_t nodeId = 0U;
+    std::uint32_t index = 0U;
+    std::uint64_t layerFunctionAssetId = 0U;
+    std::uint64_t blendFunctionAssetId = 0U;
+    bool enabled = true;
+    if (!ParseUInt32(nodeIdText, nodeId) || nodeId == 0U ||
+        !ParseUInt32(indexText, index) ||
+        !ParseUInt64(layerFunctionText, layerFunctionAssetId) ||
+        !ParseUInt64(blendFunctionText, blendFunctionAssetId) ||
+        !ParseBool(enabledText, enabled)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackEntry", "Material graph layer stack entry has an invalid id, index, asset id or enabled flag.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
+    if (node == nullptr || node->kind != RenderMaterialGraphNodeKind::LayerStack) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackEntry", "Material graph layer stack entry must reference an existing LayerStack node.", nodeIdText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    if (node->layerStack.size() <= index) {
+        node->layerStack.resize(static_cast<std::size_t>(index) + 1U);
+    }
+    std::vector<RenderMaterialGraphLayerStackParameter> layerParameters =
+        std::move(node->layerStack[index].layerParameters);
+    std::vector<RenderMaterialGraphLayerStackParameter> blendParameters =
+        std::move(node->layerStack[index].blendParameters);
+    node->layerStack[index] = RenderMaterialGraphLayerStackEntry{
+        .layerFunctionAssetId = layerFunctionAssetId,
+        .blendFunctionAssetId = blendFunctionAssetId,
+        .enabled = enabled,
+        .layerName = layerNameText == "_" ? std::string{} : DecodeToken(layerNameText),
+        .blendName = blendNameText == "_" ? std::string{} : DecodeToken(blendNameText),
+        .linkState = linkStateText == "_" ? std::string{} : DecodeToken(linkStateText),
+        .layerParameters = std::move(layerParameters),
+        .blendParameters = std::move(blendParameters),
+    };
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphLayerStackParameter(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string nodeIdText;
+    std::string indexText;
+    std::string ownerText;
+    std::string pinNameText;
+    std::string typeText;
+    std::string valueText;
+    if (!(stream >> nodeIdText >> indexText >> ownerText >> pinNameText >> typeText >> valueText)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter requires node id, index, owner, pin name, pin type and value.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    std::uint32_t nodeId = 0U;
+    std::uint32_t index = 0U;
+    const std::optional<RenderMaterialGraphPinType> type = ParseRenderMaterialGraphPinType(typeText);
+    if (!ParseUInt32(nodeIdText, nodeId) || nodeId == 0U ||
+        !ParseUInt32(indexText, index) ||
+        !type.has_value() ||
+        pinNameText == "_") {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter has an invalid id, index, pin name or type.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    RenderMaterialGraphNode* node = FindMutableGraphNode(graph, nodeId);
+    if (node == nullptr || node->kind != RenderMaterialGraphNodeKind::LayerStack) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter must reference an existing LayerStack node.", nodeIdText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (node->layerStack.size() <= index) {
+        node->layerStack.resize(static_cast<std::size_t>(index) + 1U);
+    }
+
+    RenderMaterialGraphLayerStackParameter parameter{
+        .pinName = DecodeToken(pinNameText),
+        .type = *type,
+        .valueHint = valueText == "_" ? std::string{} : DecodeToken(valueText),
+    };
+    if (ownerText == "layer") {
+        node->layerStack[index].layerParameters.push_back(std::move(parameter));
+        return RenderMaterialGraphFieldParseResult::Parsed;
+    }
+    if (ownerText == "blend") {
+        node->layerStack[index].blendParameters.push_back(std::move(parameter));
+        return RenderMaterialGraphFieldParseResult::Parsed;
+    }
+
+    AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphNode, line, "graphLayerStackParameter", "Material graph layer stack parameter owner must be 'layer' or 'blend'.", ownerText);
+    return RenderMaterialGraphFieldParseResult::Failed;
+}
+
 [[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphLink(
     std::string_view rest,
     std::size_t line,
@@ -434,17 +667,17 @@ void AddDiagnostic(
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link references an undeclared node.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphOutputPin(fromNode->kind, fromPin)) {
+    if (!IsRenderMaterialGraphOutputPin(*fromNode, fromPin)) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid source pin.", fromPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphInputPin(toNode->kind, toPin)) {
+    if (!IsRenderMaterialGraphInputPin(*toNode, toPin)) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid target pin.", toPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!AreRenderMaterialGraphPinsCompatible(fromNode->kind, fromPin, toNode->kind, toPin)) {
-        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, fromPin, true);
-        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(toNode->kind, toPin, false);
+    if (!AreRenderMaterialGraphPinsCompatible(*fromNode, fromPin, *toNode, toPin)) {
+        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(*fromNode, fromPin, true);
+        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(*toNode, toPin, false);
         AddDiagnostic(
             diagnostics,
             RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink,
@@ -455,8 +688,8 @@ void AddDiagnostic(
         return RenderMaterialGraphFieldParseResult::Failed;
     }
 
-    link.fromPinId = RenderMaterialGraphStablePinId(fromNode->kind, fromPin, true);
-    link.toPinId = RenderMaterialGraphStablePinId(toNode->kind, toPin, false);
+    link.fromPinId = RenderMaterialGraphStablePinId(*fromNode, fromPin, true);
+    link.toPinId = RenderMaterialGraphStablePinId(*toNode, toPin, false);
     if (link.fromPinId == 0U || link.toPinId == 0U) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link could not resolve stable pin ids.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
@@ -508,17 +741,17 @@ void AddDiagnostic(
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link references an undeclared node.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphOutputPin(fromNode->kind, fromPin) || RenderMaterialGraphStablePinId(fromNode->kind, fromPin, true) != link.fromPinId) {
+    if (!IsRenderMaterialGraphOutputPin(*fromNode, fromPin) || RenderMaterialGraphStablePinId(*fromNode, fromPin, true) != link.fromPinId) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid source pin id/name pair.", fromPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphInputPin(toNode->kind, toPin) || RenderMaterialGraphStablePinId(toNode->kind, toPin, false) != link.toPinId) {
+    if (!IsRenderMaterialGraphInputPin(*toNode, toPin) || RenderMaterialGraphStablePinId(*toNode, toPin, false) != link.toPinId) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid target pin id/name pair.", toPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!AreRenderMaterialGraphPinsCompatible(fromNode->kind, fromPin, toNode->kind, toPin)) {
-        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(fromNode->kind, fromPin, true);
-        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(toNode->kind, toPin, false);
+    if (!AreRenderMaterialGraphPinsCompatible(*fromNode, fromPin, *toNode, toPin)) {
+        const RenderMaterialGraphPinType fromType = RenderMaterialGraphPinDataType(*fromNode, fromPin, true);
+        const RenderMaterialGraphPinType toType = RenderMaterialGraphPinDataType(*toNode, toPin, false);
         AddDiagnostic(
             diagnostics,
             RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink,
@@ -537,6 +770,121 @@ void AddDiagnostic(
     link.fromPin = std::move(fromPin);
     link.toPin = std::move(toPin);
     graph.links.push_back(std::move(link));
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphComment(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string idText;
+    std::string xText;
+    std::string yText;
+    std::string widthText;
+    std::string heightText;
+    std::string colorText;
+    std::string text;
+    if (!(stream >> idText >> xText >> yText >> widthText >> heightText >> colorText >> text)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComment", "Material graph comment requires id, x, y, width, height, color and text.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    RenderMaterialGraphCommentBox comment{};
+    if (!ParseUInt32(idText, comment.id) || comment.id == 0U) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComment", "Material graph comment id must be a positive unsigned integer.", idText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (FindGraphComment(graph, comment.id)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComment", "Material graph comment id is duplicated.", idText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseInt32(xText, comment.positionX) || !ParseInt32(yText, comment.positionY) ||
+        !ParseInt32(widthText, comment.width) || !ParseInt32(heightText, comment.height) ||
+        comment.width <= 0 || comment.height <= 0) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComment", "Material graph comment bounds must use signed coordinates and positive size.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseUInt32(colorText, comment.color)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComment", "Material graph comment color must be an unsigned integer.", colorText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    comment.text = text == "_" ? std::string{} : DecodeToken(text);
+    graph.comments.push_back(std::move(comment));
+    return RenderMaterialGraphFieldParseResult::Parsed;
+}
+
+[[nodiscard]] bool ParseGraphCompositeNodeIds(
+    std::string_view text,
+    const RenderMaterialGraphDocument& graph,
+    std::vector<std::uint32_t>& nodeIds) {
+    nodeIds.clear();
+    if (text.empty() || text == "_") {
+        return true;
+    }
+    std::stringstream stream{ std::string{ text } };
+    std::string item;
+    while (std::getline(stream, item, ',')) {
+        std::uint32_t nodeId = 0U;
+        if (!ParseUInt32(item, nodeId) || nodeId == 0U ||
+            FindRenderMaterialGraphNode(graph, nodeId) == nullptr) {
+            return false;
+        }
+        nodeIds.push_back(nodeId);
+    }
+    return true;
+}
+
+[[nodiscard]] RenderMaterialGraphFieldParseResult ParseGraphComposite(
+    std::string_view rest,
+    std::size_t line,
+    RenderMaterialGraphDocument& graph,
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics) {
+    std::istringstream stream{ std::string{ rest } };
+    std::string idText;
+    std::string xText;
+    std::string yText;
+    std::string widthText;
+    std::string heightText;
+    std::string colorText;
+    std::string collapsedText;
+    std::string nameText;
+    std::string nodeIdsText;
+    if (!(stream >> idText >> xText >> yText >> widthText >> heightText >> colorText >> collapsedText >> nameText >> nodeIdsText)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite requires id, x, y, width, height, color, collapsed, name and node ids.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+
+    RenderMaterialGraphCompositeSubgraph composite{};
+    if (!ParseUInt32(idText, composite.id) || composite.id == 0U) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite id must be a positive unsigned integer.", idText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (FindGraphComposite(graph, composite.id)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite id is duplicated.", idText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseInt32(xText, composite.positionX) || !ParseInt32(yText, composite.positionY) ||
+        !ParseInt32(widthText, composite.width) || !ParseInt32(heightText, composite.height) ||
+        composite.width <= 0 || composite.height <= 0) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite bounds must use signed coordinates and positive size.", std::string{ rest });
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseUInt32(colorText, composite.color)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite color must be an unsigned integer.", colorText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseBool(collapsedText, composite.collapsed)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite collapsed flag must be true or false.", collapsedText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (!ParseGraphCompositeNodeIds(nodeIdsText, graph, composite.nodeIds)) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphField, line, "graphComposite", "Material graph composite node id list references an undeclared node.", nodeIdsText);
+        return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    composite.name = nameText == "_" ? std::string{} : DecodeToken(nameText);
+    graph.composites.push_back(std::move(composite));
     return RenderMaterialGraphFieldParseResult::Parsed;
 }
 
@@ -584,8 +932,23 @@ RenderMaterialGraphFieldParseResult RenderMaterialGraphFieldParser::Apply(
     if (keyword == "graphParameter") {
         return ParseGraphParameter(rest, line, asset.graph, diagnostics);
     }
+    if (keyword == "graphCustomCode") {
+        return ParseGraphCustomCode(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphLayerStackEntry") {
+        return ParseGraphLayerStackEntry(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphLayerStackParameter") {
+        return ParseGraphLayerStackParameter(rest, line, asset.graph, diagnostics);
+    }
     if (keyword == "graphLink") {
         return ParseGraphLinkWithStableIds(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphComment") {
+        return ParseGraphComment(rest, line, asset.graph, diagnostics);
+    }
+    if (keyword == "graphComposite") {
+        return ParseGraphComposite(rest, line, asset.graph, diagnostics);
     }
     return RenderMaterialGraphFieldParseResult::Unknown;
 }

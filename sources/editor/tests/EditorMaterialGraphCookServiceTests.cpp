@@ -147,17 +147,22 @@ void RunSynchronousCookProducesBinaryTest() {
         "KBMAT-MAT30: Cooking a valid graph must produce ready GPU binaries");
     Require(first.graphSourceHash != 0U, "KBMAT-MAT30: A cooked graph must expose its source hash");
     Require(first.passes.size() == 3U, "KBMAT-MAT80: Default cook must cover BaseOpaque, ShadowDepth and BaseTransparent");
+    Require(first.compiledPassCount == first.passes.size() && first.cacheHitPassCount == 0U && first.cacheEntryCount > 0U,
+        "KBMAT-MAT69: A fresh cook must report compiled passes and cache footprint telemetry");
     for (const EditorMaterialGraphCookPassResult& pass : first.passes) {
         Require(pass.succeeded, "KBMAT-MAT30: Every cooked pass must succeed");
         Require(!pass.cacheHit, "KBMAT-MAT30: A fresh cook must be a real compile, not a cache hit");
         Require(std::filesystem::exists(pass.binaryPath, error) && std::filesystem::file_size(pass.binaryPath, error) > 0U,
             "KBMAT-MAT30: Each cooked pass must leave a non-empty binary in the cache");
+        Require(pass.binaryByteSize > 0U, "KBMAT-MAT69: Cook pass telemetry must report binary byte size");
     }
 
     // Re-cooking the unchanged graph must dedupe on the source/cook hash (no recompile).
     const EditorMaterialGraphCookResult second = service.CookNow(assetId, MakeConstantColorMaterial("0.2 0.4 0.6 1"));
     Require(second.status == EditorMaterialGraphCookStatus::UpToDate,
         "KBMAT-MAT30: Re-cooking an unchanged graph must report UpToDate via the cache");
+    Require(second.cacheHitPassCount == second.passes.size() && second.compiledPassCount == 0U,
+        "KBMAT-MAT69: Re-cooking an unchanged graph must report pass-level cache hits");
     for (const EditorMaterialGraphCookPassResult& pass : second.passes) {
         Require(pass.succeeded && pass.cacheHit,
             "KBMAT-MAT30: Re-cooking an unchanged graph must hit the cache for every pass");
@@ -171,6 +176,36 @@ void RunSynchronousCookProducesBinaryTest() {
         "KBMAT-MAT30: Distinct graphs must have distinct source hashes");
     Require(other.passes.front().binaryPath != first.passes.front().binaryPath,
         "KBMAT-MAT30: Distinct graphs must stage distinct binaries");
+}
+
+void RunCookBudgetTelemetryWarningTest() {
+    EditorMaterialGraphCookConfig config = MakeCookConfig("mat69_budget");
+    config.cacheEntryWarningThreshold = 0U;
+    config.cacheByteWarningThreshold = 0U;
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x6900U };
+    const EditorMaterialGraphCookResult first = service.CookNow(assetId, MakeConstantColorMaterial("0.3 0.6 0.9 1"));
+    Require(first.status == EditorMaterialGraphCookStatus::Ready &&
+            first.compiledPassCount == first.passes.size() &&
+            first.cacheHitPassCount == 0U &&
+            first.cacheEntryCount > 0U &&
+            first.cacheByteSize > 0U,
+        "KBMAT-MAT69: Cook telemetry must expose compile count and cache footprint");
+    bool foundBudgetWarning = first.budgetWarning;
+    for (const std::string& diagnostic : first.diagnostics) {
+        foundBudgetWarning = foundBudgetWarning || diagnostic.find("graph cook budget exceeded") != std::string::npos;
+    }
+    Require(foundBudgetWarning,
+        "KBMAT-MAT69: Exceeding cook/cache budgets must emit a visible warning diagnostic");
+
+    const EditorMaterialGraphCookResult second = service.CookNow(assetId, MakeConstantColorMaterial("0.3 0.6 0.9 1"));
+    Require(second.status == EditorMaterialGraphCookStatus::UpToDate &&
+            second.cacheHitPassCount == second.passes.size() &&
+            second.compiledPassCount == 0U,
+        "KBMAT-MAT69: Budget telemetry must preserve cache-hit reporting on unchanged cooks");
 }
 
 void RunAsyncDebouncedCookTest() {
@@ -272,6 +307,7 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunCookBannerMappingTest();
 #if defined(KB_EDITOR_GRAPH_SHADERC_PATH)
     RunSynchronousCookProducesBinaryTest();
+    RunCookBudgetTelemetryWarningTest();
     RunAsyncDebouncedCookTest();
     RunHotReloadLastGoodTest();
 #endif

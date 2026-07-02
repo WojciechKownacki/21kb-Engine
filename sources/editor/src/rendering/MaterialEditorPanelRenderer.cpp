@@ -300,6 +300,8 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
 }
 
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphInputPins(kb::render::RenderMaterialGraphNodeKind kind);
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphInputPins(const kb::render::RenderMaterialGraphNode& node);
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphOutputPins(const kb::render::RenderMaterialGraphNode& node);
 
 // Turn a camelCase pin name (e.g. "baseColor") into a readable label ("Base Color"). Used as the fallback
 // label for nodes that are not in the editor's explicit pin tables, so every node renders sensible pins.
@@ -375,6 +377,32 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     };
 }
 
+[[nodiscard]] POINT InputPinPoint(const RECT& nodeRect, const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept {
+    const std::vector<std::pair<std::string, std::string>> pins = GraphInputPins(node);
+    int index = 0;
+    for (std::size_t i = 0U; i < pins.size(); ++i) {
+        if (pins[i].first == pin) {
+            index = static_cast<int>(i);
+            break;
+        }
+    }
+    const float scale = NodeUiScale(nodeRect, node.kind);
+    const int pinInset = ScaleMetric(6, scale);
+    const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
+    const int count = static_cast<int>(std::max<std::size_t>(1U, pins.size()));
+    const int bodyTop = nodeRect.top + headerHeight;
+    const int bodyHeight = std::max(1, RectHeight(nodeRect) - headerHeight);
+    const int rowHeight = std::min(ScaleMetric(kGraphNodePinRowHeight, scale), std::max(ScaleMetric(16, scale), bodyHeight / count));
+    const int total = count * rowHeight;
+    const int bodyCenter = bodyTop + (bodyHeight / 2);
+    const int y = bodyCenter - (total / 2) + (index * rowHeight) + (rowHeight / 2);
+    const int bottom = static_cast<int>(nodeRect.bottom);
+    return POINT{
+        nodeRect.left + pinInset,
+        std::clamp(y, bodyTop + pinInset, bottom - pinInset),
+    };
+}
+
 [[nodiscard]] POINT OutputPinPoint(const RECT& node, std::size_t index, std::size_t count) noexcept {
     if (count <= 1U) {
         return OutputPinPoint(node);
@@ -443,9 +471,22 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
             { "emissive", "Emissive" },
             { "occlusion", "Occlusion" },
             { "alpha", "Alpha" },
+            { "worldPositionOffset", "WPO" },
+            { "customizedUv0", "Custom UV0" },
+            { "displacement", "Displacement" },
         };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { { "texture", "Tex." }, { "uv", "UV" } };
+    case kb::render::RenderMaterialGraphNodeKind::Reroute:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
+        return { { "input", "In" } };
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return { { "input", "In" } };
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return {};
+    case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
+        return { { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::Add:
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
     case kb::render::RenderMaterialGraphNodeKind::Multiply:
@@ -625,20 +666,59 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
         return { { "rgba", "RGBA" } };
+    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
+        return {
+            { "value", "Value" },
+            { "scalar", "Scalar" },
+            { "xyz", "XYZ" },
+            { "rgba", "RGBA" },
+            { "r", "R" },
+            { "g", "G" },
+            { "b", "B" },
+            { "a", "A" },
+        };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { { "color", "RGBA" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
+    case kb::render::RenderMaterialGraphNodeKind::Reroute:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
+        return { { "output", "Out" } };
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return { { "output", "Out" } };
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return {};
+    case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
+        return { { "value", "Value" } };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return { { "texture", "Texture" } };
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
         return { { "normal", "Normal" } };
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return { { "uv", "UV" } };
+    case kb::render::RenderMaterialGraphNodeKind::LayerStack:
+        return { { "attributes", "Attributes" } };
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         return {};
     default:
         break;
     }
     return GraphPinFallback(kb::render::RenderMaterialGraphNodeOutputPinNames(kind));
+}
+
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphInputPins(const kb::render::RenderMaterialGraphNode& node) {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        return GraphPinFallback(kb::render::RenderMaterialGraphNodeInputPinNames(node));
+    }
+    return GraphInputPins(node.kind);
+}
+
+[[nodiscard]] std::vector<std::pair<std::string, std::string>> GraphOutputPins(const kb::render::RenderMaterialGraphNode& node) {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::CustomCode ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+        return GraphPinFallback(kb::render::RenderMaterialGraphNodeOutputPinNames(node));
+    }
+    return GraphOutputPins(node.kind);
 }
 
 [[nodiscard]] std::string GraphNodeTitle(kb::render::RenderMaterialGraphNodeKind kind) {
@@ -663,6 +743,36 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return "RGB Parameter";
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
         return "Image Parameter";
+    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
+        return "Collection Parameter";
+    case kb::render::RenderMaterialGraphNodeKind::CustomCode:
+        return "Custom Code";
+    case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
+        return "Quality Switch";
+    case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        return "Feature Level Switch";
+    case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return "Shading Path Switch";
+    case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return "Shader Stage Switch";
+    case kb::render::RenderMaterialGraphNodeKind::Reroute:
+        return "Reroute";
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+        return "Named In";
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
+        return "Named Out";
+    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
+        return "Composite In";
+    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
+        return "Composite Out";
+    case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
+        return "Function In";
+    case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
+        return "Function Out";
+    case kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return "Function Call";
+    case kb::render::RenderMaterialGraphNodeKind::LayerStack:
+        return "Layer Stack";
     case kb::render::RenderMaterialGraphNodeKind::Add:
         return "Add";
     case kb::render::RenderMaterialGraphNodeKind::Subtract:
@@ -798,7 +908,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
     return std::string{ kb::render::RenderMaterialGraphNodeKindName(kind) };
 }
 
-[[nodiscard]] COLORREF GraphOutputPinColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept;
+[[nodiscard]] COLORREF GraphOutputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept;
 
 void DrawGraphGrid(HDC dc, const RECT& canvas, float zoom = 1.0F, int panX = 0, int panY = 0) {
     GdiDrawing::FillRectColor(dc, canvas, BlenderGraphTheme::Canvas);
@@ -869,7 +979,7 @@ void DrawGraphLink(
     std::string_view toPin,
     const kb::render::RenderMaterialGraphNode& fromGraphNode,
     const kb::render::RenderMaterialGraphNode& toGraphNode) {
-    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(fromGraphNode.kind);
+    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(fromGraphNode);
     std::size_t outputIndex = 0U;
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
         if (outputPins[index].first == fromPin) {
@@ -878,12 +988,12 @@ void DrawGraphLink(
         }
     }
     const POINT from = OutputPinPoint(fromNode, fromGraphNode.kind, outputIndex, outputPins.size());
-    const POINT to = InputPinPoint(toNode, toGraphNode.kind, toPin);
+    const POINT to = InputPinPoint(toNode, toGraphNode, toPin);
     DrawGraphBezier(
         dc,
         from,
         to,
-        outputPins.empty() ? BlenderGraphTheme::LinkFallback : GraphOutputPinColor(fromGraphNode.kind, fromPin),
+        outputPins.empty() ? BlenderGraphTheme::LinkFallback : GraphOutputPinColor(fromGraphNode, fromPin),
         std::clamp(ScaleMetric(3, NodeUiScale(fromNode, fromGraphNode.kind)), 1, 3));
 }
 
@@ -973,7 +1083,7 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
             continue;
         }
 
-        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(fromNode->kind);
+        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(*fromNode);
         std::size_t outputIndex = 0U;
         for (std::size_t index = 0U; index < outputPins.size(); ++index) {
             if (outputPins[index].first == link.fromPin) {
@@ -982,7 +1092,7 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
             }
         }
         const POINT from = OutputPinPoint(*fromRect, fromNode->kind, outputIndex, outputPins.size());
-        const POINT to = InputPinPoint(*toRect, toNode->kind, link.toPin);
+        const POINT to = InputPinPoint(*toRect, *toNode, link.toPin);
         const int radius = std::max(8, ScaleMetric(9, sceneContext.MaterialGraphZoom()));
         if (PointNearGraphBezier(from, to, x, y, radius)) {
             return MaterialEditorGraphLinkHit{
@@ -998,7 +1108,14 @@ std::optional<MaterialEditorGraphLinkHit> MaterialEditorPanelRenderer::GraphLink
 
 namespace {
 
-void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& clip, bool tinted = false) {
+void DrawGraphPin(
+    HDC dc,
+    POINT point,
+    COLORREF color,
+    float scale,
+    const RECT& clip,
+    bool tinted = false,
+    MaterialEditorGraphPinDragState dragState = MaterialEditorGraphPinDragState::None) {
     const int r = std::max(3, ScaleMetric(kGraphNodePinRadius, scale));
     const COLORREF edge = RGB(9, 9, 9);
     const COLORREF outer = ScaleColor(color, tinted ? 0.64F : 0.78F);
@@ -1060,25 +1177,76 @@ void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& 
             std::max(1.0F, coreRect.Width * 0.72F),
             std::max(1.0F, coreRect.Height * 0.42F),
         });
+    if (dragState != MaterialEditorGraphPinDragState::None) {
+        const COLORREF ringColor = dragState == MaterialEditorGraphPinDragState::Compatible
+            ? RGB(92, 210, 126)
+            : (dragState == MaterialEditorGraphPinDragState::Incompatible ? RGB(231, 88, 88) : RGB(118, 174, 255));
+        Gdiplus::Pen ringPen(ToGdiplusColor(ringColor, dragState == MaterialEditorGraphPinDragState::Source ? 190U : 220U), std::max<Gdiplus::REAL>(2.0F, scale * 2.0F));
+        const float ringInset = std::max(1.0F, scale * 1.2F);
+        Gdiplus::RectF ringRect{
+            outerRect.X - ringInset,
+            outerRect.Y - ringInset,
+            outerRect.Width + (ringInset * 2.0F),
+            outerRect.Height + (ringInset * 2.0F),
+        };
+        graphics.DrawEllipse(&ringPen, ringRect);
+    }
 }
 
-[[nodiscard]] COLORREF GraphInputPinColor(std::string_view pin) noexcept {
-    if (pin == "baseColor") {
+[[nodiscard]] MaterialEditorGraphPinDragState GraphPinDragStateForNode(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialGraphNode& node,
+    std::string_view pin,
+    bool outputPin) noexcept {
+    if (!sceneContext.HasMaterialGraphPinConnection() ||
+        sceneContext.MaterialGraphPinConnectionAssetId() != assetId) {
+        return MaterialEditorGraphPinDragState::None;
+    }
+    return MaterialEditorPanelRenderer::GraphPinDragState(
+        graph,
+        sceneContext.MaterialGraphPinConnectionNodeId(),
+        sceneContext.MaterialGraphPinConnectionPin(),
+        sceneContext.MaterialGraphPinConnectionIsOutput(),
+        node.id,
+        pin,
+        outputPin);
+}
+
+[[nodiscard]] COLORREF GraphPinTypeColor(kb::render::RenderMaterialGraphPinType type) noexcept {
+    switch (type) {
+    case kb::render::RenderMaterialGraphPinType::Float:
+        return RGB(178, 178, 178);
+    case kb::render::RenderMaterialGraphPinType::Float2:
+        return RGB(91, 157, 216);
+    case kb::render::RenderMaterialGraphPinType::Float3:
+        return RGB(82, 181, 159);
+    case kb::render::RenderMaterialGraphPinType::Float4:
+        return RGB(218, 151, 76);
+    case kb::render::RenderMaterialGraphPinType::Color:
         return RGB(220, 170, 48);
-    }
-    if (pin == "normal") {
-        return RGB(92, 157, 214);
-    }
-    if (pin == "texture") {
+    case kb::render::RenderMaterialGraphPinType::Texture2D:
+    case kb::render::RenderMaterialGraphPinType::TextureCube:
+    case kb::render::RenderMaterialGraphPinType::Texture3D:
+    case kb::render::RenderMaterialGraphPinType::Texture2DArray:
         return RGB(184, 143, 214);
-    }
-    if (pin == "uv") {
-        return RGB(92, 157, 214);
-    }
-    if (pin == "emissive") {
-        return RGB(220, 170, 48);
+    case kb::render::RenderMaterialGraphPinType::Sampler:
+        return RGB(150, 133, 220);
+    case kb::render::RenderMaterialGraphPinType::Normal:
+        return RGB(95, 165, 223);
+    case kb::render::RenderMaterialGraphPinType::Bool:
+        return RGB(118, 187, 102);
+    case kb::render::RenderMaterialGraphPinType::MaterialAttributes:
+        return RGB(218, 112, 176);
+    case kb::render::RenderMaterialGraphPinType::Unknown:
+        return RGB(176, 176, 176);
     }
     return RGB(176, 176, 176);
+}
+
+[[nodiscard]] COLORREF GraphInputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept {
+    return GraphPinTypeColor(kb::render::RenderMaterialGraphPinDataType(node, pin, false));
 }
 
 [[nodiscard]] COLORREF GraphOutputPinLabelColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
@@ -1090,32 +1258,17 @@ void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& 
 }
 
 [[nodiscard]] COLORREF GraphOutputPinColor(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
-    if (pin == "color" || pin == "rgba") {
-        return RGB(220, 170, 48);
-    }
-    if (pin == "normal") {
-        return RGB(92, 157, 214);
-    }
-    if (pin == "uv" || pin == "xy" || pin == "xyz") {
-        return RGB(92, 157, 214);
-    }
-    if (pin == "texture") {
-        return RGB(184, 143, 214);
-    }
-    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "r") {
-        return RGB(214, 82, 82);
-    }
-    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "g") {
-        return RGB(92, 178, 88);
-    }
-    if (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && pin == "b") {
-        return RGB(84, 123, 218);
-    }
-    return RGB(176, 176, 176);
+    return GraphPinTypeColor(kb::render::RenderMaterialGraphPinDataType(kind, pin, true));
+}
+
+[[nodiscard]] COLORREF GraphOutputPinColor(const kb::render::RenderMaterialGraphNode& node, std::string_view pin) noexcept {
+    return GraphPinTypeColor(kb::render::RenderMaterialGraphPinDataType(node, pin, true));
 }
 
 [[nodiscard]] bool GraphOutputPinTinted(kb::render::RenderMaterialGraphNodeKind kind, std::string_view pin) noexcept {
-    return kind == kb::render::RenderMaterialGraphNodeKind::TextureSample && (pin == "r" || pin == "g" || pin == "b");
+    return (kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
+            kind == kb::render::RenderMaterialGraphNodeKind::CollectionParameter) &&
+        (pin == "r" || pin == "g" || pin == "b");
 }
 
 [[nodiscard]] COLORREF GraphNodeHeaderColor(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
@@ -1131,6 +1284,7 @@ void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& 
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector2:
     case kb::render::RenderMaterialGraphNodeKind::ConstantVector:
     case kb::render::RenderMaterialGraphNodeKind::ParameterVector:
+    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
     case kb::render::RenderMaterialGraphNodeKind::Uv:
     case kb::render::RenderMaterialGraphNodeKind::BreakVector:
     case kb::render::RenderMaterialGraphNodeKind::MakeVector:
@@ -1142,6 +1296,16 @@ void DrawGraphPin(HDC dc, POINT point, COLORREF color, float scale, const RECT& 
     case kb::render::RenderMaterialGraphNodeKind::ConstantScalar:
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
         return RGB(68, 68, 68);
+    case kb::render::RenderMaterialGraphNodeKind::Reroute:
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
+    case kb::render::RenderMaterialGraphNodeKind::FunctionInput:
+    case kb::render::RenderMaterialGraphNodeKind::FunctionOutput:
+        return RGB(61, 86, 76);
+    case kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall:
+        return RGB(68, 72, 104);
     default:
         return RGB(54, 64, 78);
     }
@@ -1173,6 +1337,76 @@ void DrawGraphNodeFrame(HDC dc, const RECT& rect, COLORREF body, float scale) {
         72U,
         cornerDiameter + contactSpread);
     FillRoundedRect(dc, rect, body, ScaleMetric(kGraphNodeCornerDiameter, scale));
+}
+
+[[nodiscard]] COLORREF GraphCommentColor(std::uint32_t color) noexcept {
+    if (color == 0U) {
+        return RGB(74, 99, 133);
+    }
+    return RGB((color >> 16U) & 0xFFU, (color >> 8U) & 0xFFU, color & 0xFFU);
+}
+
+void DrawGraphCommentBox(HDC dc, const RECT& rect, const kb::render::RenderMaterialGraphCommentBox& comment, bool selected) {
+    const COLORREF color = GraphCommentColor(comment.color);
+    const float scale = std::clamp(
+        static_cast<float>(RectWidth(rect)) / static_cast<float>(std::max(1, comment.width)),
+        0.45F,
+        1.8F);
+    const int cornerDiameter = std::max(4, ScaleMetric(7, scale));
+    FillRoundedRectAlpha(dc, rect, color, selected ? 78U : 54U, cornerDiameter);
+    GdiDrawing::FillRectAlpha(dc, RECT{ rect.left + 2, rect.top + 2, rect.right - 2, std::min(rect.bottom - 2, rect.top + ScaleMetric(28, scale)) }, color, selected ? 92 : 68);
+    StrokeRoundedRect(dc, rect, selected ? BlenderGraphTheme::NodeOutlineSelected : ScaleColor(color, 1.28F), cornerDiameter, selected ? 2 : 1);
+    const RECT title{
+        rect.left + ScaleMetric(10, scale),
+        rect.top + ScaleMetric(3, scale),
+        rect.right - ScaleMetric(10, scale),
+        std::min(rect.bottom, rect.top + ScaleMetric(26, scale)),
+    };
+    const std::string label = comment.text.empty() ? std::string{ "Comment" } : comment.text;
+    DrawGraphText(dc, title, label.c_str(), RGB(239, 244, 249), ScaleMetric(kGraphPinFontSize, scale), FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+void DrawGraphCompositeBox(HDC dc, const RECT& rect, const kb::render::RenderMaterialGraphCompositeSubgraph& composite) {
+    const COLORREF color = GraphCommentColor(composite.color);
+    const float scale = std::clamp(
+        static_cast<float>(RectWidth(rect)) / static_cast<float>(std::max(1, composite.width)),
+        0.45F,
+        1.8F);
+    const int cornerDiameter = std::max(4, ScaleMetric(7, scale));
+    FillRoundedRectAlpha(dc, rect, color, composite.collapsed ? 86U : 44U, cornerDiameter);
+    GdiDrawing::FillRectAlpha(dc, RECT{ rect.left + 2, rect.top + 2, rect.right - 2, std::min(rect.bottom - 2, rect.top + ScaleMetric(30, scale)) }, color, composite.collapsed ? 108 : 72);
+    StrokeRoundedRect(dc, rect, composite.collapsed ? ScaleColor(color, 1.45F) : ScaleColor(color, 1.18F), cornerDiameter, composite.collapsed ? 2 : 1);
+    const RECT title{
+        rect.left + ScaleMetric(10, scale),
+        rect.top + ScaleMetric(3, scale),
+        rect.right - ScaleMetric(10, scale),
+        std::min(rect.bottom, rect.top + ScaleMetric(28, scale)),
+    };
+    const std::string label = composite.name.empty() ? std::string{ "Composite" } : composite.name;
+    DrawGraphText(dc, title, label.c_str(), RGB(239, 244, 249), ScaleMetric(kGraphPinFontSize, scale), FW_SEMIBOLD, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    const RECT status{
+        rect.left + ScaleMetric(10, scale),
+        std::min(rect.bottom - ScaleMetric(24, scale), rect.top + ScaleMetric(34, scale)),
+        rect.right - ScaleMetric(10, scale),
+        rect.bottom - ScaleMetric(4, scale),
+    };
+    const std::string summary = std::to_string(composite.nodeIds.size()) + (composite.nodeIds.size() == 1U ? " node" : " nodes");
+    DrawGraphText(dc, status, summary.c_str(), RGB(205, 218, 226), ScaleMetric(kGraphPinFontSize, scale), FW_NORMAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
+[[nodiscard]] bool GraphNodeHiddenByCollapsedComposite(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId) noexcept {
+    for (const kb::render::RenderMaterialGraphCompositeSubgraph& composite : graph.composites) {
+        if (!composite.collapsed) {
+            continue;
+        }
+        if (std::find(composite.nodeIds.begin(), composite.nodeIds.end(), nodeId) != composite.nodeIds.end()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 [[nodiscard]] std::string TextureSampleStableId(const kb::render::RenderMaterialGraphNode& node) {
@@ -1465,7 +1699,16 @@ void DrawConstantValue(HDC dc, const RECT& nodeRect, const kb::render::RenderMat
     }
 }
 
-void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render::RenderMaterialGraphNode& node, bool selected, const kb::render::RenderMaterialAssetData* material, const EditorSceneContext& sceneContext) {
+void DrawGraphNode(
+    HDC dc,
+    const RECT& rect,
+    const RECT& clip,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    kb::assets::AssetId assetId,
+    const kb::render::RenderMaterialGraphNode& node,
+    bool selected,
+    const kb::render::RenderMaterialAssetData* material,
+    const EditorSceneContext& sceneContext) {
     const float scale = NodeUiScale(rect, node.kind);
     const int headerHeight = ScaleMetric(kGraphNodeHeaderHeight, scale);
     const int cornerDiameter = ScaleMetric(kGraphNodeCornerDiameter, scale);
@@ -1495,11 +1738,18 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
     DrawTextureParameterValue(dc, rect, node, material, sceneContext);
     DrawConstantValue(dc, rect, node, sceneContext);
 
-    const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node.kind);
+    const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node);
     if (!inputPins.empty()) {
         for (std::size_t index = 0; index < inputPins.size(); ++index) {
-            const POINT scaledPin = InputPinPoint(rect, node.kind, inputPins[index].first);
-            DrawGraphPin(dc, scaledPin, GraphInputPinColor(inputPins[index].first), scale, clip);
+            const POINT scaledPin = InputPinPoint(rect, node, inputPins[index].first);
+            DrawGraphPin(
+                dc,
+                scaledPin,
+                GraphInputPinColor(node, inputPins[index].first),
+                scale,
+                clip,
+                false,
+                GraphPinDragStateForNode(graph, sceneContext, assetId, node, inputPins[index].first, false));
             const bool textureSample = node.kind == kb::render::RenderMaterialGraphNodeKind::TextureSample;
             const RECT texturePreview = textureSample ? MaterialEditorPanelTextureSamplePreviewRect(rect) : RECT{};
             const int inputLabelRight = textureSample
@@ -1520,16 +1770,17 @@ void DrawGraphNode(HDC dc, const RECT& rect, const RECT& clip, const kb::render:
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
     }
-    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(node.kind);
+    const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(node);
     for (std::size_t index = 0U; index < outputPins.size(); ++index) {
         const POINT output = OutputPinPoint(rect, node.kind, index, outputPins.size());
         DrawGraphPin(
             dc,
             output,
-            GraphOutputPinColor(node.kind, outputPins[index].first),
+            GraphOutputPinColor(node, outputPins[index].first),
             scale,
             clip,
-            GraphOutputPinTinted(node.kind, outputPins[index].first));
+            GraphOutputPinTinted(node.kind, outputPins[index].first),
+            GraphPinDragStateForNode(graph, sceneContext, assetId, node, outputPins[index].first, true));
         RECT outputLabelRect{
             rect.left + ScaleMetric(8, scale),
             output.y - ScaleMetric(11, scale),
@@ -1578,7 +1829,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
 
     POINT anchor{};
     if (sceneContext.MaterialGraphPinConnectionIsOutput()) {
-        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(node->kind);
+        const std::vector<std::pair<std::string, std::string>>outputPins = GraphOutputPins(*node);
         std::size_t pinIndex = 0U;
         for (std::size_t index = 0U; index < outputPins.size(); ++index) {
             if (outputPins[index].first == sceneContext.MaterialGraphPinConnectionPin()) {
@@ -1588,7 +1839,7 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
         }
         anchor = OutputPinPoint(*nodeRect, node->kind, pinIndex, outputPins.size());
     } else {
-        const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(node->kind);
+        const std::vector<std::pair<std::string, std::string>>inputPins = GraphInputPins(*node);
         std::string_view pinName = inputPins.empty() ? std::string_view{} : inputPins.front().first;
         for (const auto& inputPin : inputPins) {
             if (inputPin.first == sceneContext.MaterialGraphPinConnectionPin()) {
@@ -1596,18 +1847,51 @@ void DrawPendingGraphConnection(HDC dc, const RECT& content, const kb::render::R
                 break;
             }
         }
-        anchor = InputPinPoint(*nodeRect, node->kind, pinName);
+        anchor = InputPinPoint(*nodeRect, *node, pinName);
     }
 
     const POINT cursor{ sceneContext.MaterialGraphPinConnectionX(), sceneContext.MaterialGraphPinConnectionY() };
+    COLORREF pendingColor = sceneContext.MaterialGraphPinConnectionIsOutput()
+        ? GraphOutputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin())
+        : GraphInputPinColor(*node, sceneContext.MaterialGraphPinConnectionPin());
+    if (const std::optional<MaterialEditorGraphPinHit> hoverPin =
+            MaterialEditorPanelRenderer::GraphPinAt(content, graph, sceneContext, assetId, cursor.x, cursor.y)) {
+        const MaterialEditorGraphPinDragState hoverState = MaterialEditorPanelRenderer::GraphPinDragState(
+            graph,
+            sceneContext.MaterialGraphPinConnectionNodeId(),
+            sceneContext.MaterialGraphPinConnectionPin(),
+            sceneContext.MaterialGraphPinConnectionIsOutput(),
+            hoverPin->nodeId,
+            hoverPin->pin,
+            hoverPin->direction == MaterialEditorGraphPinDirection::Output);
+        if (hoverState == MaterialEditorGraphPinDragState::Compatible) {
+            pendingColor = RGB(92, 210, 126);
+        } else if (hoverState == MaterialEditorGraphPinDragState::Incompatible) {
+            pendingColor = RGB(231, 88, 88);
+        }
+    }
     DrawGraphBezier(
         dc,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? anchor : cursor,
         sceneContext.MaterialGraphPinConnectionIsOutput() ? cursor : anchor,
-        sceneContext.MaterialGraphPinConnectionIsOutput()
-            ? GraphOutputPinColor(node->kind, sceneContext.MaterialGraphPinConnectionPin())
-            : GraphInputPinColor(sceneContext.MaterialGraphPinConnectionPin()),
+        pendingColor,
         std::clamp(ScaleMetric(3, sceneContext.MaterialGraphZoom()), 1, 3));
+}
+
+void DrawGraphBoxSelection(HDC dc, const EditorSceneContext& sceneContext) {
+    if (!sceneContext.IsMaterialGraphBoxSelecting()) {
+        return;
+    }
+    const RECT selection = MaterialEditorPanelNormalizedRect(RECT{
+        sceneContext.MaterialGraphBoxSelectionStartX(),
+        sceneContext.MaterialGraphBoxSelectionStartY(),
+        sceneContext.MaterialGraphBoxSelectionCurrentX(),
+        sceneContext.MaterialGraphBoxSelectionCurrentY(),
+    });
+    if (MaterialEditorPanelRectWidth(selection) < 2 && MaterialEditorPanelRectHeight(selection) < 2) {
+        return;
+    }
+    StrokeRoundedRect(dc, selection, sceneContext.MaterialGraphBoxSelectionAdditive() ? RGB(118, 174, 255) : RGB(92, 145, 224), 4, 1);
 }
 
 void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
@@ -1624,10 +1908,55 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
         menu.top + kMaterialEditorGraphMenuPadding + 22,
     };
     StrokeRoundedRect(dc, search, RGB(55, 111, 197), 12, 1);
-    DrawText(dc, RECT{ search.left + 10, search.top, search.right - 10, search.bottom }, "Search nodes...", RGB(172, 184, 198), 10);
+    const std::string searchText = sceneContext.MaterialGraphContextMenuSearchQuery().empty()
+        ? std::string{ "Search nodes..." }
+        : std::string{ sceneContext.MaterialGraphContextMenuSearchQuery() };
+    DrawText(
+        dc,
+        RECT{ search.left + 10, search.top, search.right - 10, search.bottom },
+        searchText.c_str(),
+        sceneContext.MaterialGraphContextMenuSearchQuery().empty() ? RGB(172, 184, 198) : RGB(236, 242, 249),
+        10);
 
     int y = menu.top + kMaterialEditorGraphMenuPadding + kMaterialEditorGraphMenuSearchHeight + kMaterialEditorGraphMenuPadding;
-    const bool hasSelectedNode = sceneContext.SelectedMaterialGraphNodeId() != 0U;
+    const bool hasSelectedGraphObject = sceneContext.SelectedMaterialGraphNodeId() != 0U ||
+        sceneContext.SelectedMaterialGraphCommentId() != 0U;
+    const std::vector<MaterialEditorGraphMenuCommand>& favoriteCommands = sceneContext.MaterialGraphPaletteFavoriteCommands();
+    const auto drawCommandRow = [&](MaterialEditorGraphMenuCommand command, std::size_t categoryIndex) {
+        const bool enabled = MaterialEditorGraphContextMenuCommandEnabled(command, hasSelectedGraphObject);
+        const bool commandHovered = sceneContext.IsMaterialGraphContextMenuCommandHovered(categoryIndex, command);
+        const bool favorite = sceneContext.IsMaterialGraphPaletteFavorite(command);
+        const RECT commandFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCommandHeight };
+        GdiDrawing::FillRectColor(
+            dc,
+            commandFill,
+            commandHovered
+                ? ProjectFilesPanelDrawing::Blend(RGB(24, 27, 33), RGB(166, 178, 193), 14)
+                : RGB(24, 27, 33));
+        const RECT favoriteRect{ menu.left + 11, y + 5, menu.left + 23, y + 17 };
+        GdiDrawing::DrawSharpFrame(dc, favoriteRect, favorite ? RGB(92, 145, 224) : RGB(66, 74, 86), RGB(32, 36, 43));
+        if (favorite) {
+            GdiDrawing::FillRectColor(dc, RECT{ favoriteRect.left + 3, favoriteRect.top + 3, favoriteRect.right - 3, favoriteRect.bottom - 3 }, RGB(118, 174, 255));
+        }
+        const RECT commandRow{ menu.left + 32, y, menu.right - 12, y + kMaterialEditorGraphMenuCommandHeight };
+        DrawText(
+            dc,
+            commandRow,
+            std::string{ MaterialEditorGraphContextMenuCommandName(command) }.c_str(),
+            enabled ? (commandHovered ? RGB(248, 250, 252) : RGB(213, 222, 235)) : RGB(102, 112, 126),
+            10,
+            commandHovered ? FW_SEMIBOLD : FW_NORMAL);
+        y += kMaterialEditorGraphMenuCommandHeight;
+    };
+
+    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
+        for (const MaterialEditorGraphMenuCommand command : commands) {
+            drawCommandRow(command, 0U);
+        }
+        return;
+    }
+
     for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
         const bool expanded = sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex);
         const bool categoryHovered = sceneContext.IsMaterialGraphContextMenuCategoryHovered(categoryIndex);
@@ -1649,26 +1978,9 @@ void DrawGraphContextMenu(HDC dc, const EditorSceneContext& sceneContext) {
             continue;
         }
 
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex);
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favoriteCommands);
         for (const MaterialEditorGraphMenuCommand command : commands) {
-            const bool enabled = MaterialEditorGraphContextMenuCommandEnabled(command, hasSelectedNode);
-            const bool commandHovered = sceneContext.IsMaterialGraphContextMenuCommandHovered(categoryIndex, command);
-            const RECT commandFill{ menu.left + 8, y, menu.right - 8, y + kMaterialEditorGraphMenuCommandHeight };
-            GdiDrawing::FillRectColor(
-                dc,
-                commandFill,
-                commandHovered
-                    ? ProjectFilesPanelDrawing::Blend(RGB(24, 27, 33), RGB(166, 178, 193), 14)
-                    : RGB(24, 27, 33));
-            const RECT commandRow{ menu.left + 32, y, menu.right - 12, y + kMaterialEditorGraphMenuCommandHeight };
-            DrawText(
-                dc,
-                commandRow,
-                std::string{ MaterialEditorGraphContextMenuCommandName(command) }.c_str(),
-                enabled ? (commandHovered ? RGB(248, 250, 252) : RGB(213, 222, 235)) : RGB(102, 112, 126),
-                10,
-                commandHovered ? FW_SEMIBOLD : FW_NORMAL);
-            y += kMaterialEditorGraphMenuCommandHeight;
+            drawCommandRow(command, categoryIndex);
         }
     }
 }
@@ -1685,7 +1997,23 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
 
     const int savedDc = SaveDC(dc);
     IntersectClipRect(dc, layout.graphCanvas.left, layout.graphCanvas.top, layout.graphCanvas.right, layout.graphCanvas.bottom);
+    for (const kb::render::RenderMaterialGraphCompositeSubgraph& composite : graphView.composites) {
+        const std::optional<RECT> compositeRect = MaterialEditorPanelRenderer::GraphCompositeRect(content, graphView, composite.id, sceneContext);
+        if (compositeRect.has_value()) {
+            DrawGraphCompositeBox(dc, *compositeRect, composite);
+        }
+    }
+    for (const kb::render::RenderMaterialGraphCommentBox& comment : graphView.comments) {
+        const std::optional<RECT> commentRect = MaterialEditorPanelRenderer::GraphCommentRect(content, graphView, comment.id, sceneContext);
+        if (commentRect.has_value()) {
+            DrawGraphCommentBox(dc, *commentRect, comment, sceneContext.IsMaterialGraphCommentSelected(comment.id));
+        }
+    }
     for (const kb::render::RenderMaterialGraphLink& link : graphView.links) {
+        if (GraphNodeHiddenByCollapsedComposite(graphView, link.fromNodeId) ||
+            GraphNodeHiddenByCollapsedComposite(graphView, link.toNodeId)) {
+            continue;
+        }
         const std::optional<RECT> from = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, link.fromNodeId, sceneContext, assetId);
         const std::optional<RECT> to = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, link.toNodeId, sceneContext, assetId);
         if (from.has_value() && to.has_value()) {
@@ -1697,11 +2025,24 @@ void DrawGraphCanvas(HDC dc, const RECT& content, const kb::render::RenderMateri
         }
     }
     for (const kb::render::RenderMaterialGraphNode& node : graphView.nodes) {
+        if (GraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
+            continue;
+        }
         const std::optional<RECT> nodeRect = MaterialEditorPanelRenderer::GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
         if (nodeRect.has_value()) {
-            DrawGraphNode(dc, *nodeRect, layout.graphCanvas, node, node.id == selectedNodeId, graph.nodes.empty() ? nullptr : &material, sceneContext);
+            DrawGraphNode(
+                dc,
+                *nodeRect,
+                layout.graphCanvas,
+                graph,
+                assetId,
+                node,
+                sceneContext.IsMaterialGraphNodeSelected(node.id) || node.id == selectedNodeId,
+                graph.nodes.empty() ? nullptr : &material,
+                sceneContext);
         }
     }
+    DrawGraphBoxSelection(dc, sceneContext);
     DrawPendingGraphConnection(dc, content, graphView, sceneContext, assetId);
     DrawGraphContextMenu(dc, sceneContext);
     RestoreDC(dc, savedDc);
@@ -1839,18 +2180,18 @@ void AppendMaterialInstanceDiagnostics(std::vector<std::string>& lines, bool& ha
     }
 
     const kb::assets::AssetMetadata* parentMetadata = manager.Registry().Find(instance.asset->parentMaterialAssetId);
-    const std::filesystem::path parentPath = parentMetadata != nullptr ? ResolveAssetPath(manager, *parentMetadata) : std::filesystem::path{};
-    kb::render::RenderMaterialAssetParseResult parent = parentPath.empty()
-        ? kb::render::RenderMaterialAssetParseResult{}
-        : kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(parentPath, instance.asset->parentMaterialAssetId);
-    if (parentPath.empty()) {
+    std::optional<kb::render::RenderMaterialAssetData> parent =
+        parentMetadata != nullptr ? sceneContext.ReadMaterialDocumentAsset(parentMetadata->id) : std::nullopt;
+    if (parentMetadata == nullptr || !parent.has_value()) {
         diagnostics.push_back("Error missing_parent_material: Parent material asset could not be resolved.");
         hasError = true;
-    } else {
-        AppendMaterialDiagnostics(diagnostics, hasError, parent);
+    }
+    std::optional<kb::render::RenderMaterialAssetData> effectiveMaterial;
+    if (parent.has_value()) {
+        effectiveMaterial = kb::render::BuildEffectiveRenderMaterialInstanceAsset(*parent, *instance.asset);
     }
     return MaterialEditorDocumentView{
-        .material = std::move(parent.asset),
+        .material = std::move(effectiveMaterial),
         .assetKind = "Material Instance",
         .parentMaterialAssetId = instance.asset->parentMaterialAssetId,
         .diagnostics = std::move(diagnostics),
@@ -1939,6 +2280,186 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
     int y = layout.detailsPanel.top + 34;
     const int rowHeight = 18;
     const int bottom = layout.detailsPanel.bottom - 10;
+    if (!rows.instanceParentRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Parent Chain", RGB(190, 169, 239), 10, FW_SEMIBOLD);
+        y += 22;
+        for (const MaterialEditorInstanceParentChainRow& row : rows.instanceParentRows) {
+            if (y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text = (row.current ? "* " : "  ") + row.label;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.current ? RGB(234, 225, 255) : RGB(201, 193, 222), 9, row.current ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
+    if (!rows.instanceOverrideGroupRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Instance Overrides", RGB(126, 201, 143), 10, FW_SEMIBOLD);
+        y += 22;
+        for (const MaterialEditorInstanceOverrideGroupRow& group : rows.instanceOverrideGroupRows) {
+            if (y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text =
+                std::string{ group.expanded ? "v " : "> " } +
+                MaterialEditorPanelParameterGroupName(group.group) + "  " +
+                std::to_string(group.activeOverrideCount) + "/" + std::to_string(group.totalParameterCount) + " overrides";
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(198, 222, 205), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
+    if (!rows.instanceStaticSwitchRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Static Switches", RGB(231, 183, 118), 10, FW_SEMIBOLD);
+        y += 22;
+        for (const MaterialEditorInstanceStaticSwitchRow& row : rows.instanceStaticSwitchRows) {
+            if (y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text = row.displayName + " = " + row.value + (row.overrideActive ? " override" : " parent");
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.overrideActive ? RGB(245, 215, 174) : RGB(205, 194, 181), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
+    if (!rows.layerTreeRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Layer Stack", RGB(157, 198, 241), 10, FW_SEMIBOLD);
+        y += 22;
+        for (const MaterialEditorLayerTreeRow& row : rows.layerTreeRows) {
+            if (y + rowHeight > bottom) {
+                break;
+            }
+            const std::string name = row.layerName.empty() ? ("Layer " + std::to_string(row.index + 1U)) : row.layerName;
+            const std::string text =
+                std::string{ row.enabled ? "[on] " : "[off] " } + name +
+                " L:" + std::to_string(row.layerFunctionAssetId) +
+                (row.index > 0U ? (" B:" + std::to_string(row.blendFunctionAssetId)) : std::string{}) +
+                " params " + std::to_string(row.layerParameterCount + row.blendParameterCount);
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), row.enabled ? RGB(205, 219, 238) : RGB(141, 151, 164), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        y += 6;
+    }
+
+    if (!rows.findResults.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Find", RGB(180, 213, 154), 10, FW_SEMIBOLD);
+        y += 22;
+        std::size_t resultCount = 0U;
+        for (const MaterialEditorFindResult& result : rows.findResults) {
+            if (y + rowHeight > bottom || resultCount >= 5U) {
+                break;
+            }
+            const std::string text = result.label + "  " + result.detail;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(205, 226, 194), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++resultCount;
+        }
+        y += 6;
+    }
+
+    if (!rows.nodePropertyRows.empty()) {
+        DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Node Properties", RGB(157, 198, 241), 10, FW_SEMIBOLD);
+        y += 22;
+        for (const MaterialEditorGraphNodeProperty& property : rows.nodePropertyRows) {
+            if (y + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight > bottom) {
+                break;
+            }
+            const RECT row{
+                layout.detailsPanel.left + 12,
+                y,
+                layout.detailsPanel.right - 12,
+                y + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight,
+            };
+            const RECT label{
+                row.left,
+                row.top,
+                row.left + std::min(122, std::max(72, RectWidth(row) / 2)),
+                row.bottom,
+            };
+            const RECT field{
+                label.right + 8,
+                row.top + 2,
+                row.right,
+                row.bottom - 2,
+            };
+            DrawText(dc, label, property.displayName.c_str(), RGB(198, 205, 218), 9, FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+            FillRoundedRect(dc, field, RGB(31, 35, 41), 4);
+            StrokeRoundedRect(dc, field, RGB(67, 76, 91), 4);
+
+            std::string valueText = MaterialEditorPanelParameterValueText(property.value);
+            if (property.kind == MaterialEditorGraphNodePropertyKind::Enum) {
+                const auto selected = std::ranges::find_if(property.options, [&property](const MaterialEditorGraphNodePropertyOption& option) {
+                    return option.value == property.value.text;
+                });
+                if (selected != property.options.end()) {
+                    valueText = selected->label;
+                }
+            }
+            if (property.kind == MaterialEditorGraphNodePropertyKind::TextureAsset) {
+                valueText += "  Pick";
+            }
+
+            if (property.kind == MaterialEditorGraphNodePropertyKind::Numeric) {
+                float normalized = property.value.numbers[0];
+                if (property.range.has_value()) {
+                    const float span = std::max(0.0001F, property.range->max - property.range->min);
+                    normalized = (property.value.numbers[0] - property.range->min) / span;
+                }
+                normalized = std::clamp(normalized, 0.0F, 1.0F);
+                const RECT fill{
+                    field.left + 1,
+                    field.top + 1,
+                    field.left + 1 + static_cast<int>(std::round(static_cast<float>(std::max(0, RectWidth(field) - 2)) * normalized)),
+                    field.bottom - 1,
+                };
+                if (fill.right > fill.left) {
+                    FillRoundedRect(dc, fill, RGB(55, 107, 142), 4);
+                }
+            } else if (property.kind == MaterialEditorGraphNodePropertyKind::Color) {
+                const RECT swatch{
+                    field.left + 5,
+                    field.top + 4,
+                    field.left + 25,
+                    field.bottom - 4,
+                };
+                const COLORREF color = RGB(
+                    std::clamp(static_cast<int>(property.value.numbers[0] * 255.0F), 0, 255),
+                    std::clamp(static_cast<int>(property.value.numbers[1] * 255.0F), 0, 255),
+                    std::clamp(static_cast<int>(property.value.numbers[2] * 255.0F), 0, 255));
+                FillRoundedRect(dc, swatch, color, 4);
+                StrokeRoundedRect(dc, swatch, RGB(18, 18, 18), 4);
+            } else if (property.kind == MaterialEditorGraphNodePropertyKind::Enum) {
+                DrawText(dc, RECT{ field.right - 22, field.top, field.right - 5, field.bottom }, "v", RGB(160, 176, 194), 9, FW_SEMIBOLD, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
+            const int textLeft = property.kind == MaterialEditorGraphNodePropertyKind::Color ? field.left + 32 : field.left + 8;
+            DrawText(dc, RECT{ textLeft, field.top, field.right - 22, field.bottom }, valueText.c_str(), RGB(229, 232, 238), 9, FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+            y += MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight;
+
+            if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
+                for (const MaterialEditorGraphNodePropertyOption& option : property.options) {
+                    if (y + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight > bottom) {
+                        break;
+                    }
+                    const bool active = option.value == property.value.text;
+                    const RECT optionRow{
+                        layout.detailsPanel.left + 28,
+                        y,
+                        layout.detailsPanel.right - 18,
+                        y + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight,
+                    };
+                    FillRoundedRect(dc, optionRow, active ? RGB(48, 83, 109) : RGB(27, 31, 37), 4);
+                    DrawText(dc, RECT{ optionRow.left + 8, optionRow.top, optionRow.right - 8, optionRow.bottom }, option.label.c_str(), active ? RGB(239, 246, 252) : RGB(202, 211, 222), 9, active ? FW_SEMIBOLD : FW_NORMAL, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+                    y += MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight;
+                }
+            }
+        }
+        y += 6;
+    }
+
     if (!rows.debugChannelRows.empty()) {
         DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Debug Channels", RGB(239, 203, 127), 10, FW_SEMIBOLD);
         y += 22;
@@ -1983,6 +2504,78 @@ void DrawDetailsPanel(HDC dc, const MaterialEditorPanelLayout& layout, const Mat
         y += rowHeight;
         ++slotCount;
     }
+
+    if (rows.materialStats.available || !rows.materialStats.warnings.empty()) {
+        if (y + 28 <= bottom) {
+            y += 6;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Material Stats", RGB(241, 208, 130), 10, FW_SEMIBOLD);
+            y += 22;
+        }
+        for (const MaterialEditorMaterialStatsPassRow& row : rows.materialStats.passRows) {
+            if (y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text =
+                row.passName + (row.graphProgram ? " graph" : " builtin") +
+                " inst " + std::to_string(row.instructionEstimate) +
+                " tex " + std::to_string(row.textureSampleCount) + "/" + std::to_string(row.samplerCount) +
+                " uni " + std::to_string(row.uniformCount) +
+                " var " + std::to_string(row.varyingCount) +
+                " variants " + std::to_string(row.staticVariantCount);
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(228, 215, 184), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+        }
+        std::size_t warningCount = 0U;
+        for (const std::string& warning : rows.materialStats.warnings) {
+            if (warningCount >= 3U || y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text = "! " + warning;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(244, 187, 121), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++warningCount;
+        }
+    }
+
+    if (rows.shaderViewer.available || !rows.shaderViewer.warnings.empty()) {
+        if (y + 28 <= bottom) {
+            y += 6;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 10, y, layout.detailsPanel.right - 10, y + 20 }, "Shader Viewer", RGB(177, 205, 246), 10, FW_SEMIBOLD);
+            y += 22;
+        }
+        std::size_t sourceCount = 0U;
+        for (const MaterialEditorShaderSourceView& source : rows.shaderViewer.sources) {
+            if (y + rowHeight > bottom || sourceCount >= 3U) {
+                break;
+            }
+            const std::string text =
+                source.passName + " " + source.stageName + " " + source.backendName +
+                " lines " + std::to_string(std::count(source.source.begin(), source.source.end(), '\n') + 1U);
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(204, 219, 241), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++sourceCount;
+        }
+        std::size_t reflectionCount = 0U;
+        for (const MaterialEditorShaderReflectionRow& row : rows.shaderViewer.reflectionRows) {
+            if (y + rowHeight > bottom || reflectionCount >= 4U) {
+                break;
+            }
+            const std::string text = row.category + " " + row.name + (row.stableId.empty() ? "" : (" [" + row.stableId + "]"));
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(192, 205, 225), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++reflectionCount;
+        }
+        std::size_t warningCount = 0U;
+        for (const std::string& warning : rows.shaderViewer.warnings) {
+            if (warningCount >= 2U || y + rowHeight > bottom) {
+                break;
+            }
+            const std::string text = "! " + warning;
+            DrawText(dc, RECT{ layout.detailsPanel.left + 12, y, layout.detailsPanel.right - 12, y + rowHeight }, text.c_str(), RGB(244, 187, 121), 9, FW_NORMAL, DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += rowHeight;
+            ++warningCount;
+        }
+    }
 }
 
 void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, const kb::assets::AssetMetadata& metadata) {
@@ -2007,9 +2600,24 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
     DrawPreviewOverlay(dc, layout, telemetry, cookBanner);
     DrawDiagnosticsPanel(dc, layout, *document);
     if (sceneContext.MaterialEditor().InfoPanelVisible()) {
+        const std::vector<MaterialEditorGraphNodeProperty> nodeProperties =
+            metadata.type == "RenderMaterialInstance"
+                ? std::vector<MaterialEditorGraphNodeProperty>{}
+                : sceneContext.MaterialEditor().GraphNodeProperties(sceneContext.MaterialEditor().SelectedNodeId());
         MaterialEditorPanelDetailsRows details = MaterialEditorPanelRenderer::DetailsRows(
             sceneContext.MaterialEditor().Parameters(),
-            sceneContext.MaterialEditor().SelectedNodeId());
+            sceneContext.MaterialEditor().SelectedNodeId(),
+            nodeProperties);
+        details.instanceParentRows = sceneContext.MaterialEditor().InstanceParentChainRows();
+        details.instanceOverrideGroupRows = sceneContext.MaterialEditor().InstanceOverrideGroups();
+        details.instanceStaticSwitchRows = sceneContext.MaterialEditor().InstanceStaticSwitchRows();
+        details.layerTreeRows = sceneContext.MaterialEditor().LayerTreeRows();
+        details.materialStats = sceneContext.MaterialEditor().MaterialStats();
+        details.shaderViewer = sceneContext.MaterialEditor().ShaderViewer();
+        details.findResults = sceneContext.MaterialEditor().FindResults();
+        if (metadata.type == "RenderMaterialInstance") {
+            details.title = "Material Instance Overrides";
+        }
         if (document->material.has_value()) {
             details.debugChannelRows = MaterialAssetFormatter::DebugChannelRows(document->material->desc, metadata.id.value);
         }

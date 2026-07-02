@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -104,6 +105,14 @@ struct MaterialEditorPanelDiagnosticRows {
 
 struct MaterialEditorPanelDetailsRows {
     std::string title;
+    std::vector<MaterialEditorInstanceParentChainRow> instanceParentRows;
+    std::vector<MaterialEditorInstanceOverrideGroupRow> instanceOverrideGroupRows;
+    std::vector<MaterialEditorInstanceStaticSwitchRow> instanceStaticSwitchRows;
+    std::vector<MaterialEditorLayerTreeRow> layerTreeRows;
+    MaterialEditorMaterialStatsModel materialStats;
+    MaterialEditorShaderViewerModel shaderViewer;
+    std::vector<MaterialEditorFindResult> findResults;
+    std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
     std::vector<MaterialDebugChannelRow> debugChannelRows;
     std::vector<std::string> parameterRows;
     std::vector<std::string> textureSlotRows;
@@ -116,6 +125,27 @@ struct MaterialEditorPanelParameterHit {
     MaterialEditorParameterValue value{};
 };
 
+enum class MaterialEditorGraphNodePropertyHitKind : std::uint8_t {
+    None,
+    Slider,
+    ColorPicker,
+    EnumField,
+    EnumOption,
+    TexturePicker,
+};
+
+struct MaterialEditorGraphNodePropertyHit {
+    MaterialEditorGraphNodePropertyHitKind kind = MaterialEditorGraphNodePropertyHitKind::None;
+    std::uint32_t nodeId = 0U;
+    std::string stableId;
+    std::string displayName;
+    MaterialEditorGraphNodePropertyKind propertyKind = MaterialEditorGraphNodePropertyKind::Numeric;
+    kb::render::RenderMaterialParameterType type = kb::render::RenderMaterialParameterType::Scalar;
+    MaterialEditorParameterValue value{};
+    std::size_t componentIndex = 0U;
+    std::string optionValue;
+};
+
 enum class MaterialEditorGraphPinDirection : std::uint8_t {
     Input,
     Output,
@@ -125,6 +155,14 @@ struct MaterialEditorGraphPinHit {
     std::uint32_t nodeId = 0U;
     MaterialEditorGraphPinDirection direction = MaterialEditorGraphPinDirection::Input;
     std::string pin;
+    kb::render::RenderMaterialGraphPinType type = kb::render::RenderMaterialGraphPinType::Unknown;
+};
+
+enum class MaterialEditorGraphPinDragState : std::uint8_t {
+    None,
+    Source,
+    Compatible,
+    Incompatible,
 };
 
 struct MaterialEditorGraphLinkHit {
@@ -144,8 +182,10 @@ struct MaterialEditorGraphConstantValueHit {
 
 enum class MaterialEditorGraphContextMenuHitKind : std::uint8_t {
     None,
+    Search,
     Category,
     Command,
+    FavoriteToggle,
 };
 
 struct MaterialEditorGraphContextMenuHit {
@@ -181,6 +221,8 @@ inline constexpr int GraphNodeHeaderHeight = 24;
 inline constexpr int GraphNodeBodyTopPadding = 6;
 inline constexpr int GraphNodePinRowHeight = 22;
 inline constexpr int TextureSlotRowCount = 5;
+inline constexpr int DetailsNodePropertyRowHeight = 22;
+inline constexpr int DetailsNodePropertyOptionHeight = 20;
 } // namespace MaterialEditorPanelMetrics
 #endif
 
@@ -203,6 +245,24 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
         return SIZE{ 176, 72 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
         return SIZE{ 176, 72 };
+    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
+        return SIZE{ 196, 112 };
+    case kb::render::RenderMaterialGraphNodeKind::CustomCode:
+        return SIZE{ 220, 88 };
+    case kb::render::RenderMaterialGraphNodeKind::Reroute:
+        return SIZE{ 116, 46 };
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration:
+    case kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeInput:
+    case kb::render::RenderMaterialGraphNodeKind::CompositeOutput:
+        return SIZE{ 180, 58 };
+    case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
+        return SIZE{ 220, 128 };
+    case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
+        return SIZE{ 220, 106 };
+    case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
+    case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
+        return SIZE{ 220, 86 };
     case kb::render::RenderMaterialGraphNodeKind::Uv:
         return SIZE{ 164, 52 };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
@@ -301,9 +361,32 @@ public:
     [[nodiscard]] static MaterialEditorPanelCommand CommandAt(const RECT& content, int x, int y) noexcept;
     [[nodiscard]] static MaterialEditorPanelDiagnosticRows DiagnosticRows(const kb::render::RenderMaterialAssetParseResult& result);
     [[nodiscard]] static MaterialEditorPanelDetailsRows DetailsRows(const std::vector<MaterialEditorParameter>& parameters, std::uint32_t selectedNodeId);
+    [[nodiscard]] static MaterialEditorPanelDetailsRows DetailsRows(
+        const std::vector<MaterialEditorParameter>& parameters,
+        std::uint32_t selectedNodeId,
+        const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties);
+    [[nodiscard]] static std::optional<MaterialEditorGraphNodePropertyHit> GraphNodePropertyAt(
+        const RECT& content,
+        const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
+        int x,
+        int y) noexcept;
     [[nodiscard]] static std::optional<MaterialEditorPanelParameterHit> ParameterAt(
         const RECT& content,
         const std::vector<MaterialEditorParameter>& parameters,
+        const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
+        std::size_t debugRowCount,
+        int x,
+        int y) noexcept;
+    [[nodiscard]] static std::optional<MaterialEditorPanelParameterHit> ParameterAt(
+        const RECT& content,
+        const std::vector<MaterialEditorParameter>& parameters,
+        std::size_t debugRowCount,
+        int x,
+        int y) noexcept;
+    [[nodiscard]] static std::optional<MaterialEditorPanelParameterHit> TextureParameterAt(
+        const RECT& content,
+        const std::vector<MaterialEditorParameter>& parameters,
+        const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
         std::size_t debugRowCount,
         int x,
         int y) noexcept;
@@ -317,6 +400,18 @@ public:
         int y) noexcept;
     [[nodiscard]] static std::optional<std::uint32_t> GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept;
     [[nodiscard]] static std::optional<std::uint32_t> GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, int x, int y) noexcept;
+    [[nodiscard]] static std::optional<std::uint32_t> GraphCommentAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId, int x, int y) noexcept;
+    [[nodiscard]] static std::vector<std::uint32_t> GraphNodeIdsInRect(
+        const RECT& content,
+        const kb::render::RenderMaterialGraphDocument& graph,
+        const EditorSceneContext& sceneContext,
+        kb::assets::AssetId assetId,
+        const RECT& selectionRect);
+    [[nodiscard]] static std::optional<MaterialEditorGraphPinHit> GraphPinAt(
+        const RECT& content,
+        const kb::render::RenderMaterialGraphDocument& graph,
+        int x,
+        int y) noexcept;
     [[nodiscard]] static std::optional<MaterialEditorGraphPinHit> GraphPinAt(
         const RECT& content,
         const kb::render::RenderMaterialGraphDocument& graph,
@@ -324,6 +419,14 @@ public:
         kb::assets::AssetId assetId,
         int x,
         int y);
+    [[nodiscard]] static MaterialEditorGraphPinDragState GraphPinDragState(
+        const kb::render::RenderMaterialGraphDocument& graph,
+        std::uint32_t pendingNodeId,
+        std::string_view pendingPin,
+        bool pendingOutputPin,
+        std::uint32_t candidateNodeId,
+        std::string_view candidatePin,
+        bool candidateOutputPin) noexcept;
     [[nodiscard]] static std::optional<MaterialEditorGraphLinkHit> GraphLinkAt(
         const RECT& content,
         const kb::render::RenderMaterialGraphDocument& graph,
@@ -349,6 +452,8 @@ public:
     [[nodiscard]] static MaterialEditorGraphContextMenuHit GraphContextMenuHit(const EditorSceneContext& sceneContext, int x, int y);
     [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId) noexcept;
     [[nodiscard]] static std::optional<RECT> GraphNodeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t nodeId, const EditorSceneContext& sceneContext, kb::assets::AssetId assetId) noexcept;
+    [[nodiscard]] static std::optional<RECT> GraphCommentRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t commentId, const EditorSceneContext& sceneContext) noexcept;
+    [[nodiscard]] static std::optional<RECT> GraphCompositeRect(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, std::uint32_t compositeId, const EditorSceneContext& sceneContext) noexcept;
 #endif
 };
 
@@ -534,8 +639,16 @@ inline std::string MaterialEditorPanelParameterValueText(const MaterialEditorPar
 }
 
 inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(const std::vector<MaterialEditorParameter>& parameters, std::uint32_t selectedNodeId) {
+    return DetailsRows(parameters, selectedNodeId, {});
+}
+
+inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(
+    const std::vector<MaterialEditorParameter>& parameters,
+    std::uint32_t selectedNodeId,
+    const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties) {
     MaterialEditorPanelDetailsRows rows;
     rows.title = selectedNodeId == 0U ? "PBR Parameters" : "Selected Node #" + std::to_string(selectedNodeId);
+    rows.nodePropertyRows = nodeProperties;
     for (const MaterialEditorParameter& parameter : parameters) {
         if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
             continue;
@@ -562,6 +675,9 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(c
             row += defaultValue;
         }
         row += parameter.overrideEnabled ? " override on" : " override disabled";
+        if (parameter.overrideActive) {
+            row += " instance override";
+        }
         if (!parameter.enabled) {
             row += " disabled";
         }
@@ -583,6 +699,9 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(c
         row += " = ";
         row += MaterialEditorPanelParameterValueText(parameter.value);
         row += parameter.overrideEnabled ? " override on" : " override disabled";
+        if (parameter.overrideActive) {
+            row += " instance override";
+        }
         if (!parameter.enabled) {
             row += " disabled";
         }
@@ -591,9 +710,119 @@ inline MaterialEditorPanelDetailsRows MaterialEditorPanelRenderer::DetailsRows(c
     return rows;
 }
 
+inline int MaterialEditorPanelAdvancePastNodeProperties(
+    int rowY,
+    int bottom,
+    const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties) noexcept {
+    if (nodeProperties.empty()) {
+        return rowY;
+    }
+    if (rowY + 20 <= bottom) {
+        rowY += 22;
+    }
+    for (const MaterialEditorGraphNodeProperty& property : nodeProperties) {
+        if (rowY + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight > bottom) {
+            break;
+        }
+        rowY += MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight;
+        if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
+            const int optionCount = static_cast<int>(property.options.size());
+            rowY += optionCount * MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight;
+        }
+    }
+    return rowY + 6;
+}
+
+inline std::optional<MaterialEditorGraphNodePropertyHit> MaterialEditorPanelRenderer::GraphNodePropertyAt(
+    const RECT& content,
+    const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
+    int x,
+    int y) noexcept {
+    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    if (nodeProperties.empty() ||
+        !MaterialEditorPanelPointInRect(layout.detailsPanel, x, y) ||
+        MaterialEditorPanelRectWidth(layout.detailsPanel) < 220 ||
+        MaterialEditorPanelRectHeight(layout.detailsPanel) < 140) {
+        return std::nullopt;
+    }
+
+    int rowY = layout.detailsPanel.top + 34;
+    const int bottom = layout.detailsPanel.bottom - 10;
+    if (rowY + 20 <= bottom) {
+        rowY += 22;
+    }
+    for (const MaterialEditorGraphNodeProperty& property : nodeProperties) {
+        if (rowY + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight > bottom) {
+            break;
+        }
+        const RECT row{
+            layout.detailsPanel.left + 12,
+            rowY,
+            layout.detailsPanel.right - 12,
+            rowY + MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight,
+        };
+        if (MaterialEditorPanelPointInRect(row, x, y) && property.enabled) {
+            MaterialEditorGraphNodePropertyHit hit{
+                .nodeId = property.nodeId,
+                .stableId = property.stableId,
+                .displayName = property.displayName,
+                .propertyKind = property.kind,
+                .type = property.type,
+                .value = property.value,
+                .componentIndex = property.componentIndex,
+            };
+            switch (property.kind) {
+            case MaterialEditorGraphNodePropertyKind::Numeric:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::Slider;
+                break;
+            case MaterialEditorGraphNodePropertyKind::Color:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::ColorPicker;
+                break;
+            case MaterialEditorGraphNodePropertyKind::Enum:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::EnumField;
+                break;
+            case MaterialEditorGraphNodePropertyKind::TextureAsset:
+                hit.kind = MaterialEditorGraphNodePropertyHitKind::TexturePicker;
+                break;
+            }
+            return hit;
+        }
+        rowY += MaterialEditorPanelMetrics::DetailsNodePropertyRowHeight;
+        if (property.kind == MaterialEditorGraphNodePropertyKind::Enum && property.dropdownOpen) {
+            for (const MaterialEditorGraphNodePropertyOption& option : property.options) {
+                if (rowY + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight > bottom) {
+                    break;
+                }
+                const RECT optionRow{
+                    layout.detailsPanel.left + 28,
+                    rowY,
+                    layout.detailsPanel.right - 18,
+                    rowY + MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight,
+                };
+                if (MaterialEditorPanelPointInRect(optionRow, x, y) && property.enabled) {
+                    return MaterialEditorGraphNodePropertyHit{
+                        .kind = MaterialEditorGraphNodePropertyHitKind::EnumOption,
+                        .nodeId = property.nodeId,
+                        .stableId = property.stableId,
+                        .displayName = property.displayName,
+                        .propertyKind = property.kind,
+                        .type = property.type,
+                        .value = property.value,
+                        .componentIndex = property.componentIndex,
+                        .optionValue = option.value,
+                    };
+                }
+                rowY += MaterialEditorPanelMetrics::DetailsNodePropertyOptionHeight;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRenderer::ParameterAt(
     const RECT& content,
     const std::vector<MaterialEditorParameter>& parameters,
+    const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
     std::size_t debugRowCount,
     int x,
     int y) noexcept {
@@ -607,6 +836,7 @@ inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRendere
     int rowY = layout.detailsPanel.top + 34;
     constexpr int rowHeight = 18;
     const int bottom = layout.detailsPanel.bottom - 10;
+    rowY = MaterialEditorPanelAdvancePastNodeProperties(rowY, bottom, nodeProperties);
     if (debugRowCount > 0U) {
         rowY += 22;
         rowY += static_cast<int>(std::min<std::size_t>(debugRowCount, 6U)) * rowHeight;
@@ -644,10 +874,131 @@ inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRendere
     return std::nullopt;
 }
 
+inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRenderer::ParameterAt(
+    const RECT& content,
+    const std::vector<MaterialEditorParameter>& parameters,
+    std::size_t debugRowCount,
+    int x,
+    int y) noexcept {
+    return ParameterAt(content, parameters, {}, debugRowCount, x, y);
+}
+
+inline std::optional<MaterialEditorPanelParameterHit> MaterialEditorPanelRenderer::TextureParameterAt(
+    const RECT& content,
+    const std::vector<MaterialEditorParameter>& parameters,
+    const std::vector<MaterialEditorGraphNodeProperty>& nodeProperties,
+    std::size_t debugRowCount,
+    int x,
+    int y) noexcept {
+    const MaterialEditorPanelLayout layout = ResolveLayout(content);
+    if (!MaterialEditorPanelPointInRect(layout.detailsPanel, x, y) ||
+        MaterialEditorPanelRectWidth(layout.detailsPanel) < 220 ||
+        MaterialEditorPanelRectHeight(layout.detailsPanel) < 140) {
+        return std::nullopt;
+    }
+
+    int rowY = layout.detailsPanel.top + 34;
+    constexpr int rowHeight = 18;
+    const int bottom = layout.detailsPanel.bottom - 10;
+    rowY = MaterialEditorPanelAdvancePastNodeProperties(rowY, bottom, nodeProperties);
+    if (debugRowCount > 0U) {
+        rowY += 22;
+        rowY += static_cast<int>(std::min<std::size_t>(debugRowCount, 6U)) * rowHeight;
+        rowY += 6;
+    }
+    if (rowY + 20 <= bottom) {
+        rowY += 22;
+    }
+
+    std::size_t visibleParameter = 0U;
+    for (const MaterialEditorParameter& parameter : parameters) {
+        if (parameter.type == kb::render::RenderMaterialParameterType::Texture) {
+            continue;
+        }
+        if (rowY + rowHeight > bottom || visibleParameter >= 7U) {
+            break;
+        }
+        rowY += rowHeight;
+        ++visibleParameter;
+    }
+
+    if (rowY + 28 <= bottom) {
+        rowY += 6;
+        rowY += 22;
+    }
+
+    std::size_t visibleTexture = 0U;
+    for (const MaterialEditorParameter& parameter : parameters) {
+        if (parameter.type != kb::render::RenderMaterialParameterType::Texture) {
+            continue;
+        }
+        if (rowY + rowHeight > bottom || visibleTexture >= 6U) {
+            break;
+        }
+        const RECT row{
+            layout.detailsPanel.left + 12,
+            rowY,
+            layout.detailsPanel.right - 12,
+            rowY + rowHeight,
+        };
+        if (MaterialEditorPanelPointInRect(row, x, y) && parameter.enabled && parameter.overrideEnabled) {
+            return MaterialEditorPanelParameterHit{
+                .stableId = parameter.stableId,
+                .displayName = parameter.displayName.empty() ? parameter.stableId : parameter.displayName,
+                .type = parameter.type,
+                .value = parameter.value,
+            };
+        }
+        rowY += rowHeight;
+        ++visibleTexture;
+    }
+    return std::nullopt;
+}
+
+inline MaterialEditorGraphPinDragState MaterialEditorPanelRenderer::GraphPinDragState(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t pendingNodeId,
+    std::string_view pendingPin,
+    bool pendingOutputPin,
+    std::uint32_t candidateNodeId,
+    std::string_view candidatePin,
+    bool candidateOutputPin) noexcept {
+    if (pendingNodeId == 0U || candidateNodeId == 0U || pendingPin.empty() || candidatePin.empty()) {
+        return MaterialEditorGraphPinDragState::None;
+    }
+    if (pendingNodeId == candidateNodeId && pendingPin == candidatePin && pendingOutputPin == candidateOutputPin) {
+        return MaterialEditorGraphPinDragState::Source;
+    }
+    if (pendingOutputPin == candidateOutputPin) {
+        return MaterialEditorGraphPinDragState::None;
+    }
+
+    const kb::render::RenderMaterialGraphNode* pendingNode = kb::render::FindRenderMaterialGraphNode(graph, pendingNodeId);
+    const kb::render::RenderMaterialGraphNode* candidateNode = kb::render::FindRenderMaterialGraphNode(graph, candidateNodeId);
+    if (pendingNode == nullptr || candidateNode == nullptr) {
+        return MaterialEditorGraphPinDragState::None;
+    }
+    if (pendingNodeId == candidateNodeId) {
+        return MaterialEditorGraphPinDragState::Incompatible;
+    }
+
+    const kb::render::RenderMaterialGraphNode* fromNode = pendingOutputPin ? pendingNode : candidateNode;
+    const kb::render::RenderMaterialGraphNode* toNode = pendingOutputPin ? candidateNode : pendingNode;
+    const std::string_view fromPin = pendingOutputPin ? pendingPin : candidatePin;
+    const std::string_view toPin = pendingOutputPin ? candidatePin : pendingPin;
+    if (!kb::render::IsRenderMaterialGraphOutputPin(*fromNode, fromPin) ||
+        !kb::render::IsRenderMaterialGraphInputPin(*toNode, toPin)) {
+        return MaterialEditorGraphPinDragState::Incompatible;
+    }
+    return kb::render::AreRenderMaterialGraphPinsCompatible(*fromNode, fromPin, *toNode, toPin)
+        ? MaterialEditorGraphPinDragState::Compatible
+        : MaterialEditorGraphPinDragState::Incompatible;
+}
+
 inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderMaterialGraphNodeKind kind) {
     switch (kind) {
     case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
-        return { "baseColor", "normal", "roughness", "metallic", "emissive", "occlusion", "alpha" };
+        return { "baseColor", "normal", "roughness", "metallic", "emissive", "occlusion", "alpha", "worldPositionOffset", "customizedUv0", "displacement" };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { "texture", "uv" };
     case kb::render::RenderMaterialGraphNodeKind::Add:
@@ -777,6 +1128,8 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
         return { "rgba" };
+    case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
+        return { "value", "scalar", "xyz", "rgba", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::TextureSample:
         return { "color", "r", "g", "b", "a" };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
@@ -1248,9 +1601,74 @@ inline std::optional<RECT> MaterialEditorPanelRenderer::GraphNodeRect(
         sceneContext.MaterialGraphNodeOffsetY(assetId, nodeId));
 }
 
+inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCommentRect(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t commentId,
+    const EditorSceneContext& sceneContext) noexcept {
+    const kb::render::RenderMaterialGraphCommentBox* target = nullptr;
+    for (const kb::render::RenderMaterialGraphCommentBox& comment : graph.comments) {
+        if (comment.id == commentId) {
+            target = &comment;
+            break;
+        }
+    }
+    if (target == nullptr) {
+        return std::nullopt;
+    }
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), 0.25F, 2.0F);
+    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
+    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
+    const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(32, target->width), clampedZoom);
+    const int height = MaterialEditorPanelScaled(std::max<std::int32_t>(32, target->height), clampedZoom);
+    return RECT{ x, y, x + width, y + height };
+}
+
+inline std::optional<RECT> MaterialEditorPanelRenderer::GraphCompositeRect(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t compositeId,
+    const EditorSceneContext& sceneContext) noexcept {
+    const kb::render::RenderMaterialGraphCompositeSubgraph* target = nullptr;
+    for (const kb::render::RenderMaterialGraphCompositeSubgraph& composite : graph.composites) {
+        if (composite.id == compositeId) {
+            target = &composite;
+            break;
+        }
+    }
+    if (target == nullptr) {
+        return std::nullopt;
+    }
+    const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
+    const float clampedZoom = std::clamp(sceneContext.MaterialGraphZoom(), 0.25F, 2.0F);
+    const int x = layout.graphCanvas.left + sceneContext.MaterialGraphPanX() + MaterialEditorPanelScaled(target->positionX, clampedZoom);
+    const int y = layout.graphCanvas.top + sceneContext.MaterialGraphPanY() + MaterialEditorPanelScaled(target->positionY, clampedZoom);
+    const int width = MaterialEditorPanelScaled(std::max<std::int32_t>(64, target->width), clampedZoom);
+    const int height = MaterialEditorPanelScaled(std::max<std::int32_t>(64, target->height), clampedZoom);
+    return RECT{ x, y, x + width, y + height };
+}
+
+inline bool MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t nodeId) noexcept {
+    for (const kb::render::RenderMaterialGraphCompositeSubgraph& composite : graph.composites) {
+        if (!composite.collapsed) {
+            continue;
+        }
+        if (std::find(composite.nodeIds.begin(), composite.nodeIds.end(), nodeId) != composite.nodeIds.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(const RECT& content, const kb::render::RenderMaterialGraphDocument& graph, int x, int y) noexcept {
     for (std::size_t index = graph.nodes.size(); index-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graph.nodes[index];
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graph, node.id)) {
+            continue;
+        }
         const std::optional<RECT> rect = GraphNodeRect(content, graph, node.id);
         if (rect.has_value() && MaterialEditorPanelPointInRect(*rect, x, y)) {
             return node.id;
@@ -1268,9 +1686,115 @@ inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeAt(
     int y) noexcept {
     for (std::size_t index = graph.nodes.size(); index-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graph.nodes[index];
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graph, node.id)) {
+            continue;
+        }
         const std::optional<RECT> rect = GraphNodeRect(content, graph, node.id, sceneContext, assetId);
         if (rect.has_value() && MaterialEditorPanelPointInRect(*rect, x, y)) {
             return node.id;
+        }
+    }
+    return std::nullopt;
+}
+
+inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphCommentAt(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    int x,
+    int y) noexcept {
+    static_cast<void>(assetId);
+    for (std::size_t index = graph.comments.size(); index-- > 0U;) {
+        const kb::render::RenderMaterialGraphCommentBox& comment = graph.comments[index];
+        const std::optional<RECT> rect = GraphCommentRect(content, graph, comment.id, sceneContext);
+        if (rect.has_value() && MaterialEditorPanelPointInRect(*rect, x, y)) {
+            return comment.id;
+        }
+    }
+    return std::nullopt;
+}
+
+inline RECT MaterialEditorPanelNormalizedRect(const RECT& rect) noexcept {
+    return RECT{
+        std::min(rect.left, rect.right),
+        std::min(rect.top, rect.bottom),
+        std::max(rect.left, rect.right),
+        std::max(rect.top, rect.bottom),
+    };
+}
+
+inline bool MaterialEditorPanelRectsIntersect(const RECT& lhs, const RECT& rhs) noexcept {
+    return lhs.left < rhs.right && lhs.right > rhs.left && lhs.top < rhs.bottom && lhs.bottom > rhs.top;
+}
+
+inline std::vector<std::uint32_t> MaterialEditorPanelRenderer::GraphNodeIdsInRect(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    const EditorSceneContext& sceneContext,
+    kb::assets::AssetId assetId,
+    const RECT& selectionRect) {
+    const RECT normalizedSelection = MaterialEditorPanelNormalizedRect(selectionRect);
+    std::vector<std::uint32_t> nodeIds;
+    for (const kb::render::RenderMaterialGraphNode& node : graph.nodes) {
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graph, node.id)) {
+            continue;
+        }
+        const std::optional<RECT> rect = GraphNodeRect(content, graph, node.id, sceneContext, assetId);
+        if (rect.has_value() && MaterialEditorPanelRectsIntersect(*rect, normalizedSelection)) {
+            nodeIds.push_back(node.id);
+        }
+    }
+    return nodeIds;
+}
+
+inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::GraphPinAt(
+    const RECT& content,
+    const kb::render::RenderMaterialGraphDocument& graph,
+    int x,
+    int y) noexcept {
+    const kb::render::RenderMaterialGraphDocument defaultGraph = graph.nodes.empty()
+        ? kb::render::MakeDefaultRenderMaterialGraphDocument()
+        : kb::render::RenderMaterialGraphDocument{};
+    const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
+    for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
+        const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
+            continue;
+        }
+        const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id);
+        if (!rect.has_value()) {
+            continue;
+        }
+        const float scale = static_cast<float>(MaterialEditorPanelRectWidth(*rect)) / static_cast<float>(std::max(1, MaterialEditorPanelMetrics::GraphNodeWidth));
+        const int radius = std::max(14, MaterialEditorPanelScaled(18, scale));
+        std::optional<MaterialEditorGraphPinHit> best;
+        long long bestDistanceSq = static_cast<long long>(radius) * static_cast<long long>(radius);
+        const auto consider = [&](const POINT& pinPoint, MaterialEditorGraphPinDirection direction, const std::string& pin) {
+            const long long dx = static_cast<long long>(pinPoint.x) - static_cast<long long>(x);
+            const long long dy = static_cast<long long>(pinPoint.y) - static_cast<long long>(y);
+            const long long distanceSq = (dx * dx) + (dy * dy);
+            if (distanceSq <= bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                const bool outputPin = direction == MaterialEditorGraphPinDirection::Output;
+                best = MaterialEditorGraphPinHit{
+                    .nodeId = node.id,
+                    .direction = direction,
+                    .pin = pin,
+                    .type = kb::render::RenderMaterialGraphPinDataType(node, pin, outputPin),
+                };
+            }
+        };
+        const std::vector<std::string> inputPins = kb::render::RenderMaterialGraphNodeInputPinNames(node);
+        for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
+            consider(MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex), MaterialEditorGraphPinDirection::Input, inputPins[pinIndex]);
+        }
+        const std::vector<std::string> outputPins = kb::render::RenderMaterialGraphNodeOutputPinNames(node);
+        for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
+            consider(MaterialEditorPanelOutputPinPoint(*rect, node.kind, pinIndex, outputPins.size()), MaterialEditorGraphPinDirection::Output, outputPins[pinIndex]);
+        }
+        if (best.has_value()) {
+            return best;
         }
     }
     return std::nullopt;
@@ -1289,6 +1813,9 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
     const kb::render::RenderMaterialGraphDocument& graphView = graph.nodes.empty() ? defaultGraph : graph;
     for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
+        if (MaterialEditorPanelGraphNodeHiddenByCollapsedComposite(graphView, node.id)) {
+            continue;
+        }
         const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
         if (!rect.has_value()) {
             continue;
@@ -1305,14 +1832,20 @@ inline std::optional<MaterialEditorGraphPinHit> MaterialEditorPanelRenderer::Gra
             const long long distanceSq = (dx * dx) + (dy * dy);
             if (distanceSq <= bestDistanceSq) {
                 bestDistanceSq = distanceSq;
-                best = MaterialEditorGraphPinHit{ .nodeId = node.id, .direction = direction, .pin = pin };
+                const bool outputPin = direction == MaterialEditorGraphPinDirection::Output;
+                best = MaterialEditorGraphPinHit{
+                    .nodeId = node.id,
+                    .direction = direction,
+                    .pin = pin,
+                    .type = kb::render::RenderMaterialGraphPinDataType(node, pin, outputPin),
+                };
             }
         };
-        const std::vector<std::string> inputPins = MaterialEditorPanelInputPins(node.kind);
+        const std::vector<std::string> inputPins = kb::render::RenderMaterialGraphNodeInputPinNames(node);
         for (std::size_t pinIndex = 0U; pinIndex < inputPins.size(); ++pinIndex) {
             consider(MaterialEditorPanelInputPinPoint(*rect, node.kind, pinIndex), MaterialEditorGraphPinDirection::Input, inputPins[pinIndex]);
         }
-        const std::vector<std::string> outputPins = MaterialEditorPanelOutputPins(node.kind);
+        const std::vector<std::string> outputPins = kb::render::RenderMaterialGraphNodeOutputPinNames(node);
         for (std::size_t pinIndex = 0U; pinIndex < outputPins.size(); ++pinIndex) {
             consider(MaterialEditorPanelOutputPinPoint(*rect, node.kind, pinIndex, outputPins.size()), MaterialEditorGraphPinDirection::Output, outputPins[pinIndex]);
         }
@@ -1356,8 +1889,14 @@ inline constexpr int kMaterialEditorGraphMenuCategoryHeight = 22;
 inline constexpr int kMaterialEditorGraphMenuCommandHeight = 22;
 inline constexpr int kMaterialEditorGraphMenuPadding = 8;
 
+inline constexpr std::size_t kMaterialEditorGraphBaseCategoryCount = 11U;
+
 inline constexpr std::size_t MaterialEditorGraphContextMenuCategoryCount() noexcept {
-    return 10U;
+    return kMaterialEditorGraphBaseCategoryCount + 1U;
+}
+
+inline constexpr std::size_t MaterialEditorGraphContextMenuFavoritesCategoryIndex() noexcept {
+    return 11U;
 }
 
 inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) noexcept {
@@ -1371,7 +1910,9 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
     case 6U: return "Utility";
     case 7U: return "Material";
     case 8U: return "Static";
-    case 9U: return "Actions";
+    case 9U: return "Organization";
+    case 10U: return "Actions";
+    case 11U: return "Favorites";
     default: return "";
     }
 }
@@ -1381,13 +1922,13 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 0U:
         return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter };
     case 1U:
-        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
+        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter };
+        return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter };
     case 3U:
         return { MaterialEditorGraphMenuCommand::CreateScalar, MaterialEditorGraphMenuCommand::CreateVector2, MaterialEditorGraphMenuCommand::CreateVector, MaterialEditorGraphMenuCommand::CreateColor };
     case 4U:
-        return { MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateTextureParameter };
+        return { MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter, MaterialEditorGraphMenuCommand::CreateTextureParameter };
     case 5U:
         return {
             MaterialEditorGraphMenuCommand::CreateAdd,
@@ -1456,16 +1997,54 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateArcTangent2,
             MaterialEditorGraphMenuCommand::CreateNormalize,
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
+            MaterialEditorGraphMenuCommand::CreateCustomCode,
         };
     case 7U:
-        return { MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes, MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes, MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes, MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes, MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes };
+        return {
+            MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes,
+            MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes,
+            MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes,
+            MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes,
+            MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes,
+            MaterialEditorGraphMenuCommand::CreateFunctionInput,
+            MaterialEditorGraphMenuCommand::CreateFunctionOutput,
+            MaterialEditorGraphMenuCommand::CreateMaterialFunctionCall,
+            MaterialEditorGraphMenuCommand::CreateLayerStack,
+        };
     case 8U:
-        return { MaterialEditorGraphMenuCommand::CreateStaticBoolParameter, MaterialEditorGraphMenuCommand::CreateStaticSwitch, MaterialEditorGraphMenuCommand::CreateStaticComponentMask };
+        return {
+            MaterialEditorGraphMenuCommand::CreateStaticBoolParameter,
+            MaterialEditorGraphMenuCommand::CreateStaticSwitch,
+            MaterialEditorGraphMenuCommand::CreateStaticComponentMask,
+            MaterialEditorGraphMenuCommand::CreateQualitySwitch,
+            MaterialEditorGraphMenuCommand::CreateFeatureLevelSwitch,
+            MaterialEditorGraphMenuCommand::CreateShadingPathSwitch,
+            MaterialEditorGraphMenuCommand::CreateShaderStageSwitch,
+        };
     case 9U:
+        return {
+            MaterialEditorGraphMenuCommand::CreateReroute,
+            MaterialEditorGraphMenuCommand::CreateNamedRerouteDeclaration,
+            MaterialEditorGraphMenuCommand::CreateNamedRerouteUsage,
+            MaterialEditorGraphMenuCommand::CreateCompositeInput,
+            MaterialEditorGraphMenuCommand::CreateCompositeOutput,
+            MaterialEditorGraphMenuCommand::CreateComposite,
+            MaterialEditorGraphMenuCommand::CreateComment,
+        };
+    case 10U:
         return { MaterialEditorGraphMenuCommand::DisconnectSelected, MaterialEditorGraphMenuCommand::DeleteSelected };
     default:
         return {};
     }
+}
+
+inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(
+    std::size_t index,
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites) {
+    if (index == MaterialEditorGraphContextMenuFavoritesCategoryIndex()) {
+        return favorites;
+    }
+    return MaterialEditorGraphContextMenuCommands(index);
 }
 
 inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditorGraphMenuCommand command) noexcept {
@@ -1480,6 +2059,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateScalarParameter: return "Scalar Parameter";
     case MaterialEditorGraphMenuCommand::CreateVectorParameter: return "Vector Parameter";
     case MaterialEditorGraphMenuCommand::CreateColorParameter: return "Color Parameter";
+    case MaterialEditorGraphMenuCommand::CreateCollectionParameter: return "Collection Parameter";
     case MaterialEditorGraphMenuCommand::CreateAdd: return "Add";
     case MaterialEditorGraphMenuCommand::CreateSubtract: return "Subtract";
     case MaterialEditorGraphMenuCommand::CreateMultiply: return "Multiply";
@@ -1551,6 +2131,8 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateWorldPosition: return "World Position";
     case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return "Per Instance Random";
     case MaterialEditorGraphMenuCommand::CreateObjectRadius: return "Object Radius";
+    case MaterialEditorGraphMenuCommand::CreateObjectBounds: return "Object Bounds";
+    case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return "Object Orientation";
     case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return "Make Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return "Break Material Attributes";
     case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return "Blend Material Attributes";
@@ -1559,6 +2141,10 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter: return "Static Bool Parameter";
     case MaterialEditorGraphMenuCommand::CreateStaticSwitch: return "Static Switch";
     case MaterialEditorGraphMenuCommand::CreateStaticComponentMask: return "Static Component Mask";
+    case MaterialEditorGraphMenuCommand::CreateQualitySwitch: return "Quality Switch";
+    case MaterialEditorGraphMenuCommand::CreateFeatureLevelSwitch: return "Feature Level Switch";
+    case MaterialEditorGraphMenuCommand::CreateShadingPathSwitch: return "Shading Path Switch";
+    case MaterialEditorGraphMenuCommand::CreateShaderStageSwitch: return "Shader Stage Switch";
     case MaterialEditorGraphMenuCommand::CreateTextureCoordinate: return "Texture Coordinate";
     case MaterialEditorGraphMenuCommand::CreatePanner: return "Panner";
     case MaterialEditorGraphMenuCommand::CreateRotator: return "Rotator";
@@ -1577,8 +2163,20 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateViewSize: return "View Size";
     case MaterialEditorGraphMenuCommand::CreateSceneDepth: return "Scene Depth";
     case MaterialEditorGraphMenuCommand::CreateDepthFade: return "Depth Fade";
+    case MaterialEditorGraphMenuCommand::CreateCustomCode: return "Custom Code";
+    case MaterialEditorGraphMenuCommand::CreateReroute: return "Reroute";
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteDeclaration: return "Named Reroute Declaration";
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteUsage: return "Named Reroute Usage";
+    case MaterialEditorGraphMenuCommand::CreateCompositeInput: return "Composite Input";
+    case MaterialEditorGraphMenuCommand::CreateCompositeOutput: return "Composite Output";
+    case MaterialEditorGraphMenuCommand::CreateFunctionInput: return "Function Input";
+    case MaterialEditorGraphMenuCommand::CreateFunctionOutput: return "Function Output";
+    case MaterialEditorGraphMenuCommand::CreateMaterialFunctionCall: return "Material Function Call";
+    case MaterialEditorGraphMenuCommand::CreateLayerStack: return "Layer Stack";
+    case MaterialEditorGraphMenuCommand::CreateComposite: return "Composite";
+    case MaterialEditorGraphMenuCommand::CreateComment: return "Comment Box";
     case MaterialEditorGraphMenuCommand::DisconnectSelected: return "Disconnect Selected Links";
-    case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected Node";
+    case MaterialEditorGraphMenuCommand::DeleteSelected: return "Delete Selected";
     case MaterialEditorGraphMenuCommand::None: return "";
     }
     return "";
@@ -1596,12 +2194,314 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     }
 }
 
+[[nodiscard]] inline bool MaterialEditorGraphCommandInList(
+    const std::vector<MaterialEditorGraphMenuCommand>& commands,
+    MaterialEditorGraphMenuCommand command) noexcept {
+    return std::find(commands.begin(), commands.end(), command) != commands.end();
+}
+
+[[nodiscard]] inline std::optional<kb::render::RenderMaterialGraphNodeKind> MaterialEditorGraphMenuCommandNodeKind(
+    MaterialEditorGraphMenuCommand command) noexcept {
+    switch (command) {
+    case MaterialEditorGraphMenuCommand::CreateTextureSample: return kb::render::RenderMaterialGraphNodeKind::TextureSample;
+    case MaterialEditorGraphMenuCommand::CreateTextureParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterTexture;
+    case MaterialEditorGraphMenuCommand::CreateUv: return kb::render::RenderMaterialGraphNodeKind::Uv;
+    case MaterialEditorGraphMenuCommand::CreateScalar: return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
+    case MaterialEditorGraphMenuCommand::CreateVector2: return kb::render::RenderMaterialGraphNodeKind::ConstantVector2;
+    case MaterialEditorGraphMenuCommand::CreateVector: return kb::render::RenderMaterialGraphNodeKind::ConstantVector;
+    case MaterialEditorGraphMenuCommand::CreateColor: return kb::render::RenderMaterialGraphNodeKind::ConstantColor;
+    case MaterialEditorGraphMenuCommand::CreateScalarParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterScalar;
+    case MaterialEditorGraphMenuCommand::CreateVectorParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterVector;
+    case MaterialEditorGraphMenuCommand::CreateColorParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterColor;
+    case MaterialEditorGraphMenuCommand::CreateCollectionParameter: return kb::render::RenderMaterialGraphNodeKind::CollectionParameter;
+    case MaterialEditorGraphMenuCommand::CreateAdd: return kb::render::RenderMaterialGraphNodeKind::Add;
+    case MaterialEditorGraphMenuCommand::CreateSubtract: return kb::render::RenderMaterialGraphNodeKind::Subtract;
+    case MaterialEditorGraphMenuCommand::CreateMultiply: return kb::render::RenderMaterialGraphNodeKind::Multiply;
+    case MaterialEditorGraphMenuCommand::CreateDivide: return kb::render::RenderMaterialGraphNodeKind::Divide;
+    case MaterialEditorGraphMenuCommand::CreatePower: return kb::render::RenderMaterialGraphNodeKind::Power;
+    case MaterialEditorGraphMenuCommand::CreateOneMinus: return kb::render::RenderMaterialGraphNodeKind::OneMinus;
+    case MaterialEditorGraphMenuCommand::CreateAbsolute: return kb::render::RenderMaterialGraphNodeKind::Absolute;
+    case MaterialEditorGraphMenuCommand::CreateMinimum: return kb::render::RenderMaterialGraphNodeKind::Minimum;
+    case MaterialEditorGraphMenuCommand::CreateMaximum: return kb::render::RenderMaterialGraphNodeKind::Maximum;
+    case MaterialEditorGraphMenuCommand::CreateSaturate: return kb::render::RenderMaterialGraphNodeKind::Saturate;
+    case MaterialEditorGraphMenuCommand::CreateFloor: return kb::render::RenderMaterialGraphNodeKind::Floor;
+    case MaterialEditorGraphMenuCommand::CreateCeil: return kb::render::RenderMaterialGraphNodeKind::Ceil;
+    case MaterialEditorGraphMenuCommand::CreateFraction: return kb::render::RenderMaterialGraphNodeKind::Fraction;
+    case MaterialEditorGraphMenuCommand::CreateSquareRoot: return kb::render::RenderMaterialGraphNodeKind::SquareRoot;
+    case MaterialEditorGraphMenuCommand::CreateSine: return kb::render::RenderMaterialGraphNodeKind::Sine;
+    case MaterialEditorGraphMenuCommand::CreateCosine: return kb::render::RenderMaterialGraphNodeKind::Cosine;
+    case MaterialEditorGraphMenuCommand::CreateExponential: return kb::render::RenderMaterialGraphNodeKind::Exponential;
+    case MaterialEditorGraphMenuCommand::CreateExponential2: return kb::render::RenderMaterialGraphNodeKind::Exponential2;
+    case MaterialEditorGraphMenuCommand::CreateLogarithm: return kb::render::RenderMaterialGraphNodeKind::Logarithm;
+    case MaterialEditorGraphMenuCommand::CreateLogarithm2: return kb::render::RenderMaterialGraphNodeKind::Logarithm2;
+    case MaterialEditorGraphMenuCommand::CreateSrgbToLinear: return kb::render::RenderMaterialGraphNodeKind::SrgbToLinear;
+    case MaterialEditorGraphMenuCommand::CreateLinearToSrgb: return kb::render::RenderMaterialGraphNodeKind::LinearToSrgb;
+    case MaterialEditorGraphMenuCommand::CreateLogarithm10: return kb::render::RenderMaterialGraphNodeKind::Logarithm10;
+    case MaterialEditorGraphMenuCommand::CreateHsvToRgb: return kb::render::RenderMaterialGraphNodeKind::HsvToRgb;
+    case MaterialEditorGraphMenuCommand::CreateRgbToHsv: return kb::render::RenderMaterialGraphNodeKind::RgbToHsv;
+    case MaterialEditorGraphMenuCommand::CreateDeriveNormalZ: return kb::render::RenderMaterialGraphNodeKind::DeriveNormalZ;
+    case MaterialEditorGraphMenuCommand::CreateFmod: return kb::render::RenderMaterialGraphNodeKind::Fmod;
+    case MaterialEditorGraphMenuCommand::CreateInverseLerp: return kb::render::RenderMaterialGraphNodeKind::InverseLerp;
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeX: return kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX;
+    case MaterialEditorGraphMenuCommand::CreatePartialDerivativeY: return kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY;
+    case MaterialEditorGraphMenuCommand::CreateSphereMask: return kb::render::RenderMaterialGraphNodeKind::SphereMask;
+    case MaterialEditorGraphMenuCommand::CreateBlackBody: return kb::render::RenderMaterialGraphNodeKind::BlackBody;
+    case MaterialEditorGraphMenuCommand::CreateNoise: return kb::render::RenderMaterialGraphNodeKind::Noise;
+    case MaterialEditorGraphMenuCommand::CreateVectorNoise: return kb::render::RenderMaterialGraphNodeKind::VectorNoise;
+    case MaterialEditorGraphMenuCommand::CreateAppendVector: return kb::render::RenderMaterialGraphNodeKind::AppendVector;
+    case MaterialEditorGraphMenuCommand::CreateColorRamp: return kb::render::RenderMaterialGraphNodeKind::ColorRamp;
+    case MaterialEditorGraphMenuCommand::CreateAntialiasedTextureMask: return kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask;
+    case MaterialEditorGraphMenuCommand::CreateTransform: return kb::render::RenderMaterialGraphNodeKind::Transform;
+    case MaterialEditorGraphMenuCommand::CreateTransformPosition: return kb::render::RenderMaterialGraphNodeKind::TransformPosition;
+    case MaterialEditorGraphMenuCommand::CreateDotProduct: return kb::render::RenderMaterialGraphNodeKind::DotProduct;
+    case MaterialEditorGraphMenuCommand::CreateCrossProduct: return kb::render::RenderMaterialGraphNodeKind::CrossProduct;
+    case MaterialEditorGraphMenuCommand::CreateNormalize: return kb::render::RenderMaterialGraphNodeKind::Normalize;
+    case MaterialEditorGraphMenuCommand::CreateLength: return kb::render::RenderMaterialGraphNodeKind::Length;
+    case MaterialEditorGraphMenuCommand::CreateDistance: return kb::render::RenderMaterialGraphNodeKind::Distance;
+    case MaterialEditorGraphMenuCommand::CreateBreakVector: return kb::render::RenderMaterialGraphNodeKind::BreakVector;
+    case MaterialEditorGraphMenuCommand::CreateMakeVector: return kb::render::RenderMaterialGraphNodeKind::MakeVector;
+    case MaterialEditorGraphMenuCommand::CreateStep: return kb::render::RenderMaterialGraphNodeKind::Step;
+    case MaterialEditorGraphMenuCommand::CreateSmoothStep: return kb::render::RenderMaterialGraphNodeKind::SmoothStep;
+    case MaterialEditorGraphMenuCommand::CreateIf: return kb::render::RenderMaterialGraphNodeKind::If;
+    case MaterialEditorGraphMenuCommand::CreateDesaturate: return kb::render::RenderMaterialGraphNodeKind::Desaturate;
+    case MaterialEditorGraphMenuCommand::CreateFresnel: return kb::render::RenderMaterialGraphNodeKind::Fresnel;
+    case MaterialEditorGraphMenuCommand::CreateNegate: return kb::render::RenderMaterialGraphNodeKind::Negate;
+    case MaterialEditorGraphMenuCommand::CreateSign: return kb::render::RenderMaterialGraphNodeKind::Sign;
+    case MaterialEditorGraphMenuCommand::CreateRound: return kb::render::RenderMaterialGraphNodeKind::Round;
+    case MaterialEditorGraphMenuCommand::CreateTruncate: return kb::render::RenderMaterialGraphNodeKind::Truncate;
+    case MaterialEditorGraphMenuCommand::CreateTangent: return kb::render::RenderMaterialGraphNodeKind::Tangent;
+    case MaterialEditorGraphMenuCommand::CreateArcSine: return kb::render::RenderMaterialGraphNodeKind::ArcSine;
+    case MaterialEditorGraphMenuCommand::CreateArcCosine: return kb::render::RenderMaterialGraphNodeKind::ArcCosine;
+    case MaterialEditorGraphMenuCommand::CreateArcTangent: return kb::render::RenderMaterialGraphNodeKind::ArcTangent;
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2: return kb::render::RenderMaterialGraphNodeKind::ArcTangent2;
+    case MaterialEditorGraphMenuCommand::CreateClamp: return kb::render::RenderMaterialGraphNodeKind::Clamp;
+    case MaterialEditorGraphMenuCommand::CreateLerp: return kb::render::RenderMaterialGraphNodeKind::Lerp;
+    case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return kb::render::RenderMaterialGraphNodeKind::NormalUnpack;
+    case MaterialEditorGraphMenuCommand::CreateTime: return kb::render::RenderMaterialGraphNodeKind::Time;
+    case MaterialEditorGraphMenuCommand::CreateVertexColor: return kb::render::RenderMaterialGraphNodeKind::VertexColor;
+    case MaterialEditorGraphMenuCommand::CreateScreenPosition: return kb::render::RenderMaterialGraphNodeKind::ScreenPosition;
+    case MaterialEditorGraphMenuCommand::CreateLocalPosition: return kb::render::RenderMaterialGraphNodeKind::LocalPosition;
+    case MaterialEditorGraphMenuCommand::CreateObjectPosition: return kb::render::RenderMaterialGraphNodeKind::ObjectPosition;
+    case MaterialEditorGraphMenuCommand::CreateWorldPosition: return kb::render::RenderMaterialGraphNodeKind::WorldPosition;
+    case MaterialEditorGraphMenuCommand::CreatePerInstanceRandom: return kb::render::RenderMaterialGraphNodeKind::PerInstanceRandom;
+    case MaterialEditorGraphMenuCommand::CreateObjectRadius: return kb::render::RenderMaterialGraphNodeKind::ObjectRadius;
+    case MaterialEditorGraphMenuCommand::CreateObjectBounds: return kb::render::RenderMaterialGraphNodeKind::ObjectBounds;
+    case MaterialEditorGraphMenuCommand::CreateObjectOrientation: return kb::render::RenderMaterialGraphNodeKind::ObjectOrientation;
+    case MaterialEditorGraphMenuCommand::CreateMakeMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes;
+    case MaterialEditorGraphMenuCommand::CreateBreakMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BreakMaterialAttributes;
+    case MaterialEditorGraphMenuCommand::CreateBlendMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes;
+    case MaterialEditorGraphMenuCommand::CreateGetMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::GetMaterialAttributes;
+    case MaterialEditorGraphMenuCommand::CreateSetMaterialAttributes: return kb::render::RenderMaterialGraphNodeKind::SetMaterialAttributes;
+    case MaterialEditorGraphMenuCommand::CreateStaticBoolParameter: return kb::render::RenderMaterialGraphNodeKind::StaticBoolParameter;
+    case MaterialEditorGraphMenuCommand::CreateStaticSwitch: return kb::render::RenderMaterialGraphNodeKind::StaticSwitch;
+    case MaterialEditorGraphMenuCommand::CreateStaticComponentMask: return kb::render::RenderMaterialGraphNodeKind::StaticComponentMask;
+    case MaterialEditorGraphMenuCommand::CreateQualitySwitch: return kb::render::RenderMaterialGraphNodeKind::QualitySwitch;
+    case MaterialEditorGraphMenuCommand::CreateFeatureLevelSwitch: return kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch;
+    case MaterialEditorGraphMenuCommand::CreateShadingPathSwitch: return kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch;
+    case MaterialEditorGraphMenuCommand::CreateShaderStageSwitch: return kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch;
+    case MaterialEditorGraphMenuCommand::CreateTextureCoordinate: return kb::render::RenderMaterialGraphNodeKind::TextureCoordinate;
+    case MaterialEditorGraphMenuCommand::CreatePanner: return kb::render::RenderMaterialGraphNodeKind::Panner;
+    case MaterialEditorGraphMenuCommand::CreateRotator: return kb::render::RenderMaterialGraphNodeKind::Rotator;
+    case MaterialEditorGraphMenuCommand::CreateBumpOffset: return kb::render::RenderMaterialGraphNodeKind::BumpOffset;
+    case MaterialEditorGraphMenuCommand::CreateConstantBiasScale: return kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale;
+    case MaterialEditorGraphMenuCommand::CreateRotateAboutAxis: return kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis;
+    case MaterialEditorGraphMenuCommand::CreateViewportUV: return kb::render::RenderMaterialGraphNodeKind::ViewportUV;
+    case MaterialEditorGraphMenuCommand::CreateCameraPosition: return kb::render::RenderMaterialGraphNodeKind::CameraPosition;
+    case MaterialEditorGraphMenuCommand::CreateCameraVector: return kb::render::RenderMaterialGraphNodeKind::CameraVector;
+    case MaterialEditorGraphMenuCommand::CreateReflectionVector: return kb::render::RenderMaterialGraphNodeKind::ReflectionVector;
+    case MaterialEditorGraphMenuCommand::CreateLightVector: return kb::render::RenderMaterialGraphNodeKind::LightVector;
+    case MaterialEditorGraphMenuCommand::CreatePixelNormalWS: return kb::render::RenderMaterialGraphNodeKind::PixelNormalWS;
+    case MaterialEditorGraphMenuCommand::CreateVertexNormalWS: return kb::render::RenderMaterialGraphNodeKind::VertexNormalWS;
+    case MaterialEditorGraphMenuCommand::CreateVertexTangentWS: return kb::render::RenderMaterialGraphNodeKind::VertexTangentWS;
+    case MaterialEditorGraphMenuCommand::CreateViewProperty: return kb::render::RenderMaterialGraphNodeKind::ViewProperty;
+    case MaterialEditorGraphMenuCommand::CreateViewSize: return kb::render::RenderMaterialGraphNodeKind::ViewSize;
+    case MaterialEditorGraphMenuCommand::CreateSceneDepth: return kb::render::RenderMaterialGraphNodeKind::SceneDepth;
+    case MaterialEditorGraphMenuCommand::CreateDepthFade: return kb::render::RenderMaterialGraphNodeKind::DepthFade;
+    case MaterialEditorGraphMenuCommand::CreateCustomCode: return kb::render::RenderMaterialGraphNodeKind::CustomCode;
+    case MaterialEditorGraphMenuCommand::CreateReroute: return kb::render::RenderMaterialGraphNodeKind::Reroute;
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteDeclaration: return kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration;
+    case MaterialEditorGraphMenuCommand::CreateNamedRerouteUsage: return kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage;
+    case MaterialEditorGraphMenuCommand::CreateCompositeInput: return kb::render::RenderMaterialGraphNodeKind::CompositeInput;
+    case MaterialEditorGraphMenuCommand::CreateCompositeOutput: return kb::render::RenderMaterialGraphNodeKind::CompositeOutput;
+    case MaterialEditorGraphMenuCommand::CreateFunctionInput: return kb::render::RenderMaterialGraphNodeKind::FunctionInput;
+    case MaterialEditorGraphMenuCommand::CreateFunctionOutput: return kb::render::RenderMaterialGraphNodeKind::FunctionOutput;
+    case MaterialEditorGraphMenuCommand::CreateMaterialFunctionCall: return kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall;
+    case MaterialEditorGraphMenuCommand::CreateLayerStack: return kb::render::RenderMaterialGraphNodeKind::LayerStack;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphPaletteAllCommands() {
+    std::vector<MaterialEditorGraphMenuCommand> commands;
+    for (std::size_t categoryIndex = 0U; categoryIndex < kMaterialEditorGraphBaseCategoryCount; ++categoryIndex) {
+        for (const MaterialEditorGraphMenuCommand command : MaterialEditorGraphContextMenuCommands(categoryIndex)) {
+            if (command != MaterialEditorGraphMenuCommand::None && !MaterialEditorGraphCommandInList(commands, command)) {
+                commands.push_back(command);
+            }
+        }
+    }
+    return commands;
+}
+
+[[nodiscard]] inline std::string MaterialEditorGraphPaletteNormalize(std::string_view text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    for (const unsigned char ch : text) {
+        if (std::isalnum(ch)) {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+        }
+    }
+    return normalized;
+}
+
+[[nodiscard]] inline bool MaterialEditorGraphPaletteCommandMatches(
+    MaterialEditorGraphMenuCommand command,
+    std::string_view query) {
+    const std::string normalizedQuery = MaterialEditorGraphPaletteNormalize(query);
+    if (normalizedQuery.empty()) {
+        return true;
+    }
+    std::string haystack{ MaterialEditorGraphContextMenuCommandName(command) };
+    if (const std::optional<kb::render::RenderMaterialGraphNodeKind> kind = MaterialEditorGraphMenuCommandNodeKind(command)) {
+        haystack += " ";
+        haystack += kb::render::RenderMaterialGraphNodeKindName(*kind);
+        for (const std::string& pin : kb::render::RenderMaterialGraphNodeInputPinNames(*kind)) {
+            haystack += " ";
+            haystack += pin;
+        }
+        for (const std::string& pin : kb::render::RenderMaterialGraphNodeOutputPinNames(*kind)) {
+            haystack += " ";
+            haystack += pin;
+        }
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateCollectionParameter) {
+        haystack += " material parameter collection mpc global parameter global uniform";
+    }
+    const std::string normalizedHaystack = MaterialEditorGraphPaletteNormalize(haystack);
+    if (normalizedHaystack.find(normalizedQuery) != std::string::npos) {
+        return true;
+    }
+    std::string token;
+    bool sawToken = false;
+    for (std::size_t index = 0U; index <= query.size(); ++index) {
+        const char ch = index < query.size() ? static_cast<char>(query[index]) : ' ';
+        if (std::isalnum(static_cast<unsigned char>(ch))) {
+            token.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            continue;
+        }
+        if (token.empty()) {
+            continue;
+        }
+        sawToken = true;
+        if (normalizedHaystack.find(token) == std::string::npos) {
+            return false;
+        }
+        token.clear();
+    }
+    return sawToken;
+}
+
+[[nodiscard]] inline std::optional<std::string> MaterialEditorGraphCompatibleCommandPin(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t sourceNodeId,
+    std::string_view sourcePin,
+    bool sourceOutput,
+    MaterialEditorGraphMenuCommand command) {
+    const kb::render::RenderMaterialGraphNode* sourceNode = kb::render::FindRenderMaterialGraphNode(graph, sourceNodeId);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> candidateKind = MaterialEditorGraphMenuCommandNodeKind(command);
+    if (sourceNode == nullptr || !candidateKind.has_value()) {
+        return std::nullopt;
+    }
+    const bool sourcePinValid = sourceOutput
+        ? kb::render::IsRenderMaterialGraphOutputPin(*sourceNode, sourcePin)
+        : kb::render::IsRenderMaterialGraphInputPin(*sourceNode, sourcePin);
+    if (!sourcePinValid) {
+        return std::nullopt;
+    }
+    const kb::render::RenderMaterialGraphPinType sourceType =
+        kb::render::RenderMaterialGraphPinDataType(*sourceNode, sourcePin, sourceOutput);
+    if (sourceOutput) {
+        for (const std::string& inputPin : kb::render::RenderMaterialGraphNodeInputPinNames(*candidateKind)) {
+            if (kb::render::AreRenderMaterialGraphPinsCompatible(
+                    sourceType,
+                    kb::render::RenderMaterialGraphPinDataType(*candidateKind, inputPin, false))) {
+                return inputPin;
+            }
+        }
+    } else {
+        for (const std::string& outputPin : kb::render::RenderMaterialGraphNodeOutputPinNames(*candidateKind)) {
+            if (kb::render::AreRenderMaterialGraphPinsCompatible(
+                    kb::render::RenderMaterialGraphPinDataType(*candidateKind, outputPin, true),
+                    sourceType)) {
+                return outputPin;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphCompatibleCommands(
+    const kb::render::RenderMaterialGraphDocument& graph,
+    std::uint32_t sourceNodeId,
+    std::string_view sourcePin,
+    bool sourceOutput) {
+    std::vector<MaterialEditorGraphMenuCommand> compatible;
+    for (const MaterialEditorGraphMenuCommand command : MaterialEditorGraphPaletteAllCommands()) {
+        if (MaterialEditorGraphCompatibleCommandPin(graph, sourceNodeId, sourcePin, sourceOutput, command).has_value()) {
+            compatible.push_back(command);
+        }
+    }
+    return compatible;
+}
+
+[[nodiscard]] inline bool MaterialEditorGraphContextMenuUsesFlatCommandList(const EditorSceneContext& sceneContext) noexcept {
+    return !sceneContext.MaterialGraphContextMenuSearchQuery().empty() || sceneContext.IsMaterialGraphContextMenuPinFiltered();
+}
+
+[[nodiscard]] inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuFilteredCommands(
+    const EditorSceneContext& sceneContext) {
+    std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphPaletteAllCommands();
+    if (sceneContext.IsMaterialGraphContextMenuPinFiltered()) {
+        commands.clear();
+        const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = sceneContext.MaterialEditor().WorkingCopy();
+        if (workingCopy.has_value()) {
+            commands = MaterialEditorGraphCompatibleCommands(
+                workingCopy->graph,
+                sceneContext.MaterialGraphContextMenuPinFilterNodeId(),
+                sceneContext.MaterialGraphContextMenuPinFilterPin(),
+                sceneContext.MaterialGraphContextMenuPinFilterIsOutput());
+        }
+    }
+
+    const std::string_view query = sceneContext.MaterialGraphContextMenuSearchQuery();
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
+    std::vector<MaterialEditorGraphMenuCommand> filtered;
+    filtered.reserve(commands.size());
+    for (const MaterialEditorGraphMenuCommand command : commands) {
+        if (MaterialEditorGraphPaletteCommandMatches(command, query)) {
+            filtered.push_back(command);
+        }
+    }
+    std::stable_sort(filtered.begin(), filtered.end(), [&favorites](MaterialEditorGraphMenuCommand lhs, MaterialEditorGraphMenuCommand rhs) {
+        const bool lhsFavorite = MaterialEditorGraphCommandInList(favorites, lhs);
+        const bool rhsFavorite = MaterialEditorGraphCommandInList(favorites, rhs);
+        return lhsFavorite && !rhsFavorite;
+    });
+    return filtered;
+}
+
 inline int MaterialEditorGraphContextMenuHeight(const EditorSceneContext& sceneContext) {
     int height = kMaterialEditorGraphMenuPadding + kMaterialEditorGraphMenuSearchHeight + kMaterialEditorGraphMenuPadding;
+    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
+        return height + static_cast<int>(MaterialEditorGraphContextMenuFilteredCommands(sceneContext).size()) * kMaterialEditorGraphMenuCommandHeight +
+            kMaterialEditorGraphMenuPadding;
+    }
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
     for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
         height += kMaterialEditorGraphMenuCategoryHeight;
         if (sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
-            height += static_cast<int>(MaterialEditorGraphContextMenuCommands(categoryIndex).size()) * kMaterialEditorGraphMenuCommandHeight;
+            height += static_cast<int>(MaterialEditorGraphContextMenuCommands(categoryIndex, favorites).size()) * kMaterialEditorGraphMenuCommandHeight;
         }
     }
     return height + kMaterialEditorGraphMenuPadding;
@@ -1626,7 +2526,34 @@ inline MaterialEditorGraphContextMenuHit MaterialEditorPanelRenderer::GraphConte
     if (!MaterialEditorPanelPointInRect(menu, x, y)) {
         return {};
     }
+    const RECT searchRect{
+        menu.left + kMaterialEditorGraphMenuPadding + 8,
+        menu.top + kMaterialEditorGraphMenuPadding,
+        menu.right - kMaterialEditorGraphMenuPadding - 8,
+        menu.top + kMaterialEditorGraphMenuPadding + 22,
+    };
+    if (MaterialEditorPanelPointInRect(searchRect, x, y)) {
+        return MaterialEditorGraphContextMenuHit{ .kind = MaterialEditorGraphContextMenuHitKind::Search };
+    }
     int rowTop = menu.top + kMaterialEditorGraphMenuPadding + kMaterialEditorGraphMenuSearchHeight + kMaterialEditorGraphMenuPadding;
+    if (MaterialEditorGraphContextMenuUsesFlatCommandList(sceneContext)) {
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuFilteredCommands(sceneContext);
+        for (const MaterialEditorGraphMenuCommand command : commands) {
+            const RECT commandRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCommandHeight };
+            if (MaterialEditorPanelPointInRect(commandRect, x, y)) {
+                const RECT favoriteRect{ menu.left + 10, rowTop + 4, menu.left + 24, rowTop + 18 };
+                return MaterialEditorGraphContextMenuHit{
+                    .kind = MaterialEditorPanelPointInRect(favoriteRect, x, y)
+                        ? MaterialEditorGraphContextMenuHitKind::FavoriteToggle
+                        : MaterialEditorGraphContextMenuHitKind::Command,
+                    .command = command,
+                };
+            }
+            rowTop += kMaterialEditorGraphMenuCommandHeight;
+        }
+        return {};
+    }
+    const std::vector<MaterialEditorGraphMenuCommand>& favorites = sceneContext.MaterialGraphPaletteFavoriteCommands();
     for (std::size_t categoryIndex = 0U; categoryIndex < MaterialEditorGraphContextMenuCategoryCount(); ++categoryIndex) {
         const RECT categoryRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCategoryHeight };
         if (MaterialEditorPanelPointInRect(categoryRect, x, y)) {
@@ -1639,12 +2566,15 @@ inline MaterialEditorGraphContextMenuHit MaterialEditorPanelRenderer::GraphConte
         if (!sceneContext.IsMaterialGraphContextMenuCategoryExpanded(categoryIndex)) {
             continue;
         }
-        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex);
+        const std::vector<MaterialEditorGraphMenuCommand> commands = MaterialEditorGraphContextMenuCommands(categoryIndex, favorites);
         for (const MaterialEditorGraphMenuCommand command : commands) {
             const RECT commandRect{ menu.left, rowTop, menu.right, rowTop + kMaterialEditorGraphMenuCommandHeight };
             if (MaterialEditorPanelPointInRect(commandRect, x, y)) {
+                const RECT favoriteRect{ menu.left + 10, rowTop + 4, menu.left + 24, rowTop + 18 };
                 return MaterialEditorGraphContextMenuHit{
-                    .kind = MaterialEditorGraphContextMenuHitKind::Command,
+                    .kind = MaterialEditorPanelPointInRect(favoriteRect, x, y)
+                        ? MaterialEditorGraphContextMenuHitKind::FavoriteToggle
+                        : MaterialEditorGraphContextMenuHitKind::Command,
                     .categoryIndex = categoryIndex,
                     .command = command,
                 };

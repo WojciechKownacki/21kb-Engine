@@ -1,18 +1,63 @@
 #include "kb/render/MaterialProgramRegistry.hpp"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 namespace kb::render {
+namespace {
+
+constexpr std::uint64_t kProgramKeyFnvOffset = 1469598103934665603ULL;
+constexpr std::uint64_t kProgramKeyFnvPrime = 1099511628211ULL;
+
+void HashByte(std::uint64_t& hash, std::uint8_t value) noexcept {
+    hash ^= value;
+    hash *= kProgramKeyFnvPrime;
+}
+
+void HashU32(std::uint64_t& hash, std::uint32_t value) noexcept {
+    for (std::uint32_t shift = 0U; shift < 32U; shift += 8U) {
+        HashByte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+void HashU64(std::uint64_t& hash, std::uint64_t value) noexcept {
+    for (std::uint32_t shift = 0U; shift < 64U; shift += 8U) {
+        HashByte(hash, static_cast<std::uint8_t>((value >> shift) & 0xFFU));
+    }
+}
+
+void HashString(std::uint64_t& hash, std::string_view value) noexcept {
+    HashU64(hash, static_cast<std::uint64_t>(value.size()));
+    for (const char ch : value) {
+        HashByte(hash, static_cast<std::uint8_t>(static_cast<unsigned char>(ch)));
+    }
+}
+
+} // namespace
 
 bool MaterialProgramKey::operator==(const MaterialProgramKey& rhs) const noexcept {
     return materialTypeId == rhs.materialTypeId &&
         materialTypeVersion == rhs.materialTypeVersion &&
         graphSourceHash == rhs.graphSourceHash &&
+        variantKey == rhs.variantKey &&
         pass == rhs.pass &&
         backend == rhs.backend &&
         pipelineStateKey == rhs.pipelineStateKey &&
         graphProgram == rhs.graphProgram;
+}
+
+std::uint64_t MaterialProgramKeyIdentityHash(const MaterialProgramKey& key) noexcept {
+    std::uint64_t hash = kProgramKeyFnvOffset;
+    HashU64(hash, key.materialTypeId);
+    HashU32(hash, key.materialTypeVersion);
+    HashU64(hash, key.graphSourceHash);
+    HashU64(hash, key.variantKey);
+    HashString(hash, key.pass);
+    HashU32(hash, key.backend);
+    HashU64(hash, key.pipelineStateKey);
+    HashByte(hash, key.graphProgram ? 1U : 0U);
+    return hash;
 }
 
 void MaterialProgramRegistry::Configure(MaterialProgramLoader loader, MaterialProgramDestroyer destroyer, std::uint32_t graceFrames) {

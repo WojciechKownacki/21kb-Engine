@@ -361,7 +361,7 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
         "OPAQUE", "MASK", "BLEND"
     };
 
-    static const std::array<const char*, 12> unsupportedAdvancedFeatures{
+    static const std::array<const char*, 13> unsupportedAdvancedFeatures{
         "clearcoatFactor",
         "clearcoatRoughnessFactor",
         "sheenColor",
@@ -374,6 +374,7 @@ const RenderMaterialTypeSchema& BuildBuiltInPbrMaterialTypeSchema() {
         "subsurfaceFactor",
         "anisotropyStrength",
         "anisotropyRotation",
+        "tessellation",
     };
 
     static const std::array<RenderMaterialTypeMigrationOperation, 4> migrations{{

@@ -26,6 +26,7 @@ public:
     EditorMaterialAssetAuthoring(kb::scene::Scene& scene, EditorAssetBrowserState& browser, EditorConsoleState& console) noexcept;
 
     [[nodiscard]] bool Create(const std::filesystem::path& virtualFolder);
+    [[nodiscard]] bool CreateFunction(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateGraph(const std::filesystem::path& virtualFolder);
     [[nodiscard]] bool CreateInstance(kb::assets::AssetId parentMaterial);
     [[nodiscard]] bool CreateMaterialType(const std::filesystem::path& virtualFolder);

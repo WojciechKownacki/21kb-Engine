@@ -133,9 +133,31 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
+    if (sceneContext_.IsMaterialGraphCommentDragging()) {
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.EndMaterialGraphCommentDrag());
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragMaterialGraphComment(x, y));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
+    if (sceneContext_.IsMaterialGraphBoxSelecting()) {
+        if (!leftButtonDown) {
+            static_cast<void>(sceneContext_.EndMaterialGraphBoxSelection({}, 0U));
+            ReleaseCapture();
+        } else {
+            static_cast<void>(sceneContext_.DragMaterialGraphBoxSelection(x, y));
+        }
+        EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);
+        return;
+    }
+
     if (sceneContext_.HasMaterialGraphPinConnection()) {
         if (!leftButtonDown) {
-            sceneContext_.CancelMaterialGraphPinConnection();
+            static_cast<void>(sceneContext_.CancelMaterialGraphPinConnection());
             ReleaseCapture();
         } else {
             static_cast<void>(sceneContext_.DragMaterialGraphPinConnection(x, y));
@@ -160,7 +182,8 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         bool changed = false;
         if (hit.kind == MaterialEditorGraphContextMenuHitKind::Category) {
             changed = sceneContext_.SetMaterialGraphContextMenuHover(hit.categoryIndex, MaterialEditorGraphMenuCommand::None);
-        } else if (hit.kind == MaterialEditorGraphContextMenuHitKind::Command) {
+        } else if (hit.kind == MaterialEditorGraphContextMenuHitKind::Command ||
+            hit.kind == MaterialEditorGraphContextMenuHitKind::FavoriteToggle) {
             changed = sceneContext_.SetMaterialGraphContextMenuHover(hit.categoryIndex, hit.command);
         } else {
             changed = sceneContext_.ClearMaterialGraphContextMenuHover();

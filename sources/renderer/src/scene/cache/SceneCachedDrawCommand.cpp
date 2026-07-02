@@ -1,5 +1,8 @@
 #include "kb/render/scene/cache/SceneCachedDrawCommand.hpp"
 
+#include "kb/render/MaterialProgramRegistry.hpp"
+#include "kb/render/scene/MeshPipeline.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -11,6 +14,20 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
 }
 
 [[nodiscard]] SceneCachedDrawCommandKey BuildKey(const SceneCachedDrawCommandDesc& desc) noexcept {
+    MaterialProgramKey programKey{};
+    if (desc.materialResource != nullptr && desc.materialResource->graphProgram.active) {
+        programKey = MaterialProgramKey{
+            .materialTypeId = desc.materialResource->graphProgram.materialTypeId,
+            .materialTypeVersion = desc.materialResource->graphProgram.materialTypeVersion,
+            .graphSourceHash = desc.materialResource->graphProgram.graphSourceHash,
+            .variantKey = desc.materialResource->graphProgram.variantKey,
+            .pass = MeshPassTypeName(desc.pass),
+            .backend = 0U,
+            .pipelineStateKey = desc.materialResource->graphProgram.pipelineStateKey,
+            .graphProgram = true,
+        };
+    }
+
     return SceneCachedDrawCommandKey{
         .pass = desc.pass,
         .meshAssetId = desc.meshAssetId,
@@ -19,9 +36,13 @@ void HashCombine(std::size_t& seed, std::uint64_t value) noexcept {
         .materialHandleValue = desc.material.value,
         .meshResourceVersion = desc.meshResourceVersion,
         .materialResourceVersion = desc.materialResourceVersion,
-        .materialProgramKey = (desc.materialResource != nullptr && desc.materialResource->graphProgram.active)
-            ? desc.materialResource->graphProgram.graphSourceHash
-            : 0U,
+        .materialProgramKey = programKey.graphProgram ? MaterialProgramKeyIdentityHash(programKey) : 0U,
+        .materialProgramTypeId = programKey.materialTypeId,
+        .materialProgramTypeVersion = programKey.materialTypeVersion,
+        .materialProgramGraphSourceHash = programKey.graphSourceHash,
+        .materialProgramVariantKey = programKey.variantKey,
+        .materialProgramPipelineStateKey = programKey.pipelineStateKey,
+        .materialGraphProgram = programKey.graphProgram,
         .materialTextureDependencySignature = desc.materialTextureDependencySignature,
         .sectionIndex = desc.sectionIndex,
         .materialSlot = desc.materialSlot,
@@ -52,6 +73,12 @@ std::size_t SceneCachedDrawCommandKeyHash::operator()(const SceneCachedDrawComma
     HashCombine(seed, key.meshResourceVersion);
     HashCombine(seed, key.materialResourceVersion);
     HashCombine(seed, key.materialProgramKey);
+    HashCombine(seed, key.materialProgramTypeId);
+    HashCombine(seed, key.materialProgramTypeVersion);
+    HashCombine(seed, key.materialProgramGraphSourceHash);
+    HashCombine(seed, key.materialProgramVariantKey);
+    HashCombine(seed, key.materialProgramPipelineStateKey);
+    HashCombine(seed, key.materialGraphProgram ? 1U : 0U);
     HashCombine(seed, key.materialTextureDependencySignature);
     HashCombine(seed, key.sectionIndex);
     HashCombine(seed, key.materialSlot);

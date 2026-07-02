@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderHandles.hpp"
 
 #include <bgfx/bgfx.h>
@@ -304,10 +305,18 @@ enum class RenderMaterialGraphUniformBindingType : std::uint8_t {
     Color,
 };
 
+enum class RenderMaterialGraphUniformBindingSource : std::uint8_t {
+    MaterialParameter,
+    ParameterCollection,
+};
+
 struct RenderMaterialGraphUniformBinding {
     std::string name;
     std::string stableId;
     RenderMaterialGraphUniformBindingType type = RenderMaterialGraphUniformBindingType::Scalar;
+    RenderMaterialGraphUniformBindingSource source = RenderMaterialGraphUniformBindingSource::MaterialParameter;
+    std::uint64_t collectionAssetId = 0U;
+    std::string collectionParameterStableId;
     float value[4]{ 0.0F, 0.0F, 0.0F, 0.0F };
 };
 
@@ -320,6 +329,7 @@ struct RenderMaterialGraphTextureBinding {
     RenderTextureColorSpace colorSpace = RenderTextureColorSpace::Linear;
     // Resolved bgfx sampler flags (filter/wrap) from the graph sampler state; UINT32_MAX = texture default.
     std::uint32_t samplerFlags = UINT32_MAX;
+    RenderMaterialGraphTextureDimension dimension = RenderMaterialGraphTextureDimension::Texture2D;
     bool resolved = false;
 };
 
@@ -328,6 +338,8 @@ struct RenderMaterialGraphProgramBinding {
     std::uint64_t materialTypeId = 0U;
     std::uint32_t materialTypeVersion = 0U;
     std::uint64_t graphSourceHash = 0U;
+    std::uint64_t variantKey = 0U;
+    std::uint64_t pipelineStateKey = 0U;
     std::vector<RenderMaterialGraphUniformBinding> uniforms;
     std::vector<RenderMaterialGraphTextureBinding> textures;
     std::vector<std::string> requiredVaryings;
@@ -338,6 +350,7 @@ struct RenderMaterialGraphProgramBinding {
     // MAT-80/#18b: the graph samples the opaque scene depth, so the scene binds the resolved depth texture
     // to the graph fragment shader in the transparent pass.
     bool usesSceneDepth = false;
+    bool usesSceneColor = false;
 };
 
 struct RenderMaterialResource {

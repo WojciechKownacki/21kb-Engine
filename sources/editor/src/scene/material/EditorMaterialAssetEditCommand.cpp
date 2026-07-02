@@ -249,6 +249,65 @@ bool EditorMaterialAssetEditCommand::Write(const kb::render::RenderMaterialAsset
     return EditorMaterialAssetGateway::WriteExisting(scene_, materialId_, asset);
 }
 
+std::unique_ptr<EditorMaterialInstanceEditCommand> EditorMaterialInstanceEditCommand::CreateRecorded(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId materialInstanceId,
+    std::string label,
+    kb::render::RenderMaterialInstanceAssetData before,
+    kb::render::RenderMaterialInstanceAssetData after) {
+    return std::unique_ptr<EditorMaterialInstanceEditCommand>{ new EditorMaterialInstanceEditCommand{
+        scene,
+        materialInstanceId,
+        std::move(label),
+        std::move(before),
+        std::move(after),
+    } };
+}
+
+EditorMaterialInstanceEditCommand::EditorMaterialInstanceEditCommand(
+    kb::scene::Scene& scene,
+    kb::assets::AssetId materialInstanceId,
+    std::string label,
+    kb::render::RenderMaterialInstanceAssetData before,
+    kb::render::RenderMaterialInstanceAssetData after)
+    : scene_(scene)
+    , materialInstanceId_(materialInstanceId)
+    , label_(std::move(label))
+    , before_(std::move(before))
+    , after_(std::move(after)) {}
+
+std::string_view EditorMaterialInstanceEditCommand::Label() const noexcept {
+    return label_;
+}
+
+bool EditorMaterialInstanceEditCommand::AffectsSceneDocument() const noexcept {
+    return false;
+}
+
+bool EditorMaterialInstanceEditCommand::AffectsHierarchySelection() const noexcept {
+    return false;
+}
+
+bool EditorMaterialInstanceEditCommand::AffectsOpenMaterialSource() const noexcept {
+    return true;
+}
+
+bool EditorMaterialInstanceEditCommand::Execute() {
+    return Write(after_);
+}
+
+bool EditorMaterialInstanceEditCommand::Undo() {
+    return Write(before_);
+}
+
+bool EditorMaterialInstanceEditCommand::Redo() {
+    return Write(after_);
+}
+
+bool EditorMaterialInstanceEditCommand::Write(const kb::render::RenderMaterialInstanceAssetData& asset) {
+    return EditorMaterialAssetGateway::WriteExistingInstance(scene_, materialInstanceId_, asset);
+}
+
 std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyEditCommand::Create(
     MaterialEditorState& editor,
     kb::assets::AssetId materialId,
@@ -257,14 +316,46 @@ std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyE
     kb::render::RenderMaterialAssetData after,
     std::uint32_t beforeSelectedNodeId,
     std::uint32_t afterSelectedNodeId) {
+    std::vector<std::uint32_t> beforeSelectedNodeIds;
+    if (beforeSelectedNodeId != 0U) {
+        beforeSelectedNodeIds.push_back(beforeSelectedNodeId);
+    }
+    std::vector<std::uint32_t> afterSelectedNodeIds;
+    if (afterSelectedNodeId != 0U) {
+        afterSelectedNodeIds.push_back(afterSelectedNodeId);
+    }
+    return Create(
+        editor,
+        materialId,
+        std::move(label),
+        std::move(before),
+        std::move(after),
+        std::move(beforeSelectedNodeIds),
+        std::move(afterSelectedNodeIds),
+        0U,
+        0U);
+}
+
+std::unique_ptr<EditorMaterialWorkingCopyEditCommand> EditorMaterialWorkingCopyEditCommand::Create(
+    MaterialEditorState& editor,
+    kb::assets::AssetId materialId,
+    std::string label,
+    kb::render::RenderMaterialAssetData before,
+    kb::render::RenderMaterialAssetData after,
+    std::vector<std::uint32_t> beforeSelectedNodeIds,
+    std::vector<std::uint32_t> afterSelectedNodeIds,
+    std::uint32_t beforeSelectedCommentId,
+    std::uint32_t afterSelectedCommentId) {
     return std::unique_ptr<EditorMaterialWorkingCopyEditCommand>{ new EditorMaterialWorkingCopyEditCommand{
         editor,
         materialId,
         std::move(label),
         std::move(before),
         std::move(after),
-        beforeSelectedNodeId,
-        afterSelectedNodeId,
+        std::move(beforeSelectedNodeIds),
+        std::move(afterSelectedNodeIds),
+        beforeSelectedCommentId,
+        afterSelectedCommentId,
     } };
 }
 
@@ -274,15 +365,19 @@ EditorMaterialWorkingCopyEditCommand::EditorMaterialWorkingCopyEditCommand(
     std::string label,
     kb::render::RenderMaterialAssetData before,
     kb::render::RenderMaterialAssetData after,
-    std::uint32_t beforeSelectedNodeId,
-    std::uint32_t afterSelectedNodeId)
+    std::vector<std::uint32_t> beforeSelectedNodeIds,
+    std::vector<std::uint32_t> afterSelectedNodeIds,
+    std::uint32_t beforeSelectedCommentId,
+    std::uint32_t afterSelectedCommentId)
     : editor_(editor)
     , materialId_(materialId)
     , label_(std::move(label))
     , before_(std::move(before))
     , after_(std::move(after))
-    , beforeSelectedNodeId_(beforeSelectedNodeId)
-    , afterSelectedNodeId_(afterSelectedNodeId) {}
+    , beforeSelectedNodeIds_(std::move(beforeSelectedNodeIds))
+    , afterSelectedNodeIds_(std::move(afterSelectedNodeIds))
+    , beforeSelectedCommentId_(beforeSelectedCommentId)
+    , afterSelectedCommentId_(afterSelectedCommentId) {}
 
 std::string_view EditorMaterialWorkingCopyEditCommand::Label() const noexcept {
     return label_;
@@ -297,27 +392,31 @@ bool EditorMaterialWorkingCopyEditCommand::AffectsHierarchySelection() const noe
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Execute() {
-    return Apply(after_, afterSelectedNodeId_);
+    return Apply(after_, afterSelectedNodeIds_, afterSelectedCommentId_);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Undo() {
-    return Apply(before_, beforeSelectedNodeId_);
+    return Apply(before_, beforeSelectedNodeIds_, beforeSelectedCommentId_);
 }
 
 bool EditorMaterialWorkingCopyEditCommand::Redo() {
-    return Apply(after_, afterSelectedNodeId_);
+    return Apply(after_, afterSelectedNodeIds_, afterSelectedCommentId_);
 }
 
-bool EditorMaterialWorkingCopyEditCommand::Apply(const kb::render::RenderMaterialAssetData& asset, std::uint32_t selectedNodeId) {
+bool EditorMaterialWorkingCopyEditCommand::Apply(
+    const kb::render::RenderMaterialAssetData& asset,
+    const std::vector<std::uint32_t>& selectedNodeIds,
+    std::uint32_t selectedCommentId) {
     if (editor_.OpenAssetId() != materialId_ || !editor_.WorkingCopy().has_value()) {
         return false;
     }
 
     editor_.SetWorkingCopy(asset);
-    if (selectedNodeId != 0U && kb::render::FindRenderMaterialGraphNode(asset.graph, selectedNodeId) != nullptr) {
-        static_cast<void>(editor_.SelectNode(selectedNodeId));
+    static_cast<void>(editor_.SetNodeSelection(selectedNodeIds, selectedNodeIds.empty() ? 0U : selectedNodeIds.back()));
+    if (selectedCommentId != 0U) {
+        static_cast<void>(editor_.SelectComment(selectedCommentId));
     } else {
-        static_cast<void>(editor_.ClearNodeSelection());
+        static_cast<void>(editor_.ClearCommentSelection());
     }
     return true;
 }

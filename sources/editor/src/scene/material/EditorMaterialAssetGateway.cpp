@@ -6,9 +6,11 @@
 #include "engine/scene/SceneAssets.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 
 #include <memory>
@@ -65,9 +67,26 @@ std::optional<std::filesystem::path> EditorMaterialAssetGateway::ResolveFile(con
     return manager.Mounts().Resolve(metadata->virtualPath);
 }
 
+std::optional<std::filesystem::path> EditorMaterialAssetGateway::ResolveInstanceFile(const kb::scene::Scene& scene, kb::assets::AssetId id) {
+    const kb::assets::AssetManager& manager = scene.Assets().Manager();
+    const kb::assets::AssetMetadata* metadata = manager.Registry().Find(id);
+    if (metadata == nullptr || metadata->type != "RenderMaterialInstance") {
+        return std::nullopt;
+    }
+    if (!metadata->physicalPath.empty()) {
+        return metadata->physicalPath;
+    }
+    return manager.Mounts().Resolve(metadata->virtualPath);
+}
+
 std::optional<kb::render::RenderMaterialAssetData> EditorMaterialAssetGateway::Read(const kb::scene::Scene& scene, kb::assets::AssetId id) {
     const std::optional<std::filesystem::path> path = ResolveFile(scene, id);
     return path.has_value() ? kb::render::RenderMaterialAssetLoader::LoadMaterial(*path) : std::nullopt;
+}
+
+std::optional<kb::render::RenderMaterialInstanceAssetData> EditorMaterialAssetGateway::ReadInstance(const kb::scene::Scene& scene, kb::assets::AssetId id) {
+    const std::optional<std::filesystem::path> path = ResolveInstanceFile(scene, id);
+    return path.has_value() ? kb::render::RenderMaterialInstanceAssetLoader::LoadInstance(*path) : std::nullopt;
 }
 
 bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset) {
@@ -83,8 +102,25 @@ bool EditorMaterialAssetGateway::WriteExisting(kb::scene::Scene& scene, kb::asse
     return true;
 }
 
+bool EditorMaterialAssetGateway::WriteExistingInstance(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialInstanceAssetData& asset) {
+    const std::optional<std::filesystem::path> path = ResolveInstanceFile(scene, id);
+    if (!path.has_value()) {
+        return false;
+    }
+    if (!kb::render::RenderMaterialInstanceAssetWriter::Save(*path, asset)) {
+        return false;
+    }
+    static_cast<void>(scene.Assets().Manager().Unload(id));
+    static_cast<void>(scene.Assets().Discover());
+    return true;
+}
+
 void EditorMaterialAssetGateway::EnsureMaterialLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialAssetLoader>()));
+}
+
+void EditorMaterialAssetGateway::EnsureMaterialFunctionLoader() {
+    static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialFunctionAssetLoader>()));
 }
 
 void EditorMaterialAssetGateway::EnsureMaterialGraphLoader() {
@@ -95,14 +131,20 @@ void EditorMaterialAssetGateway::EnsureMaterialInstanceLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialInstanceAssetLoader>()));
 }
 
+void EditorMaterialAssetGateway::EnsureMaterialParameterCollectionLoader() {
+    static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialParameterCollectionAssetLoader>()));
+}
+
 void EditorMaterialAssetGateway::EnsureMaterialTypeLoader() {
     static_cast<void>(scene_.Assets().Manager().RegisterLoader(std::make_unique<kb::render::RenderMaterialTypeAssetLoader>()));
 }
 
 void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& path) {
     EnsureMaterialLoader();
+    EnsureMaterialFunctionLoader();
     EnsureMaterialGraphLoader();
     EnsureMaterialInstanceLoader();
+    EnsureMaterialParameterCollectionLoader();
     EnsureMaterialTypeLoader();
     kb::assets::AssetManager& manager = scene_.Assets().Manager();
     static_cast<void>(scene_.Assets().Discover());
@@ -115,6 +157,14 @@ void EditorMaterialAssetGateway::DiscoverAndSelect(const std::filesystem::path& 
 
 bool EditorMaterialAssetGateway::WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset) {
     if (!kb::render::RenderMaterialAssetWriter::Save(path, asset)) {
+        return false;
+    }
+    DiscoverAndSelect(path);
+    return true;
+}
+
+bool EditorMaterialAssetGateway::WriteNewMaterialFunction(const std::filesystem::path& path, const kb::render::RenderMaterialFunctionAssetData& asset) {
+    if (!kb::render::RenderMaterialFunctionAssetLoader::SaveFunction(path, asset)) {
         return false;
     }
     DiscoverAndSelect(path);

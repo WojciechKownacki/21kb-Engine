@@ -57,3 +57,26 @@ function(kb_target_copy_bgfx_runtime_shaders target_name)
     endif()
     add_dependencies(${target_name} ${_bundle_target})
 endfunction()
+
+set(KB_MATERIAL_GRAPH_SHADER_CACHE_SOURCE
+    "${CMAKE_SOURCE_DIR}/Project/.cache/graph_shaders"
+    CACHE PATH
+    "Project material graph shader cache staged next to standalone runtime targets"
+)
+
+function(kb_target_stage_material_graph_shader_cache target_name)
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "kb_target_stage_material_graph_shader_cache: target '${target_name}' does not exist")
+    endif()
+
+    add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            "-DKB_GRAPH_SHADER_CACHE_SOURCE=${KB_MATERIAL_GRAPH_SHADER_CACHE_SOURCE}"
+            "-DKB_GRAPH_SHADER_CACHE_DEST=$<TARGET_FILE_DIR:${target_name}>/.cache/graph_shaders"
+            -P "${CMAKE_SOURCE_DIR}/CMake/StageMaterialGraphShaderCache.cmake"
+        COMMENT "Stage Material Graph shader cache for ${target_name}"
+        VERBATIM
+    )
+endfunction()
