@@ -24,6 +24,8 @@ namespace {
         return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetPath.filename().string();
     case EditorPointerDragKind::AssetFolder:
         return !drag.assetLabel.empty() ? drag.assetLabel : drag.assetFolderPath.filename().string();
+    case EditorPointerDragKind::MaterialGraphPaletteCommand:
+        return !drag.assetLabel.empty() ? drag.assetLabel : std::string{ "Material Graph Node" };
     case EditorPointerDragKind::None:
     default:
         return {};
