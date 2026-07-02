@@ -2033,8 +2033,8 @@ inline constexpr std::size_t MaterialEditorGraphContextMenuFavoritesCategoryInde
 inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t index) noexcept {
     switch (index) {
     case 0U: return "Textures";
-    case 1U: return "UV";
-    case 2U: return "Inputs";
+    case 1U: return "Inputs";
+    case 2U: return "Parameter Inputs";
     case 3U: return "Constants";
     case 4U: return "Parameters";
     case 5U: return "Math";

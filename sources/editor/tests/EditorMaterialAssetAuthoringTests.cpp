@@ -1691,6 +1691,13 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommand::CreateMultiply,
         kb::editor::MaterialEditorGraphMenuCommand::CreateReroute,
     };
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphContextMenuCategoryName(0U) == "Textures" &&
+            kb::editor::MaterialEditorGraphContextMenuCategoryName(1U) == "Inputs" &&
+            kb::editor::MaterialEditorGraphContextMenuCategoryName(2U) == "Parameter Inputs" &&
+            kb::editor::MaterialEditorGraphContextMenuCategoryName(4U) == "Parameters" &&
+            kb::editor::MaterialEditorGraphContextMenuCategoryName(kb::editor::MaterialEditorGraphContextMenuFavoritesCategoryIndex()) == "Favorites",
+        "KBMAT-MAT57: Material graph palette category labels must match their command groups");
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> favoriteCategory =
         kb::editor::MaterialEditorGraphContextMenuCommands(kb::editor::MaterialEditorGraphContextMenuFavoritesCategoryIndex(), favorites);
     kb::editor::tests::Require(favoriteCategory == favorites,
