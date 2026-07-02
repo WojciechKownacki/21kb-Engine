@@ -5528,6 +5528,7 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
             docs.find("RenderMaterialGraphNodeSupport") != std::string::npos &&
             docs.find("kb_standalone_player") != std::string::npos &&
             docs.find("GpuDeferred` | Production") != std::string::npos &&
+            docs.find("Forward+ / clustered lighting | Production") != std::string::npos &&
             docs.find("Apple/Metal | Unsupported") != std::string::npos,
         "MAT-71: Material Graph documentation must include support matrix, standalone runtime, render-path gating and Metal status");
 
