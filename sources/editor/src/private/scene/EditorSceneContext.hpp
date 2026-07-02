@@ -302,7 +302,14 @@ public:
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta) noexcept;
     [[nodiscard]] bool ZoomMaterialGraph(int wheelDelta, int focusCanvasX, int focusCanvasY) noexcept;
     void SetMaterialGraphCanvasViewport(int width, int height) noexcept;
+    [[nodiscard]] bool IsMaterialEditorFindFocused() const noexcept;
+    void FocusMaterialEditorFind(bool focused) noexcept;
     void SetMaterialEditorFindQuery(std::string query);
+    void AppendMaterialEditorFindText(wchar_t character);
+    void InsertMaterialEditorFindText(std::string_view text);
+    void BackspaceMaterialEditorFind();
+    void ClearMaterialEditorFind();
+    [[nodiscard]] bool FocusFirstMaterialEditorFindResult();
     [[nodiscard]] bool FocusMaterialEditorFindResult(std::size_t resultIndex, int canvasWidth, int canvasHeight);
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes();
     [[nodiscard]] bool FrameSelectedMaterialGraphNodes(int canvasWidth, int canvasHeight);

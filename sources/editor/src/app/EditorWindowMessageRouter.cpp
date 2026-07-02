@@ -143,6 +143,45 @@ namespace {
         return true;
     }
 
+    if (sceneContext.IsMaterialEditorFindFocused()) {
+        switch (EditorTextInputShortcuts::Resolve(key)) {
+        case EditorTextInputShortcut::Copy:
+            static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(messageWindow, sceneContext.MaterialEditor().FindQuery()));
+            break;
+        case EditorTextInputShortcut::Cut:
+            static_cast<void>(EditorTextInputShortcuts::CopyToClipboard(messageWindow, sceneContext.MaterialEditor().FindQuery()));
+            sceneContext.ClearMaterialEditorFind();
+            break;
+        case EditorTextInputShortcut::Paste:
+            if (const std::optional<std::string> text = EditorTextInputShortcuts::PasteFromClipboard(messageWindow); text.has_value()) {
+                sceneContext.InsertMaterialEditorFindText(*text);
+            }
+            break;
+        case EditorTextInputShortcut::SelectAll:
+            break;
+        case EditorTextInputShortcut::None:
+            switch (key) {
+            case VK_BACK:
+                sceneContext.BackspaceMaterialEditorFind();
+                break;
+            case VK_RETURN:
+                static_cast<void>(sceneContext.FocusFirstMaterialEditorFindResult());
+                break;
+            case VK_ESCAPE:
+                sceneContext.FocusMaterialEditorFind(false);
+                break;
+            default:
+                return false;
+            }
+            break;
+        }
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
+    }
+
     if (key == VK_F2 && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
         const kb::assets::AssetId materialId = sceneContext.MaterialEditor().OpenAssetId();
         const std::uint32_t nodeId = sceneContext.SelectedMaterialGraphNodeId();
@@ -163,6 +202,10 @@ namespace {
             graphClipboardShortcut = true;
             static_cast<void>(sceneContext.CopySelectedMaterialGraphNodes());
             break;
+        case 'F':
+            graphClipboardShortcut = true;
+            sceneContext.FocusMaterialEditorFind(true);
+            break;
         case 'V':
             graphClipboardShortcut = true;
             static_cast<void>(sceneContext.PasteMaterialGraphNodes(materialId, 32, 32));
@@ -181,6 +224,15 @@ namespace {
             }
             return true;
         }
+    }
+
+    if (key == 'F' && !ModifierDown(VK_CONTROL) && !ModifierDown(VK_MENU) && !ModifierDown(VK_SHIFT)) {
+        static_cast<void>(sceneContext.FrameSelectedMaterialGraphNodes());
+        InvalidateRect(messageWindow, nullptr, FALSE);
+        if (messageWindow != mainWindow) {
+            InvalidateRect(mainWindow, nullptr, FALSE);
+        }
+        return true;
     }
 
     if (key != VK_DELETE) {
@@ -216,6 +268,17 @@ namespace {
     }
     if (!sceneContext.IsMaterialGraphConstantInlineEditing()) {
         if (!sceneContext.IsMaterialGraphNodeRenameEditing()) {
+            if (sceneContext.IsMaterialEditorFindFocused()) {
+                if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
+                    return false;
+                }
+                sceneContext.AppendMaterialEditorFindText(character);
+                InvalidateRect(messageWindow, nullptr, FALSE);
+                if (messageWindow != mainWindow) {
+                    InvalidateRect(mainWindow, nullptr, FALSE);
+                }
+                return true;
+            }
             return false;
         }
         if (character == VK_BACK || character == VK_ESCAPE || character == VK_RETURN) {
