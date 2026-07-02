@@ -731,7 +731,7 @@ void DrawVerticalGradientClippedToRound(HDC dc, const RECT& rect, const RECT& cl
         return { { "xyz", "XYZ" } };
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
     case kb::render::RenderMaterialGraphNodeKind::ParameterColor:
-        return { { "rgba", "RGBA" } };
+        return { { "rgba", "RGBA" }, { "r", "R" }, { "g", "G" }, { "b", "B" }, { "a", "A" } };
     case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
         return {
             { "value", "Value" },
