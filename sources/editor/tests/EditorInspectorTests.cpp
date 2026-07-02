@@ -34,6 +34,7 @@
 #include "scene/EditorSceneMaterialAssetActions.hpp"
 #include "scene/EditorSceneMeshAssetActions.hpp"
 #include "scene/material/EditorMaterialReferenceFinder.hpp"
+#include "scene/material_preview/EditorMaterialNodePreviewBuilder.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshFactory.hpp"
 #include "scene/material_preview/EditorMaterialPreviewMeshLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
@@ -954,17 +955,25 @@ void RunMaterialPreviewMeshFactoryTest() {
     kb::editor::tests::Require(cube.desc.indexCount == 36U, "Material preview cube should generate two triangles per face");
     kb::editor::tests::Require(cube.desc.materialSlotCount == 1U, "Material preview cube should expose one material slot");
 
+    const kb::render::RenderMeshAssetData cylinder = kb::editor::EditorMaterialPreviewMeshFactory::BuildCylinder();
+    kb::editor::tests::Require(cylinder.desc.vertexCount > 96U, "KBMAT-PREVIEW-0001: Material preview cylinder should generate side and cap vertices");
+    kb::editor::tests::Require(cylinder.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !cylinder.tangentVertices.empty(), "KBMAT-PREVIEW-0001: Material preview cylinder must provide tangents for the PBR shader");
+    kb::editor::tests::Require(cylinder.desc.indexCount == 576U, "KBMAT-PREVIEW-0001: Material preview cylinder should generate sides plus capped ends");
+    kb::editor::tests::Require(cylinder.desc.materialSlotCount == 1U && cylinder.bounds.radius > 0.0F, "KBMAT-PREVIEW-0001: Material preview cylinder should expose a slot and bounds");
+
     const kb::render::RenderMeshAssetData plane = kb::editor::EditorMaterialPreviewMeshFactory::BuildPlane();
     kb::editor::tests::Require(plane.desc.vertexCount == 4U && plane.desc.indexCount == 6U, "KBMAT-UE-0008: Material preview plane should generate one quad");
     kb::editor::tests::Require(plane.desc.vertexFormat == kb::render::RenderVertexFormat::P3N3T4UV2 && !plane.tangentVertices.empty(), "Material preview plane must provide tangents for the PBR shader");
     kb::editor::tests::Require(plane.desc.materialSlotCount == 1U && plane.bounds.radius > 0.0F, "KBMAT-UE-0008: Material preview plane should expose a slot and bounds");
 
     const kb::editor::EditorMaterialPreviewPrimitivePolicy spherePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Sphere();
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy cylinderPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cylinder();
     const kb::editor::EditorMaterialPreviewPrimitivePolicy cubePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cube();
     const kb::editor::EditorMaterialPreviewPrimitivePolicy planePolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Plane();
     const kb::editor::EditorMaterialPreviewPrimitivePolicy customPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh(kb::assets::AssetId{ 0xC0570B1EC0570B1EULL });
     const kb::editor::EditorMaterialPreviewPrimitivePolicy fallbackPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh({});
     kb::editor::tests::Require(spherePolicy.meshAssetId == kb::editor::EditorMaterialPreviewMeshLoader::PreviewMeshAssetId(), "KBMAT-UE-0008: Sphere policy should keep the legacy preview mesh id");
+    kb::editor::tests::Require(cylinderPolicy.meshAssetId.IsValid() && cylinderPolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-PREVIEW-0001: Cylinder policy should use a distinct generated mesh id");
     kb::editor::tests::Require(cubePolicy.meshAssetId.IsValid() && cubePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Cube policy should use a distinct generated mesh id");
     kb::editor::tests::Require(planePolicy.meshAssetId.IsValid() && planePolicy.meshAssetId != spherePolicy.meshAssetId, "KBMAT-UE-0008: Plane policy should use a distinct generated mesh id");
     kb::editor::tests::Require(customPolicy.kind == kb::editor::EditorMaterialPreviewPrimitiveKind::CustomMesh && customPolicy.meshAssetId == customPolicy.customMeshAssetId, "KBMAT-UE-0008: Custom policy should preserve the selected mesh id");
@@ -1044,6 +1053,51 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     std::vector<kb::render::SceneRenderDrawGroup> cubeGroups;
     cubeRenderScene.BuildDrawGroups(cubeGroups);
     kb::editor::tests::Require(cubeGroups.size() == 1U && cubeGroups[0].meshAssetId == cubePolicy.meshAssetId.value, "KBMAT-UE-0008: Material preview scene should use the selected primitive mesh id");
+
+    kb::editor::EditorMaterialPreviewScene cylinderPreview;
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy cylinderPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::Cylinder();
+    kb::editor::tests::Require(cylinderPreview.SetPrimitivePolicy(cylinderPolicy), "KBMAT-PREVIEW-0001: Material preview scene should accept cylinder primitive policy");
+    const kb::scene::Scene& cylinderPreviewScene = cylinderPreview.SceneFor(source, materialId);
+    kb::render::RenderScene cylinderRenderScene;
+    kb::render::EcsRenderSceneSynchronizer{}.Sync(cylinderPreviewScene, cylinderRenderScene);
+    std::vector<kb::render::SceneRenderDrawGroup> cylinderGroups;
+    cylinderRenderScene.BuildDrawGroups(cylinderGroups);
+    kb::editor::tests::Require(cylinderGroups.size() == 1U && cylinderGroups[0].meshAssetId == cylinderPolicy.meshAssetId.value, "KBMAT-PREVIEW-0001: Material preview scene should use the cylinder mesh id");
+
+    const kb::assets::AssetId customMeshId{ 0xC0570B1EC0570B1EULL };
+    static_cast<void>(source.Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+        .id = customMeshId,
+        .type = "RenderMesh",
+        .name = "BrowserMesh",
+        .virtualPath = "/Game/Meshes/BrowserMesh.21kb",
+        .physicalPath = "__test_browser_mesh__",
+        .runtimeLoadable = true,
+    }));
+    kb::editor::EditorMaterialPreviewScene customPreview;
+    const kb::editor::EditorMaterialPreviewPrimitivePolicy customMeshPolicy = kb::editor::EditorMaterialPreviewPrimitivePolicy::CustomMesh(customMeshId);
+    kb::editor::tests::Require(customPreview.SetPrimitivePolicy(customMeshPolicy), "KBMAT-PREVIEW-0002: Material preview scene should accept a mesh selected from the asset browser");
+    const kb::scene::Scene& customPreviewScene = customPreview.SceneFor(source, materialId);
+    kb::render::RenderScene customRenderScene;
+    kb::render::EcsRenderSceneSynchronizer{}.Sync(customPreviewScene, customRenderScene);
+    std::vector<kb::render::SceneRenderDrawGroup> customGroups;
+    customRenderScene.BuildDrawGroups(customGroups);
+    kb::editor::tests::Require(customGroups.size() == 1U && customGroups[0].meshAssetId == customMeshId.value, "KBMAT-PREVIEW-0002: Material preview scene should render the browser-selected mesh asset id");
+
+    kb::editor::EditorMaterialPreviewScene settingsPreview;
+    const kb::editor::EditorMaterialPreviewSceneSettings highContrastSettings =
+        kb::editor::EditorMaterialPreviewSceneSettingsForPreset(kb::editor::EditorMaterialPreviewLightingPreset::HighContrast);
+    const std::uint64_t settingsRevision = settingsPreview.Revision();
+    kb::editor::tests::Require(settingsPreview.SetSceneSettings(highContrastSettings), "KBMAT-PREVIEW-0003: Material preview scene should accept scene lighting settings");
+    static_cast<void>(settingsPreview.SceneFor(source, materialId));
+    kb::editor::tests::Require(settingsPreview.Revision() > settingsRevision && settingsPreview.SceneSettings().lightingPreset == kb::editor::EditorMaterialPreviewLightingPreset::HighContrast,
+        "KBMAT-PREVIEW-0003: Material preview scene settings should rebuild the runtime preview scene");
+    const kb::render::SceneRenderLightingConfig highContrastLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig(highContrastSettings);
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(highContrastLighting.editorPreviewKeyLightIntensity, highContrastSettings.keyLightIntensity) &&
+            kb::editor::tests::NearlyEqual(highContrastLighting.ambientIntensity, highContrastSettings.ambientIntensity),
+        "KBMAT-PREVIEW-0003: Material preview lighting policy should use the authored scene settings");
+    const kb::render::ScenePostProcessSettings highContrastPostProcess = kb::editor::MaterialPreviewRenderPolicy::StableExposurePostProcessSettings(highContrastSettings);
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(highContrastPostProcess.outputTransform.exposureStops, highContrastSettings.exposureStops),
+        "KBMAT-PREVIEW-0003: Material preview exposure should use the authored scene settings");
 
     kb::render::SceneRenderer renderer;
     const kb::render::SceneRenderLightingConfig previewLighting = kb::editor::MaterialPreviewRenderPolicy::NeutralPbrLightingConfig();
@@ -1224,6 +1278,58 @@ void RunMaterialPreviewSceneBuildsRenderableMaterialTest() {
     std::filesystem::remove(materialFile, cleanupError);
 }
 
+void RunMaterialNodePreviewBuilderTest() {
+    kb::render::RenderMaterialAssetData material{};
+    material.graph.nodes = {
+        kb::render::RenderMaterialGraphNode{
+            .id = 1U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        },
+        kb::render::RenderMaterialGraphNode{
+            .id = 2U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+        },
+        kb::render::RenderMaterialGraphNode{
+            .id = 3U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+        },
+    };
+    material.graph.links.push_back(MakeInspectorMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::ConstantColor,
+        2U,
+        "rgba",
+        kb::render::RenderMaterialGraphNodeKind::MaterialOutput,
+        1U,
+        "baseColor"));
+
+    const std::optional<kb::render::RenderMaterialAssetData> preview =
+        kb::editor::EditorMaterialNodePreviewBuilder::Build(material, 3U);
+    kb::editor::tests::Require(preview.has_value(), "KBMAT-PREVIEW-0004: Per-node preview should build a temporary graph-backed material");
+    kb::editor::tests::Require(preview->graph.links.size() == 1U && preview->graph.links.front().fromNodeId == 3U && preview->graph.links.front().toPin == "baseColor",
+        "KBMAT-PREVIEW-0004: Per-node preview should route the selected node to MaterialOutput.baseColor");
+
+    kb::assets::AssetMetadata metadata{
+        .id = kb::assets::AssetId{ 0x51515151U },
+        .type = "RenderMaterial",
+        .name = "NodePreview",
+        .virtualPath = "/Game/Materials/NodePreview.kbmat",
+        .runtimeLoadable = true,
+    };
+    kb::assets::AssetManager manager;
+    static_cast<void>(manager.RegisterAsset(metadata));
+    const kb::render::ResolvedRuntimeMaterialDesc resolved =
+        kb::render::RuntimeMaterialResolver{}.ResolveLoadedMaterial(manager, metadata, *preview);
+    kb::editor::tests::Require(kb::editor::tests::NearlyEqual(resolved.desc.baseColor[0], 0.0F) &&
+            kb::editor::tests::NearlyEqual(resolved.desc.baseColor[1], 0.0F) &&
+            kb::editor::tests::NearlyEqual(resolved.desc.baseColor[2], 1.0F) &&
+            resolved.graphDiagnostics.empty(),
+        "KBMAT-PREVIEW-0004: Per-node preview should resolve through the runtime material graph path, not a CPU overlay");
+    kb::editor::tests::Require(!kb::editor::EditorMaterialNodePreviewBuilder::Build(material, 1U).has_value(),
+        "KBMAT-PREVIEW-0004: Per-node preview should not route MaterialOutput to itself");
+}
+
 void RunMaterialValueFormatterTest() {
     // KBMAT-0201: shared material/value formatters used by both the Inspector and the
     // dedicated Material Editor panel.
@@ -1324,7 +1430,7 @@ void RunMaterialPreviewGpuGraphParityTest() {
 
 #if defined(_WIN32)
 void RunMaterialEditorGraphLayoutAndHitTestTest() {
-    const RECT content{0, 0, 440, 540};
+    const RECT content{0, 0, 760, 540};
     const kb::editor::MaterialEditorPanelLayout layout = kb::editor::MaterialEditorPanelRenderer::ResolveLayout(content);
     kb::editor::tests::Require(layout.graphCanvas.left == content.left, "Material Editor graph should own the full tab width");
     kb::editor::tests::Require(layout.graphCanvas.right == content.right, "Material Editor graph should own the full tab width");
@@ -1332,15 +1438,22 @@ void RunMaterialEditorGraphLayoutAndHitTestTest() {
     kb::editor::tests::Require(layout.graphCanvas.bottom == content.bottom, "Material Editor graph should fill the tab height");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelPointInRect(layout.graphCanvas, layout.previewFrame.left + 2, layout.previewFrame.top + 2), "Material preview should be an overlay inside the graph workspace");
     kb::editor::tests::Require(layout.diagnosticsPanel.left >= layout.previewFrame.right, "Material diagnostics should not overlap the preview overlay");
-    kb::editor::tests::Require(layout.infoButton.right <= layout.applyButton.left, "Material Editor Info command should sit directly before Apply To Selection");
+    kb::editor::tests::Require(layout.infoButton.right <= layout.previewPrimitiveButton.left &&
+            layout.previewPrimitiveButton.right <= layout.previewSceneButton.left &&
+            layout.previewSceneButton.right <= layout.previewNodeButton.left &&
+            layout.previewNodeButton.right <= layout.applyButton.left,
+        "KBMAT-PREVIEW-0003: Material Editor preview commands should sit before Apply To Selection without overlap");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.infoButton.left + 2, layout.infoButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Info, "Material Editor should hit-test the Info command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewPrimitiveButton.left + 2, layout.previewPrimitiveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewPrimitive, "KBMAT-PREVIEW-0001: Material Editor should hit-test the preview primitive command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewSceneButton.left + 2, layout.previewSceneButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewScene, "KBMAT-PREVIEW-0003: Material Editor should hit-test the preview scene settings command");
+    kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewNodeButton.left + 2, layout.previewNodeButton.top + 2) == kb::editor::MaterialEditorPanelCommand::PreviewNode, "KBMAT-PREVIEW-0004: Material Editor should hit-test the per-node preview command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.applyButton.left + 2, layout.applyButton.top + 2) == kb::editor::MaterialEditorPanelCommand::ApplyToSelection, "Material Editor should hit-test the Apply To Selection command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.saveButton.left + 2, layout.saveButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Save, "Material Editor should hit-test the Save command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.revertButton.left + 2, layout.revertButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Revert, "Material Editor should hit-test the Revert command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.validateButton.left + 2, layout.validateButton.top + 2) == kb::editor::MaterialEditorPanelCommand::Validate, "Material Editor should hit-test the Validate command");
     kb::editor::tests::Require(kb::editor::MaterialEditorPanelRenderer::CommandAt(content, layout.previewFrame.left + 2, layout.previewFrame.bottom + 14) == kb::editor::MaterialEditorPanelCommand::None,
         "Material Editor should not keep dead asset badge/link hitboxes under the preview overlay");
-    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 5U, "KBMAT-0808: Material Editor toolbar must not expose a fake shader creation command");
+    kb::editor::tests::Require(kb::editor::kMaterialEditorPanelToolbarCommands.size() == 8U, "KBMAT-PREVIEW-0003: Material Editor toolbar should expose real preview controls only");
     for (const kb::editor::MaterialEditorPanelCommand command : kb::editor::kMaterialEditorPanelToolbarCommands) {
         const std::string name{ kb::editor::MaterialEditorPanelCommandName(command) };
         kb::editor::tests::Require(!name.empty() && name != "None", "KBMAT-1002: every Material Editor toolbar button must expose a real command label");
@@ -1462,6 +1575,7 @@ void RunEditorInspectorTests() {
     RunMaterialAssignmentUndoRedoTest();
     RunMaterialPreviewMeshFactoryTest();
     RunMaterialPreviewSceneBuildsRenderableMaterialTest();
+    RunMaterialNodePreviewBuilderTest();
     RunMaterialPreviewGpuGraphParityTest();
     RunMaterialValueFormatterTest();
 #if defined(_WIN32)

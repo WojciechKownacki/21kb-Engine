@@ -4,6 +4,7 @@
 #include "engine/scene/Scene.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
+#include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 #include "scene/material_preview/EditorMaterialPreviewTelemetry.hpp"
 
 #include <cstdint>
@@ -22,6 +23,8 @@ public:
         const kb::render::RenderMaterialAssetData* workingCopy = nullptr);
     [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& PrimitivePolicy() const noexcept;
     bool SetPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy) noexcept;
+    [[nodiscard]] const EditorMaterialPreviewSceneSettings& SceneSettings() const noexcept;
+    bool SetSceneSettings(EditorMaterialPreviewSceneSettings settings) noexcept;
     [[nodiscard]] const EditorMaterialPreviewTelemetry& Telemetry() const noexcept;
     [[nodiscard]] std::uint64_t Revision() const noexcept;
     void Clear() noexcept;
@@ -38,6 +41,7 @@ private:
     kb::assets::AssetId materialAssetId_{};
     std::filesystem::path workingCopyPath_;
     EditorMaterialPreviewPrimitivePolicy primitivePolicy_ = EditorMaterialPreviewPrimitivePolicy::Sphere();
+    EditorMaterialPreviewSceneSettings sceneSettings_{};
     std::uint64_t materialContentHash_ = 0U;
     std::uint64_t revision_ = 1U;
 };
