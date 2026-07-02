@@ -599,6 +599,31 @@ public:
         RefreshFindResults();
     }
 
+    void AppendFindText(wchar_t character) {
+        if (character < 0x20) {
+            return;
+        }
+        findQuery_.push_back(static_cast<char>(character));
+        RefreshFindResults();
+    }
+
+    void InsertFindText(std::string_view text) {
+        for (const char character : text) {
+            if (static_cast<unsigned char>(character) >= 0x20U) {
+                findQuery_.push_back(character);
+            }
+        }
+        RefreshFindResults();
+    }
+
+    void BackspaceFind() {
+        if (findQuery_.empty()) {
+            return;
+        }
+        findQuery_.pop_back();
+        RefreshFindResults();
+    }
+
     void ClearFindQuery() {
         findQuery_.clear();
         findResults_.clear();
@@ -895,6 +920,10 @@ public:
 
     [[nodiscard]] bool InfoPanelVisible() const noexcept {
         return infoPanelVisible_;
+    }
+
+    [[nodiscard]] bool IsFindFocused() const noexcept {
+        return findFocused_;
     }
 
     [[nodiscard]] bool IsGraphConstantInlineEditing() const noexcept {
@@ -2111,6 +2140,7 @@ public:
         selectedCommentId_ = 0U;
         selectedParameter_ = InspectorPropertyId::None;
         infoPanelVisible_ = false;
+        findFocused_ = false;
         instanceOverrideGroupExpanded_ = { true, true, true, true };
         findQuery_.clear();
         findResults_.clear();
@@ -2135,6 +2165,7 @@ public:
         selectedCommentId_ = 0U;
         selectedParameter_ = InspectorPropertyId::None;
         infoPanelVisible_ = false;
+        findFocused_ = false;
         instanceOverrideGroupExpanded_ = { true, true, true, true };
         findQuery_.clear();
         findResults_.clear();
@@ -2340,7 +2371,24 @@ public:
 
     bool ToggleInfoPanel() noexcept {
         infoPanelVisible_ = !infoPanelVisible_;
+        if (!infoPanelVisible_) {
+            findFocused_ = false;
+        }
         return true;
+    }
+
+    void SetInfoPanelVisible(bool visible) noexcept {
+        infoPanelVisible_ = visible;
+        if (!infoPanelVisible_) {
+            findFocused_ = false;
+        }
+    }
+
+    void FocusFind(bool focused) noexcept {
+        findFocused_ = focused;
+        if (findFocused_) {
+            infoPanelVisible_ = true;
+        }
     }
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError) {
@@ -4330,6 +4378,7 @@ private:
     MaterialEditorShaderViewerModel shaderViewer_{};
     std::string findQuery_;
     std::vector<MaterialEditorFindResult> findResults_;
+    bool findFocused_ = false;
     kb::render::RenderMaterialGraphRuntimeState graphRuntimeState_ = kb::render::RenderMaterialGraphRuntimeState::Dirty;
     bool dirty_ = false;
     bool infoPanelVisible_ = false;

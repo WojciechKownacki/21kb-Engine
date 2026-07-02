@@ -139,6 +139,8 @@ struct MaterialEditorPanelDetailsRows {
     std::vector<MaterialEditorLayerTreeRow> layerTreeRows;
     MaterialEditorMaterialStatsModel materialStats;
     MaterialEditorShaderViewerModel shaderViewer;
+    std::string findQuery;
+    bool findFocused = false;
     std::vector<MaterialEditorFindResult> findResults;
     std::vector<MaterialEditorGraphNodeProperty> nodePropertyRows;
     std::vector<std::string> materialDiffRows;
