@@ -28,14 +28,94 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <thread>
 #include <vector>
 
 namespace kb::render {
 
 namespace {
+
+std::mutex g_rendererBreadcrumbMutex;
+
+[[nodiscard]] std::filesystem::path RendererBreadcrumbPath() {
+    return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
+}
+
+[[nodiscard]] std::string RendererBreadcrumbNowMs() {
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    return std::to_string(millis);
+}
+
+[[nodiscard]] std::uint64_t RendererBreadcrumbThreadId() noexcept {
+    return static_cast<std::uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+}
+
+void WriteRendererBreadcrumb(std::string_view category, std::string_view message) {
+    try {
+        std::lock_guard lock{g_rendererBreadcrumbMutex};
+        const std::filesystem::path path = RendererBreadcrumbPath();
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        std::ofstream output{path, std::ios::out | std::ios::app};
+        if (!output.is_open()) {
+            return;
+        }
+        output << RendererBreadcrumbNowMs()
+               << " tid=" << RendererBreadcrumbThreadId()
+               << " [" << category << "] " << message << '\n';
+        output.flush();
+    } catch (...) {
+    }
+}
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
+[[nodiscard]] const char* LightingPathName(SceneRenderLightingPath path) noexcept {
+    switch (path) {
+    case SceneRenderLightingPath::Forward:
+        return "Forward";
+    case SceneRenderLightingPath::ClusteredForwardPlus:
+        return "ClusteredForwardPlus";
+    case SceneRenderLightingPath::Deferred:
+        return "Deferred";
+    case SceneRenderLightingPath::VisibilityBuffer:
+        return "VisibilityBuffer";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] const char* MeshPassModeName(SceneRenderMeshPassMode mode) noexcept {
+    switch (mode) {
+    case SceneRenderMeshPassMode::OpaqueOnly:
+        return "OpaqueOnly";
+    case SceneRenderMeshPassMode::OpaqueAndTransparent:
+        return "OpaqueAndTransparent";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::FrameBufferHandle handle) noexcept {
+    return handle.idx;
+}
+
+[[nodiscard]] std::uint16_t HandleValue(bgfx::TextureHandle handle) noexcept {
+    return handle.idx;
+}
 
 void ApplyPostProcessSettingsOverride(PostProcessOutput& output, const std::optional<ScenePostProcessSettings>& settingsOverride) noexcept {
     if (!settingsOverride.has_value()) {
@@ -272,6 +352,14 @@ bool Renderer::SubmitScene(const kb::scene::Scene& scene, const RenderSceneSubmi
 }
 
 bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
+    {
+        std::ostringstream message;
+        message << "SubmitScenes begin submissions=" << submissions.size()
+                << " frameActive=" << BoolText(frameActive_)
+                << " context=" << BoolText(context_ != nullptr)
+                << " sceneRenderer=" << BoolText(sceneRenderer_ != nullptr);
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
     lastSceneSubmitStats_ = SceneRenderSubmitStats{};
     lastScenePassSubmitStats_.clear();
     lastScenePassSubmitStats_.reserve(submissions.size() * 4U);
@@ -290,28 +378,68 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     lastGraphMaterialGpuCount_ = 0U;
     frameReferences_.Clear();
     if (context_ == nullptr || !context_->IsInitialized() || !frameActive_ || sceneRenderer_ == nullptr || !sceneRenderer_->IsInitialized() || submissions.empty()) {
+        std::ostringstream message;
+        message << "SubmitScenes early_exit invalid_state context=" << BoolText(context_ != nullptr)
+                << " contextInitialized=" << BoolText(context_ != nullptr && context_->IsInitialized())
+                << " frameActive=" << BoolText(frameActive_)
+                << " sceneRenderer=" << BoolText(sceneRenderer_ != nullptr)
+                << " sceneRendererInitialized=" << BoolText(sceneRenderer_ != nullptr && sceneRenderer_->IsInitialized())
+                << " empty=" << BoolText(submissions.empty());
+        WriteRendererBreadcrumb("renderer", message.str());
         return false;
     }
 
     RenderFrameDesc frameDesc{};
     frameDesc.frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
     frameDesc.viewports.reserve(submissions.size());
-    for (const SceneFrameSubmission& submission : submissions) {
+    for (std::size_t index = 0; index < submissions.size(); ++index) {
+        const SceneFrameSubmission& submission = submissions[index];
         if (!submission.IsValid()) {
+            std::ostringstream message;
+            message << "SubmitScenes invalid_submission index=" << index
+                    << " scene=" << BoolText(submission.scene != nullptr)
+                    << " descValid=" << BoolText(submission.desc.IsValid());
+            WriteRendererBreadcrumb("renderer", message.str());
             return false;
         }
+        std::ostringstream message;
+        message << "SubmitScenes viewport_desc index=" << index
+                << " viewportId=" << submission.desc.target.viewport.id.value
+                << " viewportIndex=" << submission.desc.target.viewport.viewportIndex
+                << " extent=" << submission.desc.target.viewport.extent.width << 'x' << submission.desc.target.viewport.extent.height
+                << " postProcess=" << BoolText(submission.desc.postProcessEnabled)
+                << " postTargets=" << BoolText(submission.desc.postProcess.enabled)
+                << " finalComposite=" << BoolText(submission.desc.finalComposite.enabled)
+                << " meshPassMode=" << MeshPassModeName(submission.desc.meshPassMode)
+                << " lightingPath=" << LightingPathName(RendererSceneLightingConfigResolver::Resolve(submission.desc.lightingConfig, defaultSceneLightingConfig_).lightingPath);
+        WriteRendererBreadcrumb("renderer", message.str());
         frameDesc.viewports.push_back(submission.desc.target.viewport);
     }
 
+    WriteRendererBreadcrumb("renderer", "SubmitScenes BuildFramePlan begin");
     const RenderFramePlan plan = framePipeline_.Build(frameDesc);
     if (!plan.Succeeded() || plan.viewports.size() != submissions.size()) {
+        std::ostringstream message;
+        message << "SubmitScenes BuildFramePlan failed succeeded=" << BoolText(plan.Succeeded())
+                << " planViewports=" << plan.viewports.size()
+                << " submissions=" << submissions.size();
+        WriteRendererBreadcrumb("renderer", message.str());
         return false;
+    }
+    {
+        std::ostringstream message;
+        message << "SubmitScenes BuildFramePlan end viewports=" << plan.viewports.size();
+        WriteRendererBreadcrumb("renderer", message.str());
     }
 
     RenderFrameState stagedFrameState;
     stagedFrameState.Begin(frameDesc.frameIndex);
     for (const RenderViewportPlan& viewportPlan : plan.viewports) {
         if (!stagedFrameState.RegisterViewportPlan(viewportPlan)) {
+            std::ostringstream message;
+            message << "SubmitScenes RegisterViewportPlan failed viewportId=" << viewportPlan.viewport.id.value
+                    << " viewportIndex=" << viewportPlan.viewport.viewportIndex;
+            WriteRendererBreadcrumb("renderer", message.str());
             return false;
         }
     }
@@ -319,8 +447,27 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     RendererViewConfigurator::ApplyViewOrder(frameState_.ViewOrder());
 
     for (std::size_t index = 0; index < submissions.size(); ++index) {
+        {
+            std::ostringstream message;
+            message << "SubmitScenes SubmitSceneToViewport begin index=" << index
+                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+            WriteRendererBreadcrumb("renderer", message.str());
+        }
         if (!SubmitSceneToViewport(*submissions[index].scene, submissions[index].desc, plan.viewports[index])) {
+            std::ostringstream message;
+            message << "SubmitScenes SubmitSceneToViewport failed index=" << index
+                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+            WriteRendererBreadcrumb("renderer", message.str());
             return false;
+        }
+        {
+            std::ostringstream message;
+            message << "SubmitScenes SubmitSceneToViewport end index=" << index
+                    << " viewportId=" << submissions[index].desc.target.viewport.id.value
+                    << " viewportIndex=" << submissions[index].desc.target.viewport.viewportIndex;
+            WriteRendererBreadcrumb("renderer", message.str());
         }
     }
     std::vector<const kb::scene::Scene*> submittedScenes;
@@ -328,30 +475,57 @@ bool Renderer::SubmitScenes(std::span<const SceneFrameSubmission> submissions) {
     for (const SceneFrameSubmission& submission : submissions) {
         submittedScenes.push_back(submission.scene);
     }
+    WriteRendererBreadcrumb("renderer", "SubmitScenes PruneUnused begin");
     runtimeResourceCache_.PruneUnused(
         submittedScenes,
         frameReferences_,
         *sceneRenderer_,
         frameDesc.frameIndex,
         kRuntimeAssetRetentionFrames);
+    WriteRendererBreadcrumb("renderer", "SubmitScenes PruneUnused end");
 
+    WriteRendererBreadcrumb("renderer", "SubmitScenes end ok");
     return true;
 }
 
 bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const RenderSceneSubmitDesc& desc, const RenderViewportPlan& viewportPlan) {
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport begin viewportId=" << desc.target.viewport.id.value
+                << " viewportIndex=" << desc.target.viewport.viewportIndex
+                << " extent=" << desc.target.viewport.extent.width << 'x' << desc.target.viewport.extent.height
+                << " meshPassMode=" << MeshPassModeName(desc.meshPassMode)
+                << " synchronizeScene=" << BoolText(desc.synchronizeScene)
+                << " transformAffineSync=" << BoolText(desc.transformAffineSync)
+                << " postProcess=" << BoolText(desc.postProcessEnabled)
+                << " postTargets=" << BoolText(desc.postProcess.enabled)
+                << " finalComposite=" << BoolText(desc.finalComposite.enabled)
+                << " selectionMask=" << BoolText(desc.selectionMaskEnabled)
+                << " overlays=" << BoolText(desc.editorSceneOverlaysEnabled)
+                << " targetFb=" << HandleValue(desc.target.frameBuffer)
+                << " colorTex=" << HandleValue(desc.target.colorTexture)
+                << " depthTex=" << HandleValue(desc.target.depthTexture);
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly &&
         desc.meshPassMode != SceneRenderMeshPassMode::OpaqueAndTransparent) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport invalid meshPassMode");
         return false;
     }
 
     const std::uint32_t width = desc.target.viewport.extent.width;
     const std::uint32_t height = desc.target.viewport.extent.height;
     if (renderSceneSynchronizer_ == nullptr) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing renderSceneSynchronizer");
         return false;
     }
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor begin");
     RenderScene& renderScene = RenderSceneFor(scene);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport RenderSceneFor end");
     if (desc.synchronizeScene) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full begin");
         renderSceneSynchronizer_->Sync(scene, renderScene);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Sync full end");
     } else {
         if (desc.transformAffineSync) {
             const std::span<const kb::scene::SceneEntity> affineEntities = scene.Runtime().TransformRenderProxyUpdateEntities();
@@ -360,6 +534,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             // the shared render-sync worker pool (H6); below it the serial path wins.
             constexpr std::size_t kParallelAffineSyncThreshold = 8U * 1024U;
             if (affineEntities.size() >= kParallelAffineSyncThreshold) {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport SyncMeshWorldAffinesParallel begin count=" << affineEntities.size();
+                WriteRendererBreadcrumb("renderer", message.str());
                 if (renderSyncWorkerPool_ == nullptr) {
                     renderSyncWorkerPool_ = std::make_unique<kb::ecs::WorkerPool>(kb::ecs::WorkerPoolConfig{});
                 }
@@ -367,17 +544,31 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                     renderSyncWorkerPool_->Start(kb::ecs::WorkerPoolConfig{});
                 }
                 renderSceneSynchronizer_->SyncMeshWorldAffinesParallel(renderScene, affineEntities, affines, *renderSyncWorkerPool_);
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffinesParallel end");
             } else {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport SyncMeshWorldAffines begin count=" << affineEntities.size();
+                WriteRendererBreadcrumb("renderer", message.str());
                 renderSceneSynchronizer_->SyncMeshWorldAffines(renderScene, affineEntities, affines);
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshWorldAffines end");
             }
         }
         if (!desc.dirtySceneEntityIds.empty()) {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport SyncEntities begin count=" << desc.dirtySceneEntityIds.size();
+            WriteRendererBreadcrumb("renderer", message.str());
             renderSceneSynchronizer_->SyncEntities(scene, renderScene, desc.dirtySceneEntityIds);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncEntities end");
         }
         if (!scene.Runtime().MeshRendererRenderProxyUpdateEntities().empty()) {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport SyncMeshRendererUpdates begin count=" << scene.Runtime().MeshRendererRenderProxyUpdateEntities().size();
+            WriteRendererBreadcrumb("renderer", message.str());
             renderSceneSynchronizer_->SyncMeshRendererUpdates(scene, renderScene);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport SyncMeshRendererUpdates end");
         }
     }
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport EnsureSceneResources begin");
     runtimeResourceCache_.EnsureSceneResources(RuntimeRenderResourceEnsureContext{
         .scene = const_cast<kb::scene::Scene&>(scene),
         .renderScene = renderScene,
@@ -398,20 +589,41 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .graphMaterialGpuCount = lastGraphMaterialGpuCount_,
         .currentFrame = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL,
     });
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport EnsureSceneResources end materialLoaded=" << lastMaterialLoadedCount_
+                << " materialFallback=" << lastMaterialFallbackCount_
+                << " graphCpuFallback=" << lastGraphMaterialCpuFallbackCount_
+                << " graphGpu=" << lastGraphMaterialGpuCount_
+                << " diagnostics=" << lastSceneDiagnostics_.events.size();
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
     SceneRenderLightingConfig effectiveLightingConfig = RendererSceneLightingConfigResolver::Resolve(desc.lightingConfig, defaultSceneLightingConfig_);
     if (!desc.shadowPassEnabled) {
         effectiveLightingConfig.shadowsEnabled = false;
     }
     const bool deferredLighting = UsesDeferredLighting(effectiveLightingConfig.lightingPath);
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport lighting resolved path=" << LightingPathName(effectiveLightingConfig.lightingPath)
+                << " deferred=" << BoolText(deferredLighting)
+                << " shadows=" << BoolText(effectiveLightingConfig.shadowsEnabled);
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
     if (deferredLighting && !defaultSceneGBuffer_.Ensure(SceneGBufferDesc{ .extent = desc.target.viewport.extent })) {
         lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
             .severity = SceneRenderDiagnosticSeverity::Error,
             .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
             .instanceCount = 1U,
         });
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer Ensure failed");
         return false;
     }
     if (deferredLighting) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer Ensure end ok");
+    }
+    if (deferredLighting) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear begin");
         RendererViewConfigurator::ConfigureFramebufferClear(
             viewportPlan.viewIds.gbufferGeometry,
             defaultSceneGBuffer_.FrameBuffer(),
@@ -421,20 +633,28 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             desc.clearRgba,
             desc.clearDepth,
             desc.clearStencil);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure GBuffer clear end");
     } else {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear begin");
         RendererViewConfigurator::ConfigureSceneClear(viewportPlan.viewIds.opaqueScene, desc);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure opaque clear end");
     }
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure transparent no-clear begin");
     RendererViewConfigurator::ConfigureSceneNoClear(viewportPlan.viewIds.transparentScene, desc, "KB Scene Transparent");
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport Configure transparent no-clear end");
 
     // MAT-80/#18b: expose the opaque scene depth to the transparent pass so depth-sampling graph materials
     // (SceneDepth / DepthFade) read real geometry depth. Deferred uses the GBuffer depth attachment.
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport scene texture bindings begin");
     sceneRenderer_->SetSceneDepthTexture(deferredLighting ? defaultSceneGBuffer_.DepthTexture() : desc.target.depthTexture);
     sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport scene texture bindings end");
 
     SceneGpuDrivenFeatureSupport effectiveGpuDrivenSupport = sceneRenderer_->GpuDrivenRuntimeSupport();
     if (!desc.gpuDrivenRuntimeDispatchEnabled) {
         effectiveGpuDrivenSupport = SceneGpuDrivenFeatureSupport{};
     }
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport ShadowSubmit begin");
     const SceneRenderShadowMapBinding shadowBinding = RendererShadowSubmitter::Submit(RendererShadowSubmitDesc{
         .renderScene = renderScene,
         .sceneRenderer = *sceneRenderer_,
@@ -447,7 +667,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         .diagnostics = lastSceneDiagnostics_,
         .passSubmitStats = lastScenePassSubmitStats_,
     });
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport ShadowSubmit end valid=" << BoolText(shadowBinding.IsValid())
+                << " depthTex=" << HandleValue(shadowBinding.depthTexture);
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
 
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport camera resolve begin");
     const std::optional<SceneRenderCamera> primaryCamera = desc.cameraOverride.has_value() ? std::optional<SceneRenderCamera>{} : renderScene.BuildPrimaryCamera(width, height);
     const SceneRenderCamera* overlayCamera = desc.cameraOverride.has_value()
         ? &(*desc.cameraOverride)
@@ -465,6 +692,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         RendererTemporalJitter::Apply(*jitteredCamera, jitter);
     }
     const SceneRenderCamera* sceneCamera = jitteredCamera.has_value() ? &(*jitteredCamera) : overlayCamera;
+    {
+        std::ostringstream message;
+        message << "SubmitSceneToViewport camera resolve end overlayCamera=" << BoolText(overlayCamera != nullptr)
+                << " sceneCamera=" << BoolText(sceneCamera != nullptr)
+                << " temporalJitter=" << BoolText(temporalJitterEnabled);
+        WriteRendererBreadcrumb("renderer", message.str());
+    }
 
     const RendererMeshPassSubmitDesc meshPassSubmitDesc{
         .sceneRenderer = *sceneRenderer_,
@@ -482,21 +716,25 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     };
 
     if (deferredLighting) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
             viewportPlan.viewIds.gbufferGeometry,
             RenderPassKind::GBufferGeometry,
             MeshPassType::GBuffer,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport GBuffer pass end");
         if (deferredLightingPass_ == nullptr) {
             lastSceneDiagnostics_.events.push_back(SceneRenderDiagnosticEvent{
                 .severity = SceneRenderDiagnosticSeverity::Error,
                 .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
                 .instanceCount = 1U,
             });
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferredLightingPass missing");
             return false;
         }
         SceneRenderSubmitStats deferredStats{};
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferred lighting pass begin");
         if (!deferredLightingPass_->Submit(SceneDeferredLightingPassDesc{
                 .viewId = viewportPlan.viewIds.deferredLighting,
                 .frameBuffer = desc.target.frameBuffer,
@@ -512,7 +750,14 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .kind = SceneRenderDiagnosticKind::DeferredRendererUnavailable,
                 .instanceCount = 1U,
             });
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport deferred lighting pass failed");
             return false;
+        }
+        {
+            std::ostringstream message;
+            message << "SubmitSceneToViewport deferred lighting pass end drawCalls=" << deferredStats.submittedDrawCallCount
+                    << " submittedMeshes=" << deferredStats.submittedMeshCount;
+            WriteRendererBreadcrumb("renderer", message.str());
         }
         lastSceneSubmitStats_ += deferredStats;
         lastScenePassSubmitStats_.push_back(SceneRenderPassSubmitStats{
@@ -523,18 +768,23 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             .stats = deferredStats,
         });
     } else {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
             viewportPlan.viewIds.opaqueScene,
             RenderPassKind::OpaqueScene,
             MeshPassType::BaseOpaque,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport opaque pass end");
     }
     if (desc.meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent) {
         if (bgfx::isValid(desc.target.colorTexture) && bgfx::isValid(desc.postProcess.pingTexture)) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit begin");
             bgfx::blit(viewportPlan.viewIds.transparentScene, desc.postProcess.pingTexture, 0U, 0U, desc.target.colorTexture);
             sceneRenderer_->SetSceneColorTexture(desc.postProcess.pingTexture);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent sceneColor blit end");
         }
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass begin");
         RendererMeshPassSubmitter::SubmitViewportPass(
             meshPassSubmitDesc,
             viewportPlan.viewIds.transparentScene,
@@ -542,9 +792,12 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             MeshPassType::BaseTransparent,
             shadowBinding.IsValid() ? &shadowBinding : nullptr);
         sceneRenderer_->SetSceneColorTexture(BGFX_INVALID_HANDLE);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport transparent pass end");
     }
     if (desc.selectionMaskEnabled) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask setup begin");
         editorPassSubmitter_.SubmitSelectionMask(viewportPlan, desc);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask setup end");
         const RendererMeshPassSubmitDesc selectionMaskSubmitDesc{
             .sceneRenderer = *sceneRenderer_,
             .renderScene = renderScene,
@@ -559,10 +812,13 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
             .diagnostics = lastSceneDiagnostics_,
             .passSubmitStats = lastScenePassSubmitStats_,
         };
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask mesh pass begin");
         RendererMeshPassSubmitter::SubmitSelectionMask(selectionMaskSubmitDesc);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask mesh pass end");
     }
 
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr) {
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite branch begin");
         PostProcessOutput postProcessOutput{
             .color = desc.target.colorTexture,
             .extent = desc.target.viewport.extent,
@@ -577,8 +833,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         bgfx::TextureHandle scenePostProcessOutput = desc.target.colorTexture;
         if (desc.postProcessEnabled) {
             if (scenePostProcessRenderer_ == nullptr) {
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport missing scenePostProcessRenderer");
                 return false;
             }
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Evaluate begin");
             postProcessOutput = postProcessChain_.Evaluate(PostProcessInput{
                 .sceneColor = desc.target.colorTexture,
                 .selectionMask = desc.postProcess.selectionMaskTexture,
@@ -587,11 +845,20 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .extent = desc.target.viewport.extent,
             });
             ApplyPostProcessSettingsOverride(postProcessOutput, desc.postProcessSettings);
+            {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport postProcess Evaluate end valid=" << BoolText(postProcessOutput.IsValid())
+                        << " gpuSubmitted=" << BoolText(postProcessOutput.gpuSubmitted)
+                        << " enabledPassCount=" << postProcessOutput.enabledPassCount;
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
         }
         if (!postProcessOutput.IsValid()) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcessOutput invalid");
             return false;
         }
         if (desc.postProcessEnabled) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport exposure submit begin");
             lastSceneExposureStats_.push_back(RendererExposureSubmitter::Submit(
                 sceneExposureMeter_,
                 postProcessOutput,
@@ -600,8 +867,10 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 renderScene,
                 effectiveLightingConfig,
                 lastCompletedFrame_));
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport exposure submit end");
 
             TemporalViewportState& temporalState = TemporalStateFor(desc.target.viewport.id, desc.target.viewport.viewportIndex);
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit begin");
             scenePostProcessOutput = RendererPostProcessSubmitter::Submit(RendererPostProcessSubmitDesc{
                 .postProcessRenderer = *scenePostProcessRenderer_,
                 .sceneDesc = desc,
@@ -615,23 +884,38 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .hasTemporalHistory = temporalState.hasHistory,
             });
             if (!bgfx::isValid(scenePostProcessOutput)) {
+                WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport postProcess Submit invalid output");
                 return false;
             }
+            {
+                std::ostringstream message;
+                message << "SubmitSceneToViewport postProcess Submit end outputTex=" << HandleValue(scenePostProcessOutput);
+                WriteRendererBreadcrumb("renderer", message.str());
+            }
         }
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit begin");
         if (!RendererFinalCompositeSubmitter::Submit(*finalCompositePass_, viewportPlan, desc, postProcessOutput, scenePostProcessOutput)) {
+            WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit failed");
             return false;
         }
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite submit end");
 
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin");
         RendererEditorOverlaySubmitter::Submit(
             editorPassSubmitter_,
             viewportPlan,
             desc,
             overlayCamera,
             desc.selectionOutlineEnabled && postProcessOutput.selectionOutlineEnabled);
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end");
+        WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport end ok finalComposite");
         return true;
     }
 
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin noFinalComposite");
     RendererEditorOverlaySubmitter::Submit(editorPassSubmitter_, viewportPlan, desc, overlayCamera, true);
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end noFinalComposite");
+    WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport end ok noFinalComposite");
     return true;
 }
 
