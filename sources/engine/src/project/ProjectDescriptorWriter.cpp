@@ -33,6 +33,8 @@ using ProjectDescriptorBinaryIO::WriteUInt32;
     switch (path) {
     case ProjectSceneLightingPath::Deferred:
         return 1U;
+    case ProjectSceneLightingPath::ForwardPlus:
+        return 2U;
     case ProjectSceneLightingPath::Forward:
     default:
         return 0U;

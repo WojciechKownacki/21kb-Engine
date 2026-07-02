@@ -190,6 +190,8 @@ constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverrid
     switch (path) {
     case kb::project::ProjectSceneLightingPath::Deferred:
         return kb::render::RenderMaterialGraphShadingPath::Deferred;
+    case kb::project::ProjectSceneLightingPath::ForwardPlus:
+        return kb::render::RenderMaterialGraphShadingPath::ForwardPlus;
     case kb::project::ProjectSceneLightingPath::Forward:
         return kb::render::RenderMaterialGraphShadingPath::Forward;
     }

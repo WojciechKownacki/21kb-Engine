@@ -270,6 +270,7 @@ enum class RenderMaterialGraphFeatureLevel : std::uint8_t {
 
 enum class RenderMaterialGraphShadingPath : std::uint8_t {
     Forward,
+    ForwardPlus,
     Deferred,
 };
 

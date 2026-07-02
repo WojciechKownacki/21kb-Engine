@@ -30,6 +30,7 @@ struct ProjectSettingsPanelLayoutRects {
     RECT backendVulkanButton{};
     RECT lightingPathLabel{};
     RECT lightingPathForwardButton{};
+    RECT lightingPathForwardPlusButton{};
     RECT lightingPathDeferredButton{};
     RECT postProcessLabel{};
     RECT postProcessCheckbox{};

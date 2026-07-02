@@ -16,6 +16,8 @@ public:
         switch (projectLightingPath) {
         case kb::project::ProjectSceneLightingPath::Deferred:
             return kb::render::SceneRenderLightingPath::Deferred;
+        case kb::project::ProjectSceneLightingPath::ForwardPlus:
+            return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
         case kb::project::ProjectSceneLightingPath::Forward:
         default:
             return kb::render::SceneRenderLightingPath::Forward;
@@ -27,6 +29,9 @@ public:
         kb::project::ProjectSceneLightingPath projectLightingPath = kb::project::ProjectSceneLightingPath::Forward) noexcept {
         kb::render::SceneRenderLightingConfig lighting{};
         lighting.lightingPath = SceneLightingPath(projectLightingPath);
+        if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
+            lighting.maxForwardLights = kb::render::kMaxSceneForwardPlusLights;
+        }
         lighting.ambientColor = { 0.24F, 0.24F, 0.24F };
         lighting.ambientIntensity = settings.ambientIntensity;
         lighting.environmentMode = kb::render::SceneRenderEnvironmentMode::Hemisphere;

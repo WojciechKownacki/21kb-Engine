@@ -298,6 +298,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::FeatureLevelSwitch:
         return SIZE{ 220, 106 };
     case kb::render::RenderMaterialGraphNodeKind::ShadingPathSwitch:
+        return SIZE{ 220, 106 };
     case kb::render::RenderMaterialGraphNodeKind::ShaderStageSwitch:
         return SIZE{ 220, 86 };
     case kb::render::RenderMaterialGraphNodeKind::Uv:

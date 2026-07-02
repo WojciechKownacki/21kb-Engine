@@ -2,10 +2,10 @@
 #define KB_PBR_GRAPH_FORWARD_SH
 
 uniform vec4 u_cameraPosition;
-uniform vec4 u_lightDirKind[4];
-uniform vec4 u_lightPositionRange[4];
-uniform vec4 u_lightColorIntensity[4];
-uniform vec4 u_lightSpot[4];
+uniform vec4 u_lightDirKind[32];
+uniform vec4 u_lightPositionRange[32];
+uniform vec4 u_lightColorIntensity[32];
+uniform vec4 u_lightSpot[32];
 uniform vec4 u_lightParams;
 uniform vec4 u_ambientColor;
 uniform vec4 u_environmentZenith;
@@ -122,7 +122,7 @@ vec3 KbEvaluateForwardLighting(vec3 worldNormal, vec3 worldPos, vec3 albedo, flo
 {
     vec3 viewDir = normalize(u_cameraPosition.xyz - worldPos);
     vec3 lighting = KbEvaluateEnvironment(worldNormal, viewDir, albedo, metallic, roughness, occlusion);
-    for (int lightIndex = 0; lightIndex < 4; ++lightIndex) {
+    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
         if (float(lightIndex) < u_lightParams.x) {
             lighting += KbEvaluateSceneLight(lightIndex, worldNormal, viewDir, worldPos, albedo, metallic, roughness, occlusion);
         }
