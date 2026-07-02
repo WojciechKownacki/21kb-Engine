@@ -25,6 +25,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <tuple>
 
 namespace kb::editor {
 namespace {
@@ -205,12 +206,12 @@ void AddPreviewMesh(kb::scene::Scene& scene, kb::assets::AssetId materialAssetId
     });
 }
 
-void AddPreviewCamera(kb::scene::Scene& scene) {
+void AddPreviewCamera(kb::scene::Scene& scene, const EditorMaterialPreviewSceneSettings& settings) {
     kb::scene::SceneObjectDesc cameraDesc{.name = "Material Preview Camera"};
-    cameraDesc.transform.localPosition = kb::scene::Vec3{0.0F, 0.0F, -4.0F};
+    cameraDesc.transform.localPosition = kb::scene::Vec3{0.0F, 0.0F, -settings.cameraDistance};
     const kb::scene::SceneEntity camera = scene.Entities().CreateEntity(cameraDesc);
     scene.Components().Cameras().Set(camera, kb::scene::CameraComponent{
-        .verticalFovDegrees = 38.0F,
+        .verticalFovDegrees = settings.verticalFovDegrees,
         .nearClip = 0.05F,
         .farClip = 50.0F,
         .primary = true,
@@ -252,6 +253,36 @@ bool EditorMaterialPreviewScene::SetPrimitivePolicy(EditorMaterialPreviewPrimiti
         return false;
     }
     primitivePolicy_ = policy;
+    Clear();
+    return true;
+}
+
+const EditorMaterialPreviewSceneSettings& EditorMaterialPreviewScene::SceneSettings() const noexcept {
+    return sceneSettings_;
+}
+
+bool EditorMaterialPreviewScene::SetSceneSettings(EditorMaterialPreviewSceneSettings settings) noexcept {
+    if (std::tie(sceneSettings_.lightingPreset,
+            sceneSettings_.cameraDistance,
+            sceneSettings_.verticalFovDegrees,
+            sceneSettings_.keyLightIntensity,
+            sceneSettings_.ambientIntensity,
+            sceneSettings_.environmentDiffuseIntensity,
+            sceneSettings_.environmentSpecularIntensity,
+            sceneSettings_.exposureStops,
+            sceneSettings_.postProcessEnabled)
+        == std::tie(settings.lightingPreset,
+            settings.cameraDistance,
+            settings.verticalFovDegrees,
+            settings.keyLightIntensity,
+            settings.ambientIntensity,
+            settings.environmentDiffuseIntensity,
+            settings.environmentSpecularIntensity,
+            settings.exposureStops,
+            settings.postProcessEnabled)) {
+        return false;
+    }
+    sceneSettings_ = settings;
     Clear();
     return true;
 }
@@ -309,7 +340,7 @@ void EditorMaterialPreviewScene::Rebuild(
     }
 
     AddPreviewMesh(*scene_, materialAssetId, resolved.resolved, effectivePolicy);
-    AddPreviewCamera(*scene_);
+    AddPreviewCamera(*scene_, sceneSettings_);
     AddPreviewLighting(*scene_);
     scene_->Runtime().SynchronizeTransforms();
 

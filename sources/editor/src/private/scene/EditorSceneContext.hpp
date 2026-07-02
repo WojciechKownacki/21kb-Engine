@@ -20,6 +20,8 @@
 #include "scene/EditorSceneViewportStateStore.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 #include "scene/material/MaterialEditorState.hpp"
+#include "scene/material_preview/EditorMaterialPreviewPrimitivePolicy.hpp"
+#include "scene/material_preview/EditorMaterialPreviewSettings.hpp"
 #include "scene/transform_edit/EditorSceneTransformEditSession.hpp"
 #include "app/scene_viewport/EditorSceneViewportSelectionTypes.hpp"
 #include "inspection/InspectorPanelState.hpp"
@@ -261,6 +263,15 @@ public:
     [[nodiscard]] std::optional<kb::render::RenderMaterialAssetData> ReadMaterialDocumentAsset(kb::assets::AssetId id) const;
     [[nodiscard]] const kb::scene::Scene& MaterialPreviewScene(kb::assets::AssetId id);
     [[nodiscard]] const EditorMaterialPreviewTelemetry& MaterialPreviewTelemetry() const noexcept;
+    [[nodiscard]] const EditorMaterialPreviewPrimitivePolicy& MaterialPreviewPrimitivePolicy() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewPrimitivePolicy(EditorMaterialPreviewPrimitivePolicy policy);
+    [[nodiscard]] bool CycleMaterialPreviewPrimitive();
+    [[nodiscard]] const EditorMaterialPreviewSceneSettings& MaterialPreviewSceneSettings() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewSceneSettings(EditorMaterialPreviewSceneSettings settings);
+    [[nodiscard]] bool CycleMaterialPreviewSceneLightingPreset();
+    [[nodiscard]] bool MaterialPreviewNodePreviewEnabled() const noexcept;
+    [[nodiscard]] bool SetMaterialPreviewNodePreviewEnabled(bool enabled) noexcept;
+    [[nodiscard]] bool ToggleMaterialPreviewNodePreview() noexcept;
     // Per-project graph shader cache root shared by the cook service and every renderer (preview
     // panel + scene viewport + play mode) so authored graph programs render identically (MAT-31).
     [[nodiscard]] const std::string& GraphShaderCacheRoot() const noexcept;
@@ -577,6 +588,8 @@ private:
     std::optional<kb::assets::AssetMetadata> materialRuntimePreviewSourceMetadata_;
     std::filesystem::path materialRuntimePreviewPath_;
     std::uint64_t materialRuntimePreviewContentHash_ = 0U;
+    std::optional<kb::render::RenderMaterialAssetData> materialNodePreviewWorkingCopy_;
+    bool materialPreviewNodePreviewEnabled_ = false;
     EditorProjectSettingsState projectSettings_;
     EditorPluginsState plugins_;
     EditorScriptEditorState scriptEditor_;

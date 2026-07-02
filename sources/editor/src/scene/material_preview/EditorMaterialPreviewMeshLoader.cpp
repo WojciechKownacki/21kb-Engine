@@ -27,10 +27,12 @@ std::vector<std::string> EditorMaterialPreviewMeshLoader::Extensions() const {
 
 kb::assets::AssetLoadResult EditorMaterialPreviewMeshLoader::Load(const kb::assets::AssetLoadRequest& request) {
     const kb::assets::AssetId sphereId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Sphere);
+    const kb::assets::AssetId cylinderId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Cylinder);
     const kb::assets::AssetId cubeId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Cube);
     const kb::assets::AssetId planeId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Plane);
     const kb::assets::AssetId fallbackId = EditorMaterialPreviewPrimitivePolicy::GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Fallback);
     if (request.metadata.id.value != sphereId.value &&
+        request.metadata.id.value != cylinderId.value &&
         request.metadata.id.value != cubeId.value &&
         request.metadata.id.value != planeId.value &&
         request.metadata.id.value != fallbackId.value) {
@@ -39,6 +41,8 @@ kb::assets::AssetLoadResult EditorMaterialPreviewMeshLoader::Load(const kb::asse
 
     kb::render::RenderMeshAssetData mesh = request.metadata.id.value == cubeId.value || request.metadata.id.value == fallbackId.value
         ? EditorMaterialPreviewMeshFactory::BuildCube()
+        : request.metadata.id.value == cylinderId.value
+            ? EditorMaterialPreviewMeshFactory::BuildCylinder()
         : request.metadata.id.value == planeId.value
             ? EditorMaterialPreviewMeshFactory::BuildPlane()
             : EditorMaterialPreviewMeshFactory::BuildSphere();

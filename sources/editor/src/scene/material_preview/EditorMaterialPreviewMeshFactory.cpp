@@ -126,6 +126,57 @@ kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildSphere() 
     return mesh;
 }
 
+kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildCylinder() {
+    constexpr std::uint32_t kSegments = 48U;
+    constexpr float kHalfHeight = 1.0F;
+
+    kb::render::RenderMeshAssetData mesh;
+    mesh.tangentVertices.reserve(static_cast<std::size_t>((kSegments + 1U) * 4U + 2U));
+    mesh.indices32.reserve(static_cast<std::size_t>(kSegments * 12U));
+
+    for (std::uint32_t segment = 0U; segment <= kSegments; ++segment) {
+        const float u = static_cast<float>(segment) / static_cast<float>(kSegments);
+        const float theta = u * 2.0F * kPi;
+        const float x = std::cos(theta);
+        const float z = std::sin(theta);
+        AppendVertex(mesh, x, -kHalfHeight, z, x, 0.0F, z, u, 1.0F);
+        AppendVertex(mesh, x, kHalfHeight, z, x, 0.0F, z, u, 0.0F);
+    }
+
+    for (std::uint32_t segment = 0U; segment < kSegments; ++segment) {
+        const std::uint32_t base = segment * 2U;
+        mesh.indices32.insert(mesh.indices32.end(), {base, base + 1U, base + 2U, base + 1U, base + 3U, base + 2U});
+    }
+
+    const std::uint32_t topCenter = static_cast<std::uint32_t>(mesh.tangentVertices.size());
+    AppendVertex(mesh, 0.0F, kHalfHeight, 0.0F, 0.0F, 1.0F, 0.0F, 0.5F, 0.5F);
+    const std::uint32_t bottomCenter = static_cast<std::uint32_t>(mesh.tangentVertices.size());
+    AppendVertex(mesh, 0.0F, -kHalfHeight, 0.0F, 0.0F, -1.0F, 0.0F, 0.5F, 0.5F);
+
+    const std::uint32_t topStart = static_cast<std::uint32_t>(mesh.tangentVertices.size());
+    for (std::uint32_t segment = 0U; segment <= kSegments; ++segment) {
+        const float theta = (static_cast<float>(segment) / static_cast<float>(kSegments)) * 2.0F * kPi;
+        const float x = std::cos(theta);
+        const float z = std::sin(theta);
+        AppendVertex(mesh, x, kHalfHeight, z, 0.0F, 1.0F, 0.0F, 0.5F + x * 0.5F, 0.5F - z * 0.5F);
+    }
+    const std::uint32_t bottomStart = static_cast<std::uint32_t>(mesh.tangentVertices.size());
+    for (std::uint32_t segment = 0U; segment <= kSegments; ++segment) {
+        const float theta = (static_cast<float>(segment) / static_cast<float>(kSegments)) * 2.0F * kPi;
+        const float x = std::cos(theta);
+        const float z = std::sin(theta);
+        AppendVertex(mesh, x, -kHalfHeight, z, 0.0F, -1.0F, 0.0F, 0.5F + x * 0.5F, 0.5F + z * 0.5F);
+    }
+
+    for (std::uint32_t segment = 0U; segment < kSegments; ++segment) {
+        mesh.indices32.insert(mesh.indices32.end(), {topCenter, topStart + segment, topStart + segment + 1U});
+        mesh.indices32.insert(mesh.indices32.end(), {bottomCenter, bottomStart + segment + 1U, bottomStart + segment});
+    }
+
+    FinalizeMesh(mesh, 1.4143F);
+    return mesh;
+}
+
 kb::render::RenderMeshAssetData EditorMaterialPreviewMeshFactory::BuildCube() {
     kb::render::RenderMeshAssetData mesh;
     const auto face = [&mesh](

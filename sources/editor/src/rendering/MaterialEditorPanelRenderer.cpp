@@ -131,13 +131,37 @@ void DrawCommandButton(HDC dc, const RECT& rect, const char* label, bool emphasi
     DrawText(dc, RECT{ rect.left + 8, rect.top, rect.right - 8, rect.bottom }, label, RGB(221, 226, 232), 11, FW_NORMAL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
-void DrawHeader(HDC dc, const RECT& content, bool dirty, bool infoVisible) {
+[[nodiscard]] const char* PreviewPrimitiveButtonLabel(EditorMaterialPreviewPrimitiveKind kind) noexcept {
+    switch (kind) {
+    case EditorMaterialPreviewPrimitiveKind::Sphere: return "Sphere";
+    case EditorMaterialPreviewPrimitiveKind::Cylinder: return "Cylinder";
+    case EditorMaterialPreviewPrimitiveKind::Cube: return "Cube";
+    case EditorMaterialPreviewPrimitiveKind::Plane: return "Plane";
+    case EditorMaterialPreviewPrimitiveKind::CustomMesh: return "Custom";
+    case EditorMaterialPreviewPrimitiveKind::Fallback: return "Fallback";
+    }
+    return "Preview";
+}
+
+[[nodiscard]] const char* PreviewSceneButtonLabel(EditorMaterialPreviewLightingPreset preset) noexcept {
+    switch (preset) {
+    case EditorMaterialPreviewLightingPreset::Studio: return "Studio";
+    case EditorMaterialPreviewLightingPreset::Neutral: return "Neutral";
+    case EditorMaterialPreviewLightingPreset::HighContrast: return "High";
+    }
+    return "Scene";
+}
+
+void DrawHeader(HDC dc, const RECT& content, const EditorSceneContext& sceneContext, bool dirty, bool infoVisible) {
     const RECT header{ content.left, content.top, content.right, content.top + kHeaderHeight };
     const MaterialEditorPanelLayout layout = MaterialEditorPanelRenderer::ResolveLayout(content);
     GdiDrawing::FillRectColor(dc, header, RGB(32, 35, 39));
     GdiDrawing::FillRectColor(dc, RECT{ header.left, header.bottom - 1, header.right, header.bottom }, RGB(13, 14, 16));
     DrawText(dc, RECT{ header.left + kPadding, header.top, layout.infoButton.left - 10, header.bottom }, "Material Editor", RGB(226, 230, 235), 14, FW_SEMIBOLD);
     DrawCommandButton(dc, layout.infoButton, "Info", infoVisible);
+    DrawCommandButton(dc, layout.previewPrimitiveButton, PreviewPrimitiveButtonLabel(sceneContext.MaterialPreviewPrimitivePolicy().kind), false);
+    DrawCommandButton(dc, layout.previewSceneButton, PreviewSceneButtonLabel(sceneContext.MaterialPreviewSceneSettings().lightingPreset), false);
+    DrawCommandButton(dc, layout.previewNodeButton, "Node", sceneContext.MaterialPreviewNodePreviewEnabled());
     DrawCommandButton(dc, layout.applyButton, "Apply To Selection", false);
     DrawCommandButton(dc, layout.saveButton, "Save", dirty);
     DrawCommandButton(dc, layout.revertButton, "Revert", false);
@@ -2690,7 +2714,7 @@ void DrawMaterialContent(HDC dc, const RECT& content, const EditorSceneContext& 
 void MaterialEditorPanelRenderer::Paint(HDC dc, const RECT& content, const EditorTheme& theme, const EditorSceneContext& sceneContext) const {
     static_cast<void>(theme);
     GdiDrawing::FillRectColor(dc, content, RGB(26, 28, 31));
-    DrawHeader(dc, content, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
+    DrawHeader(dc, content, sceneContext, sceneContext.HasDirtyMaterialAssetEdit(), sceneContext.MaterialEditor().InfoPanelVisible());
 
     const kb::assets::AssetId assetId = sceneContext.MaterialEditor().OpenAssetId();
     const kb::assets::AssetMetadata* metadata = assetId.IsValid()

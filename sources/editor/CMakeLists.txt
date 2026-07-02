@@ -546,9 +546,11 @@ add_executable(kb_editor WIN32
     src/private/scene/material/EditorEmbeddedMaterialExtractor.hpp
     src/private/scene/material/EditorEmbeddedMaterialTextureResolver.hpp
     src/private/scene/material_preview/EditorMaterialGraphCookService.hpp
+    src/private/scene/material_preview/EditorMaterialNodePreviewBuilder.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshFactory.hpp
     src/private/scene/material_preview/EditorMaterialPreviewMeshLoader.hpp
     src/private/scene/material_preview/EditorMaterialPreviewScene.hpp
+    src/private/scene/material_preview/EditorMaterialPreviewSettings.hpp
     src/private/scene/material_preview/EditorMaterialPreviewTelemetry.hpp
     src/private/scene/transform_edit/EditorSceneTransformChange.hpp
     src/private/scene/transform_edit/EditorSceneTransformCommitBuilder.hpp

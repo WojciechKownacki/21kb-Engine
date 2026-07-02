@@ -9,6 +9,7 @@ public:
     EditorMaterialPreviewMeshFactory() = delete;
 
     [[nodiscard]] static kb::render::RenderMeshAssetData BuildSphere();
+    [[nodiscard]] static kb::render::RenderMeshAssetData BuildCylinder();
     [[nodiscard]] static kb::render::RenderMeshAssetData BuildCube();
     [[nodiscard]] static kb::render::RenderMeshAssetData BuildPlane();
 };

@@ -9,6 +9,7 @@ namespace kb::editor {
 
 enum class EditorMaterialPreviewPrimitiveKind : std::uint8_t {
     Sphere,
+    Cylinder,
     Cube,
     Plane,
     CustomMesh,
@@ -24,6 +25,8 @@ struct EditorMaterialPreviewPrimitivePolicy {
         switch (kind) {
         case EditorMaterialPreviewPrimitiveKind::Sphere:
             return kb::assets::MakeAssetId("EditorMaterialPreview:SphereMesh");
+        case EditorMaterialPreviewPrimitiveKind::Cylinder:
+            return kb::assets::MakeAssetId("EditorMaterialPreview:CylinderMesh");
         case EditorMaterialPreviewPrimitiveKind::Cube:
             return kb::assets::MakeAssetId("EditorMaterialPreview:CubeMesh");
         case EditorMaterialPreviewPrimitiveKind::Plane:
@@ -47,6 +50,13 @@ struct EditorMaterialPreviewPrimitivePolicy {
         return EditorMaterialPreviewPrimitivePolicy{
             .kind = EditorMaterialPreviewPrimitiveKind::Cube,
             .meshAssetId = GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Cube),
+        };
+    }
+
+    [[nodiscard]] static EditorMaterialPreviewPrimitivePolicy Cylinder() noexcept {
+        return EditorMaterialPreviewPrimitivePolicy{
+            .kind = EditorMaterialPreviewPrimitiveKind::Cylinder,
+            .meshAssetId = GeneratedMeshAssetId(EditorMaterialPreviewPrimitiveKind::Cylinder),
         };
     }
 
@@ -77,6 +87,8 @@ struct EditorMaterialPreviewPrimitivePolicy {
     switch (kind) {
     case EditorMaterialPreviewPrimitiveKind::Sphere:
         return "Sphere";
+    case EditorMaterialPreviewPrimitiveKind::Cylinder:
+        return "Cylinder";
     case EditorMaterialPreviewPrimitiveKind::Cube:
         return "Cube";
     case EditorMaterialPreviewPrimitiveKind::Plane:
