@@ -1654,6 +1654,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should expose Texture Object by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign, "twosidedsign"),
         "KBMAT-MAT57: Palette search should expose TwoSidedSign by catalog alias");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor, "opaque snapshot"),
+        "KBMAT-MAT57: Palette search should expose Scene Color by scene-snapshot aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneTexture, "post process scene texture"),
+        "KBMAT-MAT57: Palette search should expose Scene Texture by post-process scene aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast, "atan2 fast"),
         "KBMAT-MAT57: Palette search should expose fast inverse trig nodes by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSwitch, "runtime switch"),
@@ -1685,6 +1689,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphContextMenuCommands(1U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign),
         "KBMAT-MAT57: TwoSidedSign must be available from the Inputs palette category");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor) &&
+            kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSceneTexture),
+        "KBMAT-MAT57: Scene Color and Scene Texture must be available from the Inputs palette category");
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> mathCommands =
         kb::editor::MaterialEditorGraphContextMenuCommands(5U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(mathCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateSwitch),
@@ -1791,6 +1799,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign);
     kb::editor::tests::Require(twoSidedSignKind.has_value() && *twoSidedSignKind == kb::render::RenderMaterialGraphNodeKind::TwoSidedSign,
         "KBMAT-MAT57: CreateTwoSidedSign command should map to the TwoSidedSign graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> sceneColorKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor);
+    kb::editor::tests::Require(sceneColorKind.has_value() && *sceneColorKind == kb::render::RenderMaterialGraphNodeKind::SceneColor,
+        "KBMAT-MAT57: CreateSceneColor command should map to the SceneColor graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> sceneTextureKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneTexture);
+    kb::editor::tests::Require(sceneTextureKind.has_value() && *sceneTextureKind == kb::render::RenderMaterialGraphNodeKind::SceneTexture,
+        "KBMAT-MAT57: CreateSceneTexture command should map to the SceneTexture graph node kind");
     const std::optional<kb::render::RenderMaterialGraphNodeKind> atan2FastKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast);
     kb::editor::tests::Require(atan2FastKind.has_value() && *atan2FastKind == kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast,
@@ -1814,6 +1830,22 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             materialEditor.WorkingCopy()->graph.links[0].toNodeId == 1U &&
             materialEditor.WorkingCopy()->graph.links[0].toPin == "baseColor",
         "KBMAT-MAT57: Drag-from-pin auto-create should leave a real material graph link");
+
+    std::uint32_t sceneColorNodeId = 0U;
+    std::uint32_t sceneTextureNodeId = 0U;
+    kb::editor::tests::Require(
+        materialEditor.AddGraphNode(*sceneColorKind, -120, 160, &sceneColorNodeId) &&
+            materialEditor.AddGraphNode(*sceneTextureKind, 120, 160, &sceneTextureNodeId),
+        "KBMAT-MAT57: MaterialEditorState must create SceneColor and SceneTexture nodes from palette commands");
+    const kb::render::RenderMaterialGraphNode* sceneColorNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneColorNodeId);
+    const kb::render::RenderMaterialGraphNode* sceneTextureNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneTextureNodeId);
+    kb::editor::tests::Require(sceneColorNode != nullptr &&
+            sceneTextureNode != nullptr &&
+            kb::render::RenderMaterialGraphPinDataType(*sceneColorNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
+            kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color,
+        "KBMAT-MAT57: Scene sampling palette nodes must expose real typed color output pins");
 }
 
 void RunMaterialEditorCollectionParameterNodeModelTest() {
