@@ -65,6 +65,22 @@ void AddDiagnostic(
     });
 }
 
+void AddGraphMigrationDiagnostic(
+    std::vector<RenderMaterialAssetParseDiagnostic>& diagnostics,
+    std::size_t line,
+    std::string field,
+    std::string message,
+    std::string text) {
+    diagnostics.push_back(RenderMaterialAssetParseDiagnostic{
+        .code = RenderMaterialAssetParseDiagnosticCode::GraphMigration,
+        .severity = RenderMaterialAssetParseDiagnosticSeverity::Warning,
+        .line = line,
+        .field = std::move(field),
+        .message = std::move(message),
+        .text = std::move(text),
+    });
+}
+
 [[nodiscard]] std::string DecodeToken(std::string_view value) {
     std::string decoded;
     for (std::size_t index = 0U; index < value.size(); ++index) {
@@ -730,23 +746,20 @@ void AddDiagnostic(
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph stable link requires positive link, node and pin ids.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (FindRenderMaterialGraphLink(graph, link.id) != nullptr) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link id is duplicated.", linkIdText);
-        return RenderMaterialGraphFieldParseResult::Failed;
-    }
-
     const RenderMaterialGraphNode* fromNode = FindRenderMaterialGraphNode(graph, link.fromNodeId);
     const RenderMaterialGraphNode* toNode = FindRenderMaterialGraphNode(graph, link.toNodeId);
     if (fromNode == nullptr || toNode == nullptr) {
         AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link references an undeclared node.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphOutputPin(*fromNode, fromPin) || RenderMaterialGraphStablePinId(*fromNode, fromPin, true) != link.fromPinId) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid source pin id/name pair.", fromPin);
+    const std::uint32_t expectedFromPinId = RenderMaterialGraphStablePinId(*fromNode, fromPin, true);
+    if (!IsRenderMaterialGraphOutputPin(*fromNode, fromPin) || expectedFromPinId == 0U) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid source pin.", fromPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
-    if (!IsRenderMaterialGraphInputPin(*toNode, toPin) || RenderMaterialGraphStablePinId(*toNode, toPin, false) != link.toPinId) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid target pin id/name pair.", toPin);
+    const std::uint32_t expectedToPinId = RenderMaterialGraphStablePinId(*toNode, toPin, false);
+    if (!IsRenderMaterialGraphInputPin(*toNode, toPin) || expectedToPinId == 0U) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link uses an invalid target pin.", toPin);
         return RenderMaterialGraphFieldParseResult::Failed;
     }
     if (!AreRenderMaterialGraphPinsCompatible(*fromNode, fromPin, *toNode, toPin)) {
@@ -761,10 +774,23 @@ void AddDiagnostic(
             std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
     }
+    const bool migratedStableIds = link.fromPinId != expectedFromPinId || link.toPinId != expectedToPinId;
+    link.fromPinId = expectedFromPinId;
+    link.toPinId = expectedToPinId;
     const std::uint32_t expectedLinkId = MakeRenderMaterialGraphLinkId(link);
-    if (expectedLinkId != link.id) {
-        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link id does not match its stable endpoints.", linkIdText);
+    const bool migratedLinkId = expectedLinkId != link.id;
+    link.id = expectedLinkId;
+    if (FindRenderMaterialGraphLink(graph, link.id) != nullptr) {
+        AddDiagnostic(diagnostics, RenderMaterialAssetParseDiagnosticCode::InvalidGraphLink, line, "graphLink", "Material graph link id is duplicated.", std::string{ rest });
         return RenderMaterialGraphFieldParseResult::Failed;
+    }
+    if (migratedStableIds || migratedLinkId) {
+        AddGraphMigrationDiagnostic(
+            diagnostics,
+            line,
+            "graphLink",
+            "Material graph link stable ids were migrated to the current schema.",
+            std::string{ rest });
     }
 
     link.fromPin = std::move(fromPin);
