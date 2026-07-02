@@ -651,6 +651,7 @@ struct AcceptanceCookedMaterial {
         .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ colorHint } },
     });
     graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
     return graph;
 }
 
@@ -661,6 +662,9 @@ struct AcceptanceCookedMaterial {
     RenderMaterialAssetWriter::Write(output, material);
     std::istringstream input{ output.str() };
     RenderMaterialAssetParseResult parsed = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    if (!parsed.Succeeded()) {
+        std::fprintf(stderr, "%s\n", parsed.ErrorMessage().c_str());
+    }
     Require(parsed.Succeeded() && parsed.asset.has_value(),
         "KBMAT-MAT68: editor-authored graph material asset must round-trip before acceptance cook");
     return *parsed.asset;
@@ -3185,6 +3189,7 @@ void RunForwardGraphMaskedDiscardTest() {
         color.parameter.defaultValueHint = rgba;
         graph.nodes.push_back(color);
         graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantColor, 2U, "a", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
         return graph;
     };
 
