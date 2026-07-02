@@ -1652,6 +1652,12 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should find Texture Sample by a fragmented query");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject, "texture object parameter"),
         "KBMAT-MAT57: Palette search should expose Texture Object by catalog alias");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleCube, "cubemap environment"),
+        "KBMAT-MAT57: Palette search should expose Texture Sample Cube by cubemap aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleVolume, "texture3d voxel"),
+        "KBMAT-MAT57: Palette search should expose Texture Sample Volume by 3D texture aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample2DArray, "array layer"),
+        "KBMAT-MAT57: Palette search should expose Texture Sample 2D Array by array/layer aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign, "twosidedsign"),
         "KBMAT-MAT57: Palette search should expose TwoSidedSign by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneColor, "opaque snapshot"),
@@ -1685,6 +1691,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphContextMenuCommands(0U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject),
         "KBMAT-MAT57: Texture Object must be available from the Textures palette category");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleCube) &&
+            kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectCube) &&
+            kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleVolume) &&
+            kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectVolume) &&
+            kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample2DArray) &&
+            kb::editor::MaterialEditorGraphCommandInList(textureCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject2DArray),
+        "KBMAT-MAT57: Advanced cube/volume/array texture sample and object nodes must be available from the Textures palette category");
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> inputCommands =
         kb::editor::MaterialEditorGraphContextMenuCommands(1U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign),
@@ -1795,6 +1809,26 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject);
     kb::editor::tests::Require(textureObjectKind.has_value() && *textureObjectKind == kb::render::RenderMaterialGraphNodeKind::TextureObject,
         "KBMAT-MAT57: CreateTextureObject command should map to the TextureObject graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureCubeSampleKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleCube);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureCubeObjectKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectCube);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureVolumeSampleKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleVolume);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureVolumeObjectKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectVolume);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureArraySampleKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample2DArray);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> textureArrayObjectKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject2DArray);
+    kb::editor::tests::Require(
+        textureCubeSampleKind == kb::render::RenderMaterialGraphNodeKind::TextureSampleCube &&
+            textureCubeObjectKind == kb::render::RenderMaterialGraphNodeKind::TextureObjectCube &&
+            textureVolumeSampleKind == kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume &&
+            textureVolumeObjectKind == kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume &&
+            textureArraySampleKind == kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray &&
+            textureArrayObjectKind == kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray,
+        "KBMAT-MAT57: Advanced texture palette commands must map to the runtime graph node kinds");
     const std::optional<kb::render::RenderMaterialGraphNodeKind> twoSidedSignKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign);
     kb::editor::tests::Require(twoSidedSignKind.has_value() && *twoSidedSignKind == kb::render::RenderMaterialGraphNodeKind::TwoSidedSign,
@@ -1846,6 +1880,113 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             kb::render::RenderMaterialGraphPinDataType(*sceneColorNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
             kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color,
         "KBMAT-MAT57: Scene sampling palette nodes must expose real typed color output pins");
+
+    const auto compilePaletteTextureSample = [](
+        kb::editor::MaterialEditorGraphMenuCommand command,
+        kb::render::RenderMaterialGraphTextureDimension expectedDimension,
+        std::string_view stableIdPrefix,
+        std::uint64_t assetId,
+        const char* message) {
+        kb::editor::MaterialEditorState editor;
+        kb::render::RenderMaterialAssetData asset{};
+        asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        asset.graph.shadingModel = "unlit";
+        editor.Open(kb::assets::AssetId{ assetId }, asset);
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(kind.has_value() && editor.AddGraphNode(*kind, -160, 96, &nodeId), message);
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, nodeId);
+        kb::editor::tests::Require(node != nullptr && node->parameter.stableId.rfind(std::string{ stableIdPrefix }, 0U) == 0U,
+            "KBMAT-MAT57: Palette-created advanced texture sample must carry a stable sampler id");
+        kb::editor::tests::Require(editor.ConnectGraphPins(nodeId, "color", 1U, "baseColor"),
+            "KBMAT-MAT57: Palette-created advanced texture sample must connect to Material Output baseColor");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            editor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = assetId });
+        kb::editor::tests::Require(compiled.Succeeded(), message);
+        kb::editor::tests::Require(compiled.shader.reflection.textures.size() == 1U,
+            "KBMAT-MAT57: Palette-created advanced texture sample must reflect one sampler");
+        kb::editor::tests::Require(compiled.shader.reflection.textures[0].dimension == expectedDimension,
+            "KBMAT-MAT57: Palette-created advanced texture sample must reflect the expected texture dimension");
+    };
+    compilePaletteTextureSample(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleCube,
+        kb::render::RenderMaterialGraphTextureDimension::TextureCube,
+        "textureCubeSample",
+        0x3951U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureSampleCube nodes from the palette");
+    compilePaletteTextureSample(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSampleVolume,
+        kb::render::RenderMaterialGraphTextureDimension::Texture3D,
+        "textureVolumeSample",
+        0x3952U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureSampleVolume nodes from the palette");
+    compilePaletteTextureSample(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample2DArray,
+        kb::render::RenderMaterialGraphTextureDimension::Texture2DArray,
+        "textureArraySample",
+        0x3953U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureSample2DArray nodes from the palette");
+
+    const auto compilePaletteTextureObject = [](
+        kb::editor::MaterialEditorGraphMenuCommand objectCommand,
+        kb::render::RenderMaterialGraphNodeKind sampleKind,
+        kb::render::RenderMaterialGraphTextureDimension expectedDimension,
+        std::string_view stableIdPrefix,
+        std::uint64_t assetId,
+        const char* message) {
+        kb::editor::MaterialEditorState editor;
+        kb::render::RenderMaterialAssetData asset{};
+        asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        asset.graph.shadingModel = "unlit";
+        editor.Open(kb::assets::AssetId{ assetId }, asset);
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> objectKind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(objectCommand);
+        std::uint32_t objectNodeId = 0U;
+        std::uint32_t sampleNodeId = 0U;
+        kb::editor::tests::Require(
+            objectKind.has_value() &&
+                editor.AddGraphNode(*objectKind, -300, 96, &objectNodeId) &&
+                editor.AddGraphNode(sampleKind, -40, 96, &sampleNodeId),
+            message);
+        const kb::render::RenderMaterialGraphNode* objectNode = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, objectNodeId);
+        kb::editor::tests::Require(objectNode != nullptr && objectNode->parameter.stableId.rfind(std::string{ stableIdPrefix }, 0U) == 0U,
+            "KBMAT-MAT57: Palette-created advanced texture object must carry a stable sampler id");
+        kb::editor::tests::Require(
+            editor.ConnectGraphPins(objectNodeId, "texture", sampleNodeId, "texture") &&
+                editor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor"),
+            "KBMAT-MAT57: Palette-created advanced texture object must connect to its matching sample node");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            editor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = assetId });
+        kb::editor::tests::Require(compiled.Succeeded(), message);
+        kb::editor::tests::Require(compiled.shader.reflection.textures.size() == 1U,
+            "KBMAT-MAT57: Palette-created advanced texture object must reflect one sampler");
+        kb::editor::tests::Require(compiled.shader.reflection.textures[0].dimension == expectedDimension,
+            "KBMAT-MAT57: Palette-created advanced texture object must reflect the expected texture dimension");
+    };
+    compilePaletteTextureObject(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectCube,
+        kb::render::RenderMaterialGraphNodeKind::TextureSampleCube,
+        kb::render::RenderMaterialGraphTextureDimension::TextureCube,
+        "textureCubeObject",
+        0x3954U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureObjectCube nodes from the palette");
+    compilePaletteTextureObject(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObjectVolume,
+        kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume,
+        kb::render::RenderMaterialGraphTextureDimension::Texture3D,
+        "textureVolumeObject",
+        0x3955U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureObjectVolume nodes from the palette");
+    compilePaletteTextureObject(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateTextureObject2DArray,
+        kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray,
+        kb::render::RenderMaterialGraphTextureDimension::Texture2DArray,
+        "textureArrayObject",
+        0x3956U,
+        "KBMAT-MAT57: MaterialEditorState must create TextureObject2DArray nodes from the palette");
 }
 
 void RunMaterialEditorCollectionParameterNodeModelTest() {

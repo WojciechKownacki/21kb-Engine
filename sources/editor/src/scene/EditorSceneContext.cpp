@@ -4353,6 +4353,18 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ParameterTexture, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateTextureObject:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureObject, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleCube:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureSampleCube, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectCube:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureObjectCube, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureSampleVolume:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureObjectVolume:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureObjectVolume, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureSample2DArray:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateTextureObject2DArray:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureObject2DArray, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateUv:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::Uv, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScalar:
