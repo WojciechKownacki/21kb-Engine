@@ -1753,6 +1753,18 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::RuntimeSwitch, "index", false) == RenderMaterialGraphPinType::Float &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::RuntimeSwitch, "case0", false) == RenderMaterialGraphPinType::Float4,
         "Material graph runtime Switch should expose index/default/case pins and a Float4 output");
+    Require(ParseRenderMaterialGraphNodeKind("Sobol") == RenderMaterialGraphNodeKind::Sobol &&
+            ParseRenderMaterialGraphNodeKind("Sobol2D") == RenderMaterialGraphNodeKind::Sobol &&
+            ParseRenderMaterialGraphNodeKind("LowDiscrepancy") == RenderMaterialGraphNodeKind::Sobol,
+        "MAT-50 Sobol should parse its UE-style and low-discrepancy aliases");
+    Require(RenderMaterialGraphNodeInputPinNames(RenderMaterialGraphNodeKind::Sobol) == std::vector<std::string>{ "cell", "index", "seed" } &&
+            RenderMaterialGraphNodeOutputPinNames(RenderMaterialGraphNodeKind::Sobol) == std::vector<std::string>{ "value" },
+        "MAT-50 Sobol should expose Cell/Index/Seed inputs and a value output");
+    Require(RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Sobol, "cell", false) == RenderMaterialGraphPinType::Float2 &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Sobol, "index", false) == RenderMaterialGraphPinType::Float &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Sobol, "seed", false) == RenderMaterialGraphPinType::Float2 &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::Sobol, "value", true) == RenderMaterialGraphPinType::Float2,
+        "MAT-50 Sobol should keep its 2D sample schema visible to validation and codegen");
     Require(ParseRenderMaterialGraphNodeKind("Desaturation") == RenderMaterialGraphNodeKind::Desaturate, "Material graph surface utility should parse Desaturation alias");
     Require(ParseRenderMaterialGraphNodeKind("Fresnel") == RenderMaterialGraphNodeKind::Fresnel, "Material graph surface utility should parse Fresnel node");
     Require(ParseRenderMaterialGraphNodeKind("ObjectBounds") == RenderMaterialGraphNodeKind::ObjectBounds, "MAT-46 ObjectBounds must parse as a world/object-space node");
@@ -1906,6 +1918,9 @@ void RunMaterialGraphTypedPinCompatibilityTest() {
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Bool, RenderMaterialGraphPinType::Color), "KBMAT-GRAPH-0103: Bool should feed color inputs through explicit coercion");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Float, RenderMaterialGraphPinType::Bool), "KBMAT-GRAPH-0103: Float should feed bool inputs through explicit coercion");
     Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Color, RenderMaterialGraphPinType::Float4), "KBMAT-GRAPH-0103: Color should feed float4 operator inputs");
+    Require(AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Float2, RenderMaterialGraphPinType::Color) &&
+            AreRenderMaterialGraphPinsCompatible(RenderMaterialGraphPinType::Color, RenderMaterialGraphPinType::Float2),
+        "KBMAT-GRAPH-0103: Float2 nodes such as Sobol should feed color pins and receive color defaults through explicit coercion");
     Require(AreRenderMaterialGraphPinsCompatible(
                 RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ConstantVector2, "xy", true),
                 RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSample, "uv", false)),

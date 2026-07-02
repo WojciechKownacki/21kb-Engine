@@ -143,6 +143,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     BlackBody,
     Noise,
     VectorNoise,
+    Sobol,
     AppendVector,
     ColorRamp,
     AntialiasedTextureMask,
