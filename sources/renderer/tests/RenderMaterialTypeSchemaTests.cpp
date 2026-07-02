@@ -1454,6 +1454,41 @@ void RunMaterialGraphSchemaMigrationGoldenTest() {
         "MAT-70: canonical migration golden should round-trip without graph data loss");
 }
 
+void RunMaterialGraphStableLinkIdMigrationTest() {
+    const std::uint32_t fromPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::TextureSample, "color", true);
+    const std::uint32_t toPinId = RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind::MaterialOutput, "baseColor", false);
+    RenderMaterialGraphLink expectedLink{
+        .fromNodeId = 2U,
+        .fromPinId = fromPinId,
+        .toNodeId = 1U,
+        .toPinId = toPinId,
+    };
+    const std::uint32_t expectedLinkId = MakeRenderMaterialGraphLinkId(expectedLink);
+    const std::uint32_t staleLinkId = expectedLinkId == 123U ? 124U : 123U;
+    std::ostringstream text;
+    text << "version 1\n"
+         << "materialType builtin.pbr\n"
+         << "materialTypeVersion 1\n"
+         << "baseColor 1 1 1 1\n"
+         << "graphVersion 1\n"
+         << "graphNode 1 MaterialOutput 640 240\n"
+         << "graphNode 2 TextureSample 240 180\n"
+         << "graphLink " << staleLinkId << " 2 " << fromPinId << " color 1 " << toPinId << " baseColor\n";
+
+    std::istringstream input{ text.str() };
+    const RenderMaterialAssetParseResult migrated = RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(input);
+    Require(migrated.asset.has_value(), "Material graph stable link id migration should keep the asset loadable");
+    Require(!migrated.Succeeded(), "Material graph stable link id migration should keep a visible warning diagnostic");
+    const RenderMaterialAssetParseDiagnostic* migration = FindParseDiagnostic(migrated.diagnostics, RenderMaterialAssetParseDiagnosticCode::GraphMigration);
+    Require(migration != nullptr && migration->field == "graphLink" && migration->severity == RenderMaterialAssetParseDiagnosticSeverity::Warning,
+        "Material graph stable link id migration should emit a graphLink warning");
+    Require(migrated.asset->graph.links.size() == 1U &&
+            migrated.asset->graph.links[0].id == expectedLinkId &&
+            migrated.asset->graph.links[0].fromPinId == fromPinId &&
+            migrated.asset->graph.links[0].toPinId == toPinId,
+        "Material graph stable link id migration should normalize the link identity");
+}
+
 void RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest() {
     // Regression: RenderMaterialGraphNodeKindName is used both for serialization (graphNode <id> <kind> ...)
     // and the parser reads the kind as a SINGLE whitespace token. Every multi-word node kind therefore has
@@ -5783,6 +5818,7 @@ void RunRenderMaterialTypeSchemaTests() {
     RunMaterialAssetTilingOffsetRoundTripTest();
     RunMaterialGraphRoundTripTest();
     RunMaterialGraphSchemaMigrationGoldenTest();
+    RunMaterialGraphStableLinkIdMigrationTest();
     RunMaterialGraphMultiWordNodeKindSerializationRoundTripTest();
     RunMaterialGraphEveryShaderNodeKindHasCodegenTest();
     RunMaterialGraphDefaultsLegacyMaterialToOutputNodeTest();
