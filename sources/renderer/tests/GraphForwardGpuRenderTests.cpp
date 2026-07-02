@@ -1251,6 +1251,20 @@ void RunForwardGraphAcceptanceSuiteTest() {
     Require(HasGraphDiagnostic(deferredSceneColorDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
         "KBMAT-MAT68: scene color must report an explicit unsupported diagnostic on the deferred GBuffer geometry path");
 
+    deferredSceneColorGraph.shadingModel = "unlit";
+    deferredSceneColorGraph.blendMode = "translucent";
+    const std::vector<RenderMaterialGraphDiagnostic> deferredTransparentSceneColorDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredSceneColorGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(!HasGraphDiagnostic(deferredTransparentSceneColorDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "KBMAT-MAT68: transparent deferred graph must accept scene color because BaseTransparent binds the scene-color snapshot");
+    const AcceptanceCookedMaterial& deferredTransparentSceneColor = cookAndTrack(deferredSceneColorGraph, 0x68F2U);
+    Require(deferredTransparentSceneColor.shader.reflection.usesSceneColor &&
+            deferredTransparentSceneColor.shader.reflection.blendMode == RenderMaterialGraphBlendMode::Translucent &&
+            deferredTransparentSceneColor.key.pass == "BaseTransparent",
+        "KBMAT-MAT68: transparent deferred scene-color graph must cook through the real BaseTransparent graph program path");
+    Require(bgfx::isValid(registry.Acquire(deferredTransparentSceneColor.key)),
+        "KBMAT-MAT68: transparent deferred scene-color graph program must link through MaterialProgramRegistry");
+
     const MaterialProgramRegistryStats stats = registry.Stats();
     Require(stats.loads >= 5U && stats.failures == 0U && stats.liveProgramCount >= 5U,
         "KBMAT-MAT68: acceptance suite must load live graph programs through MaterialProgramRegistry without failures");

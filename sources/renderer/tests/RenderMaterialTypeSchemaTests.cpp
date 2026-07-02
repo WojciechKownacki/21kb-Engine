@@ -5576,6 +5576,25 @@ void RunMaterialGraphUnsupportedNodeValidationTest() {
     Require(pathDiagnostic == nullptr,
         "Deferred production path must not raise a render-path support diagnostic for supported graph nodes");
 
+    RenderMaterialGraphDocument deferredOpaqueSceneDepthGraph = MakeDefaultRenderMaterialGraphDocument();
+    deferredOpaqueSceneDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::SceneDepth });
+    deferredOpaqueSceneDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "x"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "y"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::SceneDepth, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 5U, "z"));
+    deferredOpaqueSceneDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    const std::vector<RenderMaterialGraphDiagnostic> deferredOpaqueSceneDepthDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredOpaqueSceneDepthGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(HasGraphDiagnostic(deferredOpaqueSceneDepthDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "Deferred opaque/GBuffer graph must still reject scene-depth sampling because the geometry pass has no scene-depth binding");
+
+    RenderMaterialGraphDocument deferredTransparentSceneDepthGraph = deferredOpaqueSceneDepthGraph;
+    deferredTransparentSceneDepthGraph.blendMode = "translucent";
+    const std::vector<RenderMaterialGraphDiagnostic> deferredTransparentSceneDepthDiagnostics =
+        ValidateRenderMaterialGraphDocument(deferredTransparentSceneDepthGraph, RenderMaterialGraphRenderPath::GpuDeferred);
+    Require(!HasGraphDiagnostic(deferredTransparentSceneDepthDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
+        "Deferred transparent graph must accept SceneDepth because BaseTransparent binds the GBuffer depth texture");
+
     // Unknown node kind must still be rejected as an unsupported node.
     RenderMaterialGraphDocument unknownGraph = MakeDefaultRenderMaterialGraphDocument();
     unknownGraph.nodes.push_back(RenderMaterialGraphNode{
