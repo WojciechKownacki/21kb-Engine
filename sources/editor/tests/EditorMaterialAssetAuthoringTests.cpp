@@ -1441,6 +1441,62 @@ void RunMaterialEditorGraphSelectionLayoutCommandsTest() {
         "KBMAT-MAT54B: Layout commands should keep the selected graph nodes active");
 }
 
+void RunMaterialEditorGraphPromoteToParameterTest() {
+    kb::editor::MaterialEditorState materialEditor;
+    kb::render::RenderMaterialAssetData source{};
+    source.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    materialEditor.Open(kb::assets::AssetId{ 0x3603U }, source);
+
+    std::uint32_t scalarId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantScalar, -360, 80, &scalarId),
+        "KBMAT-MAT57B: Promote test should create a scalar constant");
+    kb::editor::tests::Require(materialEditor.SetGraphConstantValue(scalarId, "0.42"),
+        "KBMAT-MAT57B: Promote test should set the scalar constant value");
+    kb::editor::tests::Require(materialEditor.ConnectGraphPins(scalarId, "value", 1U, "metallic"),
+        "KBMAT-MAT57B: Promote test should connect the scalar before promotion");
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ scalarId }, scalarId) && materialEditor.CanPromoteSelectedGraphNodeToParameter(),
+        "KBMAT-MAT57B: A single selected scalar constant should be promotable");
+    kb::editor::tests::Require(materialEditor.PromoteSelectedGraphNodeToParameter(),
+        "KBMAT-MAT57B: Promote to Parameter should convert the selected scalar node");
+    const kb::render::RenderMaterialGraphNode* promotedScalar =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, scalarId);
+    kb::editor::tests::Require(promotedScalar != nullptr &&
+            promotedScalar->kind == kb::render::RenderMaterialGraphNodeKind::ParameterScalar &&
+            promotedScalar->parameter.stableId == "scalar" + std::to_string(scalarId) &&
+            promotedScalar->parameter.defaultValueHint == "0.42" &&
+            promotedScalar->parameter.overrideSupported,
+        "KBMAT-MAT57B: Promoted scalar should become a real scalar parameter with the authored default");
+    kb::editor::tests::Require(std::ranges::any_of(materialEditor.WorkingCopy()->graph.links, [scalarId](const kb::render::RenderMaterialGraphLink& link) {
+            return link.fromNodeId == scalarId && link.fromPin == "value" && link.toNodeId == 1U && link.toPin == "metallic";
+        }),
+        "KBMAT-MAT57B: Promoting a scalar should preserve existing graph links");
+
+    std::uint32_t vector2Id = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantVector2, -360, 220, &vector2Id),
+        "KBMAT-MAT57B: Promote test should create a vector2 constant");
+    kb::editor::tests::Require(materialEditor.SetGraphConstantValue(vector2Id, "0.25 0.75"),
+        "KBMAT-MAT57B: Promote test should set the vector2 constant value");
+    kb::editor::tests::Require(materialEditor.ConnectGraphPins(vector2Id, "xy", 1U, "baseColor"),
+        "KBMAT-MAT57B: Promote test should connect vector2 to a compatible material output");
+    kb::editor::tests::Require(materialEditor.SetNodeSelection({ vector2Id }, vector2Id) && materialEditor.PromoteSelectedGraphNodeToParameter(),
+        "KBMAT-MAT57B: Promote to Parameter should convert vector2 constants through the vector parameter node");
+    const kb::render::RenderMaterialGraphNode* promotedVector =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, vector2Id);
+    kb::editor::tests::Require(promotedVector != nullptr &&
+            promotedVector->kind == kb::render::RenderMaterialGraphNodeKind::ParameterVector &&
+            promotedVector->parameter.defaultValueHint == "0.25 0.75 0",
+        "KBMAT-MAT57B: Promoted vector2 should become a vector parameter with a deterministic zero Z component");
+    kb::editor::tests::Require(std::ranges::any_of(materialEditor.WorkingCopy()->graph.links, [vector2Id](const kb::render::RenderMaterialGraphLink& link) {
+            return link.fromNodeId == vector2Id && link.fromPin == "xyz" && link.fromPinId != 0U && link.toNodeId == 1U && link.toPin == "baseColor";
+        }),
+        "KBMAT-MAT57B: Promoting vector2 should remap outgoing links from xy to the parameter xyz pin");
+
+    const kb::render::RenderMaterialGraphCompileResult compile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(materialEditor.WorkingCopy()->graph, kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x3603U });
+    kb::editor::tests::Require(compile.Succeeded(),
+        "KBMAT-MAT57B: A graph with promoted parameters should compile through the real material graph compiler");
+}
+
 void RunMaterialEditorGraphCommentBoxSerializationGroupMoveTest() {
     kb::editor::MaterialEditorState materialEditor;
     kb::render::RenderMaterialAssetData material{};
@@ -1647,12 +1703,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::SelectUpstream) &&
             kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::SelectDownstream) &&
             kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::AlignLeft) &&
-            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal),
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal) &&
+            kb::editor::MaterialEditorGraphCommandInList(actionCommands, kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter),
         "KBMAT-MAT54B: Canvas action menu must expose frame, traversal, align and distribute commands");
     kb::editor::tests::Require(
         kb::editor::MaterialEditorGraphMenuCommandIsAction(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected) &&
             !kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected).has_value() &&
-            kb::editor::MaterialEditorGraphContextMenuCommandName(kb::editor::MaterialEditorGraphMenuCommand::AlignMiddle) == "Align Middle",
+            kb::editor::MaterialEditorGraphContextMenuCommandName(kb::editor::MaterialEditorGraphMenuCommand::AlignMiddle) == "Align Middle" &&
+            kb::editor::MaterialEditorGraphContextMenuCommandName(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter) == "Promote to Parameter",
         "KBMAT-MAT54B: Canvas action commands should be named actions, not graph node creation commands");
     kb::editor::tests::Require(
         !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::FrameSelected, 0U, false) &&
@@ -1660,8 +1718,17 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::AlignLeft, 1U, false) &&
             kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::AlignLeft, 2U, false) &&
             !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal, 2U, false) &&
-            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal, 3U, false),
+            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::DistributeHorizontal, 3U, false) &&
+            kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter, 1U, false) &&
+            !kb::editor::MaterialEditorGraphContextMenuCommandEnabled(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter, 2U, false),
         "KBMAT-MAT54B: Canvas action enablement should match selection requirements");
+    kb::editor::tests::Require(
+        kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(kb::editor::MaterialEditorGraphMenuCommand::CreateMultiply) &&
+            kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(kb::editor::MaterialEditorGraphMenuCommand::CreateComment) &&
+            !kb::editor::MaterialEditorGraphMenuCommandCreatesCanvasObject(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter),
+        "KBMAT-MAT57B: Palette drag-to-canvas should only start for commands that create canvas objects");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::PromoteToParameter, "promote parameter"),
+        "KBMAT-MAT57B: Global palette search should expose Promote to Parameter by name");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
@@ -4020,6 +4087,7 @@ void RunEditorMaterialAssetAuthoringTests() {
     RunMaterialEditorGraphWorkingCopyCommandUndoRedoTest();
     RunMaterialEditorGraphMultiSelectCopyPasteDuplicateTest();
     RunMaterialEditorGraphSelectionLayoutCommandsTest();
+    RunMaterialEditorGraphPromoteToParameterTest();
     RunMaterialEditorGraphCommentBoxSerializationGroupMoveTest();
     RunMaterialEditorGraphCompositeRerouteAuthoringTest();
     RunMaterialEditorGraphNodeCreationUxModelTest();

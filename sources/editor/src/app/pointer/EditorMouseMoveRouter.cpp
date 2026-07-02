@@ -177,7 +177,8 @@ void EditorMouseMoveRouter::Handle(HWND messageWindow, int x, int y, bool leftBu
         return;
     }
 
-    if (sceneContext_.IsMaterialGraphContextMenuOpen()) {
+    if (sceneContext_.IsMaterialGraphContextMenuOpen() &&
+        pointerDrag_.kind != EditorPointerDragKind::MaterialGraphPaletteCommand) {
         const MaterialEditorGraphContextMenuHit hit = MaterialEditorPanelRenderer::GraphContextMenuHit(sceneContext_, x, y);
         bool changed = false;
         if (hit.kind == MaterialEditorGraphContextMenuHitKind::Category) {
