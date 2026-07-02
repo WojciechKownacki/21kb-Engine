@@ -2493,6 +2493,8 @@ std::string SelectGraphPinFromBase(GraphCodegen& cg, const RenderMaterialGraphNo
     case RenderMaterialGraphNodeKind::TextureSample2DArray:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
+    case RenderMaterialGraphNodeKind::ConstantColor:
+    case RenderMaterialGraphNodeKind::ParameterColor:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::CollectionParameter:
@@ -7304,7 +7306,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "xyz";
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
-        return pin == "rgba";
+        return pin == "rgba" || pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::TextureSample:
     case RenderMaterialGraphNodeKind::TextureSampleCube:
     case RenderMaterialGraphNodeKind::TextureSampleVolume:
@@ -7725,7 +7727,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         return outputPin && pin == "xyz" ? RenderMaterialGraphPinType::Float3 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
-        return outputPin && pin == "rgba" ? RenderMaterialGraphPinType::Color : RenderMaterialGraphPinType::Unknown;
+        if (!outputPin) return RenderMaterialGraphPinType::Unknown;
+        if (pin == "rgba") return RenderMaterialGraphPinType::Color;
+        if (pin == "r" || pin == "g" || pin == "b" || pin == "a") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         if (!outputPin) return RenderMaterialGraphPinType::Unknown;
         if (pin == "scalar" || pin == "r" || pin == "g" || pin == "b" || pin == "a") return RenderMaterialGraphPinType::Float;
@@ -8257,6 +8262,10 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ConstantColor:
     case RenderMaterialGraphNodeKind::ParameterColor:
         if (outputPin && pin == "rgba") return PinId(nodeKind, direction, 1U);
+        if (outputPin && pin == "r") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "g") return PinId(nodeKind, direction, 3U);
+        if (outputPin && pin == "b") return PinId(nodeKind, direction, 4U);
+        if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
         return 0U;
     case RenderMaterialGraphNodeKind::CollectionParameter:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
