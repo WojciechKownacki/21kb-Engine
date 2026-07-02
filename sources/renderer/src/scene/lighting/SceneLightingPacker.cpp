@@ -75,7 +75,7 @@ void Normalize(float& x, float& y, float& z) noexcept {
 }
 
 bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
-    if (slot >= kMaxSceneForwardLights) {
+    if (slot >= kMaxSceneForwardPlusLights) {
         return false;
     }
 
@@ -106,7 +106,7 @@ bool PackLight(const LightRenderProxyDesc& light, std::uint32_t slot, PackedScen
 }
 
 bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t slot, PackedSceneLighting& lighting) noexcept {
-    if (!config.editorPreviewKeyLightEnabled || config.editorPreviewKeyLightIntensity <= 0.0F || slot >= kMaxSceneForwardLights) {
+    if (!config.editorPreviewKeyLightEnabled || config.editorPreviewKeyLightIntensity <= 0.0F || slot >= kMaxSceneForwardPlusLights) {
         return false;
     }
 
@@ -135,7 +135,10 @@ bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t s
     if (config.maxForwardLights == 0U) {
         return 0U;
     }
-    return std::min<std::uint32_t>(config.maxForwardLights, kMaxSceneForwardLights);
+    const std::uint32_t maxSupported = config.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
+        ? kMaxSceneForwardPlusLights
+        : kMaxSceneForwardLights;
+    return std::min<std::uint32_t>(config.maxForwardLights, maxSupported);
 }
 
 [[nodiscard]] float EnvironmentModeValue(SceneRenderEnvironmentMode mode) noexcept {
@@ -177,7 +180,6 @@ bool PackEditorPreviewKeyLight(SceneRenderLightingConfig config, std::uint32_t s
 
 void FillIblStats(SceneRenderSubmitStats& stats, SceneRenderLightingConfig config) noexcept {
     stats.lightingPath = static_cast<std::uint32_t>(config.lightingPath) + 1U;
-    // Clustered/visibility remain roadmap paths; Forward and Deferred report production when selected.
     stats.lightingPathProduction = IsSceneRenderLightingPathProduction(config.lightingPath);
     stats.lightClusterCount = ClusterCount(config);
     stats.globalIlluminationMode = static_cast<std::uint32_t>(config.globalIllumination) + 1U;

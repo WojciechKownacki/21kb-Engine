@@ -264,6 +264,7 @@ void DrawGraphicsPage(
     DrawText(dc, RECT{ rects.lightingPathLabel.left, rects.lightingPathLabel.top, rects.lightingPathLabel.right - 8, rects.lightingPathLabel.bottom }, "Lighting Path", RGB(196, 205, 214), 12);
     const kb::project::ProjectSceneLightingPath lightingPath = sceneContext.Project().sceneLightingPath;
     DrawOptionButton(dc, rects.lightingPathForwardButton, "Forward", lightingPath == kb::project::ProjectSceneLightingPath::Forward);
+    DrawOptionButton(dc, rects.lightingPathForwardPlusButton, "Forward+", lightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus);
     DrawOptionButton(dc, rects.lightingPathDeferredButton, "Deferred", lightingPath == kb::project::ProjectSceneLightingPath::Deferred);
 
     DrawText(dc, rects.postProcessLabel, "Post FX", RGB(196, 205, 214), 12);
@@ -344,7 +345,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::RenderBackendOption, .index = index, .rect = button };
             }
         }
-        for (int index = 0; index < 2; ++index) {
+        for (int index = 0; index < 3; ++index) {
             const RECT button = ProjectSettingsPanelLayout::LightingPathOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::LightingPathOption, .index = index, .rect = button };

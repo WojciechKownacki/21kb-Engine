@@ -98,6 +98,9 @@ using ProjectDescriptorBinaryIO::ReadAllBytes;
     case 1U:
         descriptor.sceneLightingPath = ProjectSceneLightingPath::Deferred;
         return true;
+    case 2U:
+        descriptor.sceneLightingPath = ProjectSceneLightingPath::ForwardPlus;
+        return true;
     default:
         return false;
     }

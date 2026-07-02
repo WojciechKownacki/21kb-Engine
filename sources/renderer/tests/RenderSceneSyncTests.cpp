@@ -1452,9 +1452,19 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
         .volumetricScattering = 0.75F,
         .visible = true,
     }));
+    for (std::uint32_t index = 0U; index < 5U; ++index) {
+        static_cast<void>(renderScene.UpsertLight(LightRenderProxyDesc{
+            .entityId = 2U + index,
+            .kind = RenderLightKind::Point,
+            .position = { static_cast<float>(index) * 0.35F, 1.0F, 2.0F },
+            .intensity = 1.0F,
+            .range = 10.0F,
+            .visible = true,
+        }));
+    }
 
     SceneRenderLightingConfig lighting{};
-    lighting.maxForwardLights = 4U;
+    lighting.maxForwardLights = 6U;
     lighting.lightingPath = SceneRenderLightingPath::ClusteredForwardPlus;
     lighting.clusterDimensions = { 4U, 3U, 2U };
     lighting.environmentMode = SceneRenderEnvironmentMode::ImageBased;
@@ -1471,14 +1481,15 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     const SceneRenderSubmitStats stats = renderer.ValidateSceneResources(renderScene);
     Require(stats.lightingPath == static_cast<std::uint32_t>(SceneRenderLightingPath::ClusteredForwardPlus) + 1U, "SceneRenderer validation did not report clustered lighting path");
     Require(stats.lightClusterCount == 24U, "SceneRenderer validation did not report clustered light grid size");
-    // KBMAT-MAT64/#51: clustered forward+ is declared but not implemented (no clustered light list reaches the
-    // shader), so the renderer must report it as a non-production path rather than falsely claim it ran.
-    Require(!stats.lightingPathProduction, "KBMAT-MAT64: ClusteredForwardPlus must be reported as a non-production lighting path");
-    Require(!IsSceneRenderLightingPathProduction(SceneRenderLightingPath::ClusteredForwardPlus) &&
+    Require(stats.forwardLightCapacity == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not use the expanded forward+ light budget");
+    Require(stats.submittedForwardLightCount == 6U, "KBMAT-MAT64: ClusteredForwardPlus did not submit all lights within its expanded budget");
+    Require(stats.skippedForwardLightCount == 0U, "KBMAT-MAT64: ClusteredForwardPlus incorrectly skipped lights within its expanded budget");
+    Require(stats.lightingPathProduction, "KBMAT-MAT64: ClusteredForwardPlus must be reported as a production lighting path");
+    Require(IsSceneRenderLightingPathProduction(SceneRenderLightingPath::ClusteredForwardPlus) &&
             IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Deferred) &&
             !IsSceneRenderLightingPathProduction(SceneRenderLightingPath::VisibilityBuffer) &&
             IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Forward),
-            "KBMAT-MAT64: Forward and Deferred lighting paths are production; clustered/visibility are non-production");
+            "KBMAT-MAT64: Forward, Forward+ and Deferred lighting paths are production; visibility is non-production");
     Require(stats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::ImageBased) + 1U, "SceneRenderer validation did not report IBL environment mode");
     Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");

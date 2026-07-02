@@ -87,7 +87,15 @@ void RunProjectBootstrapCreatesDescriptorAndRuntimeFoldersTest() {
     kb::editor::tests::Require(BinaryPathFor(loaded.descriptor, "Rendering.BasicLighting") == kb::editor::EditorPluginCatalog::PersistentBinaryPath("Rendering.BasicLighting"), "Persisted lighting plugin path should stay config-agnostic");
     kb::editor::tests::Require(loaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::Forward, "Created editor project should default to Forward lighting path");
 
-    kb::project::ProjectDescriptor deferredDescriptor = loaded.descriptor;
+    kb::project::ProjectDescriptor forwardPlusDescriptor = loaded.descriptor;
+    forwardPlusDescriptor.sceneLightingPath = kb::project::ProjectSceneLightingPath::ForwardPlus;
+    kb::editor::tests::Require(kb::project::ProjectDescriptorWriter::Write(kb::editor::EditorProjectPaths::ProjectFile(), forwardPlusDescriptor), "Editor project descriptor did not write Forward+ lighting path");
+    const kb::project::ProjectDescriptorReadResult forwardPlusLoaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());
+    kb::editor::tests::Require(forwardPlusLoaded.succeeded, "Forward+ editor project descriptor did not reload");
+    kb::editor::tests::Require(forwardPlusLoaded.descriptor.sceneLightingPath == kb::project::ProjectSceneLightingPath::ForwardPlus, "Forward+ lighting path did not roundtrip through project descriptor");
+    kb::editor::tests::Require(forwardPlusLoaded.descriptor.fileVersion >= 4U, "Forward+ lighting path descriptor should be version >= 4");
+
+    kb::project::ProjectDescriptor deferredDescriptor = forwardPlusLoaded.descriptor;
     deferredDescriptor.sceneLightingPath = kb::project::ProjectSceneLightingPath::Deferred;
     kb::editor::tests::Require(kb::project::ProjectDescriptorWriter::Write(kb::editor::EditorProjectPaths::ProjectFile(), deferredDescriptor), "Editor project descriptor did not write Deferred lighting path");
     const kb::project::ProjectDescriptorReadResult deferredLoaded = kb::project::ProjectManager::LoadProject(kb::editor::EditorProjectPaths::ProjectFile());

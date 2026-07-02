@@ -15,7 +15,7 @@ struct SceneForwardLightCandidate {
 };
 
 struct SceneForwardLightSelection {
-    std::array<SceneForwardLightCandidate, kMaxSceneForwardLights> selected{};
+    std::array<SceneForwardLightCandidate, kMaxSceneForwardPlusLights> selected{};
     std::uint32_t selectedCount = 0;
     std::uint32_t validLightCount = 0;
 };

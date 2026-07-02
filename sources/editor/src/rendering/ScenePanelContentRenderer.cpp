@@ -170,6 +170,8 @@ struct SceneViewportRenderProfileDesc {
     switch (path) {
     case kb::project::ProjectSceneLightingPath::Deferred:
         return kb::render::SceneRenderLightingPath::Deferred;
+    case kb::project::ProjectSceneLightingPath::ForwardPlus:
+        return kb::render::SceneRenderLightingPath::ClusteredForwardPlus;
     case kb::project::ProjectSceneLightingPath::Forward:
     default:
         return kb::render::SceneRenderLightingPath::Forward;
@@ -181,6 +183,9 @@ struct SceneViewportRenderProfileDesc {
     kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
     lighting.lightingPath = RenderLightingPath(projectLightingPath);
+    if (lighting.lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
+        lighting.maxForwardLights = kb::render::kMaxSceneForwardPlusLights;
+    }
     if (!renderProfile.editorStudioLightEnabled) {
         return lighting;
     }

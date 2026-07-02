@@ -6,10 +6,10 @@ SAMPLER2D(s_gbufferAlbedo, 0);
 SAMPLER2D(s_gbufferNormal, 1);
 SAMPLER2D(s_gbufferMaterial, 2);
 SAMPLER2D(s_gbufferDepth, 3);
-uniform vec4 u_deferredLightDirKind[4];
-uniform vec4 u_deferredLightPositionRange[4];
-uniform vec4 u_deferredLightColorIntensity[4];
-uniform vec4 u_deferredLightSpot[4];
+uniform vec4 u_deferredLightDirKind[32];
+uniform vec4 u_deferredLightPositionRange[32];
+uniform vec4 u_deferredLightColorIntensity[32];
+uniform vec4 u_deferredLightSpot[32];
 uniform vec4 u_deferredLightParams;
 uniform vec4 u_deferredAmbientColor;
 uniform vec4 u_deferredEnvironmentZenith;
@@ -145,7 +145,7 @@ void main()
     vec3 viewDir = normalize(u_deferredCameraPosition.xyz - worldPos);
     vec3 lighting = EvaluateEnvironment(normal, viewDir, albedo.rgb, metallic, roughness, occlusion);
 
-    for (int lightIndex = 0; lightIndex < 4; ++lightIndex) {
+    for (int lightIndex = 0; lightIndex < 32; ++lightIndex) {
         if (float(lightIndex) < u_deferredLightParams.x) {
             lighting += EvaluateSceneLight(lightIndex, normal, viewDir, worldPos, albedo.rgb, metallic, roughness, occlusion);
         }

@@ -551,7 +551,9 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     RenderMaterialGraphBuildContext runtimeGraphContext{};
     runtimeGraphContext.shadingPath = deferredLighting
         ? RenderMaterialGraphShadingPath::Deferred
-        : RenderMaterialGraphShadingPath::Forward;
+        : effectiveLightingConfig.lightingPath == SceneRenderLightingPath::ClusteredForwardPlus
+            ? RenderMaterialGraphShadingPath::ForwardPlus
+            : RenderMaterialGraphShadingPath::Forward;
     runtimeMaterialResolver_.SetGraphBuildContext(std::move(runtimeGraphContext));
     if (!lastRuntimeMaterialLightingPath_.has_value() || *lastRuntimeMaterialLightingPath_ != effectiveLightingConfig.lightingPath) {
         runtimeResourceCache_.InvalidateMaterials(sceneRenderer_.get());
