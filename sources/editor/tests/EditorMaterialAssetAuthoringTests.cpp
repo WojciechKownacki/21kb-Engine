@@ -140,7 +140,7 @@ void ReserveMaterialAuthoringRuntimeResources(kb::render::Renderer& renderer) {
         .frameReferencedMeshes = 4U,
         .frameReferencedMaterials = 4U,
         .frameReferencedTextures = 4U,
-        .scenePassSubmitStats = 1U,
+        .scenePassSubmitStats = 4U,
         .renderSceneMeshProxies = 8U,
         .renderSceneDrawGroupKeys = 4U,
         .meshResourceSlots = 4U,
@@ -3374,7 +3374,7 @@ void RunProjectFilesMaterialEditorMeshRendererRenderPathE2ETest() {
     kb::editor::tests::Require(renderer.Initialize(surface, &config), "KBMAT-1006: Renderer did not initialize for Material Editor E2E");
     kb::editor::tests::Require(renderer.BeginFrame(), "KBMAT-1006: Renderer did not begin frame for Material Editor E2E");
 
-    const kb::render::RenderSceneSubmitDesc desc{
+    const kb::render::RenderSceneSubmitDesc baseDesc{
         .target = kb::render::RenderSceneTargetBinding{
             .frameBuffer = BGFX_INVALID_HANDLE,
             .colorTexture = BGFX_INVALID_HANDLE,
@@ -3396,42 +3396,90 @@ void RunProjectFilesMaterialEditorMeshRendererRenderPathE2ETest() {
         .selectionOutlineEnabled = false,
         .gpuDrivenRuntimeDispatchEnabled = false,
     };
-    kb::editor::tests::Require(renderer.SubmitScene(scene, desc), "KBMAT-1006: Runtime render path rejected the Material Editor assigned scene");
-    const kb::render::SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
-    if (submitStats.visibleMeshCount != 1U) {
-        const kb::render::Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
-        std::cerr
-            << "KBMAT-1006 stats: visible=" << submitStats.visibleMeshCount
-            << " groups=" << submitStats.visibleDrawGroupCount
-            << " culled=" << submitStats.culledInstanceCount
-            << " submittedMesh=" << submitStats.submittedMeshCount
-            << " drawCalls=" << submitStats.submittedDrawCallCount
-            << " missingMeshBinding=" << submitStats.missingMeshBindingCount
-            << " missingMeshResource=" << submitStats.missingMeshResourceCount
-            << " unsupportedVertex=" << submitStats.unsupportedMeshVertexFormatCount
-            << " missingMaterialBinding=" << submitStats.missingMaterialBindingCount
-            << " missingMaterialResource=" << submitStats.missingMaterialResourceCount
-            << " cachedMeshes=" << runtimeStats.cachedMeshCount
-            << " cachedMaterials=" << runtimeStats.cachedMaterialCount
-            << " referencedMeshes=" << runtimeStats.referencedMeshAssetCount
-            << " referencedMaterials=" << runtimeStats.referencedMaterialAssetCount << '\n';
-    }
-    kb::editor::tests::Require(submitStats.visibleMeshCount == 1U, "KBMAT-1006: Runtime render path did not keep the assigned mesh visible");
-    if (submitStats.submittedMeshCount != 1U || submitStats.submittedDrawCallCount != 1U) {
-        const kb::render::Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
-        std::cerr
-            << "KBMAT-1006 submit stats: submittedMesh=" << submitStats.submittedMeshCount
-            << " drawCalls=" << submitStats.submittedDrawCallCount
-            << " visible=" << submitStats.visibleMeshCount
-            << " missingMeshBinding=" << submitStats.missingMeshBindingCount
-            << " missingMaterialBinding=" << submitStats.missingMaterialBindingCount
-            << " missingMaterialResource=" << submitStats.missingMaterialResourceCount
-            << " unsupportedVertex=" << submitStats.unsupportedMeshVertexFormatCount
-            << " cachedMeshes=" << runtimeStats.cachedMeshCount
-            << " cachedMaterials=" << runtimeStats.cachedMaterialCount << '\n';
-    }
-    kb::editor::tests::Require(submitStats.submittedMeshCount == 1U && submitStats.submittedDrawCallCount == 1U, "KBMAT-1006: Runtime render path did not submit the assigned mesh/material");
-    kb::editor::tests::Require(!submitStats.HasMissingResources(), "KBMAT-1006: Runtime render path reported missing resources for Material Editor assignment");
+
+    const auto submitAndValidatePath = [&](kb::render::SceneRenderLightingPath lightingPath, const char* pathName) {
+        kb::render::RenderSceneSubmitDesc desc = baseDesc;
+        desc.lightingConfig = kb::render::SceneRenderLightingConfig{
+            .maxForwardLights = lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus
+                ? kb::render::kMaxSceneForwardPlusLights
+                : kb::render::kMaxSceneForwardLights,
+            .lightingPath = lightingPath,
+        };
+        kb::editor::tests::Require(renderer.SubmitScene(scene, desc), "KBMAT-1006: Runtime render path rejected the Material Editor assigned scene");
+        const kb::render::SceneRenderSubmitStats submitStats = renderer.LastSceneSubmitStats();
+        if (submitStats.visibleMeshCount != 1U) {
+            const kb::render::Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+            std::cerr
+                << "KBMAT-1006 " << pathName << " stats: visible=" << submitStats.visibleMeshCount
+                << " groups=" << submitStats.visibleDrawGroupCount
+                << " culled=" << submitStats.culledInstanceCount
+                << " submittedMesh=" << submitStats.submittedMeshCount
+                << " drawCalls=" << submitStats.submittedDrawCallCount
+                << " missingMeshBinding=" << submitStats.missingMeshBindingCount
+                << " missingMeshResource=" << submitStats.missingMeshResourceCount
+                << " unsupportedVertex=" << submitStats.unsupportedMeshVertexFormatCount
+                << " missingMaterialBinding=" << submitStats.missingMaterialBindingCount
+                << " missingMaterialResource=" << submitStats.missingMaterialResourceCount
+                << " cachedMeshes=" << runtimeStats.cachedMeshCount
+                << " cachedMaterials=" << runtimeStats.cachedMaterialCount
+                << " referencedMeshes=" << runtimeStats.referencedMeshAssetCount
+                << " referencedMaterials=" << runtimeStats.referencedMaterialAssetCount << '\n';
+        }
+        kb::editor::tests::Require(submitStats.visibleMeshCount == 1U, "KBMAT-1006: Runtime render path did not keep the assigned mesh visible");
+        if (submitStats.submittedMeshCount != 1U || submitStats.submittedDrawCallCount == 0U) {
+            const kb::render::Renderer::RuntimeSceneResourceStats runtimeStats = renderer.RuntimeResourceStats();
+            std::cerr
+                << "KBMAT-1006 " << pathName << " submit stats: submittedMesh=" << submitStats.submittedMeshCount
+                << " drawCalls=" << submitStats.submittedDrawCallCount
+                << " visible=" << submitStats.visibleMeshCount
+                << " missingMeshBinding=" << submitStats.missingMeshBindingCount
+                << " missingMaterialBinding=" << submitStats.missingMaterialBindingCount
+                << " missingMaterialResource=" << submitStats.missingMaterialResourceCount
+                << " unsupportedVertex=" << submitStats.unsupportedMeshVertexFormatCount
+                << " cachedMeshes=" << runtimeStats.cachedMeshCount
+                << " cachedMaterials=" << runtimeStats.cachedMaterialCount << '\n';
+        }
+        kb::editor::tests::Require(submitStats.submittedMeshCount == 1U && submitStats.submittedDrawCallCount > 0U,
+            "KBMAT-1006: Runtime render path did not submit the assigned mesh/material");
+        kb::editor::tests::Require(!submitStats.HasMissingResources(), "KBMAT-1006: Runtime render path reported missing resources for Material Editor assignment");
+        kb::editor::tests::Require(!renderer.LastSceneDiagnostics().HasErrors(), "KBMAT-1006: Runtime render path reported diagnostics for Material Editor assignment");
+        kb::editor::tests::Require(submitStats.lightingPath == static_cast<std::uint32_t>(lightingPath) + 1U && submitStats.lightingPathProduction,
+            "KBMAT-1006: Runtime render path did not report a production lighting path");
+        if (lightingPath == kb::render::SceneRenderLightingPath::ClusteredForwardPlus) {
+            kb::editor::tests::Require(submitStats.forwardLightCapacity == kb::render::kMaxSceneForwardPlusLights,
+                "KBMAT-1006: Forward+ Material Editor assignment did not use the expanded light budget");
+        } else if (lightingPath == kb::render::SceneRenderLightingPath::Forward) {
+            kb::editor::tests::Require(submitStats.forwardLightCapacity == kb::render::kMaxSceneForwardLights,
+                "KBMAT-1006: Forward Material Editor assignment did not use the classic light budget");
+        }
+
+        const std::span<const kb::render::SceneRenderPassSubmitStats> passStats = renderer.LastScenePassSubmitStats();
+        if (lightingPath == kb::render::SceneRenderLightingPath::Deferred) {
+            kb::editor::tests::Require(passStats.size() >= 2U,
+                "KBMAT-1006: Deferred Material Editor assignment must submit GBuffer and deferred lighting passes");
+            kb::editor::tests::Require(passStats[0].renderPass == kb::render::RenderPassKind::GBufferGeometry &&
+                    passStats[0].pass == kb::render::MeshPassType::GBuffer &&
+                    passStats[0].stats.submittedMeshCount == 1U,
+                "KBMAT-1006: Deferred Material Editor assignment did not submit the mesh through the GBuffer pass");
+            kb::editor::tests::Require(passStats[1].renderPass == kb::render::RenderPassKind::DeferredLighting,
+                "KBMAT-1006: Deferred Material Editor assignment did not submit the deferred lighting pass");
+            if (passStats.size() > 2U) {
+                kb::editor::tests::Require(passStats[2].renderPass == kb::render::RenderPassKind::TransparentScene &&
+                        passStats[2].pass == kb::render::MeshPassType::BaseTransparent,
+                    "KBMAT-1006: Deferred Material Editor assignment did not preserve the transparent forward pass");
+            }
+        } else {
+            kb::editor::tests::Require(passStats.size() == 1U &&
+                    passStats[0].renderPass == kb::render::RenderPassKind::OpaqueScene &&
+                    passStats[0].pass == kb::render::MeshPassType::BaseOpaque &&
+                    passStats[0].stats.submittedMeshCount == 1U,
+                "KBMAT-1006: Forward Material Editor assignment did not submit through the opaque base pass");
+        }
+    };
+
+    submitAndValidatePath(kb::render::SceneRenderLightingPath::Forward, "Forward");
+    submitAndValidatePath(kb::render::SceneRenderLightingPath::ClusteredForwardPlus, "Forward+");
+    submitAndValidatePath(kb::render::SceneRenderLightingPath::Deferred, "Deferred");
 
     const kb::render::SceneRenderResourceMap* resourceMap = renderer.SceneResourceMap();
     const kb::render::RenderResourceRegistry* resources = renderer.SceneResources();
