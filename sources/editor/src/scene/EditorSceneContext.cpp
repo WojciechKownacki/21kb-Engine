@@ -77,6 +77,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <exception>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -2222,7 +2223,10 @@ void EditorSceneContext::CloseMaterialEditorAsset() noexcept {
         CancelMaterialGraphWorkingCopyTransaction();
         ClearMaterialEditorWorkingCopyRuntimePreview();
         MarkSceneRenderDirty();
+    } catch (const std::exception& exception) {
+        console_.Error("Materials", std::string{ "Material Editor cleanup failed while closing asset: " } + exception.what());
     } catch (...) {
+        console_.Error("Materials", "Material Editor cleanup failed while closing asset with an unknown error.");
     }
     materialEditor_.Close();
 }
