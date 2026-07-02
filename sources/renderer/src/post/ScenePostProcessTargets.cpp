@@ -15,6 +15,7 @@ namespace {
 
 constexpr std::uint64_t kPostProcessColorTextureFlags =
     BGFX_TEXTURE_RT |
+    BGFX_TEXTURE_BLIT_DST |
     BGFX_SAMPLER_U_CLAMP |
     BGFX_SAMPLER_V_CLAMP;
 
