@@ -9,6 +9,7 @@
 #include "kb/render/scene/SceneRenderResourceMap.hpp"
 #include "kb/render/scene/SceneRenderer.hpp"
 #include "kb/render/scene/batch/SceneMeshBatchBuilder.hpp"
+#include "../src/scene/pipeline/MeshPipelinePassPolicy.hpp"
 #include "../src/scene/pipeline/MeshPipelineResourceResolver.hpp"
 
 #include <array>
@@ -37,6 +38,7 @@ namespace {
 void RunMeshPassTypeNamesResolveTest() {
     Require(MeshPassTypeName(MeshPassType::Depth) == std::string_view("Depth"), "MeshPassTypeName did not resolve Depth");
     Require(MeshPassTypeName(MeshPassType::BaseOpaque) == std::string_view("BaseOpaque"), "MeshPassTypeName did not resolve BaseOpaque");
+    Require(MeshPassTypeName(MeshPassType::GBuffer) == std::string_view("GBuffer"), "MeshPassTypeName did not resolve GBuffer");
     Require(MeshPassTypeName(MeshPassType::BaseTransparent) == std::string_view("BaseTransparent"), "MeshPassTypeName did not resolve BaseTransparent");
     Require(MeshPassTypeName(MeshPassType::ShadowDepth) == std::string_view("ShadowDepth"), "MeshPassTypeName did not resolve ShadowDepth");
     Require(MeshPassTypeName(MeshPassType::SelectionId) == std::string_view("SelectionId"), "MeshPassTypeName did not resolve SelectionId");
@@ -51,6 +53,7 @@ void RunStaticMeshVertexLayoutIsDefinedTest() {
 
 void RunFramePassKindsMapToMeshPassesTest() {
     Require(MeshPassForRenderPassKind(RenderPassKind::OpaqueScene).value_or(MeshPassType::Depth) == MeshPassType::BaseOpaque, "OpaqueScene did not map to BaseOpaque mesh pass");
+    Require(MeshPassForRenderPassKind(RenderPassKind::GBufferGeometry).value_or(MeshPassType::Depth) == MeshPassType::GBuffer, "GBufferGeometry did not map to GBuffer mesh pass");
     Require(MeshPassForRenderPassKind(RenderPassKind::TransparentScene).value_or(MeshPassType::Depth) == MeshPassType::BaseTransparent, "TransparentScene did not map to BaseTransparent mesh pass");
     Require(MeshPassForRenderPassKind(RenderPassKind::EditorSelectionMask).value_or(MeshPassType::Depth) == MeshPassType::SelectionId, "EditorSelectionMask did not map to SelectionId mesh pass");
     Require(!MeshPassForRenderPassKind(RenderPassKind::PostProcessBloomPrefilter).has_value(), "Post-process pass unexpectedly mapped to a mesh pass");
@@ -806,6 +809,14 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
     Require(maskedOpaque.commands.size() == 1U, "MeshPipeline did not keep masked materials in the opaque pass");
+    const MeshPipelineBuildResult maskedGBuffer = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::GBuffer,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &masked,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(maskedGBuffer.commands.size() == 1U, "MeshPipeline did not keep masked materials in the GBuffer pass");
 
     SceneRenderDiagnostics blendedDiagnostics;
     const MeshPipelineBuildResult blendedOpaque = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
@@ -820,6 +831,14 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
     // MAT-80: routing a blended material out of the opaque pass is correct (it renders in transparent),
     // so it must NOT raise an unsupported-alpha-blend diagnostic anymore.
     Require(blendedDiagnostics.events.empty(), "KBMAT-MAT80: blended material excluded from opaque must not emit an unsupported diagnostic");
+    const MeshPipelineBuildResult blendedGBuffer = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
+        .pass = MeshPassType::GBuffer,
+        .drawGroups = &drawGroups,
+        .resolvedMeshResource = &mesh,
+        .resolvedMaterialResource = &blended,
+        .resourceValidation = MeshPipelineResourceValidation::Skip,
+    });
+    Require(blendedGBuffer.commands.empty(), "MeshPipeline kept blended materials in the GBuffer pass");
 
     const MeshPipelineBuildResult blendedTransparent = MeshPipelineProcessor::Build(MeshPipelineBuildDesc{
         .pass = MeshPassType::BaseTransparent,
@@ -829,6 +848,10 @@ void RunMeshPipelineRoutesMaterialAlphaModesToPassesTest() {
         .resourceValidation = MeshPipelineResourceValidation::Skip,
     });
     Require(blendedTransparent.commands.size() == 1U, "KBMAT-MAT80: MeshPipeline must route blended materials to the transparent pass");
+    Require((MeshPipelinePassPolicy::State(MeshPassType::GBuffer, &mesh, &masked) & BGFX_STATE_WRITE_RGB) != 0U, "GBuffer state must write RGB attachments");
+    Require((MeshPipelinePassPolicy::State(MeshPassType::GBuffer, &mesh, &masked) & BGFX_STATE_WRITE_A) != 0U, "GBuffer state must write alpha attachments");
+    Require((MeshPipelinePassPolicy::State(MeshPassType::GBuffer, &mesh, &masked) & BGFX_STATE_WRITE_Z) != 0U, "GBuffer state must write depth");
+    Require((MeshPipelinePassPolicy::State(MeshPassType::GBuffer, &mesh, &masked) & BGFX_STATE_BLEND_MASK) == 0U, "GBuffer state must not enable blending");
 }
 
 void RunMeshPipelineUsesMaterialDoubleSidedStateTest() {

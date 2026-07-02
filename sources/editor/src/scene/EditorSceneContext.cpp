@@ -5159,6 +5159,14 @@ bool EditorSceneContext::SetProjectInputMappingContext(std::string virtualPath) 
     return SaveProjectDescriptor();
 }
 
+bool EditorSceneContext::SetProjectSceneLightingPath(kb::project::ProjectSceneLightingPath path) {
+    if (project_.sceneLightingPath == path) {
+        return false;
+    }
+    project_.sceneLightingPath = path;
+    return SaveProjectDescriptor();
+}
+
 bool EditorSceneContext::CloseProjectSettingsDropdowns() noexcept {
     return projectSettings_.CloseDropdowns();
 }

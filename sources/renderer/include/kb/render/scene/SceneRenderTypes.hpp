@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kb/render/frame/RenderPassKind.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/scene/SceneGpuDrivenFeatureState.hpp"
 #include "kb/render/scene/SceneGpuDrivenParityValidator.hpp"
@@ -50,12 +51,10 @@ enum class SceneRenderLightingPath : std::uint8_t {
     VisibilityBuffer,
 };
 
-// MAT-64/#51: only the Forward path (capped at kMaxSceneForwardLights analytic lights) is implemented
-// and drives the graph/builtin shaders. ClusteredForwardPlus/Deferred/VisibilityBuffer are declared for
-// the roadmap but NOT implemented (no clustered/tiled light list reaches the shader); they are reported
-// as non-production so nothing falsely claims >4-light lighting is applied.
+// Forward is the classic capped analytic-light path. Deferred is the GBuffer + fullscreen lighting path.
+// ClusteredForwardPlus/VisibilityBuffer remain roadmap declarations and must not be reported production.
 [[nodiscard]] constexpr bool IsSceneRenderLightingPathProduction(SceneRenderLightingPath path) noexcept {
-    return path == SceneRenderLightingPath::Forward;
+    return path == SceneRenderLightingPath::Forward || path == SceneRenderLightingPath::Deferred;
 }
 
 enum class SceneRenderGlobalIlluminationMode : std::uint8_t {
@@ -300,6 +299,7 @@ struct SceneRenderSubmitStats {
 struct SceneRenderPassSubmitStats {
     std::uint32_t viewportId = 0;
     std::uint32_t viewportIndex = 0;
+    RenderPassKind renderPass = RenderPassKind::OpaqueScene;
     MeshPassType pass{};
     SceneRenderSubmitStats stats{};
 };
@@ -345,6 +345,8 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     UnsupportedMaterialAlphaBlend,
     DroppedInstances,
     GraphMaterialProgramFallback,
+    GraphMaterialProgramUnavailable,
+    DeferredRendererUnavailable,
 };
 
 enum class SceneRenderMaterialProgramStatus : std::uint8_t {

@@ -52,6 +52,10 @@ const char* SceneTextureFormatName(bgfx::TextureFormat::Enum format) noexcept {
         return "RGBA16";
     case bgfx::TextureFormat::RGBA8:
         return "RGBA8";
+    case bgfx::TextureFormat::BGRA8:
+        return "BGRA8";
+    case bgfx::TextureFormat::RG16F:
+        return "RG16F";
     case bgfx::TextureFormat::D32F:
         return "D32F";
     case bgfx::TextureFormat::D32:
@@ -82,6 +86,10 @@ bgfx::TextureFormat::Enum SceneColorFormatForPolicy(SceneColorFormatPolicy polic
 }
 
 bool SceneColorFormatSupported(bgfx::TextureFormat::Enum format, std::uint64_t textureFlags) noexcept {
+    return SceneTextureFormatSupported(format, textureFlags);
+}
+
+bool SceneTextureFormatSupported(bgfx::TextureFormat::Enum format, std::uint64_t textureFlags) noexcept {
     return format != bgfx::TextureFormat::Count && bgfx::isTextureValid(0, false, 1, format, textureFlags);
 }
 

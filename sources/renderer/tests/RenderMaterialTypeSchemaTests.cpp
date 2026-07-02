@@ -282,7 +282,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
     Require(document.shaderModel == RenderMaterialShaderModel::MetallicRoughnessPbr, "KBMAT-GRAPH-0002: Built-in PBR material type must declare metallic-roughness shader model");
     Require(document.defaultBlendMode == RenderMaterialBlendMode::Opaque, "KBMAT-GRAPH-0002: Built-in PBR material type must declare default opaque blend mode");
     Require(document.defaultCullMode == RenderMaterialCullMode::BackFace, "KBMAT-GRAPH-0002: Built-in PBR material type must declare default cull mode");
-    Require(document.renderPasses.size() == 5U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare render pass support");
+    Require(document.renderPasses.size() == 6U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare render pass support");
     Require(document.permutationKeys.size() == 3U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare permutation keys");
     Require(document.requiredResources.size() >= 4U, "KBMAT-GRAPH-0002: Built-in PBR material type should declare shader resources");
     Require(document.schema.typeName == document.stableTypeId, "Built-in PBR material type document schema id mismatch");
@@ -297,6 +297,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
         return false;
     };
     Require(hasPass("BaseOpaque", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing BaseOpaque pass");
+    Require(hasPass("GBuffer", RenderMaterialFeatureSupport::Supported), "Deferred: Built-in PBR material type missing GBuffer pass");
     Require(hasPass("ShadowDepth", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing ShadowDepth pass");
     Require(hasPass("SelectionId", RenderMaterialFeatureSupport::Supported), "KBMAT-GRAPH-0002: Built-in PBR material type missing SelectionId pass");
     Require(hasPass("BaseTransparent", RenderMaterialFeatureSupport::Supported), "KBMAT-MAT80: Built-in PBR material type must declare the transparent pass as supported");
@@ -322,6 +323,7 @@ void RunBuiltInPbrMaterialTypeDocumentExistsTest() {
     };
     Require(hasResource("vs_mesh_instanced", "vertexShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing base vertex shader resource");
     Require(hasResource("fs_mesh_instanced", "fragmentShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing base fragment shader resource");
+    Require(hasResource("fs_mesh_gbuffer_instanced", "fragmentShader"), "Deferred: Built-in PBR material type missing GBuffer fragment shader resource");
     Require(hasResource("fs_mesh_shadow_instanced", "fragmentShader"), "KBMAT-GRAPH-0002: Built-in PBR material type missing shadow fragment shader resource");
     Require(ValidateRenderMaterialTypeDocument(document).Succeeded(), "KBMAT-GRAPH-0004: Built-in PBR Material Type document should pass version validation");
 }
@@ -5414,8 +5416,15 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
             "MAT-71: Support matrix path statuses must match RenderMaterialGraphNodeSupportForPath");
         Require(RenderMaterialGraphNodeSupportStatus(kind) != RenderMaterialGraphNodeSupport::Unsupported,
             "KBMAT-MAT03: Every enumerated node kind must have an explicit support matrix entry");
-        Require(entry.gpuDeferredSupport != RenderMaterialGraphNodeSupport::Production,
-            "MAT-71: Deferred/GBuffer graph support must not be listed as Production before a real GBuffer writer exists");
+        const bool deferredSceneBindingNode =
+            kind == RenderMaterialGraphNodeKind::SceneDepth ||
+            kind == RenderMaterialGraphNodeKind::SceneColor ||
+            kind == RenderMaterialGraphNodeKind::SceneTexture ||
+            kind == RenderMaterialGraphNodeKind::DepthFade;
+        Require(deferredSceneBindingNode
+                ? entry.gpuDeferredSupport == RenderMaterialGraphNodeSupport::Unsupported
+                : entry.gpuDeferredSupport == entry.authoringSupport,
+            "MAT-71: Deferred/GBuffer graph support must match authoring support except scene texture/depth nodes that lack a deferred geometry binding");
     }
 
     // Cross-check: a node kind is in the canonical list iff it has a known (non-Unsupported) status.
@@ -5439,13 +5448,16 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
     Require(RenderMaterialGraphNodeSupportShortTag(RenderMaterialGraphNodeKind::Multiply).empty(),
         "KBMAT-MAT03: Production node must not be decorated with an unsupported/experimental UI tag");
 
-    // The path dimension must be live: a non-production render path downgrades supported nodes to FallbackOnly.
+    // The path dimension must be live: production render paths keep supported nodes Production.
     Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Production,
         "KBMAT-MAT03: Production node on the forward path must remain Production");
-    Require(IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath::GpuDeferred) == false,
-        "KBMAT-MAT65: Deferred/GBuffer graph path must be reported as non-production until a real GBuffer writer exists");
-    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::FallbackOnly,
-        "KBMAT-MAT65: Supported graph nodes on the Deferred path must downgrade to FallbackOnly");
+    Require(IsRenderMaterialGraphRenderPathProduction(RenderMaterialGraphRenderPath::GpuDeferred),
+        "Deferred/GBuffer graph path must be reported as production after real GBuffer writer, deferred lighting and GPU readback coverage");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::Multiply, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Production,
+        "Supported graph nodes on the Deferred path must remain Production");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneColor, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported &&
+            RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneDepth, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported,
+        "Scene color/depth graph nodes must fail closed on Deferred/GBuffer until explicit deferred bindings exist");
     Require(RenderMaterialGraphNodeSupportForPath(bogus, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Unsupported,
         "KBMAT-MAT03: Unsupported node stays Unsupported on every render path");
 
@@ -5455,7 +5467,7 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
     Require(docs.find("MAT-71") != std::string::npos &&
             docs.find("RenderMaterialGraphNodeSupport") != std::string::npos &&
             docs.find("kb_standalone_player") != std::string::npos &&
-            docs.find("GpuDeferred | FallbackOnly") != std::string::npos &&
+            docs.find("GpuDeferred` | Production") != std::string::npos &&
             docs.find("Apple/Metal | Unsupported") != std::string::npos,
         "MAT-71: Material Graph documentation must include support matrix, standalone runtime, render-path gating and Metal status");
 
@@ -5497,15 +5509,12 @@ void RunMaterialGraphUnsupportedNodeValidationTest() {
     Require(!HasGraphDiagnostic(forwardDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode),
         "KBMAT-MAT03: Production nodes on the forward path must not raise render-path support diagnostics");
 
-    // MAT-65/#52: Deferred/GBuffer is explicitly non-production until a real graph GBuffer writer exists.
-    // Every supported node is flagged as a fallback warning, not silently dropped or falsely marked production.
+    // Deferred/GBuffer is production after the real graph GBuffer writer, deferred lighting and readback proof.
     const std::vector<RenderMaterialGraphDiagnostic> deferredDiagnostics =
         ValidateRenderMaterialGraphDocument(graph, RenderMaterialGraphRenderPath::GpuDeferred);
     const RenderMaterialGraphDiagnostic* pathDiagnostic = FindGraphDiagnostic(deferredDiagnostics, RenderMaterialGraphDiagnosticKind::UnsupportedRenderPathNode);
-    Require(pathDiagnostic != nullptr && pathDiagnostic->severity == RenderMaterialGraphDiagnosticSeverity::Warning,
-        "KBMAT-MAT65: Graph nodes on the Deferred path must raise an explicit non-production warning diagnostic");
-    Require(pathDiagnostic->message.find("GpuDeferred") != std::string::npos,
-        "KBMAT-MAT65: Deferred path diagnostic must name GpuDeferred");
+    Require(pathDiagnostic == nullptr,
+        "Deferred production path must not raise a render-path support diagnostic for supported graph nodes");
 
     // Unknown node kind must still be rejected as an unsupported node.
     RenderMaterialGraphDocument unknownGraph = MakeDefaultRenderMaterialGraphDocument();

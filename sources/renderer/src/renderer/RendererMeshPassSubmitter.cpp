@@ -30,6 +30,7 @@ void RendererMeshPassSubmitter::SubmitViewportPass(
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
         .viewportId = desc.sceneDesc.target.viewport.id.value,
         .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+        .renderPass = passKind,
         .pass = meshPass,
         .stats = desc.sceneRenderer.LastSubmitStats(),
     });
@@ -56,6 +57,7 @@ void RendererMeshPassSubmitter::SubmitSelectionMask(const RendererMeshPassSubmit
     desc.passSubmitStats.push_back(SceneRenderPassSubmitStats{
         .viewportId = desc.sceneDesc.target.viewport.id.value,
         .viewportIndex = desc.sceneDesc.target.viewport.viewportIndex,
+        .renderPass = RenderPassKind::EditorSelectionMask,
         .pass = MeshPassType::SelectionId,
         .stats = desc.sceneRenderer.LastSubmitStats(),
     });

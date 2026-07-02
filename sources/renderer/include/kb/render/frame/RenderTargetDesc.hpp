@@ -9,6 +9,7 @@ enum class RenderTargetFormat : std::uint8_t {
     Backbuffer,
     Bgra8,
     Rgba8,
+    Rg16F,
     Rgba16,
     Rgba16F,
     R8,
@@ -20,6 +21,10 @@ enum class RenderTargetFormat : std::uint8_t {
 enum class RenderTargetRole : std::uint8_t {
     SceneColorHdr,
     SceneDepth,
+    GBufferAlbedo,
+    GBufferNormal,
+    GBufferMaterial,
+    GBufferDepth,
     SelectionMask,
     PostProcessColor,
     CompositeOutput,

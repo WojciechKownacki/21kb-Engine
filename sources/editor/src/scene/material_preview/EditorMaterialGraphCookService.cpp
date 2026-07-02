@@ -135,9 +135,9 @@ namespace {
     if (!config.passes.empty()) {
         return config.passes;
     }
-    // BaseOpaque (MAT-08 GPU forward), ShadowDepth (graph alpha clip) and BaseTransparent (MAT-80, now an
-    // active alpha-blended submit pass) all have a live runtime consumer.
-    return { "BaseOpaque", "ShadowDepth", "BaseTransparent" };
+    // BaseOpaque (GPU forward), GBuffer (deferred MRT), ShadowDepth (graph alpha clip) and
+    // BaseTransparent (active alpha-blended submit pass) all have a live runtime consumer.
+    return { "BaseOpaque", "GBuffer", "ShadowDepth", "BaseTransparent" };
 }
 
 struct CookCacheFootprint {

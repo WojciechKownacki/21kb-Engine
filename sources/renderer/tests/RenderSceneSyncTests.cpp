@@ -1475,10 +1475,10 @@ void RunSceneRendererReportsClusteredIblAndAdvancedLightStatsTest() {
     // shader), so the renderer must report it as a non-production path rather than falsely claim it ran.
     Require(!stats.lightingPathProduction, "KBMAT-MAT64: ClusteredForwardPlus must be reported as a non-production lighting path");
     Require(!IsSceneRenderLightingPathProduction(SceneRenderLightingPath::ClusteredForwardPlus) &&
-            !IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Deferred) &&
+            IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Deferred) &&
             !IsSceneRenderLightingPathProduction(SceneRenderLightingPath::VisibilityBuffer) &&
             IsSceneRenderLightingPathProduction(SceneRenderLightingPath::Forward),
-            "KBMAT-MAT64: only the Forward lighting path is production; clustered/deferred/visibility are non-production");
+            "KBMAT-MAT64: Forward and Deferred lighting paths are production; clustered/visibility are non-production");
     Require(stats.environmentLightingMode == static_cast<std::uint32_t>(SceneRenderEnvironmentMode::ImageBased) + 1U, "SceneRenderer validation did not report IBL environment mode");
     Require(stats.environmentLightingSampleCount == 4U, "SceneRenderer validation did not report IBL sample count");
     Require(stats.reflectionProbeCount == 2U, "SceneRenderer validation did not report reflection probes");

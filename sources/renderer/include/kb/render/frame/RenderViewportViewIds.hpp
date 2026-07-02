@@ -14,6 +14,8 @@ struct RenderViewportViewIds {
 
     std::uint16_t shadowDepth = ViewId::Invalid;
     std::uint16_t opaqueScene = ViewId::Invalid;
+    std::uint16_t gbufferGeometry = ViewId::Invalid;
+    std::uint16_t deferredLighting = ViewId::Invalid;
     std::uint16_t transparentScene = ViewId::Invalid;
     std::uint16_t selectionMask = ViewId::Invalid;
     std::uint16_t postProcessExposureReadback = ViewId::Invalid;
@@ -40,6 +42,10 @@ struct RenderViewportViewIds {
             return shadowDepth;
         case RenderPassKind::OpaqueScene:
             return opaqueScene;
+        case RenderPassKind::GBufferGeometry:
+            return gbufferGeometry;
+        case RenderPassKind::DeferredLighting:
+            return deferredLighting;
         case RenderPassKind::TransparentScene:
             return transparentScene;
         case RenderPassKind::EditorSelectionMask:
@@ -77,7 +83,9 @@ struct RenderViewportViewIds {
     }
 
     [[nodiscard]] constexpr bool IsValid() const noexcept {
-        return ViewId::IsValid(shadowDepth) && ViewId::IsValid(opaqueScene) && ViewId::IsValid(transparentScene) && ViewId::IsValid(selectionMask) &&
+        return ViewId::IsValid(shadowDepth) && ViewId::IsValid(opaqueScene) &&
+               ViewId::IsValid(gbufferGeometry) && ViewId::IsValid(deferredLighting) &&
+               ViewId::IsValid(transparentScene) && ViewId::IsValid(selectionMask) &&
                ViewId::IsValid(postProcessExposureReadback) && ViewId::IsValid(postProcessBloomPrefilter) && ViewId::IsValid(postProcessBloomBlurH) &&
                ViewId::IsValid(postProcessMotionVectors) && ViewId::IsValid(postProcessTaaResolve) &&
                ViewId::IsValid(postProcessBloomBlurV) && BloomMipViewsAreValid(postProcessBloomDownsampleViews) &&
@@ -105,6 +113,8 @@ public:
             return RenderViewportViewIds{
                 .shadowDepth = ViewId::ShadowDepth,
                 .opaqueScene = ViewId::Scene3D,
+                .gbufferGeometry = ViewId::GBufferGeometry,
+                .deferredLighting = ViewId::DeferredLighting,
                 .transparentScene = ViewId::TransparentScene,
                 .selectionMask = ViewId::EditorSelectionMask,
                 .postProcessExposureReadback = ViewId::PostProcessExposureReadback,
@@ -133,23 +143,25 @@ public:
         return RenderViewportViewIds{
             .shadowDepth = static_cast<std::uint16_t>(base),
             .opaqueScene = static_cast<std::uint16_t>(base + 1U),
-            .transparentScene = static_cast<std::uint16_t>(base + 2U),
-            .selectionMask = static_cast<std::uint16_t>(base + 3U),
-            .postProcessExposureReadback = static_cast<std::uint16_t>(base + 4U),
-            .postProcessMotionVectors = static_cast<std::uint16_t>(base + 5U),
-            .postProcessTaaResolve = static_cast<std::uint16_t>(base + 6U),
-            .postProcessBloomPrefilter = static_cast<std::uint16_t>(base + 7U),
-            .postProcessBloomBlurH = static_cast<std::uint16_t>(base + 8U),
-            .postProcessBloomBlurV = static_cast<std::uint16_t>(base + 9U),
-            .postProcessBloomDownsampleViews = BloomMipViews(base + 15U),
-            .postProcessBloomMipBlurHViews = BloomMipViews(base + 20U),
-            .postProcessBloomMipBlurVViews = BloomMipViews(base + 25U),
-            .postProcessHdrCombine = static_cast<std::uint16_t>(base + 10U),
-            .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 11U),
-            .sceneOverlays = static_cast<std::uint16_t>(base + 12U),
-            .finalComposite = static_cast<std::uint16_t>(base + 13U),
-            .editorUiComposite = static_cast<std::uint16_t>(base + 14U),
-            .editorGizmoOverlay = static_cast<std::uint16_t>(base + 30U),
+            .gbufferGeometry = static_cast<std::uint16_t>(base + 2U),
+            .deferredLighting = static_cast<std::uint16_t>(base + 3U),
+            .transparentScene = static_cast<std::uint16_t>(base + 4U),
+            .selectionMask = static_cast<std::uint16_t>(base + 5U),
+            .postProcessExposureReadback = static_cast<std::uint16_t>(base + 6U),
+            .postProcessMotionVectors = static_cast<std::uint16_t>(base + 7U),
+            .postProcessTaaResolve = static_cast<std::uint16_t>(base + 8U),
+            .postProcessBloomPrefilter = static_cast<std::uint16_t>(base + 9U),
+            .postProcessBloomBlurH = static_cast<std::uint16_t>(base + 10U),
+            .postProcessBloomBlurV = static_cast<std::uint16_t>(base + 11U),
+            .postProcessBloomDownsampleViews = BloomMipViews(base + 17U),
+            .postProcessBloomMipBlurHViews = BloomMipViews(base + 22U),
+            .postProcessBloomMipBlurVViews = BloomMipViews(base + 27U),
+            .postProcessHdrCombine = static_cast<std::uint16_t>(base + 12U),
+            .postProcessHdrFinalize = static_cast<std::uint16_t>(base + 13U),
+            .sceneOverlays = static_cast<std::uint16_t>(base + 14U),
+            .finalComposite = static_cast<std::uint16_t>(base + 15U),
+            .editorUiComposite = static_cast<std::uint16_t>(base + 16U),
+            .editorGizmoOverlay = static_cast<std::uint16_t>(base + 32U),
         };
     }
 

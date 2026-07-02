@@ -4,7 +4,9 @@
 #include "kb/render/MaterialProgramRegistry.hpp"
 #include "kb/render/RendererCapabilityReport.hpp"
 #include "kb/render/SceneRenderTarget.hpp"
+#include "kb/render/SceneDeferredLightingPass.hpp"
 #include "kb/render/SceneDepthPolicy.hpp"
+#include "kb/render/SceneGBuffer.hpp"
 #include "kb/render/frame/EditorRenderPassSubmitter.hpp"
 #include "kb/render/frame/FinalCompositePass.hpp"
 #include "kb/render/frame/RenderFramePipeline.hpp"
@@ -237,7 +239,9 @@ private:
     std::unique_ptr<SceneRenderer> sceneRenderer_;
     std::unique_ptr<ScenePostProcessRenderer> scenePostProcessRenderer_;
     std::unique_ptr<FinalCompositePass> finalCompositePass_;
+    std::unique_ptr<SceneDeferredLightingPass> deferredLightingPass_;
     SceneRenderTarget defaultSceneTarget_;
+    SceneGBuffer defaultSceneGBuffer_;
     ScenePostProcessTargets defaultPostProcessTargets_;
     ShadowMapResource defaultShadowMap_;
     RenderFramePipeline framePipeline_;

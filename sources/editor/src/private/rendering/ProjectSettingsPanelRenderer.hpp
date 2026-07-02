@@ -25,6 +25,7 @@ enum class ProjectSettingsHitKind : std::uint8_t {
     MappingContextOption, // A row inside the open dropdown list (see Hit::index).
     EnabledCheckbox,
     RenderBackendOption,
+    LightingPathOption,
     AntiAliasingMode,
     GraphicsToggle,
     MsaaOption,

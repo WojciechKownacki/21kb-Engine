@@ -60,7 +60,12 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.backendDx12Button = RECT{ rects.backendAutoButton.right + 6, graphicsRowTop + 3, rects.backendAutoButton.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
     rects.backendVulkanButton = RECT{ rects.backendDx12Button.right + 6, graphicsRowTop + 3, rects.backendDx12Button.right + 6 + kBackendButtonWidth, graphicsRowTop + kRowHeight - 3 };
 
-    const int postRowTop = graphicsRowTop + kRowHeight + kRowGap;
+    const int lightingPathRowTop = graphicsRowTop + kRowHeight + kRowGap;
+    rects.lightingPathLabel = RECT{ left, lightingPathRowTop, left + kLabelWidth, lightingPathRowTop + kRowHeight };
+    rects.lightingPathForwardButton = RECT{ left + kLabelWidth, lightingPathRowTop + 3, left + kLabelWidth + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+    rects.lightingPathDeferredButton = RECT{ rects.lightingPathForwardButton.right + 6, lightingPathRowTop + 3, rects.lightingPathForwardButton.right + 6 + kBackendButtonWidth, lightingPathRowTop + kRowHeight - 3 };
+
+    const int postRowTop = lightingPathRowTop + kRowHeight + kRowGap;
     rects.postProcessLabel = RECT{ left, postRowTop, left + kLabelWidth, postRowTop + kRowHeight };
     rects.postProcessCheckbox = CheckboxForRow(left, postRowTop);
 
@@ -121,6 +126,17 @@ RECT ProjectSettingsPanelLayout::BackendOptionButton(const ProjectSettingsPanelL
         return rects.backendDx12Button;
     case 2:
         return rects.backendVulkanButton;
+    default:
+        return {};
+    }
+}
+
+RECT ProjectSettingsPanelLayout::LightingPathOptionButton(const ProjectSettingsPanelLayoutRects& rects, int index) noexcept {
+    switch (index) {
+    case 0:
+        return rects.lightingPathForwardButton;
+    case 1:
+        return rects.lightingPathDeferredButton;
     default:
         return {};
     }

@@ -15,6 +15,8 @@ const char* MeshPassTypeName(MeshPassType pass) noexcept {
         return "Depth";
     case MeshPassType::BaseOpaque:
         return "BaseOpaque";
+    case MeshPassType::GBuffer:
+        return "GBuffer";
     case MeshPassType::BaseTransparent:
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
@@ -36,11 +38,14 @@ std::optional<MeshPassType> MeshPassForRenderPassKind(RenderPassKind kind) noexc
         return MeshPassType::ShadowDepth;
     case RenderPassKind::OpaqueScene:
         return MeshPassType::BaseOpaque;
+    case RenderPassKind::GBufferGeometry:
+        return MeshPassType::GBuffer;
     case RenderPassKind::TransparentScene:
         return MeshPassType::BaseTransparent;
     case RenderPassKind::EditorSelectionMask:
         return MeshPassType::SelectionId;
     case RenderPassKind::SceneTargetSetup:
+    case RenderPassKind::DeferredLighting:
     case RenderPassKind::PostProcessBloomPrefilter:
     case RenderPassKind::PostProcessBloomBlurH:
     case RenderPassKind::PostProcessBloomBlurV:

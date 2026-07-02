@@ -75,7 +75,16 @@ void RunGraphShaderWrapperSourceTest() {
         "KBMAT-MAT04: ShadowDepth wrapper must not depend on full surface shading output");
     Require(shadow.find("surface.alphaClipThreshold") != std::string::npos,
         "KBMAT-MAT04: ShadowDepth wrapper must still honor the graph alpha clip contract");
-    Require(opaque != shadow, "KBMAT-MAT04: Different passes must produce different wrapper sources");
+    const std::string gbuffer = BuildGraphFragmentWrapperSource(shader, "GBuffer");
+    Require(gbuffer.find("// pass:GBuffer") != std::string::npos,
+        "KBMAT-MAT04: GBuffer wrapper must carry its own pass identity");
+    Require(gbuffer.find("gl_FragData[0] = vec4(surface.baseColor.rgb, surface.alpha);") != std::string::npos &&
+            gbuffer.find("gl_FragData[1] = vec4(worldNormal * 0.5 + 0.5, 1.0);") != std::string::npos &&
+            gbuffer.find("gl_FragData[2] = vec4(clamp(surface.metallic") != std::string::npos,
+        "Deferred graph wrapper must write albedo, normal and material MRT outputs");
+    Require(gbuffer.find("KbEvaluateForwardLighting(") == std::string::npos,
+        "Deferred graph GBuffer wrapper must not light through the forward shader");
+    Require(opaque != shadow && opaque != gbuffer && shadow != gbuffer, "KBMAT-MAT04: Different passes must produce different wrapper sources");
 }
 
 void RunGraphShaderBackendMetadataTest() {
@@ -184,6 +193,18 @@ void RunGraphShaderCookProducesBinaryTest() {
     const RenderMaterialGraphShaderBinary* cachedSpirv = second.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv);
     Require(cachedSpirv != nullptr && cachedSpirv->cacheHit,
         "KBMAT-MAT04: Rebuilding an unchanged graph must hit the shader binary cache");
+
+    const RenderMaterialGraphShaderArtifactResult gbuffer = CookRenderMaterialGraphShaderArtifact(shader, backends, MakeCookRequest("GBuffer"));
+    Require(gbuffer.Succeeded() && gbuffer.artifact.has_value(), "Deferred graph GBuffer cook must produce a shader binary");
+    const RenderMaterialGraphShaderBinary* gbufferSpirv = gbuffer.artifact->FindBinary(RenderMaterialGraphShaderBackend::Spirv);
+    Require(gbufferSpirv != nullptr &&
+            (gbufferSpirv->binaryPath.find("/GBuffer/") != std::string::npos ||
+             gbufferSpirv->binaryPath.find("\\GBuffer\\") != std::string::npos),
+        "Deferred graph GBuffer cook must use a distinct GBuffer artifact directory");
+    const std::array<RenderMaterialGraphShaderArtifact, 1U> gbufferManifestArtifacts{ *gbuffer.artifact };
+    const RenderMaterialGraphShaderManifest gbufferManifest = BuildRenderMaterialGraphShaderManifest(gbufferManifestArtifacts);
+    Require(gbufferManifest.Find(shader.sourceHash, "GBuffer", RenderMaterialGraphShaderBackend::Spirv) != nullptr,
+        "Deferred graph GBuffer artifact must be discoverable in the shader manifest");
 }
 
 void RunGraphShaderCookShadercFailureTest() {

@@ -54,6 +54,9 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
         // Transparent reuses the forward shader; the alpha blend is a render state (MAT-80), not a shader.
         return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_instanced.sc");
     }
+    if (key.pass == "GBuffer") {
+        return ShaderLoader::LoadProgram("vs_mesh_instanced.sc", "fs_mesh_gbuffer_instanced.sc");
+    }
     if (key.pass == "ShadowDepth") {
         return ShaderLoader::LoadProgram("vs_mesh_shadow_instanced.sc", "fs_mesh_shadow_instanced.sc");
     }
@@ -89,6 +92,8 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
 
 [[nodiscard]] std::string GraphMeshPassName(MeshPassType pass) {
     switch (pass) {
+    case MeshPassType::GBuffer:
+        return "GBuffer";
     case MeshPassType::BaseTransparent:
         return "BaseTransparent";
     case MeshPassType::ShadowDepth:
@@ -99,7 +104,7 @@ constexpr std::uint32_t kBuiltinMeshMaterialTypeVersion = 1U;
 }
 
 [[nodiscard]] bool IsGraphCapablePass(MeshPassType pass) noexcept {
-    return pass == MeshPassType::BaseOpaque || pass == MeshPassType::BaseTransparent || pass == MeshPassType::ShadowDepth;
+    return pass == MeshPassType::BaseOpaque || pass == MeshPassType::GBuffer || pass == MeshPassType::BaseTransparent || pass == MeshPassType::ShadowDepth;
 }
 
 [[nodiscard]] std::vector<std::uint8_t> ReadShaderBinaryFile(const std::filesystem::path& path) {
@@ -137,6 +142,11 @@ bool SceneMeshPassResources::Initialize() {
     }
     shadowProgram_ = programRegistry_.Acquire(BuiltinMeshProgramKey("ShadowDepth"));
     if (!bgfx::isValid(shadowProgram_)) {
+        Shutdown();
+        return false;
+    }
+    gbufferProgram_ = programRegistry_.Acquire(BuiltinMeshProgramKey("GBuffer"));
+    if (!bgfx::isValid(gbufferProgram_)) {
         Shutdown();
         return false;
     }
@@ -301,12 +311,14 @@ void SceneMeshPassResources::Shutdown() {
     graphUniforms_.clear();
     programRegistry_.Shutdown();
     meshProgram_ = BGFX_INVALID_HANDLE;
+    gbufferProgram_ = BGFX_INVALID_HANDLE;
     selectionProgram_ = BGFX_INVALID_HANDLE;
     shadowProgram_ = BGFX_INVALID_HANDLE;
 }
 
 bool SceneMeshPassResources::IsInitialized() const noexcept {
     return bgfx::isValid(meshProgram_) &&
+        bgfx::isValid(gbufferProgram_) &&
         bgfx::isValid(shadowProgram_) &&
         bgfx::isValid(selectionProgram_) &&
         bgfx::isValid(albedoSampler_) &&
@@ -393,7 +405,7 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
     } else {
-        resolution.program = pass == MeshPassType::ShadowDepth ? shadowProgram_ : meshProgram_;
+        resolution.program = pass == MeshPassType::ShadowDepth ? shadowProgram_ : (pass == MeshPassType::GBuffer ? gbufferProgram_ : meshProgram_);
         resolution.key = BuiltinMeshProgramKey(pass == MeshPassType::ShadowDepth ? "ShadowDepth" : GraphMeshPassName(pass));
         resolution.materialProgramIdentity = MaterialProgramKeyIdentityHash(resolution.key);
         resolution.status = SceneRenderMaterialProgramStatus::Builtin;
@@ -420,8 +432,10 @@ SceneMeshPassProgramResolution SceneMeshPassResources::ResolveMeshPassProgram(co
                 resolution.program = graphHandle;
                 resolution.graphProgram = true;
                 resolution.status = SceneRenderMaterialProgramStatus::GraphReady;
-            } else {
+            } else if (pass != MeshPassType::GBuffer) {
                 resolution.fellBackToBuiltin = true;
+            } else {
+                resolution.program = BGFX_INVALID_HANDLE;
             }
         }
     }

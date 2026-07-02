@@ -166,8 +166,21 @@ struct SceneViewportRenderProfileDesc {
     return RenderProfileDesc(EditorViewportRenderProfile::Interactive);
 }
 
-[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(const SceneViewportRenderProfileDesc& renderProfile) noexcept {
+[[nodiscard]] kb::render::SceneRenderLightingPath RenderLightingPath(kb::project::ProjectSceneLightingPath path) noexcept {
+    switch (path) {
+    case kb::project::ProjectSceneLightingPath::Deferred:
+        return kb::render::SceneRenderLightingPath::Deferred;
+    case kb::project::ProjectSceneLightingPath::Forward:
+    default:
+        return kb::render::SceneRenderLightingPath::Forward;
+    }
+}
+
+[[nodiscard]] kb::render::SceneRenderLightingConfig BuildViewportLightingConfig(
+    const SceneViewportRenderProfileDesc& renderProfile,
+    kb::project::ProjectSceneLightingPath projectLightingPath) noexcept {
     kb::render::SceneRenderLightingConfig lighting{};
+    lighting.lightingPath = RenderLightingPath(projectLightingPath);
     if (!renderProfile.editorStudioLightEnabled) {
         return lighting;
     }
@@ -448,7 +461,7 @@ struct LightWireframeBasis {
         .editorLightWireframes = BuildLightWireframes(sceneContext, viewportCamera, axes, renderHeight),
         .editorSelectionBox = SelectionBoxDesc(sceneContext, panelId),
         .meshPassMode = renderProfile.meshPassMode,
-        .lightingConfig = BuildViewportLightingConfig(renderProfile),
+        .lightingConfig = BuildViewportLightingConfig(renderProfile, sceneContext.Project().sceneLightingPath),
         .postProcessSettings = postProcessSettings,
         .shadowPassEnabled = renderProfile.shadowPassEnabled && renderBackendSettings.ShadowsEnabled(),
         .postProcessEnabled = postProcessEnabled,

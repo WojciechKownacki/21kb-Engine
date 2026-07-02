@@ -22,7 +22,9 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
     ShaderManifestEntry{.name = "fs_editor_viewport_grid.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_leui_rect.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_lit.sc", .stage = ShaderStage::Fragment},
+    ShaderManifestEntry{.name = "fs_deferred_lighting.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh.sc", .stage = ShaderStage::Fragment},
+    ShaderManifestEntry{.name = "fs_mesh_gbuffer_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_selection_instanced.sc", .stage = ShaderStage::Fragment},
     ShaderManifestEntry{.name = "fs_mesh_shadow_instanced.sc", .stage = ShaderStage::Fragment},
@@ -50,8 +52,10 @@ constexpr auto kRequiredShaders = std::to_array<ShaderManifestEntry>({
 
 constexpr auto kRequiredPrograms = std::to_array<ShaderProgramManifestEntry>({
     ShaderProgramManifestEntry{.name = "scene_mesh_instanced", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_instanced.sc"},
+    ShaderProgramManifestEntry{.name = "scene_mesh_gbuffer", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_gbuffer_instanced.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_shadow", .vertexShader = "vs_mesh_shadow_instanced.sc", .fragmentShader = "fs_mesh_shadow_instanced.sc"},
     ShaderProgramManifestEntry{.name = "scene_mesh_selection", .vertexShader = "vs_mesh_instanced.sc", .fragmentShader = "fs_mesh_selection_instanced.sc"},
+    ShaderProgramManifestEntry{.name = "deferred_lighting", .vertexShader = "vs_present.sc", .fragmentShader = "fs_deferred_lighting.sc"},
     ShaderProgramManifestEntry{.name = "fullscreen_present", .vertexShader = "vs_present.sc", .fragmentShader = "fs_present_tex.sc"},
     ShaderProgramManifestEntry{.name = "post_bloom_prefilter", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_bloom_prefilter.sc"},
     ShaderProgramManifestEntry{.name = "post_bloom_blur", .vertexShader = "vs_present.sc", .fragmentShader = "fs_post_bloom_blur.sc"},
