@@ -1509,6 +1509,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should expose Texture Object by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign, "twosidedsign"),
         "KBMAT-MAT57: Palette search should expose TwoSidedSign by catalog alias");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast, "atan2 fast"),
+        "KBMAT-MAT57: Palette search should expose fast inverse trig nodes by catalog alias");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "rgba"),
         "KBMAT-MAT57: Palette search should include node pin aliases");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateBool, "constant bool"),
@@ -1532,6 +1534,13 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphContextMenuCommands(1U);
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(inputCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign),
         "KBMAT-MAT57: TwoSidedSign must be available from the Inputs palette category");
+    const std::vector<kb::editor::MaterialEditorGraphMenuCommand> utilityCommands =
+        kb::editor::MaterialEditorGraphContextMenuCommands(6U);
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcSineFast) &&
+            kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcCosineFast) &&
+            kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangentFast) &&
+            kb::editor::MaterialEditorGraphCommandInList(utilityCommands, kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast),
+        "KBMAT-MAT57: Fast inverse trig nodes must be available from the Utility palette category");
 
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
@@ -1579,6 +1588,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateTwoSidedSign);
     kb::editor::tests::Require(twoSidedSignKind.has_value() && *twoSidedSignKind == kb::render::RenderMaterialGraphNodeKind::TwoSidedSign,
         "KBMAT-MAT57: CreateTwoSidedSign command should map to the TwoSidedSign graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> atan2FastKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast);
+    kb::editor::tests::Require(atan2FastKind.has_value() && *atan2FastKind == kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast,
+        "KBMAT-MAT57: CreateArcTangent2Fast command should map to the ArcTangent2Fast graph node kind");
     std::uint32_t createdNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(*colorKind, -240, 96, &createdNodeId),
         "KBMAT-MAT57: Drag-from-pin should be able to create the selected compatible node");

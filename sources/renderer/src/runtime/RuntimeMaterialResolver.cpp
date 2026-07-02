@@ -47,6 +47,37 @@ namespace {
         : RuntimeMaterialResolveDiagnosticSeverity::Error;
 }
 
+[[nodiscard]] float FastAtanScalar(float value) noexcept {
+    const float ax = std::abs(value);
+    const float t = ax >= 1.0F ? 1.0F / std::max(ax, 0.000001F) : ax;
+    const float s = t * t;
+    float result = (((-0.0464964749F * s + 0.15931422F) * s - 0.327622764F) * s + 0.999787841F) * t;
+    if (ax >= 1.0F) {
+        result = 1.57079632679F - result;
+    }
+    return value < 0.0F ? -result : result;
+}
+
+[[nodiscard]] float FastAtan2Scalar(float y, float x) noexcept {
+    if (std::abs(x) <= 0.000001F) {
+        return y < 0.0F ? -1.57079632679F : 1.57079632679F;
+    }
+    float angle = FastAtanScalar(y / x);
+    if (x < 0.0F) {
+        angle += y < 0.0F ? -3.14159265359F : 3.14159265359F;
+    }
+    return angle;
+}
+
+[[nodiscard]] float FastAsinScalar(float value) noexcept {
+    const float clamped = std::clamp(value, -1.0F, 1.0F);
+    return FastAtan2Scalar(clamped, std::sqrt(std::max(0.0F, 1.0F - clamped * clamped)));
+}
+
+[[nodiscard]] float FastAcosScalar(float value) noexcept {
+    return 1.57079632679F - FastAsinScalar(value);
+}
+
 [[nodiscard]] std::string ParseDiagnosticMessage(const RenderMaterialAssetParseDiagnostic& diagnostic) {
     std::string message{ RenderMaterialAssetParseDiagnosticCodeName(diagnostic.code) };
     if (diagnostic.line > 0U) {
@@ -671,6 +702,10 @@ void ApplyGraphTextureSlotValuesToPbrDesc(RenderMaterialDesc& desc, const Render
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -1414,6 +1449,40 @@ struct MaterialGraphRuntimeValue {
             std::atan2(y.value[1], x.value[1]),
             std::atan2(y.value[2], x.value[2]),
             std::atan2(y.value[3], x.value[3]),
+            RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = MergeTextureProvenance(y.textureAssetId, x.textureAssetId);
+        result.authored = y.authored || x.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcSineFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(FastAsinScalar(input.value[0]), FastAsinScalar(input.value[1]), FastAsinScalar(input.value[2]), FastAsinScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcCosineFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(FastAcosScalar(input.value[0]), FastAcosScalar(input.value[1]), FastAcosScalar(input.value[2]), FastAcosScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcTangentFast: {
+        const MaterialGraphRuntimeValue input = EvaluateGraphInput(materialAsset, node, "value", RuntimeValue(0.0F, false), stack);
+        result = RuntimeValue(FastAtanScalar(input.value[0]), FastAtanScalar(input.value[1]), FastAtanScalar(input.value[2]), FastAtanScalar(input.value[3]), RenderMaterialGraphPinType::Float4);
+        result.textureAssetId = input.textureAssetId;
+        result.authored = input.authored;
+        break;
+    }
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast: {
+        const MaterialGraphRuntimeValue y = EvaluateGraphInput(materialAsset, node, "y", RuntimeValue(0.0F, false), stack);
+        const MaterialGraphRuntimeValue x = EvaluateGraphInput(materialAsset, node, "x", RuntimeValue(1.0F, false), stack);
+        result = RuntimeValue(
+            FastAtan2Scalar(y.value[0], x.value[0]),
+            FastAtan2Scalar(y.value[1], x.value[1]),
+            FastAtan2Scalar(y.value[2], x.value[2]),
+            FastAtan2Scalar(y.value[3], x.value[3]),
             RenderMaterialGraphPinType::Float4);
         result.textureAssetId = MergeTextureProvenance(y.textureAssetId, x.textureAssetId);
         result.authored = y.authored || x.authored;

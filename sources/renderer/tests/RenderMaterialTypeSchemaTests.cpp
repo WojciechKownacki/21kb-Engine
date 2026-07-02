@@ -1769,6 +1769,22 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Acos") == RenderMaterialGraphNodeKind::ArcCosine, "Material graph advanced math should parse Acos alias");
     Require(ParseRenderMaterialGraphNodeKind("Atan") == RenderMaterialGraphNodeKind::ArcTangent, "Material graph advanced math should parse Atan alias");
     Require(ParseRenderMaterialGraphNodeKind("Atan2") == RenderMaterialGraphNodeKind::ArcTangent2, "Material graph advanced math should parse Atan2 alias");
+    Require(ParseRenderMaterialGraphNodeKind("AsinFast") == RenderMaterialGraphNodeKind::ArcSineFast, "Material graph fast trig should parse AsinFast alias");
+    Require(ParseRenderMaterialGraphNodeKind("AcosFast") == RenderMaterialGraphNodeKind::ArcCosineFast, "Material graph fast trig should parse AcosFast alias");
+    Require(ParseRenderMaterialGraphNodeKind("AtanFast") == RenderMaterialGraphNodeKind::ArcTangentFast, "Material graph fast trig should parse AtanFast alias");
+    Require(ParseRenderMaterialGraphNodeKind("Atan2Fast") == RenderMaterialGraphNodeKind::ArcTangent2Fast, "Material graph fast trig should parse Atan2Fast alias");
+    Require(RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind::ArcSineFast) == "ArcSineFast", "Material graph fast trig names should round-trip");
+    Require(RenderMaterialGraphNodeSupportStatus(RenderMaterialGraphNodeKind::ArcTangent2Fast) == RenderMaterialGraphNodeSupport::Production,
+        "Material graph fast trig nodes should be production-supported once they have shader codegen");
+    Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::ArcSineFast, "value") &&
+            IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::ArcSineFast, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ArcSineFast, "value", true) == RenderMaterialGraphPinType::Float4,
+        "Material graph fast unary trig should expose a Float4 value input/output schema");
+    Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::ArcTangent2Fast, "y") &&
+            IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::ArcTangent2Fast, "x") &&
+            IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::ArcTangent2Fast, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::ArcTangent2Fast, "value", true) == RenderMaterialGraphPinType::Float4,
+        "Material graph fast atan2 should expose y/x inputs and a Float4 value output");
 
     std::istringstream input{
         "version 1\n"
@@ -2766,6 +2782,44 @@ void RunMaterialGraphShaderSourceCompilerMvpTest() {
     Require(advancedMathResult.shader.source.find("asin(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcSine expression");
     Require(advancedMathResult.shader.source.find("acos(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcCosine expression");
     Require(advancedMathResult.shader.source.find("atan(") != std::string::npos, "KBMAT-GRAPH-0202: Shader compiler should emit ArcTangent expression");
+
+    RenderMaterialGraphDocument fastTrigGraph = MakeDefaultRenderMaterialGraphDocument();
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" } });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ArcSineFast });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.5" } });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 5U, .kind = RenderMaterialGraphNodeKind::ArcCosineFast });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::ArcTangentFast });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1" } });
+    fastTrigGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 10U, .kind = RenderMaterialGraphNodeKind::ArcTangent2Fast });
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 2U, "value", RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcSineFast, 3U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "metallic"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcCosineFast, 5U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "emissive"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 6U, "value", RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangentFast, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "occlusion"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 8U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "y"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ConstantScalar, 9U, "value", RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "x"));
+    fastTrigGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::ArcTangent2Fast, 10U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult fastTrigResult = CompileRenderMaterialGraphToShaderSource(
+        fastTrigGraph,
+        RenderMaterialGraphBuildContext{ .assetId = 0x0205U, .sourcePath = "/Game/Materials/CompiledFastTrig.kbmat" });
+    Require(fastTrigResult.Succeeded(), "KBMAT-GRAPH-0202: Fast trig graph should compile to shader source");
+    const auto countFastTrigSymbol = [](std::string_view source, std::string_view symbol) noexcept {
+        std::uint32_t count = 0U;
+        std::size_t offset = 0U;
+        while ((offset = source.find(symbol, offset)) != std::string_view::npos) {
+            ++count;
+            offset += symbol.size();
+        }
+        return count;
+    };
+    Require(fastTrigResult.shader.source.find("vec4 kbAtanFast") != std::string::npos, "KBMAT-GRAPH-0202: Fast trig shader should emit the shared atan helper");
+    Require(countFastTrigSymbol(fastTrigResult.shader.source, "kbAsinFast(") >= 3U, "KBMAT-GRAPH-0202: Fast trig shader should emit ArcSineFast codegen");
+    Require(countFastTrigSymbol(fastTrigResult.shader.source, "kbAcosFast(") >= 2U, "KBMAT-GRAPH-0202: Fast trig shader should emit ArcCosineFast codegen");
+    Require(countFastTrigSymbol(fastTrigResult.shader.source, "kbAtanFast(") >= 3U, "KBMAT-GRAPH-0202: Fast trig shader should emit ArcTangentFast codegen");
+    Require(countFastTrigSymbol(fastTrigResult.shader.source, "kbAtan2Fast(") >= 3U, "KBMAT-GRAPH-0202: Fast trig shader should emit ArcTangent2Fast codegen");
 
     RenderMaterialGraphDocument textureGraph = MakeDefaultRenderMaterialGraphDocument();
     textureGraph.nodes.push_back(RenderMaterialGraphNode{

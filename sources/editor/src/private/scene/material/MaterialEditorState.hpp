@@ -118,6 +118,10 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateArcCosine,
     CreateArcTangent,
     CreateArcTangent2,
+    CreateArcSineFast,
+    CreateArcCosineFast,
+    CreateArcTangentFast,
+    CreateArcTangent2Fast,
     CreateClamp,
     CreateLerp,
     CreateNormalUnpack,
@@ -3036,6 +3040,10 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
         case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
         case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+        case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+        case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+        case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
+        case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
         case kb::render::RenderMaterialGraphNodeKind::Clamp:
         case kb::render::RenderMaterialGraphNodeKind::Lerp:
         case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:

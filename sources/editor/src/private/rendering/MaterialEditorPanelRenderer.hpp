@@ -284,6 +284,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
         return SIZE{ 150, 62 };
     case kb::render::RenderMaterialGraphNodeKind::Power:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case kb::render::RenderMaterialGraphNodeKind::Desaturate:
         return SIZE{ 166, 62 };
     case kb::render::RenderMaterialGraphNodeKind::OneMinus:
@@ -324,6 +325,9 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::ArcSine:
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
     case kb::render::RenderMaterialGraphNodeKind::NormalUnpack:
         return SIZE{ 142, 54 };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
@@ -1047,8 +1051,12 @@ inline std::vector<std::string> MaterialEditorPanelInputPins(kb::render::RenderM
     case kb::render::RenderMaterialGraphNodeKind::ArcSine:
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
         return { "value" };
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
         return { "y", "x" };
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
         return { "value", "min", "max" };
@@ -1114,6 +1122,10 @@ inline std::vector<std::string> MaterialEditorPanelOutputPins(kb::render::Render
     case kb::render::RenderMaterialGraphNodeKind::ArcCosine:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent:
     case kb::render::RenderMaterialGraphNodeKind::ArcTangent2:
+    case kb::render::RenderMaterialGraphNodeKind::ArcSineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcCosineFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangentFast:
+    case kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case kb::render::RenderMaterialGraphNodeKind::Clamp:
     case kb::render::RenderMaterialGraphNodeKind::Lerp:
         return { "value" };
@@ -2019,6 +2031,10 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
             MaterialEditorGraphMenuCommand::CreateArcCosine,
             MaterialEditorGraphMenuCommand::CreateArcTangent,
             MaterialEditorGraphMenuCommand::CreateArcTangent2,
+            MaterialEditorGraphMenuCommand::CreateArcSineFast,
+            MaterialEditorGraphMenuCommand::CreateArcCosineFast,
+            MaterialEditorGraphMenuCommand::CreateArcTangentFast,
+            MaterialEditorGraphMenuCommand::CreateArcTangent2Fast,
             MaterialEditorGraphMenuCommand::CreateNormalize,
             MaterialEditorGraphMenuCommand::CreateNormalUnpack,
             MaterialEditorGraphMenuCommand::CreateCustomCode,
@@ -2146,6 +2162,10 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateArcCosine: return "Acos";
     case MaterialEditorGraphMenuCommand::CreateArcTangent: return "Atan";
     case MaterialEditorGraphMenuCommand::CreateArcTangent2: return "Atan2";
+    case MaterialEditorGraphMenuCommand::CreateArcSineFast: return "Asin Fast";
+    case MaterialEditorGraphMenuCommand::CreateArcCosineFast: return "Acos Fast";
+    case MaterialEditorGraphMenuCommand::CreateArcTangentFast: return "Atan Fast";
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2Fast: return "Atan2 Fast";
     case MaterialEditorGraphMenuCommand::CreateClamp: return "Clamp";
     case MaterialEditorGraphMenuCommand::CreateLerp: return "Lerp";
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return "Normal Unpack";
@@ -2303,6 +2323,10 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateArcCosine: return kb::render::RenderMaterialGraphNodeKind::ArcCosine;
     case MaterialEditorGraphMenuCommand::CreateArcTangent: return kb::render::RenderMaterialGraphNodeKind::ArcTangent;
     case MaterialEditorGraphMenuCommand::CreateArcTangent2: return kb::render::RenderMaterialGraphNodeKind::ArcTangent2;
+    case MaterialEditorGraphMenuCommand::CreateArcSineFast: return kb::render::RenderMaterialGraphNodeKind::ArcSineFast;
+    case MaterialEditorGraphMenuCommand::CreateArcCosineFast: return kb::render::RenderMaterialGraphNodeKind::ArcCosineFast;
+    case MaterialEditorGraphMenuCommand::CreateArcTangentFast: return kb::render::RenderMaterialGraphNodeKind::ArcTangentFast;
+    case MaterialEditorGraphMenuCommand::CreateArcTangent2Fast: return kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast;
     case MaterialEditorGraphMenuCommand::CreateClamp: return kb::render::RenderMaterialGraphNodeKind::Clamp;
     case MaterialEditorGraphMenuCommand::CreateLerp: return kb::render::RenderMaterialGraphNodeKind::Lerp;
     case MaterialEditorGraphMenuCommand::CreateNormalUnpack: return kb::render::RenderMaterialGraphNodeKind::NormalUnpack;
@@ -2419,6 +2443,12 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateArcSineFast ||
+        command == MaterialEditorGraphMenuCommand::CreateArcCosineFast ||
+        command == MaterialEditorGraphMenuCommand::CreateArcTangentFast ||
+        command == MaterialEditorGraphMenuCommand::CreateArcTangent2Fast) {
+        haystack += " fast approximate approximation material expression";
     }
     const std::string normalizedHaystack = MaterialEditorGraphPaletteNormalize(haystack);
     if (normalizedHaystack.find(normalizedQuery) != std::string::npos) {

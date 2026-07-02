@@ -248,6 +248,10 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
@@ -319,6 +323,10 @@ void AddDiagnostic(
     case RenderMaterialGraphNodeKind::ArcCosine:
     case RenderMaterialGraphNodeKind::ArcTangent:
     case RenderMaterialGraphNodeKind::ArcTangent2:
+    case RenderMaterialGraphNodeKind::ArcSineFast:
+    case RenderMaterialGraphNodeKind::ArcCosineFast:
+    case RenderMaterialGraphNodeKind::ArcTangentFast:
+    case RenderMaterialGraphNodeKind::ArcTangent2Fast:
     case RenderMaterialGraphNodeKind::Clamp:
     case RenderMaterialGraphNodeKind::Lerp:
     case RenderMaterialGraphNodeKind::NormalUnpack:
