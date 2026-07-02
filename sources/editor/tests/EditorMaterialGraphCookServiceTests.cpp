@@ -95,6 +95,54 @@ using kb::render::RenderMaterialGraphNodeKind;
     return material;
 }
 
+[[nodiscard]] RenderMaterialAssetData MakeShadingPathSwitchMaterial() {
+    RenderMaterialAssetData material{};
+    material.materialType = "graph";
+    material.materialTypeVersion = 1U;
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 40,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "1 0 0 1" },
+    });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 3U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 120,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 1 0 1" },
+    });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 4U,
+        .kind = RenderMaterialGraphNodeKind::ConstantColor,
+        .positionX = 80,
+        .positionY = 200,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0 0 1 1" },
+    });
+    material.graph.nodes.push_back(RenderMaterialGraphNode{
+        .id = 5U,
+        .kind = RenderMaterialGraphNodeKind::ShadingPathSwitch,
+        .positionX = 280,
+        .positionY = 120,
+    });
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantColor, 2U, "rgba",
+        RenderMaterialGraphNodeKind::ShadingPathSwitch, 5U, "forward"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantColor, 3U, "rgba",
+        RenderMaterialGraphNodeKind::ShadingPathSwitch, 5U, "forwardPlus"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ConstantColor, 4U, "rgba",
+        RenderMaterialGraphNodeKind::ShadingPathSwitch, 5U, "deferred"));
+    material.graph.links.push_back(MakeLink(
+        RenderMaterialGraphNodeKind::ShadingPathSwitch, 5U, "result",
+        RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+    return material;
+}
+
 [[nodiscard]] RenderMaterialAssetData MakeMaterialWithoutOutput() {
     RenderMaterialAssetData material{};
     material.materialType = "graph";
@@ -286,6 +334,45 @@ void RunQualityVariantCookContextTest() {
         "KBMAT-MAT52: Quality preview variants must stage distinct shader binaries");
 }
 
+void RunShadingPathVariantCookContextTest() {
+    const EditorMaterialGraphCookConfig config = MakeCookConfig("mat52_shading_path_preview");
+    std::error_code error;
+    std::filesystem::remove_all(config.cacheRoot, error);
+
+    EditorMaterialGraphCookService service{ config };
+    const kb::assets::AssetId assetId{ 0x5218U };
+    const RenderMaterialAssetData material = MakeShadingPathSwitchMaterial();
+
+    const auto cookPath = [&service, assetId, &material](kb::render::RenderMaterialGraphShadingPath path) {
+        return service.CookNow(
+            assetId,
+            material,
+            kb::render::RenderMaterialGraphBuildContext{
+                .assetId = assetId.value,
+                .shadingPath = path,
+            });
+    };
+
+    const EditorMaterialGraphCookResult forward = cookPath(kb::render::RenderMaterialGraphShadingPath::Forward);
+    const EditorMaterialGraphCookResult forwardPlus = cookPath(kb::render::RenderMaterialGraphShadingPath::ForwardPlus);
+    const EditorMaterialGraphCookResult deferred = cookPath(kb::render::RenderMaterialGraphShadingPath::Deferred);
+
+    Require(forward.HasGpuProgram() && forwardPlus.HasGpuProgram() && deferred.HasGpuProgram(),
+        "KBMAT-MAT52: Forward, Forward+ and Deferred shading-path preview variants must cook real GPU binaries");
+    Require(forward.graphSourceHash != 0U && forwardPlus.graphSourceHash != 0U && deferred.graphSourceHash != 0U,
+        "KBMAT-MAT52: Shading-path preview variants must expose non-zero graph shader hashes");
+    Require(forward.graphSourceHash != forwardPlus.graphSourceHash &&
+            forward.graphSourceHash != deferred.graphSourceHash &&
+            forwardPlus.graphSourceHash != deferred.graphSourceHash,
+        "KBMAT-MAT52: Cook service must include Forward/Forward+/Deferred shading path in the graph shader hash");
+    Require(!forward.passes.empty() && !forwardPlus.passes.empty() && !deferred.passes.empty(),
+        "KBMAT-MAT52: Shading-path preview variants must produce pass cook telemetry");
+    Require(forward.passes.front().binaryPath != forwardPlus.passes.front().binaryPath &&
+            forward.passes.front().binaryPath != deferred.passes.front().binaryPath &&
+            forwardPlus.passes.front().binaryPath != deferred.passes.front().binaryPath,
+        "KBMAT-MAT52: Forward, Forward+ and Deferred shading-path preview variants must stage distinct shader binaries");
+}
+
 void RunAsyncDebouncedCookTest() {
     const EditorMaterialGraphCookConfig config = MakeCookConfig("mat30_async");
     std::error_code error;
@@ -387,6 +474,7 @@ void RunEditorMaterialGraphCookServiceTests() {
     RunSynchronousCookProducesBinaryTest();
     RunCookBudgetTelemetryWarningTest();
     RunQualityVariantCookContextTest();
+    RunShadingPathVariantCookContextTest();
     RunAsyncDebouncedCookTest();
     RunHotReloadLastGoodTest();
 #endif
