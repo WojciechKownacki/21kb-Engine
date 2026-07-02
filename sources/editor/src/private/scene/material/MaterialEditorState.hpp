@@ -43,6 +43,16 @@ enum class MaterialEditorParameterGroup : std::uint8_t {
     Advanced,
 };
 
+struct MaterialEditorGraphDiagnosticMarker {
+    std::uint32_t nodeId = 0U;
+    std::uint32_t linkId = 0U;
+    std::uint32_t pinId = 0U;
+    std::string pin;
+    kb::render::RenderMaterialGraphDiagnosticSeverity severity = kb::render::RenderMaterialGraphDiagnosticSeverity::Error;
+    kb::render::RenderMaterialGraphDiagnosticKind kind = kb::render::RenderMaterialGraphDiagnosticKind::UnsupportedNode;
+    std::string message;
+};
+
 enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     None,
     CreateTextureSample,
@@ -412,6 +422,10 @@ public:
 
     [[nodiscard]] bool DiagnosticsHaveError() const noexcept {
         return diagnosticsHaveError_;
+    }
+
+    [[nodiscard]] const std::vector<MaterialEditorGraphDiagnosticMarker>& GraphDiagnosticMarkers() const noexcept {
+        return graphDiagnosticMarkers_;
     }
 
     [[nodiscard]] kb::render::RenderMaterialGraphRuntimeState GraphRuntimeState() const noexcept {
@@ -1860,6 +1874,7 @@ public:
         findResults_.clear();
         CloseGraphNodeEnumDropdown();
         diagnostics_.clear();
+        graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = false;
         materialStats_ = {};
         shaderViewer_ = {};
@@ -2048,6 +2063,7 @@ public:
 
     void SetDiagnostics(std::vector<std::string> diagnostics, bool hasError) {
         diagnostics_ = std::move(diagnostics);
+        graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = hasError;
     }
 
@@ -3886,6 +3902,7 @@ private:
 
     void RefreshGraphDiagnostics() {
         diagnostics_.clear();
+        graphDiagnosticMarkers_.clear();
         diagnosticsHaveError_ = false;
         materialStats_ = {};
         shaderViewer_ = {};
@@ -3895,8 +3912,20 @@ private:
         }
         const std::vector<kb::render::RenderMaterialGraphDiagnostic> graphDiagnostics = kb::render::ValidateRenderMaterialAssetGraphDiagnostics(*workingCopy_);
         diagnostics_.reserve(graphDiagnostics.size());
+        graphDiagnosticMarkers_.reserve(graphDiagnostics.size());
         for (const kb::render::RenderMaterialGraphDiagnostic& diagnostic : graphDiagnostics) {
             diagnostics_.push_back(GraphDiagnosticLine(diagnostic));
+            if (diagnostic.nodeId != 0U) {
+                graphDiagnosticMarkers_.push_back(MaterialEditorGraphDiagnosticMarker{
+                    .nodeId = diagnostic.nodeId,
+                    .linkId = diagnostic.linkId,
+                    .pinId = diagnostic.pinId,
+                    .pin = diagnostic.pin,
+                    .severity = diagnostic.severity,
+                    .kind = diagnostic.kind,
+                    .message = diagnostic.message,
+                });
+            }
             if (diagnostic.severity == kb::render::RenderMaterialGraphDiagnosticSeverity::Error) {
                 diagnosticsHaveError_ = true;
             }
@@ -3979,6 +4008,7 @@ private:
     std::array<bool, 4U> instanceOverrideGroupExpanded_{ true, true, true, true };
     std::vector<MaterialEditorParameter> parameters_;
     std::vector<std::string> diagnostics_;
+    std::vector<MaterialEditorGraphDiagnosticMarker> graphDiagnosticMarkers_;
     bool diagnosticsHaveError_ = false;
     MaterialEditorMaterialStatsModel materialStats_{};
     MaterialEditorShaderViewerModel shaderViewer_{};
