@@ -5105,14 +5105,35 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForPath(RenderMater
     return status;
 }
 
+[[nodiscard]] static bool IsDeferredSceneBindingNode(RenderMaterialGraphNodeKind kind) noexcept {
+    return kind == RenderMaterialGraphNodeKind::SceneDepth ||
+        kind == RenderMaterialGraphNodeKind::SceneColor ||
+        kind == RenderMaterialGraphNodeKind::SceneTexture ||
+        kind == RenderMaterialGraphNodeKind::DepthFade;
+}
+
+[[nodiscard]] static RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportForDocumentPath(
+    const RenderMaterialGraphDocument& graph,
+    RenderMaterialGraphNodeKind kind,
+    RenderMaterialGraphRenderPath path) noexcept {
+    const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(kind, path);
+    if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported &&
+        path == RenderMaterialGraphRenderPath::GpuDeferred &&
+        IsDeferredSceneBindingNode(kind) &&
+        IsRenderMaterialGraphBlendModeTransparent(ParseRenderMaterialGraphBlendMode(graph.blendMode))) {
+        return RenderMaterialGraphNodeSupportStatus(kind);
+    }
+    return pathSupport;
+}
+
 static std::string_view RenderMaterialGraphNodeSupportMatrixNote(RenderMaterialGraphNodeKind kind) noexcept {
     switch (kind) {
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
-        return "Requires the transparent pass scene-depth binding; GpuDeferred GBuffer geometry currently rejects it until a deferred scene-depth binding is defined.";
+        return "Requires the transparent pass scene-depth binding; GpuDeferred accepts transparent materials and rejects opaque/masked GBuffer geometry.";
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
-        return "Requires the scene-color snapshot binding; GpuDeferred GBuffer geometry currently rejects it until a deferred scene-color binding is defined.";
+        return "Requires the transparent pass scene-color snapshot binding; GpuDeferred accepts transparent materials and rejects opaque/masked GBuffer geometry.";
     case RenderMaterialGraphNodeKind::CustomCode:
         return "Production when custom pin declarations validate; invalid code reports shader-generation diagnostics.";
     case RenderMaterialGraphNodeKind::MaterialFunctionCall:
@@ -6713,7 +6734,7 @@ std::vector<RenderMaterialGraphDiagnostic> ValidateRenderMaterialGraphDocument(
                 "Material graph contains an unsupported node kind.");
             continue;
         }
-        const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForPath(node.kind, renderPath);
+        const RenderMaterialGraphNodeSupport pathSupport = RenderMaterialGraphNodeSupportForDocumentPath(graph, node.kind, renderPath);
         if (pathSupport == RenderMaterialGraphNodeSupport::Unsupported) {
             AddGraphDiagnostic(
                 diagnostics,
