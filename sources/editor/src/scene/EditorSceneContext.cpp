@@ -2657,6 +2657,27 @@ bool EditorSceneContext::DistributeSelectedMaterialGraphNodes(kb::assets::AssetI
     return true;
 }
 
+bool EditorSceneContext::PromoteSelectedMaterialGraphNodeToParameter(kb::assets::AssetId id) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value()) {
+        return false;
+    }
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    std::uint32_t promotedNodeId = 0U;
+    if (!materialEditor_.PromoteSelectedGraphNodeToParameter(&promotedNodeId)) {
+        console_.Warning("Materials", "Select one constant scalar/vector/color node to promote to a parameter.");
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(id, "Promote Material Graph Node To Parameter", std::move(before), beforeSelectedNodeId, std::move(beforeSelectedNodeIds), beforeSelectedCommentId)) {
+        console_.Warning("Materials", "Material graph parameter promotion could not be recorded.");
+        return false;
+    }
+    console_.Info("Materials", "Promoted material graph node #" + std::to_string(promotedNodeId) + " to a parameter.");
+    return true;
+}
+
 int EditorSceneContext::MaterialGraphNodeOffsetX(kb::assets::AssetId assetId, std::uint32_t nodeId) const noexcept {
     static_cast<void>(assetId);
     static_cast<void>(nodeId);
@@ -4311,6 +4332,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return DistributeSelectedMaterialGraphNodes(id, MaterialEditorGraphDistributeAxis::Horizontal);
     case MaterialEditorGraphMenuCommand::DistributeVertical:
         return DistributeSelectedMaterialGraphNodes(id, MaterialEditorGraphDistributeAxis::Vertical);
+    case MaterialEditorGraphMenuCommand::PromoteToParameter:
+        return PromoteSelectedMaterialGraphNodeToParameter(id);
     case MaterialEditorGraphMenuCommand::DisconnectSelected:
         return DisconnectSelectedMaterialGraphNodeLinks(id);
     case MaterialEditorGraphMenuCommand::DeleteSelected:

@@ -2,6 +2,7 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "engine/scene/SceneEntity.hpp"
+#include "scene/material/MaterialEditorState.hpp"
 
 #include <filesystem>
 #include <string>
@@ -14,6 +15,7 @@ enum class EditorPointerDragKind {
     HierarchyEntity,
     PrefabAsset,
     AssetFolder,
+    MaterialGraphPaletteCommand,
 };
 
 struct EditorPointerDragState {
@@ -33,6 +35,8 @@ struct EditorPointerDragState {
     bool assetAssignsMaterialGraph = false;
     bool assetAssignsTexture = false;
     kb::scene::SceneEntity meshScenePreview{};
+    kb::assets::AssetId materialGraphAssetId{};
+    MaterialEditorGraphMenuCommand materialGraphCommand = MaterialEditorGraphMenuCommand::None;
     bool meshScenePreviewCommitted = false;
     bool meshPreviewUpdatePending = false;
     void* dragSourceWindow = nullptr;
@@ -68,6 +72,8 @@ struct EditorPointerDragState {
         assetAssignsMaterialGraph = false;
         assetAssignsTexture = false;
         meshScenePreview = {};
+        materialGraphAssetId = {};
+        materialGraphCommand = MaterialEditorGraphMenuCommand::None;
         meshScenePreviewCommitted = false;
         meshPreviewUpdatePending = false;
         dragSourceWindow = nullptr;

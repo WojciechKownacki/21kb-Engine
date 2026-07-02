@@ -38,6 +38,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace kb::editor {
 namespace {
@@ -359,10 +360,22 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                 sceneContext_.SetMaterialGraphCanvasViewport(
                     MaterialEditorPanelRectWidth(menuLayout.graphCanvas),
                     MaterialEditorPanelRectHeight(menuLayout.graphCanvas));
-                if (MaterialEditorGraphContextMenuCommandEnabled(
-                        menuHit.command,
-                        sceneContext_.SelectedMaterialGraphNodeIds().size(),
-                        sceneContext_.SelectedMaterialGraphCommentId() != 0U)) {
+                const bool commandEnabled = MaterialEditorGraphContextMenuCommandEnabled(
+                    menuHit.command,
+                    sceneContext_.SelectedMaterialGraphNodeIds().size(),
+                    sceneContext_.SelectedMaterialGraphCommentId() != 0U);
+                if (commandEnabled && MaterialEditorGraphMenuCommandCreatesCanvasObject(menuHit.command)) {
+                    pointerDrag_.Clear();
+                    pointerDrag_.kind = EditorPointerDragKind::MaterialGraphPaletteCommand;
+                    pointerDrag_.materialGraphAssetId = materialId;
+                    pointerDrag_.materialGraphCommand = menuHit.command;
+                    pointerDrag_.assetLabel = std::string{ MaterialEditorGraphContextMenuCommandName(menuHit.command) };
+                    pointerDrag_.startX = x;
+                    pointerDrag_.startY = y;
+                    pointerDrag_.x = x;
+                    pointerDrag_.y = y;
+                    SetCapture(messageWindow);
+                } else if (commandEnabled) {
                     static_cast<void>(sceneContext_.ExecuteMaterialGraphContextMenuCommand(menuHit.command));
                 }
                 EditorWindowInvalidator::InvalidateMainAndSource(mainWindow_, messageWindow);

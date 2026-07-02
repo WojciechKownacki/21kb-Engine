@@ -298,6 +298,7 @@ public:
     [[nodiscard]] bool SelectMaterialGraphDownstream();
     [[nodiscard]] bool AlignSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphAlignMode mode);
     [[nodiscard]] bool DistributeSelectedMaterialGraphNodes(kb::assets::AssetId id, MaterialEditorGraphDistributeAxis axis);
+    [[nodiscard]] bool PromoteSelectedMaterialGraphNodeToParameter(kb::assets::AssetId id);
     [[nodiscard]] bool BeginMaterialGraphNodeDrag(kb::assets::AssetId assetId, std::uint32_t nodeId, int x, int y);
     [[nodiscard]] bool DragMaterialGraphNode(int x, int y);
     [[nodiscard]] bool EndMaterialGraphNodeDrag();
