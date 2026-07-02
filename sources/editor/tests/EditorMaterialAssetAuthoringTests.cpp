@@ -1507,6 +1507,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "KBMAT-MAT57: Palette search should find Texture Sample by a fragmented query");
     kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateColor, "rgba"),
         "KBMAT-MAT57: Palette search should include node pin aliases");
+    kb::editor::tests::Require(kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateBool, "constant bool"),
+        "KBMAT-MAT57: Palette search should expose Constant Bool");
     kb::editor::tests::Require(!kb::editor::MaterialEditorGraphPaletteCommandMatches(kb::editor::MaterialEditorGraphMenuCommand::CreateTextureParameter, "world position"),
         "KBMAT-MAT57: Palette search should reject unrelated commands");
 
@@ -1524,10 +1526,19 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphCompatibleCommands(graph, 1U, "baseColor", false);
     kb::editor::tests::Require(
         kb::editor::MaterialEditorGraphCommandInList(baseColorCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateColor) &&
+            kb::editor::MaterialEditorGraphCommandInList(baseColorCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateBool) &&
             kb::editor::MaterialEditorGraphCommandInList(baseColorCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureSample) &&
             kb::editor::MaterialEditorGraphCommandInList(baseColorCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateReroute) &&
             !kb::editor::MaterialEditorGraphCommandInList(baseColorCompatible, kb::editor::MaterialEditorGraphMenuCommand::CreateTextureParameter),
         "KBMAT-MAT57: Drag-from-input palette should list only commands with compatible outputs");
+    const std::optional<std::string> boolOutputPin = kb::editor::MaterialEditorGraphCompatibleCommandPin(
+        graph,
+        1U,
+        "baseColor",
+        false,
+        kb::editor::MaterialEditorGraphMenuCommand::CreateBool);
+    kb::editor::tests::Require(boolOutputPin.has_value() && *boolOutputPin == "value",
+        "KBMAT-MAT57: Drag-from-input palette should select Constant Bool's value output pin for auto-connect");
     const std::optional<std::string> colorOutputPin = kb::editor::MaterialEditorGraphCompatibleCommandPin(
         graph,
         1U,
@@ -1544,6 +1555,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
     const std::optional<kb::render::RenderMaterialGraphNodeKind> colorKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateColor);
     kb::editor::tests::Require(colorKind.has_value(), "KBMAT-MAT57: CreateColor command should map to a graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> boolKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateBool);
+    kb::editor::tests::Require(boolKind.has_value() && *boolKind == kb::render::RenderMaterialGraphNodeKind::ConstantBool,
+        "KBMAT-MAT57: CreateBool command should map to the ConstantBool graph node kind");
     std::uint32_t createdNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(*colorKind, -240, 96, &createdNodeId),
         "KBMAT-MAT57: Drag-from-pin should be able to create the selected compatible node");
@@ -1873,6 +1888,32 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     const std::optional<float> clampedScalar = materialEditor.GraphConstantComponentValue(scalarNodeId, 0U);
     kb::editor::tests::Require(clampedScalar.has_value() && *clampedScalar == 2.0F,
         "KBMAT-MAT58: Slider edits should clamp to the metadata max");
+
+    std::uint32_t boolNodeId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantBool, -420, 188, &boolNodeId),
+        "KBMAT-MAT58: Material Editor should create a bool constant for typed property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
+    kb::editor::tests::Require(boolProperties.size() == 1U &&
+            boolProperties[0].kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            boolProperties[0].type == kb::render::RenderMaterialParameterType::Bool &&
+            boolProperties[0].value.text == "false" &&
+            boolProperties[0].options.size() == 2U &&
+            boolProperties[0].options[0].value == "false" &&
+            boolProperties[0].options[1].value == "true",
+        "KBMAT-MAT58: ConstantBool should expose a typed False/True property model");
+    materialEditor.ToggleGraphNodeEnumDropdown(boolNodeId, "constant.bool");
+    boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
+    kb::editor::tests::Require(boolProperties[0].dropdownOpen,
+        "KBMAT-MAT58: ConstantBool property should track dropdown open state");
+    kb::editor::tests::Require(materialEditor.SetGraphNodeEnumValue(boolNodeId, "constant.bool", "true"),
+        "KBMAT-MAT58: ConstantBool enum edit should update node metadata");
+    boolProperties = materialEditor.GraphNodeProperties(boolNodeId);
+    const kb::render::RenderMaterialGraphNode* boolNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, boolNodeId);
+    kb::editor::tests::Require(boolNode != nullptr &&
+            boolNode->parameter.defaultValueHint == "true" &&
+            boolProperties[0].value.text == "true",
+        "KBMAT-MAT58: ConstantBool enum edit should persist the selected bool value");
 
     std::uint32_t uvNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Uv, -220, 220, &uvNodeId),
