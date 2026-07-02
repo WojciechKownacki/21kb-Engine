@@ -1,5 +1,6 @@
 #include "scene/EditorSceneContext.hpp"
 
+#include "app/EditorCrashBreadcrumbs.hpp"
 #include "engine/audio/AudioPlayback.hpp"
 #include "engine/scene/SceneEntities.hpp"
 #include "engine/scene/SceneAssets.hpp"
@@ -2097,35 +2098,55 @@ bool EditorSceneContext::OpenLuaScript(kb::assets::AssetId id) {
 }
 
 bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
+    EditorCrashBreadcrumbs::WriteValue("material_open", "begin asset", id.value);
     if (!id.IsValid()) {
+        EditorCrashBreadcrumbs::Write("material_open", "invalid asset id");
         console_.Error("Materials", "No material asset was provided for the Material Editor.");
         return false;
     }
     const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(id);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        EditorCrashBreadcrumbs::Write("material_open", metadata == nullptr ? "metadata missing" : "metadata is not material");
         console_.Error("Materials", "Selected asset is not a material document.");
         return false;
     }
+    EditorCrashBreadcrumbs::Write("material_open", "metadata type=" + metadata->type + " path=" + metadata->virtualPath.generic_string());
     if (!PrepareMaterialAssetSelectionChange(id)) {
+        EditorCrashBreadcrumbs::Write("material_open", "selection change cancelled");
         return false;
     }
+    EditorCrashBreadcrumbs::Write("material_open", "clear runtime preview begin");
     ClearMaterialEditorWorkingCopyRuntimePreview();
+    EditorCrashBreadcrumbs::Write("material_open", "clear runtime preview end");
     std::optional<kb::render::RenderMaterialInstanceAssetData> instanceDocument =
         metadata->type == "RenderMaterialInstance" ? ReadMaterialInstanceAsset(id) : std::nullopt;
+    EditorCrashBreadcrumbs::Write("material_open", instanceDocument.has_value() ? "instance document loaded" : "not an instance or instance missing");
     std::optional<kb::render::RenderMaterialAssetData> materialDocument =
         instanceDocument.has_value() && instanceDocument->parentMaterialAssetId.IsValid()
             ? ReadEffectiveMaterialAsset(instanceDocument->parentMaterialAssetId)
             : ReadMaterialAsset(id);
+    if (materialDocument.has_value()) {
+        EditorCrashBreadcrumbs::Write(
+            "material_open",
+            "material document loaded nodes=" + std::to_string(materialDocument->graph.nodes.size()) +
+                " links=" + std::to_string(materialDocument->graph.links.size()) +
+                " params=" + std::to_string(materialDocument->graphParameterValues.size()));
+    } else {
+        EditorCrashBreadcrumbs::Write("material_open", "material document missing");
+    }
     std::optional<kb::render::RenderMaterialAssetData> refreshedMaterialDocument;
     std::optional<kb::render::RenderMaterialTypeSchema> schema;
     std::vector<std::string> refreshDiagnostics;
     std::vector<std::string> materialTypeDiagnostics;
     bool materialTypeDiagnosticsHaveError = false;
     if (materialDocument.has_value()) {
+        EditorCrashBreadcrumbs::Write("material_open", "load material type/schema begin");
         const std::optional<kb::render::RenderMaterialTypeDocument> materialType =
             LoadMaterialTypeDocumentForMaterial(scene_->Assets().Manager(), *materialDocument);
+        EditorCrashBreadcrumbs::Write("material_open", materialType.has_value() ? "material type document loaded" : "material type document missing");
         if (materialType.has_value() && materialType->stableTypeId == materialDocument->materialType) {
             if (materialType->version != materialDocument->materialTypeVersion) {
+                EditorCrashBreadcrumbs::Write("material_open", "schema refresh begin");
                 kb::render::RenderMaterialSchemaRefreshResult refreshed =
                     kb::render::RefreshRenderMaterialGraphBackedMaterialSchema(*materialDocument, *materialType);
                 refreshDiagnostics.reserve(refreshed.diagnostics.size());
@@ -2134,22 +2155,31 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
                     console_.Warning("Materials", refreshDiagnostics.back());
                 }
                 refreshedMaterialDocument = std::move(refreshed.material);
+                EditorCrashBreadcrumbs::WriteValue("material_open", "schema refresh diagnostics", refreshDiagnostics.size());
             }
             schema = materialType->schema;
         } else {
             schema = MaterialEditorSchemaForMaterial(scene_->Assets().Manager(), *materialDocument);
         }
+        EditorCrashBreadcrumbs::Write("material_open", "type reference validation begin");
         AppendMaterialTypeReferenceValidationDiagnostics(
             scene_->Assets().Manager(),
             *metadata,
             refreshedMaterialDocument.has_value() ? *refreshedMaterialDocument : *materialDocument,
             materialTypeDiagnostics,
             materialTypeDiagnosticsHaveError);
+        EditorCrashBreadcrumbs::WriteValue("material_open", "type reference diagnostics", materialTypeDiagnostics.size());
     }
+    EditorCrashBreadcrumbs::Write("material_open", "materialEditor.Open begin");
     materialEditor_.Open(id, std::move(materialDocument), std::move(schema), std::move(instanceDocument));
+    EditorCrashBreadcrumbs::Write(
+        "material_open",
+        std::string{"materialEditor.Open end workingCopy="} + (materialEditor_.WorkingCopy().has_value() ? "yes" : "no"));
     if (refreshedMaterialDocument.has_value()) {
+        EditorCrashBreadcrumbs::Write("material_open", "set refreshed working copy begin");
         materialEditor_.SetWorkingCopy(std::move(*refreshedMaterialDocument));
         MarkSceneRenderDirty();
+        EditorCrashBreadcrumbs::Write("material_open", "set refreshed working copy end");
     }
     if (!refreshDiagnostics.empty()) {
         materialEditor_.SetDiagnostics(std::move(refreshDiagnostics), false);
@@ -2161,6 +2191,7 @@ bool EditorSceneContext::OpenMaterialEditorAsset(kb::assets::AssetId id) {
         materialEditor_.SetDiagnostics(std::move(materialTypeDiagnostics), materialTypeDiagnosticsHaveError);
     }
     console_.Info("Materials", "Opened Material Editor: " + metadata->virtualPath.generic_string());
+    EditorCrashBreadcrumbs::Write("material_open", "end success");
     return true;
 }
 
@@ -2353,21 +2384,31 @@ std::optional<kb::render::RenderMaterialAssetData> EditorSceneContext::ReadMater
 }
 
 const kb::scene::Scene& EditorSceneContext::MaterialPreviewScene(kb::assets::AssetId id) {
+    EditorCrashBreadcrumbs::WriteValue("material_preview_scene", "begin asset", id.value);
     const kb::render::RenderMaterialAssetData* workingCopy = nullptr;
     if (materialEditor_.OpenAssetId() == id && materialEditor_.WorkingCopy().has_value()) {
         workingCopy = &*materialEditor_.WorkingCopy();
+        EditorCrashBreadcrumbs::Write(
+            "material_preview_scene",
+            "using working copy nodes=" + std::to_string(workingCopy->graph.nodes.size()) +
+                " links=" + std::to_string(workingCopy->graph.links.size()));
         materialNodePreviewWorkingCopy_.reset();
         if (materialPreviewNodePreviewEnabled_) {
+            EditorCrashBreadcrumbs::Write("material_preview_scene", "node preview build begin");
             materialNodePreviewWorkingCopy_ =
                 EditorMaterialNodePreviewBuilder::Build(*materialEditor_.WorkingCopy(), materialEditor_.SelectedNodeId());
             if (materialNodePreviewWorkingCopy_.has_value()) {
                 workingCopy = &*materialNodePreviewWorkingCopy_;
+                EditorCrashBreadcrumbs::Write("material_preview_scene", "node preview working copy active");
             }
         }
     } else {
         materialNodePreviewWorkingCopy_.reset();
+        EditorCrashBreadcrumbs::Write("material_preview_scene", "using source material");
     }
-    return materialPreviewScene_->SceneFor(*scene_, id, workingCopy);
+    const kb::scene::Scene& previewScene = materialPreviewScene_->SceneFor(*scene_, id, workingCopy);
+    EditorCrashBreadcrumbs::Write("material_preview_scene", "end");
+    return previewScene;
 }
 
 const EditorMaterialPreviewTelemetry& EditorSceneContext::MaterialPreviewTelemetry() const noexcept {
@@ -5954,15 +5995,19 @@ bool EditorSceneContext::ApplyPatchToMaterialEditorWorkingCopy(kb::assets::Asset
 }
 
 void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync begin");
     if (scene_ == nullptr || !materialEditor_.OpenAssetId().IsValid() || !materialEditor_.WorkingCopy().has_value() || !materialEditor_.Dirty()) {
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync clear no scene/open/working/dirty");
         ClearMaterialEditorWorkingCopyRuntimePreview();
         return;
     }
 
     const kb::assets::AssetId openAsset = materialEditor_.OpenAssetId();
+    EditorCrashBreadcrumbs::WriteValue("material_runtime_preview", "open asset", openAsset.value);
     kb::assets::AssetManager& manager = scene_->Assets().Manager();
     const kb::assets::AssetMetadata* metadata = manager.Registry().Find(openAsset);
     if (metadata == nullptr || (metadata->type != "RenderMaterial" && metadata->type != "RenderMaterialInstance")) {
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "source metadata missing or invalid");
         ClearMaterialEditorWorkingCopyRuntimePreview();
         return;
     }
@@ -5979,6 +6024,7 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     if (materialRuntimePreviewAssetId_ == openAsset && materialRuntimePreviewContentHash_ == runtimeContentHash) {
         std::error_code existsError;
         if (!materialRuntimePreviewPath_.empty() && std::filesystem::exists(materialRuntimePreviewPath_, existsError)) {
+            EditorCrashBreadcrumbs::Write("material_runtime_preview", "runtime preview already current");
             return;
         }
     }
@@ -5987,6 +6033,7 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // live runtime preview, keep rendering that last-good material and only kick a recook so the
     // cook service reports Stale (with the failure reason) instead of dropping to a black/error frame.
     if (materialEditor_.DiagnosticsHaveError() && materialRuntimePreviewAssetId_ == openAsset) {
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "diagnostic error keeping last good");
         if (materialGraphCookService_ != nullptr) {
             static_cast<void>(materialGraphCookService_->RequestCook(
                 openAsset,
@@ -6003,7 +6050,9 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     const std::filesystem::path runtimePath = materialRuntimePreviewPath_.empty()
         ? SceneMaterialWorkingCopyRuntimePath(openAsset)
         : materialRuntimePreviewPath_;
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "save runtime path=" + runtimePath.generic_string());
     if (!kb::render::RenderMaterialAssetWriter::Save(runtimePath, *materialEditor_.WorkingCopy())) {
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "save runtime failed");
         console_.Warning("Materials", "Material graph live preview could not write its runtime working copy.");
         return;
     }
@@ -6023,6 +6072,7 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     }
 
     static_cast<void>(manager.RegisterAsset(std::move(runtimeMetadata)));
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "registered runtime asset");
     static_cast<void>(manager.Unload(openAsset));
     materialRuntimePreviewAssetId_ = openAsset;
     materialRuntimePreviewPath_ = runtimePath;
@@ -6031,14 +6081,18 @@ void EditorSceneContext::SyncMaterialEditorWorkingCopyRuntimePreview() {
     // The working copy changed: kick a debounced GPU cook so the preview and scene render the
     // authored graph program (not the CPU PBR fallback) on the next frame (MAT-30/32/33).
     if (materialGraphCookService_ != nullptr) {
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "request cook begin");
         static_cast<void>(materialGraphCookService_->RequestCook(
             openAsset,
             *materialEditor_.WorkingCopy(),
             MaterialPreviewGraphBuildContext(openAsset, materialPreviewScene_->SceneSettings())));
+        EditorCrashBreadcrumbs::Write("material_runtime_preview", "request cook end");
     }
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "sync end");
 }
 
 void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "clear begin");
     if (scene_ != nullptr && materialRuntimePreviewAssetId_.IsValid()) {
         kb::assets::AssetManager& manager = scene_->Assets().Manager();
         if (materialRuntimePreviewSourceMetadata_.has_value()) {
@@ -6056,6 +6110,7 @@ void EditorSceneContext::ClearMaterialEditorWorkingCopyRuntimePreview() {
     materialRuntimePreviewSourceMetadata_.reset();
     materialRuntimePreviewPath_.clear();
     materialRuntimePreviewContentHash_ = 0U;
+    EditorCrashBreadcrumbs::Write("material_runtime_preview", "clear end");
 }
 
 bool EditorSceneContext::CopyWorkingMaterialToSource(kb::assets::AssetId id) {
