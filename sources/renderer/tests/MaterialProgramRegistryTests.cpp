@@ -9,14 +9,22 @@
 namespace kb::render::tests {
 namespace {
 
-[[nodiscard]] MaterialProgramKey GraphKey(std::uint64_t graphSourceHash, std::string pass, std::uint32_t backend = 0U) {
+[[nodiscard]] MaterialProgramKey GraphKey(
+    std::uint64_t graphSourceHash,
+    std::string pass,
+    std::uint32_t backend = 0U,
+    std::uint64_t variantKey = 0x5555U,
+    std::uint64_t pipelineStateKey = 0x7777U,
+    std::uint64_t materialTypeId = 0xABCDU,
+    std::uint32_t materialTypeVersion = 1U) {
     return MaterialProgramKey{
-        .materialTypeId = 0xABCDU,
-        .materialTypeVersion = 1U,
+        .materialTypeId = materialTypeId,
+        .materialTypeVersion = materialTypeVersion,
         .graphSourceHash = graphSourceHash,
+        .variantKey = variantKey,
         .pass = std::move(pass),
         .backend = backend,
-        .pipelineStateKey = 0U,
+        .pipelineStateKey = pipelineStateKey,
         .graphProgram = true,
     };
 }
@@ -74,6 +82,62 @@ void RunMaterialProgramRegistryReuseAndDistinctKeysTest() {
     registry.Shutdown();
     Require(destroyer.WasDestroyed(first.idx) && destroyer.WasDestroyed(other.idx),
         "KBMAT-MAT05: Shutdown must destroy every owned program handle");
+}
+
+void RunMaterialProgramRegistryFullIdentityKeyTest() {
+    std::uint16_t counter = 100U;
+    RecordingDestroyer destroyer;
+    MaterialProgramRegistry registry;
+    registry.Configure(IncrementingLoader(&counter), destroyer.Callback());
+
+    const MaterialProgramKey base = GraphKey(
+        0xFFFF'0000'0000'0001ULL,
+        "BaseOpaque",
+        0x0000'0001U,
+        0xEEEE'0000'0000'0002ULL,
+        0xDDDD'0000'0000'0003ULL,
+        0xCCCC'0000'0000'0004ULL,
+        7U);
+    const bgfx::ProgramHandle baseHandle = registry.Acquire(base);
+    Require(bgfx::isValid(baseHandle), "KBMAT-MAT66: Base full-identity graph program must load");
+    Require(registry.Acquire(base).idx == baseHandle.idx,
+        "KBMAT-MAT66: Reacquiring the exact full program key must reuse the same program");
+
+    std::vector<MaterialProgramKey> distinctKeys;
+    MaterialProgramKey changedType = base;
+    changedType.materialTypeId ^= 0x8000'0000'0000'0000ULL;
+    distinctKeys.push_back(changedType);
+    MaterialProgramKey changedVersion = base;
+    ++changedVersion.materialTypeVersion;
+    distinctKeys.push_back(changedVersion);
+    MaterialProgramKey changedHashHighBits = base;
+    changedHashHighBits.graphSourceHash ^= 0xFFFF'0000'0000'0000ULL;
+    distinctKeys.push_back(changedHashHighBits);
+    MaterialProgramKey changedVariant = base;
+    changedVariant.variantKey ^= 0xAAAA'0000'0000'0000ULL;
+    distinctKeys.push_back(changedVariant);
+    MaterialProgramKey changedPass = base;
+    changedPass.pass = "ShadowDepth";
+    distinctKeys.push_back(changedPass);
+    MaterialProgramKey changedBackend = base;
+    changedBackend.backend = 0x8000'0002U;
+    distinctKeys.push_back(changedBackend);
+    MaterialProgramKey changedPipeline = base;
+    changedPipeline.pipelineStateKey ^= 0xBBBB'0000'0000'0000ULL;
+    distinctKeys.push_back(changedPipeline);
+
+    for (const MaterialProgramKey& key : distinctKeys) {
+        Require(!(key == base), "KBMAT-MAT66: Mutating any full identity field must change key equality");
+        Require(MaterialProgramKeyIdentityHash(key) != MaterialProgramKeyIdentityHash(base),
+            "KBMAT-MAT66: Full program identity hash must include high bits and every key field");
+        const bgfx::ProgramHandle handle = registry.Acquire(key);
+        Require(bgfx::isValid(handle) && handle.idx != baseHandle.idx,
+            "KBMAT-MAT66: A distinct full identity key must not reuse the base program");
+    }
+
+    Require(registry.Stats().loads == static_cast<std::uint32_t>(distinctKeys.size() + 1U),
+        "KBMAT-MAT66: Registry loads must match distinct full program identities");
+    registry.Shutdown();
 }
 
 void RunMaterialProgramRegistryMissingBinaryTest() {
@@ -150,6 +214,7 @@ void RunMaterialProgramRegistryFailedReloadKeepsLastGoodTest() {
 
 void RunMaterialProgramRegistryTests() {
     RunMaterialProgramRegistryReuseAndDistinctKeysTest();
+    RunMaterialProgramRegistryFullIdentityKeyTest();
     RunMaterialProgramRegistryMissingBinaryTest();
     RunMaterialProgramRegistryDeferredDestroyTest();
     RunMaterialProgramRegistryFailedReloadKeepsLastGoodTest();

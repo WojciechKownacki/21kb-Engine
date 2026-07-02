@@ -14,6 +14,7 @@ struct MaterialProgramKey {
     std::uint64_t materialTypeId = 0U;
     std::uint32_t materialTypeVersion = 0U;
     std::uint64_t graphSourceHash = 0U;
+    std::uint64_t variantKey = 0U;
     std::string pass;
     std::uint32_t backend = 0U;
     std::uint64_t pipelineStateKey = 0U;
@@ -21,6 +22,8 @@ struct MaterialProgramKey {
 
     [[nodiscard]] bool operator==(const MaterialProgramKey& rhs) const noexcept;
 };
+
+[[nodiscard]] std::uint64_t MaterialProgramKeyIdentityHash(const MaterialProgramKey& key) noexcept;
 
 struct MaterialProgramRegistryStats {
     std::uint32_t hits = 0U;

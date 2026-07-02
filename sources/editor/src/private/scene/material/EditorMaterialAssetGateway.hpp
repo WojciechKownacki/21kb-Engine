@@ -2,8 +2,10 @@
 
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeSchema.hpp"
 
 #include <filesystem>
@@ -28,9 +30,13 @@ public:
     [[nodiscard]] static std::filesystem::path UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName);
     [[nodiscard]] static std::filesystem::path UniqueFilePath(const std::filesystem::path& folder, std::string_view baseName, std::string_view extension);
     [[nodiscard]] static std::optional<std::filesystem::path> ResolveFile(const kb::scene::Scene& scene, kb::assets::AssetId id);
+    [[nodiscard]] static std::optional<std::filesystem::path> ResolveInstanceFile(const kb::scene::Scene& scene, kb::assets::AssetId id);
     [[nodiscard]] static std::optional<kb::render::RenderMaterialAssetData> Read(const kb::scene::Scene& scene, kb::assets::AssetId id);
+    [[nodiscard]] static std::optional<kb::render::RenderMaterialInstanceAssetData> ReadInstance(const kb::scene::Scene& scene, kb::assets::AssetId id);
     [[nodiscard]] static bool WriteExisting(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialAssetData& asset);
+    [[nodiscard]] static bool WriteExistingInstance(kb::scene::Scene& scene, kb::assets::AssetId id, const kb::render::RenderMaterialInstanceAssetData& asset);
     [[nodiscard]] bool WriteNewMaterial(const std::filesystem::path& path, const kb::render::RenderMaterialAssetData& asset);
+    [[nodiscard]] bool WriteNewMaterialFunction(const std::filesystem::path& path, const kb::render::RenderMaterialFunctionAssetData& asset);
     [[nodiscard]] bool WriteNewMaterialGraph(const std::filesystem::path& path, const kb::render::RenderMaterialGraphDocument& graph);
     [[nodiscard]] bool WriteNewMaterialInstance(const std::filesystem::path& path, const kb::render::RenderMaterialInstanceAssetData& asset);
     [[nodiscard]] bool WriteNewMaterialType(const std::filesystem::path& path, const kb::render::RenderMaterialTypeDocument& document);
@@ -40,8 +46,10 @@ public:
 private:
     void DiscoverAndSelect(const std::filesystem::path& path);
     void EnsureMaterialLoader();
+    void EnsureMaterialFunctionLoader();
     void EnsureMaterialGraphLoader();
     void EnsureMaterialInstanceLoader();
+    void EnsureMaterialParameterCollectionLoader();
     void EnsureMaterialTypeLoader();
 
     kb::scene::Scene& scene_;

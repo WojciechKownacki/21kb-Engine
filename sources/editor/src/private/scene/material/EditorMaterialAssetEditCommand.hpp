@@ -3,12 +3,14 @@
 #include "commands/IEditorCommand.hpp"
 #include "engine/assets/AssetId.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "scene/material/EditorMaterialAssetAuthoring.hpp"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kb::scene {
 class Scene;
@@ -177,6 +179,40 @@ private:
     kb::render::RenderMaterialAssetData after_;
 };
 
+class EditorMaterialInstanceEditCommand final : public IEditorCommand {
+public:
+    [[nodiscard]] static std::unique_ptr<EditorMaterialInstanceEditCommand> CreateRecorded(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId materialInstanceId,
+        std::string label,
+        kb::render::RenderMaterialInstanceAssetData before,
+        kb::render::RenderMaterialInstanceAssetData after);
+
+    [[nodiscard]] std::string_view Label() const noexcept override;
+    [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
+    [[nodiscard]] bool AffectsHierarchySelection() const noexcept override;
+    [[nodiscard]] bool AffectsOpenMaterialSource() const noexcept override;
+    [[nodiscard]] bool Execute() override;
+    [[nodiscard]] bool Undo() override;
+    [[nodiscard]] bool Redo() override;
+
+private:
+    EditorMaterialInstanceEditCommand(
+        kb::scene::Scene& scene,
+        kb::assets::AssetId materialInstanceId,
+        std::string label,
+        kb::render::RenderMaterialInstanceAssetData before,
+        kb::render::RenderMaterialInstanceAssetData after);
+
+    [[nodiscard]] bool Write(const kb::render::RenderMaterialInstanceAssetData& asset);
+
+    kb::scene::Scene& scene_;
+    kb::assets::AssetId materialInstanceId_{};
+    std::string label_;
+    kb::render::RenderMaterialInstanceAssetData before_;
+    kb::render::RenderMaterialInstanceAssetData after_;
+};
+
 class EditorMaterialWorkingCopyEditCommand final : public IEditorCommand {
 public:
     [[nodiscard]] static std::unique_ptr<EditorMaterialWorkingCopyEditCommand> Create(
@@ -187,6 +223,16 @@ public:
         kb::render::RenderMaterialAssetData after,
         std::uint32_t beforeSelectedNodeId,
         std::uint32_t afterSelectedNodeId);
+    [[nodiscard]] static std::unique_ptr<EditorMaterialWorkingCopyEditCommand> Create(
+        MaterialEditorState& editor,
+        kb::assets::AssetId materialId,
+        std::string label,
+        kb::render::RenderMaterialAssetData before,
+        kb::render::RenderMaterialAssetData after,
+        std::vector<std::uint32_t> beforeSelectedNodeIds,
+        std::vector<std::uint32_t> afterSelectedNodeIds,
+        std::uint32_t beforeSelectedCommentId = 0U,
+        std::uint32_t afterSelectedCommentId = 0U);
 
     [[nodiscard]] std::string_view Label() const noexcept override;
     [[nodiscard]] bool AffectsSceneDocument() const noexcept override;
@@ -202,18 +248,25 @@ private:
         std::string label,
         kb::render::RenderMaterialAssetData before,
         kb::render::RenderMaterialAssetData after,
-        std::uint32_t beforeSelectedNodeId,
-        std::uint32_t afterSelectedNodeId);
+        std::vector<std::uint32_t> beforeSelectedNodeIds,
+        std::vector<std::uint32_t> afterSelectedNodeIds,
+        std::uint32_t beforeSelectedCommentId,
+        std::uint32_t afterSelectedCommentId);
 
-    [[nodiscard]] bool Apply(const kb::render::RenderMaterialAssetData& asset, std::uint32_t selectedNodeId);
+    [[nodiscard]] bool Apply(
+        const kb::render::RenderMaterialAssetData& asset,
+        const std::vector<std::uint32_t>& selectedNodeIds,
+        std::uint32_t selectedCommentId);
 
     MaterialEditorState& editor_;
     kb::assets::AssetId materialId_{};
     std::string label_;
     kb::render::RenderMaterialAssetData before_;
     kb::render::RenderMaterialAssetData after_;
-    std::uint32_t beforeSelectedNodeId_ = 0U;
-    std::uint32_t afterSelectedNodeId_ = 0U;
+    std::vector<std::uint32_t> beforeSelectedNodeIds_;
+    std::vector<std::uint32_t> afterSelectedNodeIds_;
+    std::uint32_t beforeSelectedCommentId_ = 0U;
+    std::uint32_t afterSelectedCommentId_ = 0U;
 };
 
 } // namespace kb::editor

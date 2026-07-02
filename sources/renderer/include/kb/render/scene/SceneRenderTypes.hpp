@@ -50,10 +50,10 @@ enum class SceneRenderLightingPath : std::uint8_t {
     VisibilityBuffer,
 };
 
-// MAT-82: only the Forward path (capped at kMaxSceneForwardLights analytic lights) is implemented and
-// drives the graph/builtin shaders. ClusteredForwardPlus/Deferred/VisibilityBuffer are declared for the
-// roadmap but NOT implemented (no clustered/tiled light list reaches the shader); they are reported as
-// non-production so nothing falsely claims >4-light lighting is applied.
+// MAT-64/#51: only the Forward path (capped at kMaxSceneForwardLights analytic lights) is implemented
+// and drives the graph/builtin shaders. ClusteredForwardPlus/Deferred/VisibilityBuffer are declared for
+// the roadmap but NOT implemented (no clustered/tiled light list reaches the shader); they are reported
+// as non-production so nothing falsely claims >4-light lighting is applied.
 [[nodiscard]] constexpr bool IsSceneRenderLightingPathProduction(SceneRenderLightingPath path) noexcept {
     return path == SceneRenderLightingPath::Forward;
 }
@@ -85,6 +85,8 @@ struct SceneRenderMeshInstance {
     std::uint32_t materialSlotOverrideCount = 0;
     std::array<float, 16> model{};
     std::array<float, 4> color{ 0.76F, 0.80F, 0.86F, 1.0F };
+    float fadeAmount = 1.0F;
+    float customData0 = 0.0F;
     RenderBoundsSphere worldBounds{};
     std::uint16_t depthBucket = 0;
     bool castsShadow = true;
@@ -254,8 +256,9 @@ struct SceneRenderSubmitStats {
     std::uint32_t invalidLightCount = 0;
     std::uint32_t forwardLightCapacity = 0;
     std::uint32_t lightingPath = 0;
-    // MAT-82: false when the configured lighting path is a declared-but-unimplemented (non-production)
-    // path; the renderer still lights via the real Forward path, so this prevents a false >4-light claim.
+    // MAT-64/#51: false when the configured lighting path is a declared-but-unimplemented
+    // (non-production) path; the renderer still lights via the real Forward path, so this prevents a
+    // false >4-light claim.
     bool lightingPathProduction = true;
     std::uint32_t lightClusterCount = 0;
     std::uint32_t submittedAreaLightCount = 0;
@@ -341,6 +344,14 @@ enum class SceneRenderDiagnosticKind : std::uint8_t {
     InvalidMaterialAsset,
     UnsupportedMaterialAlphaBlend,
     DroppedInstances,
+    GraphMaterialProgramFallback,
+};
+
+enum class SceneRenderMaterialProgramStatus : std::uint8_t {
+    None,
+    Builtin,
+    GraphReady,
+    GraphFallback,
 };
 
 struct SceneRenderDiagnosticEvent {
@@ -350,6 +361,15 @@ struct SceneRenderDiagnosticEvent {
     std::uint64_t meshAssetId = 0;
     std::uint64_t materialAssetId = 0;
     std::uint32_t instanceCount = 0;
+    std::uint64_t materialTypeId = 0U;
+    std::uint32_t materialTypeVersion = 0U;
+    std::uint64_t graphSourceHash = 0U;
+    std::uint64_t graphVariantKey = 0U;
+    std::uint64_t pipelineStateKey = 0U;
+    std::uint64_t materialProgramIdentity = 0U;
+    std::uint32_t materialProgramBackend = 0U;
+    std::uint16_t materialProgramHandle = bgfx::kInvalidHandle;
+    SceneRenderMaterialProgramStatus materialProgramStatus = SceneRenderMaterialProgramStatus::None;
 };
 
 struct SceneRenderDiagnostics {

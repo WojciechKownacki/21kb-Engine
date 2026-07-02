@@ -8,6 +8,7 @@ namespace {
 [[nodiscard]] bool IsMaterialAsset(const kb::assets::AssetMetadata& metadata) noexcept {
     return metadata.type == "RenderMaterial"
         || metadata.type == "RenderMaterialInstance"
+        || metadata.type == "RenderMaterialFunction"
         || metadata.type == "RenderMaterialGraph"
         || metadata.type == "RenderMaterialType";
 }

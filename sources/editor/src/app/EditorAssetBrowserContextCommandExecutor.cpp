@@ -41,6 +41,10 @@ bool EditorAssetBrowserContextCommandExecutor::Execute(EditorAssetContextCommand
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialAsset(destinationFolder);
     }
+    case EditorAssetContextCommand::NewMaterialFunction: {
+        const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
+        return sceneContext.CreateMaterialFunctionAsset(destinationFolder);
+    }
     case EditorAssetContextCommand::NewMaterialGraph: {
         const std::filesystem::path destinationFolder = targetKind == EditorAssetContextTargetKind::Folder ? targetFolder : state.SelectedFolder();
         return sceneContext.CreateMaterialGraphAsset(destinationFolder);
