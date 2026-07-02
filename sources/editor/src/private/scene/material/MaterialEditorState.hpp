@@ -177,6 +177,8 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateViewProperty,
     CreateViewSize,
     CreateTwoSidedSign,
+    CreateSceneColor,
+    CreateSceneTexture,
     CreateSceneDepth,
     CreateDepthFade,
     CreateCustomCode,

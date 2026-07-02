@@ -27,7 +27,7 @@ The canonical code entry points are:
 | `GpuShadow` | Production | Cooks/loads generated graph vertex shader when vertex-domain outputs are present and keeps shadow-pass fragment inputs neutral where the pass has no lighting uniforms. |
 | `CpuFallback` | Production fallback | Explicit fallback/error path only. It must not be presented as GPU graph proof. |
 | `GpuDeferred` | Production | Deferred graph materials cook a distinct `GBuffer` artifact, write albedo/normal/material MRT attachments, and are lit by the deferred lighting pass. Missing `GBuffer` graph programs are diagnostics/errors, not builtin forward proof. |
-| Forward+ / clustered lighting | Unsupported | `SceneRenderLightingPath::ClusteredForwardPlus` is declared for roadmap use only; `Forward` and `Deferred` are the production scene lighting paths. |
+| Forward+ / clustered lighting | Production | `SceneRenderLightingPath::ClusteredForwardPlus` uses the forward graph material pass with the expanded Forward+ light budget and exposes `forwardPlus` through `ShadingPathSwitch`; renderer/editor tests cover project settings, preview inheritance and GPU shader-path selection. |
 
 ## Node Support Matrix
 

@@ -2053,7 +2053,7 @@ inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMen
     case 0U:
         return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject };
     case 1U:
-        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
+        return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateTwoSidedSign, MaterialEditorGraphMenuCommand::CreateSceneColor, MaterialEditorGraphMenuCommand::CreateSceneTexture, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
         return { MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateScalarParameter, MaterialEditorGraphMenuCommand::CreateVectorParameter, MaterialEditorGraphMenuCommand::CreateColorParameter, MaterialEditorGraphMenuCommand::CreateCollectionParameter };
     case 3U:
@@ -2322,6 +2322,8 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     case MaterialEditorGraphMenuCommand::CreateViewProperty: return "View Property";
     case MaterialEditorGraphMenuCommand::CreateViewSize: return "View Size";
     case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return "Two Sided Sign";
+    case MaterialEditorGraphMenuCommand::CreateSceneColor: return "Scene Color";
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return "Scene Texture";
     case MaterialEditorGraphMenuCommand::CreateSceneDepth: return "Scene Depth";
     case MaterialEditorGraphMenuCommand::CreateDepthFade: return "Depth Fade";
     case MaterialEditorGraphMenuCommand::CreateCustomCode: return "Custom Code";
@@ -2544,6 +2546,8 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     case MaterialEditorGraphMenuCommand::CreateViewProperty: return kb::render::RenderMaterialGraphNodeKind::ViewProperty;
     case MaterialEditorGraphMenuCommand::CreateViewSize: return kb::render::RenderMaterialGraphNodeKind::ViewSize;
     case MaterialEditorGraphMenuCommand::CreateTwoSidedSign: return kb::render::RenderMaterialGraphNodeKind::TwoSidedSign;
+    case MaterialEditorGraphMenuCommand::CreateSceneColor: return kb::render::RenderMaterialGraphNodeKind::SceneColor;
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture: return kb::render::RenderMaterialGraphNodeKind::SceneTexture;
     case MaterialEditorGraphMenuCommand::CreateSceneDepth: return kb::render::RenderMaterialGraphNodeKind::SceneDepth;
     case MaterialEditorGraphMenuCommand::CreateDepthFade: return kb::render::RenderMaterialGraphNodeKind::DepthFade;
     case MaterialEditorGraphMenuCommand::CreateCustomCode: return kb::render::RenderMaterialGraphNodeKind::CustomCode;
@@ -2634,6 +2638,10 @@ inline bool MaterialEditorGraphMenuCommandCreatesCanvasObject(MaterialEditorGrap
     }
     if (command == MaterialEditorGraphMenuCommand::CreateTwoSidedSign) {
         haystack += " twosidedsign two sided sign front face back face backface";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateSceneColor ||
+        command == MaterialEditorGraphMenuCommand::CreateSceneTexture) {
+        haystack += " scene texture post process opaque snapshot framebuffer screen color";
     }
     if (command == MaterialEditorGraphMenuCommand::CreateArcSineFast ||
         command == MaterialEditorGraphMenuCommand::CreateArcCosineFast ||

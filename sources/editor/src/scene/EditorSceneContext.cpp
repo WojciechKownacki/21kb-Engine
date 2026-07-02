@@ -4589,6 +4589,10 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ViewSize, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateTwoSidedSign:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TwoSidedSign, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSceneColor:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SceneColor, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreateSceneTexture:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SceneTexture, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateSceneDepth:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::SceneDepth, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateDepthFade:
