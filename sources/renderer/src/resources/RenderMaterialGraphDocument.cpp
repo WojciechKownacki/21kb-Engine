@@ -6431,7 +6431,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
         bentNormalExpr = compileOutput("bentNormal", RenderMaterialGraphPinType::Normal, "vec3(0.0, 0.0, 1.0)");
         occlusionExpr = compileOutput("occlusion", RenderMaterialGraphPinType::Float, "1.0");
         emissiveExpr = compileOutput("emissive", RenderMaterialGraphPinType::Color, "vec4(0.0, 0.0, 0.0, 1.0)");
-        alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "material.baseColor.a");
+        alphaExpr = compileOutput("alpha", RenderMaterialGraphPinType::Float, "1.0");
         alphaClipThresholdExpr = compileOutput("alphaClipThreshold", RenderMaterialGraphPinType::Float, "0.5");
         // MAT-35: advanced fragment-domain surface outputs. They extend the surface contract; advanced shading
         // models (#24) consume them, the base forward lighting uses the core PBR subset.

@@ -124,6 +124,12 @@ void EnsureParentChildClipping(HWND parent) noexcept {
         return "alpha blend material disabled until transparent pass is ready";
     case render::SceneRenderDiagnosticKind::DroppedInstances:
         return "dropped instances";
+    case render::SceneRenderDiagnosticKind::GraphMaterialProgramFallback:
+        return "graph material program fallback";
+    case render::SceneRenderDiagnosticKind::GraphMaterialProgramUnavailable:
+        return "graph material program unavailable";
+    case render::SceneRenderDiagnosticKind::DeferredRendererUnavailable:
+        return "deferred renderer unavailable";
     }
     return "unknown render diagnostic";
 }

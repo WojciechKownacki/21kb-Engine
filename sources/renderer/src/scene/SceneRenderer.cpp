@@ -2,10 +2,12 @@
 
 #include "kb/render/scene/RenderScene.hpp"
 #include "scene/SceneMeshSubmitter.hpp"
+#include "renderer/RendererDebugLog.hpp"
 
 #include <bgfx/bgfx.h>
 
 #include <cstdint>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -46,6 +48,28 @@ namespace {
         .contactShadowsEnabled = requested.contactShadowsEnabled != defaultConfig.contactShadowsEnabled ? requested.contactShadowsEnabled : fallback.contactShadowsEnabled,
         .volumetricLightingEnabled = requested.volumetricLightingEnabled != defaultConfig.volumetricLightingEnabled ? requested.volumetricLightingEnabled : fallback.volumetricLightingEnabled,
     };
+}
+
+[[nodiscard]] const char* MeshPassName(MeshPassType pass) noexcept {
+    switch (pass) {
+    case MeshPassType::Depth:
+        return "Depth";
+    case MeshPassType::BaseOpaque:
+        return "BaseOpaque";
+    case MeshPassType::GBuffer:
+        return "GBuffer";
+    case MeshPassType::BaseTransparent:
+        return "BaseTransparent";
+    case MeshPassType::ShadowDepth:
+        return "ShadowDepth";
+    case MeshPassType::SelectionId:
+        return "SelectionId";
+    case MeshPassType::EditorSelection:
+        return "EditorSelection";
+    case MeshPassType::Gizmo:
+        return "Gizmo";
+    }
+    return "Unknown";
 }
 
 } // namespace
@@ -106,6 +130,23 @@ void SceneRenderer::SubmitMeshPass(
     const SceneRenderLightingConfig effectiveLightingConfig = ResolveLightingConfig(lightingConfig, defaultLightingConfig_);
     const std::optional<SceneRenderCamera> primaryCamera = cameraOverride == nullptr ? renderScene.BuildPrimaryCamera(viewportWidth, viewportHeight) : std::optional<SceneRenderCamera>{};
     const SceneRenderCamera* camera = cameraOverride != nullptr ? cameraOverride : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
+    {
+        std::ostringstream message;
+        message << "SubmitMeshPass begin pass=" << MeshPassName(pass)
+                << " viewId=" << viewId
+                << " extent=" << viewportWidth << 'x' << viewportHeight
+                << " initialized=" << (initialized_ ? "true" : "false")
+                << " camera=" << (camera != nullptr ? "true" : "false")
+                << " renderMeshes=" << renderScene.MeshProxyCount()
+                << " renderLights=" << renderScene.LightProxyCount()
+                << " selected=" << selectedEntityIds.size()
+                << " budgetDraws=" << effectiveDrawBudget.maxDrawCommands
+                << " budgetVisible=" << effectiveDrawBudget.maxVisibleInstances
+                << " lightingPath=" << static_cast<int>(effectiveLightingConfig.lightingPath)
+                << " shadows=" << (effectiveLightingConfig.shadowsEnabled ? "true" : "false")
+                << " gpuDrivenOverride=" << (gpuDrivenSupportOverride != nullptr ? "true" : "false");
+        WriteRendererDebugLog("scene_renderer", message.str());
+    }
     if (!initialized_ || camera == nullptr || viewportWidth == 0U || viewportHeight == 0U) {
         lastSubmitStats_ = SceneMeshSubmitter::ValidateResourcesInto(
             renderScene,
@@ -119,6 +160,14 @@ void SceneRenderer::SubmitMeshPass(
             effectiveLightingConfig,
             selectedEntityIds,
             gpuDrivenSupportOverride == nullptr ? gpuDrivenRuntimeSupport_ : *gpuDrivenSupportOverride);
+        std::ostringstream message;
+        message << "SubmitMeshPass validation-only end pass=" << MeshPassName(pass)
+                << " visible=" << lastSubmitStats_.visibleMeshCount
+                << " submitted=" << lastSubmitStats_.submittedMeshCount
+                << " missingMesh=" << lastSubmitStats_.missingMeshResourceCount
+                << " missingMaterial=" << lastSubmitStats_.missingMaterialResourceCount
+                << " diagnostics=" << lastDiagnostics_.events.size();
+        WriteRendererDebugLog("scene_renderer", message.str());
         return;
     }
 
@@ -149,6 +198,26 @@ void SceneRenderer::SubmitMeshPass(
             DynamicParameterConstants(),
             pass == MeshPassType::BaseTransparent ? sceneDepthTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle },
             pass == MeshPassType::BaseTransparent ? sceneColorTexture_ : bgfx::TextureHandle{ bgfx::kInvalidHandle });
+    }
+    {
+        std::ostringstream message;
+        message << "SubmitMeshPass end pass=" << MeshPassName(pass)
+                << " visible=" << lastSubmitStats_.visibleMeshCount
+                << " visibleGroups=" << lastSubmitStats_.visibleDrawGroupCount
+                << " submittedMeshes=" << lastSubmitStats_.submittedMeshCount
+                << " submittedGroups=" << lastSubmitStats_.submittedDrawGroupCount
+                << " submittedDrawCalls=" << lastSubmitStats_.submittedDrawCallCount
+                << " culled=" << lastSubmitStats_.culledInstanceCount
+                << " dropped=" << lastSubmitStats_.droppedInstanceCount
+                << " missingMeshBinding=" << lastSubmitStats_.missingMeshBindingCount
+                << " missingMeshResource=" << lastSubmitStats_.missingMeshResourceCount
+                << " missingMaterialBinding=" << lastSubmitStats_.missingMaterialBindingCount
+                << " missingMaterialResource=" << lastSubmitStats_.missingMaterialResourceCount
+                << " missingTextureBinding=" << lastSubmitStats_.missingTextureBindingCount
+                << " missingTextureResource=" << lastSubmitStats_.missingTextureResourceCount
+                << " diagnostics=" << lastDiagnostics_.events.size()
+                << " instanceUploadBytes=" << lastSubmitStats_.instanceUploadBytes;
+        WriteRendererDebugLog("scene_renderer", message.str());
     }
 }
 
