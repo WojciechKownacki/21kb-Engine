@@ -238,6 +238,7 @@ inline SIZE MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNode
     case kb::render::RenderMaterialGraphNodeKind::ConstantColor:
         return SIZE{ 220, 92 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
+    case kb::render::RenderMaterialGraphNodeKind::TextureObject:
         return SIZE{ 220, 118 };
     case kb::render::RenderMaterialGraphNodeKind::ParameterScalar:
         return SIZE{ 160, 66 };
@@ -1394,7 +1395,8 @@ inline RECT MaterialEditorPanelTextureParameterRect(const RECT& node) noexcept {
 inline std::uint32_t MaterialEditorPanelTextureValueNodeId(
     const kb::render::RenderMaterialGraphDocument& graph,
     const kb::render::RenderMaterialGraphNode& node) noexcept {
-    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+    if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+        node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
         return node.id;
     }
     if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample) {
@@ -1487,7 +1489,8 @@ inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphTextureSam
     for (std::size_t nodeIndex = graphView.nodes.size(); nodeIndex-- > 0U;) {
         const kb::render::RenderMaterialGraphNode& node = graphView.nodes[nodeIndex];
         if (node.kind != kb::render::RenderMaterialGraphNodeKind::TextureSample &&
-            node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+            node.kind != kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
+            node.kind != kb::render::RenderMaterialGraphNodeKind::TextureObject) {
             continue;
         }
         const std::optional<RECT> rect = GraphNodeRect(content, graphView, node.id, sceneContext, assetId);
@@ -1500,6 +1503,10 @@ inline std::optional<std::uint32_t> MaterialEditorPanelRenderer::GraphTextureSam
             return textureNodeId == 0U ? node.id : textureNodeId;
         }
         if (node.kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture &&
+            MaterialEditorPanelPointInRect(MaterialEditorPanelTextureParameterRect(*rect), x, y)) {
+            return node.id;
+        }
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureObject &&
             MaterialEditorPanelPointInRect(MaterialEditorPanelTextureParameterRect(*rect), x, y)) {
             return node.id;
         }
@@ -1937,7 +1944,7 @@ inline std::string_view MaterialEditorGraphContextMenuCategoryName(std::size_t i
 inline std::vector<MaterialEditorGraphMenuCommand> MaterialEditorGraphContextMenuCommands(std::size_t index) {
     switch (index) {
     case 0U:
-        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter };
+        return { MaterialEditorGraphMenuCommand::CreateTextureSample, MaterialEditorGraphMenuCommand::CreateTextureParameter, MaterialEditorGraphMenuCommand::CreateTextureObject };
     case 1U:
         return { MaterialEditorGraphMenuCommand::CreateUv, MaterialEditorGraphMenuCommand::CreateTextureCoordinate, MaterialEditorGraphMenuCommand::CreatePanner, MaterialEditorGraphMenuCommand::CreateRotator, MaterialEditorGraphMenuCommand::CreateBumpOffset, MaterialEditorGraphMenuCommand::CreateConstantBiasScale, MaterialEditorGraphMenuCommand::CreateRotateAboutAxis, MaterialEditorGraphMenuCommand::CreateViewportUV, MaterialEditorGraphMenuCommand::CreateTime, MaterialEditorGraphMenuCommand::CreateVertexColor, MaterialEditorGraphMenuCommand::CreateScreenPosition, MaterialEditorGraphMenuCommand::CreateLocalPosition, MaterialEditorGraphMenuCommand::CreateObjectPosition, MaterialEditorGraphMenuCommand::CreateWorldPosition, MaterialEditorGraphMenuCommand::CreatePerInstanceRandom, MaterialEditorGraphMenuCommand::CreateObjectRadius, MaterialEditorGraphMenuCommand::CreateObjectBounds, MaterialEditorGraphMenuCommand::CreateObjectOrientation, MaterialEditorGraphMenuCommand::CreateCameraPosition, MaterialEditorGraphMenuCommand::CreateCameraVector, MaterialEditorGraphMenuCommand::CreateReflectionVector, MaterialEditorGraphMenuCommand::CreateLightVector, MaterialEditorGraphMenuCommand::CreatePixelNormalWS, MaterialEditorGraphMenuCommand::CreateVertexNormalWS, MaterialEditorGraphMenuCommand::CreateVertexTangentWS, MaterialEditorGraphMenuCommand::CreateViewProperty, MaterialEditorGraphMenuCommand::CreateViewSize, MaterialEditorGraphMenuCommand::CreateSceneDepth, MaterialEditorGraphMenuCommand::CreateDepthFade };
     case 2U:
@@ -2068,6 +2075,7 @@ inline std::string_view MaterialEditorGraphContextMenuCommandName(MaterialEditor
     switch (command) {
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return "Texture Sample";
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return "Texture Parameter";
+    case MaterialEditorGraphMenuCommand::CreateTextureObject: return "Texture Object";
     case MaterialEditorGraphMenuCommand::CreateUv: return "UV";
     case MaterialEditorGraphMenuCommand::CreateScalar: return "Constant Scalar";
     case MaterialEditorGraphMenuCommand::CreateBool: return "Constant Bool";
@@ -2223,6 +2231,7 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     switch (command) {
     case MaterialEditorGraphMenuCommand::CreateTextureSample: return kb::render::RenderMaterialGraphNodeKind::TextureSample;
     case MaterialEditorGraphMenuCommand::CreateTextureParameter: return kb::render::RenderMaterialGraphNodeKind::ParameterTexture;
+    case MaterialEditorGraphMenuCommand::CreateTextureObject: return kb::render::RenderMaterialGraphNodeKind::TextureObject;
     case MaterialEditorGraphMenuCommand::CreateUv: return kb::render::RenderMaterialGraphNodeKind::Uv;
     case MaterialEditorGraphMenuCommand::CreateScalar: return kb::render::RenderMaterialGraphNodeKind::ConstantScalar;
     case MaterialEditorGraphMenuCommand::CreateBool: return kb::render::RenderMaterialGraphNodeKind::ConstantBool;
@@ -2396,6 +2405,15 @@ inline bool MaterialEditorGraphContextMenuCommandEnabled(MaterialEditorGraphMenu
     }
     if (command == MaterialEditorGraphMenuCommand::CreateCollectionParameter) {
         haystack += " material parameter collection mpc global parameter global uniform";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateTextureObject) {
+        haystack += " texture object parameter texture object sampler object";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateStaticSwitch) {
+        haystack += " static switch parameter staticswitchparameter";
+    }
+    if (command == MaterialEditorGraphMenuCommand::CreateStaticComponentMask) {
+        haystack += " static component mask parameter channel mask channelmask channelmaskparameter";
     }
     const std::string normalizedHaystack = MaterialEditorGraphPaletteNormalize(haystack);
     if (normalizedHaystack.find(normalizedQuery) != std::string::npos) {

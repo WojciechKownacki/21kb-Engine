@@ -47,6 +47,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     None,
     CreateTextureSample,
     CreateTextureParameter,
+    CreateTextureObject,
     CreateUv,
     CreateScalar,
     CreateBool,
@@ -987,7 +988,8 @@ public:
         }
 
         if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
-            node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture) {
+            node->kind == kb::render::RenderMaterialGraphNodeKind::ParameterTexture ||
+            node->kind == kb::render::RenderMaterialGraphNodeKind::TextureObject) {
             properties.push_back(MaterialEditorGraphNodeProperty{
                 .nodeId = node->id,
                 .stableId = "texture.asset",
@@ -2072,6 +2074,8 @@ private:
             return "Texture Sample";
         case kb::render::RenderMaterialGraphNodeKind::ParameterTexture:
             return "Texture";
+        case kb::render::RenderMaterialGraphNodeKind::TextureObject:
+            return "Texture Object";
         case kb::render::RenderMaterialGraphNodeKind::CollectionParameter:
             return "Collection Parameter";
         default:
@@ -2805,6 +2809,14 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .stableId = "texture" + std::to_string(nodeId),
                 .displayName = "Texture " + std::to_string(nodeId),
+                .textureRole = "baseColor",
+                .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
+                .overrideSupported = true,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TextureObject:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "textureObject" + std::to_string(nodeId),
+                .displayName = "Texture Object " + std::to_string(nodeId),
                 .textureRole = "baseColor",
                 .expectedTextureColorSpace = kb::render::RenderMaterialTextureColorSpace::Srgb,
                 .overrideSupported = true,

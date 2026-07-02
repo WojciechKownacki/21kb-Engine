@@ -1738,7 +1738,11 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Length") == RenderMaterialGraphNodeKind::Length, "Material graph vector math should parse Length node");
     Require(ParseRenderMaterialGraphNodeKind("Distance") == RenderMaterialGraphNodeKind::Distance, "Material graph vector math should parse Distance node");
     Require(ParseRenderMaterialGraphNodeKind("ComponentMask") == RenderMaterialGraphNodeKind::StaticComponentMask, "MAT-50 ComponentMask must map to the swizzle-mask node (StaticComponentMask), not BreakVector");
+    Require(ParseRenderMaterialGraphNodeKind("StaticComponentMaskParameter") == RenderMaterialGraphNodeKind::StaticComponentMask, "MAT-50 StaticComponentMaskParameter catalog alias must map to StaticComponentMask");
+    Require(ParseRenderMaterialGraphNodeKind("ChannelMaskParameter") == RenderMaterialGraphNodeKind::StaticComponentMask, "MAT-50 ChannelMaskParameter catalog alias must map to StaticComponentMask");
     Require(ParseRenderMaterialGraphNodeKind("AppendVector") == RenderMaterialGraphNodeKind::AppendVector, "MAT-50 AppendVector is a distinct concatenation node and must round-trip to itself, not MakeVector");
+    Require(ParseRenderMaterialGraphNodeKind("StaticSwitchParameter") == RenderMaterialGraphNodeKind::StaticSwitch, "MAT-39 StaticSwitchParameter catalog alias must map to StaticSwitch");
+    Require(ParseRenderMaterialGraphNodeKind("TextureObjectParameter") == RenderMaterialGraphNodeKind::TextureObject, "MAT-31 TextureObjectParameter catalog alias must map to TextureObject");
     Require(ParseRenderMaterialGraphNodeKind("Step") == RenderMaterialGraphNodeKind::Step, "Material graph conditional math should parse Step node");
     Require(ParseRenderMaterialGraphNodeKind("SmoothStep") == RenderMaterialGraphNodeKind::SmoothStep, "Material graph conditional math should parse SmoothStep node");
     Require(ParseRenderMaterialGraphNodeKind("Compare") == RenderMaterialGraphNodeKind::If, "Material graph conditional math should parse Compare alias");

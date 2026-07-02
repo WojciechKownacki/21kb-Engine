@@ -4059,7 +4059,7 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "TextureSample")) {
         return RenderMaterialGraphNodeKind::TextureSample;
     }
-    if (EqualsIgnoreCase(text, "TextureObject")) {
+    if (EqualsIgnoreCase(text, "TextureObject") || EqualsIgnoreCase(text, "TextureObjectParameter")) {
         return RenderMaterialGraphNodeKind::TextureObject;
     }
     if (EqualsIgnoreCase(text, "TextureSampleCube") || EqualsIgnoreCase(text, "TextureCubeSample")) {
@@ -4299,10 +4299,12 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "StaticBoolParameter")) {
         return RenderMaterialGraphNodeKind::StaticBoolParameter;
     }
-    if (EqualsIgnoreCase(text, "StaticSwitch")) {
+    if (EqualsIgnoreCase(text, "StaticSwitch") || EqualsIgnoreCase(text, "StaticSwitchParameter")) {
         return RenderMaterialGraphNodeKind::StaticSwitch;
     }
-    if (EqualsIgnoreCase(text, "StaticComponentMask") || EqualsIgnoreCase(text, "ComponentMask") || EqualsIgnoreCase(text, "Mask")) {
+    if (EqualsIgnoreCase(text, "StaticComponentMask") || EqualsIgnoreCase(text, "StaticComponentMaskParameter") ||
+        EqualsIgnoreCase(text, "ComponentMask") || EqualsIgnoreCase(text, "ChannelMask") ||
+        EqualsIgnoreCase(text, "ChannelMaskParameter") || EqualsIgnoreCase(text, "Mask")) {
         return RenderMaterialGraphNodeKind::StaticComponentMask;
     }
     if (EqualsIgnoreCase(text, "QualitySwitch") || EqualsIgnoreCase(text, "MaterialQualitySwitch")) {
