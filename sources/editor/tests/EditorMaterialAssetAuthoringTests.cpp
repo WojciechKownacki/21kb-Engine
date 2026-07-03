@@ -3300,6 +3300,131 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             tiledTextureCoordinateNode->parameter.defaultValueHint == "2 3 1",
         "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve existing U/V tiling");
 
+    const auto requireUtilityNumericProperty =
+        [](const std::vector<kb::editor::MaterialEditorGraphNodeProperty>& properties,
+            std::string_view stableId,
+            float expectedValue,
+            const char* message) {
+            const auto property = std::ranges::find_if(properties, [stableId](const kb::editor::MaterialEditorGraphNodeProperty& candidate) {
+                return candidate.stableId == stableId;
+            });
+            kb::editor::tests::Require(property != properties.end() &&
+                    property->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Numeric &&
+                    property->type == kb::render::RenderMaterialParameterType::Scalar &&
+                    property->value.numbers[0] == expectedValue,
+                message);
+        };
+
+    kb::editor::MaterialEditorState uvUtilityEditor;
+    kb::render::RenderMaterialAssetData uvUtilityAsset{};
+    uvUtilityAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    uvUtilityAsset.graph.shadingModel = "unlit";
+    uvUtilityEditor.Open(kb::assets::AssetId{ 0x5812U }, uvUtilityAsset);
+
+    std::uint32_t pannerNodeId = 0U;
+    kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Panner, -520, -120, &pannerNodeId),
+        "KBMAT-MAT82: Material Editor should create a Panner node for numeric utility property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> pannerProperties = uvUtilityEditor.GraphNodeProperties(pannerNodeId);
+    requireUtilityNumericProperty(pannerProperties, "panner.speedU", 0.1F, "KBMAT-MAT82: Panner should expose Speed U as a numeric property");
+    requireUtilityNumericProperty(pannerProperties, "panner.speedV", 0.0F, "KBMAT-MAT82: Panner should expose Speed V as a numeric property");
+    kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 0U, 0.25F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(pannerNodeId, 1U, -0.5F),
+        "KBMAT-MAT82: Panner numeric utility properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* pannerNode =
+        kb::render::FindRenderMaterialGraphNode(uvUtilityEditor.WorkingCopy()->graph, pannerNodeId);
+    kb::editor::tests::Require(pannerNode != nullptr && pannerNode->parameter.defaultValueHint == "0.25 -0.5",
+        "KBMAT-MAT82: Panner should persist speedU/speedV in the runtime hint format");
+
+    std::uint32_t rotatorNodeId = 0U;
+    kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Rotator, -520, 40, &rotatorNodeId),
+        "KBMAT-MAT82: Material Editor should create a Rotator node for numeric utility property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> rotatorProperties = uvUtilityEditor.GraphNodeProperties(rotatorNodeId);
+    requireUtilityNumericProperty(rotatorProperties, "rotator.speed", 1.0F, "KBMAT-MAT82: Rotator should expose Speed as a numeric property");
+    requireUtilityNumericProperty(rotatorProperties, "rotator.centerU", 0.5F, "KBMAT-MAT82: Rotator should expose Center U as a numeric property");
+    requireUtilityNumericProperty(rotatorProperties, "rotator.centerV", 0.5F, "KBMAT-MAT82: Rotator should expose Center V as a numeric property");
+    kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(rotatorNodeId, 0U, 2.0F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(rotatorNodeId, 1U, 0.25F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(rotatorNodeId, 2U, 0.75F),
+        "KBMAT-MAT82: Rotator numeric utility properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* rotatorNode =
+        kb::render::FindRenderMaterialGraphNode(uvUtilityEditor.WorkingCopy()->graph, rotatorNodeId);
+    kb::editor::tests::Require(rotatorNode != nullptr && rotatorNode->parameter.defaultValueHint == "2 0.25 0.75",
+        "KBMAT-MAT82: Rotator should persist speed/centerU/centerV in the runtime hint format");
+
+    std::uint32_t bumpOffsetNodeId = 0U;
+    kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::BumpOffset, -520, 200, &bumpOffsetNodeId),
+        "KBMAT-MAT82: Material Editor should create a BumpOffset node for numeric utility property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> bumpOffsetProperties = uvUtilityEditor.GraphNodeProperties(bumpOffsetNodeId);
+    requireUtilityNumericProperty(
+        bumpOffsetProperties,
+        "bumpOffset.heightRatio",
+        0.05F,
+        "KBMAT-MAT82: BumpOffset should expose Height Ratio as a numeric property");
+    kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(bumpOffsetNodeId, 0U, 0.125F),
+        "KBMAT-MAT82: BumpOffset numeric utility property should update node metadata");
+    const kb::render::RenderMaterialGraphNode* bumpOffsetNode =
+        kb::render::FindRenderMaterialGraphNode(uvUtilityEditor.WorkingCopy()->graph, bumpOffsetNodeId);
+    kb::editor::tests::Require(bumpOffsetNode != nullptr && bumpOffsetNode->parameter.defaultValueHint == "0.125",
+        "KBMAT-MAT82: BumpOffset should persist heightRatio in the runtime hint format");
+
+    std::uint32_t constantBiasScaleNodeId = 0U;
+    kb::editor::tests::Require(
+        uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale, -520, 360, &constantBiasScaleNodeId),
+        "KBMAT-MAT82: Material Editor should create a ConstantBiasScale node for numeric utility property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> constantBiasScaleProperties =
+        uvUtilityEditor.GraphNodeProperties(constantBiasScaleNodeId);
+    requireUtilityNumericProperty(
+        constantBiasScaleProperties,
+        "constantBiasScale.bias",
+        0.0F,
+        "KBMAT-MAT82: ConstantBiasScale should expose Bias as a numeric property");
+    requireUtilityNumericProperty(
+        constantBiasScaleProperties,
+        "constantBiasScale.scale",
+        1.0F,
+        "KBMAT-MAT82: ConstantBiasScale should expose Scale as a numeric property");
+    kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(constantBiasScaleNodeId, 0U, -0.25F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(constantBiasScaleNodeId, 1U, 2.0F),
+        "KBMAT-MAT82: ConstantBiasScale numeric utility properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* constantBiasScaleNode =
+        kb::render::FindRenderMaterialGraphNode(uvUtilityEditor.WorkingCopy()->graph, constantBiasScaleNodeId);
+    kb::editor::tests::Require(constantBiasScaleNode != nullptr && constantBiasScaleNode->parameter.defaultValueHint == "-0.25 2",
+        "KBMAT-MAT82: ConstantBiasScale should persist bias/scale in the runtime hint format");
+
+    std::uint32_t pannerSampleNodeId = 0U;
+    std::uint32_t rotatorSampleNodeId = 0U;
+    std::uint32_t bumpSampleNodeId = 0U;
+    kb::editor::tests::Require(uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -260, -120, &pannerSampleNodeId) &&
+            uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -260, 40, &rotatorSampleNodeId) &&
+            uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -260, 200, &bumpSampleNodeId),
+        "KBMAT-MAT82: Edited UV utility graph should create texture sample sinks");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(pannerNodeId, "uv", pannerSampleNodeId, "uv"),
+        "KBMAT-MAT82: Edited Panner UV should route into TextureSample UV");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(rotatorNodeId, "uv", rotatorSampleNodeId, "uv"),
+        "KBMAT-MAT82: Edited Rotator UV should route into TextureSample UV");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(bumpOffsetNodeId, "uv", bumpSampleNodeId, "uv"),
+        "KBMAT-MAT82: Edited BumpOffset UV should route into TextureSample UV");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(pannerSampleNodeId, "color", 1U, "baseColor"),
+        "KBMAT-MAT82: Panner-driven texture sample should route into Base Color");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(rotatorSampleNodeId, "color", 1U, "emissive"),
+        "KBMAT-MAT82: Rotator-driven texture sample should route into Emissive");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(bumpSampleNodeId, "a", 1U, "roughness"),
+        "KBMAT-MAT82: BumpOffset-driven texture sample alpha should route into Roughness");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "thinTranslucentOutput"),
+        "KBMAT-MAT82: ConstantBiasScale result should route into a color material output");
+    const kb::render::RenderMaterialGraphCompileResult uvUtilityCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            uvUtilityEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5812U });
+    kb::editor::tests::Require(uvUtilityCompiled.Succeeded() &&
+            uvUtilityCompiled.shader.source.find("vec2(0.25, -0.5)") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("vec2(0.25, 0.75)") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("* 2.0") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("* 0.125") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("vec4_splat(-0.25)") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("vec4_splat(2.0)") != std::string::npos,
+        "KBMAT-MAT82: Edited UV utility properties should compile into production shader expressions");
+
     kb::editor::MaterialEditorState viewPropertyEditor;
     kb::render::RenderMaterialAssetData viewPropertyAsset{};
     viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
