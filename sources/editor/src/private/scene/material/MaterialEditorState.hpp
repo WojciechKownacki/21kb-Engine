@@ -1464,6 +1464,51 @@ public:
         return false;
     }
 
+    [[nodiscard]] bool SetGraphMaterialFunctionCallSignature(
+        std::uint32_t nodeId,
+        std::uint64_t functionAssetId,
+        const kb::render::RenderMaterialGraphDocument& functionGraph) {
+        if (!workingCopy_.has_value() || nodeId == 0U || functionAssetId == 0U) {
+            return false;
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
+        if (node == nullptr || node->kind != kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            return false;
+        }
+        node->parameter.stableId = std::to_string(functionAssetId);
+        node->parameter.defaultValueHint.clear();
+        node->customCode = kb::render::BuildRenderMaterialFunctionCallCustomCode(functionGraph);
+
+        const auto linkStillValid = [&document](kb::render::RenderMaterialGraphLink& link) {
+            const kb::render::RenderMaterialGraphNode* fromNode = kb::render::FindRenderMaterialGraphNode(document.graph, link.fromNodeId);
+            const kb::render::RenderMaterialGraphNode* toNode = kb::render::FindRenderMaterialGraphNode(document.graph, link.toNodeId);
+            if (fromNode == nullptr || toNode == nullptr ||
+                !kb::render::IsRenderMaterialGraphOutputPin(*fromNode, link.fromPin) ||
+                !kb::render::IsRenderMaterialGraphInputPin(*toNode, link.toPin) ||
+                !kb::render::AreRenderMaterialGraphPinsCompatible(*fromNode, link.fromPin, *toNode, link.toPin)) {
+                return false;
+            }
+            link.fromPinId = kb::render::RenderMaterialGraphStablePinId(*fromNode, link.fromPin, true);
+            link.toPinId = kb::render::RenderMaterialGraphStablePinId(*toNode, link.toPin, false);
+            link.id = kb::render::MakeRenderMaterialGraphLinkId(link);
+            return link.fromPinId != 0U && link.toPinId != 0U && link.id != 0U;
+        };
+        document.graph.links.erase(
+            std::remove_if(document.graph.links.begin(), document.graph.links.end(), [&](kb::render::RenderMaterialGraphLink& link) {
+                if (link.fromNodeId != nodeId && link.toNodeId != nodeId) {
+                    return false;
+                }
+                return !linkStillValid(link);
+            }),
+            document.graph.links.end());
+
+        SetWorkingCopy(std::move(document));
+        SelectNode(nodeId);
+        return true;
+    }
+
     [[nodiscard]] std::vector<MaterialEditorGraphNodeProperty> GraphNodeProperties(std::uint32_t nodeId) const {
         std::vector<MaterialEditorGraphNodeProperty> properties;
         if (!workingCopy_.has_value() || nodeId == 0U) {

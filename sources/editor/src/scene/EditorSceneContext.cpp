@@ -30,6 +30,7 @@
 #include "engine/script/ScriptModule.hpp"
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
@@ -80,6 +81,7 @@
 #include <cstdlib>
 #include <exception>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -127,6 +129,31 @@ constexpr std::string_view kEditorLiveAssetOverrideCategory = "EditorLiveOverrid
     }
     const auto nextIt = std::next(currentIt);
     return nextIt == materials.end() ? kb::assets::AssetId{} : *nextIt;
+}
+
+[[nodiscard]] bool ParseDecimalAssetId(std::string_view text, std::uint64_t& output) noexcept {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t' || text.front() == '\r' || text.front() == '\n')) {
+        text.remove_prefix(1U);
+    }
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r' || text.back() == '\n')) {
+        text.remove_suffix(1U);
+    }
+    if (text.empty()) {
+        return false;
+    }
+    std::uint64_t value = 0U;
+    for (const char ch : text) {
+        if (ch < '0' || ch > '9') {
+            return false;
+        }
+        const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10ULL) {
+            return false;
+        }
+        value = value * 10ULL + digit;
+    }
+    output = value;
+    return true;
 }
 
 [[nodiscard]] kb::render::RenderMaterialAlphaMode NextAlphaMode(kb::render::RenderMaterialAlphaMode mode) noexcept {
@@ -3716,9 +3743,32 @@ bool EditorSceneContext::SetMaterialGraphNodeTextProperty(
     const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
     std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
     const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
-    if (!materialEditor_.SetGraphNodeTextProperty(nodeId, propertyId, value)) {
-        console_.Error("Materials", "Material graph node property value is invalid.");
-        return false;
+    if (propertyId == "function.assetId") {
+        std::uint64_t functionAssetId = 0U;
+        if (!ParseDecimalAssetId(value, functionAssetId) || functionAssetId == 0U) {
+            console_.Error("Materials", "Material Function Call requires a numeric function asset id.");
+            return false;
+        }
+        const kb::assets::AssetMetadata* metadata = scene_->Assets().Manager().Registry().Find(kb::assets::AssetId{ functionAssetId });
+        if (metadata == nullptr || metadata->type != kb::render::kRenderMaterialFunctionAssetType) {
+            console_.Error("Materials", "Material Function Call rejected an asset that is not a Material Function.");
+            return false;
+        }
+        const std::optional<kb::render::RenderMaterialFunctionAssetData> function =
+            kb::render::RenderMaterialFunctionAssetLoader::LoadFunction(ResolveAssetPath(scene_->Assets().Manager(), *metadata));
+        if (!function.has_value()) {
+            console_.Error("Materials", "Material Function Call could not load the selected function asset.");
+            return false;
+        }
+        if (!materialEditor_.SetGraphMaterialFunctionCallSignature(nodeId, functionAssetId, function->graph)) {
+            console_.Error("Materials", "Material graph function call value is invalid.");
+            return false;
+        }
+    } else {
+        if (!materialEditor_.SetGraphNodeTextProperty(nodeId, propertyId, value)) {
+            console_.Error("Materials", "Material graph node property value is invalid.");
+            return false;
+        }
     }
     if (!RecordMaterialGraphWorkingCopyEdit(
             id,

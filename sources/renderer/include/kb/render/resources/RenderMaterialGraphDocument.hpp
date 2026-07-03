@@ -730,6 +730,7 @@ void WriteRenderMaterialGraphDocument(std::ostream& output, const RenderMaterial
     std::span<const RenderMaterialGraphDependencyHashInput> dependencies = {},
     std::uint64_t shaderIncludeHash = 0U);
 [[nodiscard]] std::vector<std::uint64_t> DiscoverRenderMaterialGraphFunctionDependencies(const RenderMaterialGraphDocument& graph);
+[[nodiscard]] RenderMaterialGraphCustomCode BuildRenderMaterialFunctionCallCustomCode(const RenderMaterialGraphDocument& functionGraph);
 [[nodiscard]] RenderMaterialGraphFunctionInlineResult InlineRenderMaterialGraphFunctions(
     const RenderMaterialGraphDocument& graph,
     RenderMaterialGraphBuildContext context = {});

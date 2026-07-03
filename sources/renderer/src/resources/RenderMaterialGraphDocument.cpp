@@ -3272,6 +3272,34 @@ struct FunctionSignature {
     return signature;
 }
 
+} // namespace
+
+RenderMaterialGraphCustomCode BuildRenderMaterialFunctionCallCustomCode(const RenderMaterialGraphDocument& functionGraph) {
+    const FunctionSignature signature = BuildMaterialFunctionSignature(functionGraph);
+    RenderMaterialGraphCustomCode customCode{};
+    customCode.body.clear();
+    customCode.inputs.clear();
+    customCode.outputs.clear();
+    customCode.outputType = signature.outputs.empty() ? RenderMaterialGraphPinType::Float4 : signature.outputs.front().type;
+    customCode.inputs.reserve(signature.inputs.size());
+    for (const FunctionEndpointSignature& input : signature.inputs) {
+        customCode.inputs.push_back(RenderMaterialGraphCustomPin{
+            .name = input.name,
+            .type = input.type,
+        });
+    }
+    customCode.outputs.reserve(signature.outputs.size());
+    for (const FunctionEndpointSignature& output : signature.outputs) {
+        customCode.outputs.push_back(RenderMaterialGraphCustomPin{
+            .name = output.name,
+            .type = output.type,
+        });
+    }
+    return customCode;
+}
+
+namespace {
+
 [[nodiscard]] bool PinListsMatchFunctionSignature(
     const std::vector<RenderMaterialGraphCustomPin>& callPins,
     std::span<const FunctionEndpointSignature> functionPins) noexcept {
