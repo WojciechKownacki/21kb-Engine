@@ -455,6 +455,11 @@ public:
         kb::assets::AssetId id,
         std::uint32_t nodeId,
         std::string_view valueText);
+    [[nodiscard]] bool SetMaterialGraphNodeTextProperty(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        std::string_view propertyId,
+        std::string_view value);
     [[nodiscard]] bool SetMaterialGraphNodeDisplayName(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view displayName);
     [[nodiscard]] bool BeginMaterialGraphNodeRenameEdit(kb::assets::AssetId id, std::uint32_t nodeId);
     [[nodiscard]] bool IsMaterialGraphNodeRenameEditing() const noexcept;
