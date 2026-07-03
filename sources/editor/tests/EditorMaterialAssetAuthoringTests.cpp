@@ -2171,6 +2171,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePixelDepth);
     kb::editor::tests::Require(pixelDepthKind.has_value() && *pixelDepthKind == kb::render::RenderMaterialGraphNodeKind::PixelDepth,
         "KBMAT-MAT57: CreatePixelDepth command should map to the PixelDepth graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> pixelPositionKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePixelPosition);
+    kb::editor::tests::Require(pixelPositionKind.has_value() && *pixelPositionKind == kb::render::RenderMaterialGraphNodeKind::PixelPosition,
+        "KBMAT-MAT57: CreatePixelPosition command should map to the PixelPosition graph node kind");
     const std::optional<kb::render::RenderMaterialGraphNodeKind> cameraDepthFadeKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateCameraDepthFade);
     kb::editor::tests::Require(cameraDepthFadeKind.has_value() && *cameraDepthFadeKind == kb::render::RenderMaterialGraphNodeKind::CameraDepthFade,
@@ -2225,28 +2229,34 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
     std::uint32_t sceneColorNodeId = 0U;
     std::uint32_t sceneTextureNodeId = 0U;
     std::uint32_t pixelDepthNodeId = 0U;
+    std::uint32_t pixelPositionNodeId = 0U;
     std::uint32_t cameraDepthFadeNodeId = 0U;
     kb::editor::tests::Require(
         materialEditor.AddGraphNode(*sceneColorKind, -120, 160, &sceneColorNodeId) &&
             materialEditor.AddGraphNode(*sceneTextureKind, 120, 160, &sceneTextureNodeId) &&
             materialEditor.AddGraphNode(*pixelDepthKind, 320, 160, &pixelDepthNodeId) &&
-            materialEditor.AddGraphNode(*cameraDepthFadeKind, 520, 160, &cameraDepthFadeNodeId),
-        "KBMAT-MAT57: MaterialEditorState must create SceneColor, SceneTexture, PixelDepth and CameraDepthFade nodes from palette commands");
+            materialEditor.AddGraphNode(*pixelPositionKind, 520, 160, &pixelPositionNodeId) &&
+            materialEditor.AddGraphNode(*cameraDepthFadeKind, 720, 160, &cameraDepthFadeNodeId),
+        "KBMAT-MAT57: MaterialEditorState must create SceneColor, SceneTexture, PixelDepth, PixelPosition and CameraDepthFade nodes from palette commands");
     const kb::render::RenderMaterialGraphNode* sceneColorNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneColorNodeId);
     const kb::render::RenderMaterialGraphNode* sceneTextureNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneTextureNodeId);
     const kb::render::RenderMaterialGraphNode* pixelDepthNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, pixelDepthNodeId);
+    const kb::render::RenderMaterialGraphNode* pixelPositionNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, pixelPositionNodeId);
     const kb::render::RenderMaterialGraphNode* cameraDepthFadeNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, cameraDepthFadeNodeId);
     kb::editor::tests::Require(sceneColorNode != nullptr &&
             sceneTextureNode != nullptr &&
             pixelDepthNode != nullptr &&
+            pixelPositionNode != nullptr &&
             cameraDepthFadeNode != nullptr &&
             kb::render::RenderMaterialGraphPinDataType(*sceneColorNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
             kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
             kb::render::RenderMaterialGraphPinDataType(*pixelDepthNode, "value", true) == kb::render::RenderMaterialGraphPinType::Float &&
+            kb::render::RenderMaterialGraphPinDataType(*pixelPositionNode, "xy", true) == kb::render::RenderMaterialGraphPinType::Float2 &&
             kb::render::RenderMaterialGraphPinDataType(*cameraDepthFadeNode, "value", true) == kb::render::RenderMaterialGraphPinType::Float,
         "KBMAT-MAT57: Scene/depth palette nodes must expose real typed output pins");
 
@@ -2288,6 +2298,41 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
                 "KBMAT-MAT57: Uniform-backed runtime input nodes must not request vertex varyings");
         }
     };
+    const auto compilePaletteFloat2Input = [](
+        kb::editor::MaterialEditorGraphMenuCommand command,
+        std::string_view outputPin,
+        std::string_view expectedSourceToken,
+        std::uint64_t assetId,
+        const char* message) {
+        kb::editor::MaterialEditorState editor;
+        kb::render::RenderMaterialAssetData asset{};
+        asset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        asset.graph.shadingModel = "unlit";
+        editor.Open(kb::assets::AssetId{ assetId }, asset);
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(kind.has_value() && editor.AddGraphNode(*kind, -260, 96, &nodeId), message);
+        const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, nodeId);
+        kb::editor::tests::Require(node != nullptr &&
+                kb::render::RenderMaterialGraphPinDataType(*node, outputPin, true) == kb::render::RenderMaterialGraphPinType::Float2,
+            "KBMAT-MAT57: Palette-created coordinate node must expose a float2 output pin");
+        std::uint32_t sampleId = 0U;
+        kb::editor::tests::Require(editor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -60, 96, &sampleId),
+            "KBMAT-MAT57: Palette-created coordinate graph must create a real texture sample node");
+        const kb::render::RenderMaterialGraphNode* sampleNode = kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, sampleId);
+        kb::editor::tests::Require(sampleNode != nullptr, "KBMAT-MAT57: Palette-created coordinate graph texture sample must be addressable");
+        kb::editor::tests::Require(editor.ConnectGraphPins(nodeId, outputPin, sampleId, "uv"),
+            "KBMAT-MAT57: Palette-created coordinate node must connect to a texture UV pin");
+        kb::editor::tests::Require(editor.ConnectGraphPins(sampleId, "color", 1U, "baseColor"),
+            "KBMAT-MAT57: Palette-created coordinate graph must connect sampled color to baseColor");
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            editor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = assetId });
+        kb::editor::tests::Require(compiled.Succeeded(), message);
+        kb::editor::tests::Require(compiled.shader.source.find(expectedSourceToken) != std::string::npos,
+            "KBMAT-MAT57: Palette-created coordinate node must emit the expected shader context read");
+    };
     compilePaletteRuntimeInput(
         kb::editor::MaterialEditorGraphMenuCommand::CreateDeltaTime,
         "value",
@@ -2304,6 +2349,12 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         std::nullopt,
         0x3967U,
         "KBMAT-MAT57: MaterialEditorState must create PixelDepth nodes from the palette");
+    compilePaletteFloat2Input(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePixelPosition,
+        "xy",
+        "ctx.screenPosition * ctx.viewSize",
+        0x396aU,
+        "KBMAT-MAT57: MaterialEditorState must create PixelPosition nodes from the palette");
     compilePaletteRuntimeInput(
         kb::editor::MaterialEditorGraphMenuCommand::CreateCameraDepthFade,
         "value",
