@@ -1645,6 +1645,19 @@ public:
                 .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "uvSet"),
             });
         }
+        if (const std::vector<MaterialEditorGraphNodePropertyOption> options = GraphNodeEnumOptions(node->kind, "viewProperty");
+            !options.empty()) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "viewProperty",
+                .displayName = "Property",
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(GraphNodeViewPropertyValue(*node)),
+                .options = options,
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "viewProperty"),
+            });
+        }
 
         return properties;
     }
@@ -3017,6 +3030,14 @@ private:
     [[nodiscard]] static std::vector<MaterialEditorGraphNodePropertyOption> GraphNodeEnumOptions(
         kb::render::RenderMaterialGraphNodeKind kind,
         std::string_view propertyId) {
+        if (propertyId == "viewProperty" && kind == kb::render::RenderMaterialGraphNodeKind::ViewProperty) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "viewSize", .label = "View Size" },
+                MaterialEditorGraphNodePropertyOption{ .value = "invViewSize", .label = "Inverse View Size" },
+                MaterialEditorGraphNodePropertyOption{ .value = "screenPosition", .label = "Screen Position" },
+                MaterialEditorGraphNodePropertyOption{ .value = "pixelPosition", .label = "Pixel Position" },
+            };
+        }
         if (propertyId != "uvSet") {
             if (propertyId == "constant.bool" && kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
                 return {
@@ -3041,6 +3062,25 @@ private:
             return "1";
         }
         return "0";
+    }
+
+    [[nodiscard]] static std::string GraphNodeViewPropertyValue(const kb::render::RenderMaterialGraphNode& node) {
+        if (node.parameter.defaultValueHint == "invViewSize" ||
+            node.parameter.defaultValueHint == "inverseViewSize" ||
+            node.parameter.defaultValueHint == "viewInvSize") {
+            return "invViewSize";
+        }
+        if (node.parameter.defaultValueHint == "screenPosition" ||
+            node.parameter.defaultValueHint == "viewportUV" ||
+            node.parameter.defaultValueHint == "screenUV") {
+            return "screenPosition";
+        }
+        if (node.parameter.defaultValueHint == "pixelPosition" ||
+            node.parameter.defaultValueHint == "viewportPixelPosition" ||
+            node.parameter.defaultValueHint == "screenPixelPosition") {
+            return "pixelPosition";
+        }
+        return "viewSize";
     }
 
     [[nodiscard]] static std::uint64_t GraphNodeTextureAssetId(
@@ -3965,6 +4005,12 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Texture Coordinate",
                 .defaultValueHint = "0",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "View Property",
+                .defaultValueHint = "viewSize",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:

@@ -1665,6 +1665,19 @@ void AppendCustomCodeFunctionDefinitions(
     return "vec4(" + r + ", " + g + ", " + b + ", " + a + ")";
 }
 
+[[nodiscard]] std::string ViewPropertyExpression(std::string_view hint) {
+    if (EqualsIgnoreCase(hint, "invViewSize") || EqualsIgnoreCase(hint, "inverseViewSize") || EqualsIgnoreCase(hint, "viewInvSize")) {
+        return "(vec2(1.0, 1.0) / max(ctx.viewSize, vec2(1.0, 1.0)))";
+    }
+    if (EqualsIgnoreCase(hint, "screenPosition") || EqualsIgnoreCase(hint, "viewportUV") || EqualsIgnoreCase(hint, "screenUV")) {
+        return "ctx.screenPosition";
+    }
+    if (EqualsIgnoreCase(hint, "pixelPosition") || EqualsIgnoreCase(hint, "viewportPixelPosition") || EqualsIgnoreCase(hint, "screenPixelPosition")) {
+        return "(ctx.screenPosition * ctx.viewSize)";
+    }
+    return "ctx.viewSize";
+}
+
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::Reroute:
@@ -1728,8 +1741,9 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::PreSkinnedNormal:
         return "ctx.preSkinnedNormal";
     case RenderMaterialGraphNodeKind::ViewSize:
-    case RenderMaterialGraphNodeKind::ViewProperty:
         return "ctx.viewSize";
+    case RenderMaterialGraphNodeKind::ViewProperty:
+        return ViewPropertyExpression(node.parameter.defaultValueHint);
     case RenderMaterialGraphNodeKind::TwoSidedSign:
         return "ctx.twoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
