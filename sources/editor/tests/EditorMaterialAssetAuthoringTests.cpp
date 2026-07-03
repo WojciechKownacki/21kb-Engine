@@ -1873,6 +1873,55 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         }
     }
 
+    kb::editor::MaterialEditorState paletteRoundTripEditor;
+    kb::render::RenderMaterialAssetData paletteRoundTripMaterial{};
+    paletteRoundTripMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    paletteRoundTripEditor.Open(kb::assets::AssetId{ 0x57C900U }, paletteRoundTripMaterial);
+    std::vector<std::pair<std::uint32_t, kb::render::RenderMaterialGraphNodeKind>> paletteRoundTripNodes;
+    for (const kb::editor::MaterialEditorGraphMenuCommand command : allPaletteCommands) {
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        if (!kind.has_value()) {
+            continue;
+        }
+        const std::int32_t column = static_cast<std::int32_t>(paletteRoundTripNodes.size() % 12U);
+        const std::int32_t row = static_cast<std::int32_t>(paletteRoundTripNodes.size() / 12U);
+        std::uint32_t nodeId = 0U;
+        kb::editor::tests::Require(paletteRoundTripEditor.AddGraphNode(*kind, -900 + column * 180, -480 + row * 120, &nodeId),
+            "KBMAT-MAT57C: Every palette node should join a complete material graph before serialization");
+        paletteRoundTripNodes.emplace_back(nodeId, *kind);
+    }
+    std::ostringstream paletteRoundTripSerialized;
+    kb::render::RenderMaterialAssetWriter::Write(paletteRoundTripSerialized, *paletteRoundTripEditor.WorkingCopy());
+    std::istringstream paletteRoundTripInput{ paletteRoundTripSerialized.str() };
+    const kb::render::RenderMaterialAssetParseResult paletteRoundTripParsed =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(paletteRoundTripInput);
+    if (!paletteRoundTripParsed.asset.has_value()) {
+        for (const auto& diagnostic : paletteRoundTripParsed.diagnostics) {
+            std::cerr << "KBMAT-MAT57C palette round-trip diagnostic line=" << diagnostic.line
+                      << " field=" << diagnostic.field
+                      << " text=" << diagnostic.text
+                      << ": " << diagnostic.message << '\n';
+        }
+    }
+    kb::editor::tests::Require(paletteRoundTripParsed.asset.has_value(),
+        "KBMAT-MAT57C: Complete palette graph should deserialize after writer round-trip");
+    kb::editor::tests::Require(paletteRoundTripParsed.asset->graph.nodes.size() == paletteRoundTripEditor.WorkingCopy()->graph.nodes.size(),
+        "KBMAT-MAT57C: Complete palette graph round-trip should preserve every graph node");
+    for (const auto& [nodeId, kind] : paletteRoundTripNodes) {
+        const kb::render::RenderMaterialGraphNode* reloadedNode =
+            kb::render::FindRenderMaterialGraphNode(paletteRoundTripParsed.asset->graph, nodeId);
+        if (reloadedNode == nullptr || reloadedNode->kind != kind) {
+            std::cerr << "KBMAT-MAT57C palette round-trip missing node id=" << nodeId
+                      << " kind=" << kb::render::RenderMaterialGraphNodeKindName(kind) << '\n';
+        }
+        kb::editor::tests::Require(reloadedNode != nullptr && reloadedNode->kind == kind,
+            "KBMAT-MAT57C: Complete palette graph round-trip should preserve node ids and kinds");
+        kb::editor::tests::Require(!kb::render::RenderMaterialGraphNodeInputPinNames(*reloadedNode).empty() ||
+                !kb::render::RenderMaterialGraphNodeOutputPinNames(*reloadedNode).empty(),
+            "KBMAT-MAT57C: Round-tripped palette nodes should keep runtime-visible pins");
+    }
+
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
         kb::editor::MaterialEditorGraphCompatibleCommands(graph, 1U, "baseColor", false);
