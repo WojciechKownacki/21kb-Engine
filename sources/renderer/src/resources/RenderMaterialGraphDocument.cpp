@@ -848,6 +848,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
         AppendIrPin(irNode, irNode.kind, "a", true);
         break;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         AppendIrPin(irNode, irNode.kind, "xy", true);
         break;
     case RenderMaterialGraphNodeKind::LocalPosition:
@@ -1150,6 +1151,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -2403,6 +2405,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "ctx.vertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
         return "ctx.screenPosition";
+    case RenderMaterialGraphNodeKind::PixelPosition:
+        return "(ctx.screenPosition * ctx.viewSize)";
     case RenderMaterialGraphNodeKind::LocalPosition:
         return "ctx.localPosition";
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -2680,6 +2684,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -2871,6 +2876,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -3020,6 +3026,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -4247,6 +4254,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "VertexColor";
     case RenderMaterialGraphNodeKind::ScreenPosition:
         return "ScreenPosition";
+    case RenderMaterialGraphNodeKind::PixelPosition:
+        return "PixelPosition";
     case RenderMaterialGraphNodeKind::LocalPosition:
         return "LocalPosition";
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -4590,6 +4599,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "ScreenPosition")) {
         return RenderMaterialGraphNodeKind::ScreenPosition;
+    }
+    if (EqualsIgnoreCase(text, "PixelPosition") || EqualsIgnoreCase(text, "ViewportPixelPosition") || EqualsIgnoreCase(text, "ScreenPixelPosition")) {
+        return RenderMaterialGraphNodeKind::PixelPosition;
     }
     if (EqualsIgnoreCase(text, "LocalPosition")) {
         return RenderMaterialGraphNodeKind::LocalPosition;
@@ -5007,6 +5019,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -5329,6 +5342,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::DynamicParameter,
         RenderMaterialGraphNodeKind::VertexColor,
         RenderMaterialGraphNodeKind::ScreenPosition,
+        RenderMaterialGraphNodeKind::PixelPosition,
         RenderMaterialGraphNodeKind::LocalPosition,
         RenderMaterialGraphNodeKind::ObjectPosition,
         RenderMaterialGraphNodeKind::WorldPosition,
@@ -7316,6 +7330,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:
@@ -7432,6 +7447,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
         return pin == "value" || pin == "scalar" || pin == "xyz" || pin == "rgba" ||
             pin == "r" || pin == "g" || pin == "b" || pin == "a";
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         return pin == "xy";
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -8019,6 +8035,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
         if (outputPin && (pin == "r" || pin == "g" || pin == "b" || pin == "a")) return RenderMaterialGraphPinType::Float;
         return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         return outputPin && pin == "xy" ? RenderMaterialGraphPinType::Float2 : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
@@ -8648,6 +8665,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
         if (outputPin && pin == "a") return PinId(nodeKind, direction, 5U);
         return 0U;
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
         if (outputPin && pin == "xy") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::LocalPosition:
@@ -8806,6 +8824,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::DynamicParameter:
     case RenderMaterialGraphNodeKind::VertexColor:
     case RenderMaterialGraphNodeKind::ScreenPosition:
+    case RenderMaterialGraphNodeKind::PixelPosition:
     case RenderMaterialGraphNodeKind::LocalPosition:
     case RenderMaterialGraphNodeKind::ObjectPosition:
     case RenderMaterialGraphNodeKind::WorldPosition:

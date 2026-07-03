@@ -4736,18 +4736,21 @@ void RunMaterialWorldSpaceNodeCodegenTest() {
     const RenderMaterialGraphCompileResult objectBounds = CompileRenderMaterialGraphToShaderSource(boundsGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0462U });
     Require(objectBounds.Succeeded() && objectBounds.shader.source.find("ctx.objectBounds") != std::string::npos, "KBMAT-MAT46: ObjectBounds must emit ctx.objectBounds");
 
-    // Float2 view-size nodes routed through a TextureSample UV pin.
-    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind) {
+    // Float2 screen/view nodes routed through a TextureSample UV pin.
+    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind, std::string_view outputPin) {
         RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
         graph.shadingModel = "unlit";
         graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind });
         graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::TextureSample, .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "vs", .textureRole = "baseColor", .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb } });
-        graph.links.push_back(MakeGraphLink(kind, 2U, "value", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+        graph.links.push_back(MakeGraphLink(kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
         graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
         return CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0461U });
     };
-    const RenderMaterialGraphCompileResult viewSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewSize);
-    const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty);
+    const RenderMaterialGraphCompileResult pixelPosition = compileVec2Node(RenderMaterialGraphNodeKind::PixelPosition, "xy");
+    const RenderMaterialGraphCompileResult viewSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewSize, "value");
+    const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value");
+    Require(pixelPosition.Succeeded() && pixelPosition.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: PixelPosition must emit absolute viewport pixel coordinates");
     Require(viewSize.Succeeded() && viewSize.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewSize must emit ctx.viewSize");
     Require(viewProperty.Succeeded() && viewProperty.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewProperty must emit a view property (ctx.viewSize)");
 
@@ -5009,6 +5012,8 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
         "KBMAT-MAT31: parser must recognize SceneTexture");
     Require(ParseRenderMaterialGraphNodeKind("PixelDepth").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelDepth,
         "KBMAT-MAT31: parser must recognize PixelDepth");
+    Require(ParseRenderMaterialGraphNodeKind("PixelPosition").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelPosition,
+        "KBMAT-MAT31: parser must recognize PixelPosition");
     Require(ParseRenderMaterialGraphNodeKind("CameraDepthFade").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::CameraDepthFade,
         "KBMAT-MAT31: parser must recognize CameraDepthFade");
 
@@ -5027,6 +5032,9 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelDepth, "value") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelDepth, "value", true) == RenderMaterialGraphPinType::Float,
         "KBMAT-MAT31: PixelDepth must expose a float value output");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelPosition, "xy") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelPosition, "xy", true) == RenderMaterialGraphPinType::Float2,
+        "KBMAT-MAT31: PixelPosition must expose a float2 xy output");
     Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeLength") &&
             IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeOffset") &&
             IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "value") &&
