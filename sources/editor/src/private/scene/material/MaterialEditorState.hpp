@@ -393,6 +393,14 @@ struct MaterialEditorFindFocusTarget {
     std::int32_t graphY = 0;
 };
 
+struct GraphHintNumericPropertyDefinition {
+    std::string_view stableId;
+    std::string_view displayName;
+    float defaultValue = 0.0F;
+    float rangeMin = 0.0F;
+    float rangeMax = 1.0F;
+};
+
 class MaterialEditorState {
     struct GraphClipboard {
         std::vector<kb::render::RenderMaterialGraphNode> nodes;
@@ -1315,6 +1323,16 @@ public:
             const std::array<float, 2U> tiling = TextureCoordinateTiling(*node);
             return tiling[componentIndex];
         }
+        if (node != nullptr) {
+            const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node->kind);
+            if (!definitions.empty()) {
+                if (componentIndex >= definitions.size()) {
+                    return std::nullopt;
+                }
+                const std::array<float, 4U> values = GraphHintNumericValues(*node);
+                return values[componentIndex];
+            }
+        }
         if (node == nullptr || !IsGraphConstantNode(node->kind)) {
             return std::nullopt;
         }
@@ -1339,6 +1357,15 @@ public:
         if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && componentIndex < 2U) {
             return kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 16.0F };
         }
+        if (node != nullptr) {
+            const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node->kind);
+            if (!definitions.empty() && componentIndex < definitions.size()) {
+                return kb::render::RenderMaterialParameterRange{
+                    .min = definitions[componentIndex].rangeMin,
+                    .max = definitions[componentIndex].rangeMax,
+                };
+            }
+        }
         if (node == nullptr || !IsGraphConstantNode(node->kind) || componentIndex >= ConstantComponentCount(node->kind)) {
             return std::nullopt;
         }
@@ -1362,6 +1389,24 @@ public:
             textureCoordinateNode->parameter.overrideSupported = false;
             if (textureCoordinateNode->parameter.displayName.empty()) {
                 textureCoordinateNode->parameter.displayName = GraphNodeDisplayName(textureCoordinateNode->kind);
+            }
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
+        }
+        if (kb::render::RenderMaterialGraphNode* hintNumericNode = FindMutableGraphNode(document.graph, nodeId);
+            hintNumericNode != nullptr && !GraphHintNumericProperties(hintNumericNode->kind).empty()) {
+            const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(hintNumericNode->kind);
+            if (componentIndex >= definitions.size()) {
+                return false;
+            }
+            std::array<float, 4U> values = GraphHintNumericValues(*hintNumericNode);
+            values[componentIndex] =
+                std::clamp(componentValue, definitions[componentIndex].rangeMin, definitions[componentIndex].rangeMax);
+            hintNumericNode->parameter.defaultValueHint = GraphHintNumericValueHint(hintNumericNode->kind, values);
+            hintNumericNode->parameter.overrideSupported = false;
+            if (hintNumericNode->parameter.displayName.empty()) {
+                hintNumericNode->parameter.displayName = GraphNodeDisplayName(hintNumericNode->kind);
             }
             SetWorkingCopy(std::move(document));
             SelectNode(nodeId);
@@ -1624,6 +1669,26 @@ public:
                     .type = kb::render::RenderMaterialParameterType::Scalar,
                     .value = ScalarValue(tiling[componentIndex]),
                     .range = kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 16.0F },
+                    .componentIndex = componentIndex,
+                });
+            }
+        }
+
+        if (const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node->kind);
+            !definitions.empty()) {
+            const std::array<float, 4U> values = GraphHintNumericValues(*node);
+            for (std::size_t componentIndex = 0U; componentIndex < definitions.size(); ++componentIndex) {
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = std::string{ definitions[componentIndex].stableId },
+                    .displayName = std::string{ definitions[componentIndex].displayName },
+                    .kind = MaterialEditorGraphNodePropertyKind::Numeric,
+                    .type = kb::render::RenderMaterialParameterType::Scalar,
+                    .value = ScalarValue(values[componentIndex]),
+                    .range = kb::render::RenderMaterialParameterRange{
+                        .min = definitions[componentIndex].rangeMin,
+                        .max = definitions[componentIndex].rangeMax,
+                    },
                     .componentIndex = componentIndex,
                 });
             }
@@ -2956,6 +3021,114 @@ private:
         return output.str();
     }
 
+    [[nodiscard]] static std::span<const GraphHintNumericPropertyDefinition> GraphHintNumericProperties(
+        kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> panner{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "panner.speedU",
+                .displayName = "Speed U",
+                .defaultValue = 0.1F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "panner.speedV",
+                .displayName = "Speed V",
+                .defaultValue = 0.0F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 3U> rotator{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotator.speed",
+                .displayName = "Speed",
+                .defaultValue = 1.0F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotator.centerU",
+                .displayName = "Center U",
+                .defaultValue = 0.5F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotator.centerV",
+                .displayName = "Center V",
+                .defaultValue = 0.5F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 1U> bumpOffset{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "bumpOffset.heightRatio",
+                .displayName = "Height Ratio",
+                .defaultValue = 0.05F,
+                .rangeMin = -1.0F,
+                .rangeMax = 1.0F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> constantBiasScale{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "constantBiasScale.bias",
+                .displayName = "Bias",
+                .defaultValue = 0.0F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "constantBiasScale.scale",
+                .displayName = "Scale",
+                .defaultValue = 1.0F,
+                .rangeMin = -16.0F,
+                .rangeMax = 16.0F,
+            },
+        };
+
+        switch (kind) {
+        case kb::render::RenderMaterialGraphNodeKind::Panner:
+            return panner;
+        case kb::render::RenderMaterialGraphNodeKind::Rotator:
+            return rotator;
+        case kb::render::RenderMaterialGraphNodeKind::BumpOffset:
+            return bumpOffset;
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale:
+            return constantBiasScale;
+        default:
+            return {};
+        }
+    }
+
+    [[nodiscard]] static std::array<float, 4U> GraphHintNumericValues(const kb::render::RenderMaterialGraphNode& node) {
+        std::array<float, 4U> values{};
+        const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(node.kind);
+        for (std::size_t index = 0U; index < definitions.size(); ++index) {
+            values[index] = definitions[index].defaultValue;
+        }
+        const std::vector<float> parsed = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        for (std::size_t index = 0U; index < definitions.size() && index < parsed.size(); ++index) {
+            values[index] = parsed[index];
+        }
+        return values;
+    }
+
+    [[nodiscard]] static std::string GraphHintNumericValueHint(
+        kb::render::RenderMaterialGraphNodeKind kind,
+        const std::array<float, 4U>& values) {
+        const std::span<const GraphHintNumericPropertyDefinition> definitions = GraphHintNumericProperties(kind);
+        std::string hint;
+        for (std::size_t index = 0U; index < definitions.size(); ++index) {
+            if (!hint.empty()) {
+                hint += ' ';
+            }
+            hint += FloatText(values[index]);
+        }
+        return hint;
+    }
+
     [[nodiscard]] static std::string ConstantDefaultValueHint(
         kb::render::RenderMaterialGraphNodeKind kind,
         const std::array<float, 4U>& value) {
@@ -4088,6 +4261,30 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Texture Coordinate",
                 .defaultValueHint = "1 1 0",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::Panner:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Panner",
+                .defaultValueHint = "0.1 0",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::Rotator:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Rotator",
+                .defaultValueHint = "1 0.5 0.5",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::BumpOffset:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Bump Offset",
+                .defaultValueHint = "0.05",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Constant Bias Scale",
+                .defaultValueHint = "0 1",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
