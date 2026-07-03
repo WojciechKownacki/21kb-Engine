@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -97,6 +99,32 @@ void ShaderManifestCoversEveryPrebuiltShaderVariant() {
     }
 }
 
+void MotionVectorShaderUsesTopLeftUvToNdcMapping() {
+    const std::filesystem::path cwd = std::filesystem::current_path();
+    const std::vector<std::filesystem::path> candidates{
+        cwd / "sources" / "renderer" / "shaders" / "fs_post_motion_vectors.sc",
+        cwd / ".." / "sources" / "renderer" / "shaders" / "fs_post_motion_vectors.sc",
+        cwd / ".." / ".." / "sources" / "renderer" / "shaders" / "fs_post_motion_vectors.sc",
+    };
+    const auto sourceIter = std::ranges::find_if(candidates, [](const std::filesystem::path& candidate) {
+        return std::filesystem::exists(candidate);
+    });
+    Require(sourceIter != candidates.end(), "Motion vector shader source was not found");
+
+    std::ifstream file{*sourceIter};
+    Require(file.good(), "Motion vector shader source could not be opened");
+    const std::string source{
+        std::istreambuf_iterator<char>{file},
+        std::istreambuf_iterator<char>{},
+    };
+    Require(
+        source.find("1.0 - v_texcoord0.y * 2.0") != std::string::npos,
+        "Motion vector shader must map top-left UVs to positive NDC Y");
+    Require(
+        source.find("0.5 - previousNdc.y * 0.5") != std::string::npos,
+        "Motion vector shader must map previous NDC Y back to top-left UVs");
+}
+
 } // namespace
 
 void RunShaderManifestTests() {
@@ -104,6 +132,7 @@ void RunShaderManifestTests() {
     ShaderManifestDeclaresRuntimePrograms();
     PrebuiltShaderProfilesContainRequiredManifest();
     ShaderManifestCoversEveryPrebuiltShaderVariant();
+    MotionVectorShaderUsesTopLeftUvToNdcMapping();
 }
 
 } // namespace kb::render::tests

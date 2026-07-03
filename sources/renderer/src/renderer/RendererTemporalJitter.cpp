@@ -24,8 +24,8 @@ std::array<float, 2> RendererTemporalJitter::Compute(std::uint64_t frameIndex, R
     }
     const std::uint64_t sequenceIndex = (frameIndex % 8ULL) + 1ULL;
     return {
-        ((Halton(sequenceIndex, 2U) * 2.0F) - 1.0F) / static_cast<float>(std::max(1U, extent.width)),
-        ((Halton(sequenceIndex, 3U) * 2.0F) - 1.0F) / static_cast<float>(std::max(1U, extent.height)),
+        (Halton(sequenceIndex, 2U) - 0.5F) / static_cast<float>(std::max(1U, extent.width)),
+        (Halton(sequenceIndex, 3U) - 0.5F) / static_cast<float>(std::max(1U, extent.height)),
     };
 }
 
