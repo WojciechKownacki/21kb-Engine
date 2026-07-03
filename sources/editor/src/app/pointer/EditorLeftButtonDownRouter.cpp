@@ -420,7 +420,21 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                         switch (property->kind) {
                         case MaterialEditorGraphNodePropertyHitKind::TextField:
                             sceneContext_.CloseMaterialGraphNodeEnumDropdown();
-                            static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property->nodeId));
+                            if (property->stableId == "node.name") {
+                                static_cast<void>(sceneContext_.BeginMaterialGraphNodeRenameEdit(materialId, property->nodeId));
+                            } else {
+                                const std::optional<std::string> value = EditorMaterialParameterValueDialog::Show(
+                                    mainWindow_,
+                                    property->displayName,
+                                    MaterialEditorPanelParameterValueText(property->value));
+                                if (value.has_value()) {
+                                    static_cast<void>(sceneContext_.SetMaterialGraphNodeTextProperty(
+                                        materialId,
+                                        property->nodeId,
+                                        property->stableId,
+                                        *value));
+                                }
+                            }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
                             if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property->value)) {

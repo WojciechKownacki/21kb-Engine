@@ -19,10 +19,12 @@
 #include "kb/render/resources/RenderMaterialAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialAssetWriter.hpp"
 #include "kb/render/resources/RenderMaterialGraphAssetLoader.hpp"
+#include "kb/render/resources/RenderMaterialGraphProgramBindingBuilder.hpp"
 #include "kb/render/resources/RenderMaterialGraphShaderArtifact.hpp"
 #include "kb/render/resources/RenderMaterialFunctionAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetLoader.hpp"
 #include "kb/render/resources/RenderMaterialInstanceAssetWriter.hpp"
+#include "kb/render/resources/RenderMaterialParameterCollection.hpp"
 #include "kb/render/resources/RenderMaterialTypeAssetLoader.hpp"
 #include "kb/render/resources/RenderResources.hpp"
 #include "kb/render/resources/RenderMeshAssetLoader.hpp"
@@ -2470,6 +2472,83 @@ void RunMaterialEditorCollectionParameterNodeModelTest() {
     const SIZE nodeSize = kb::editor::MaterialEditorPanelGraphNodeSize(kb::render::RenderMaterialGraphNodeKind::CollectionParameter);
     kb::editor::tests::Require(nodeSize.cx >= 196 && nodeSize.cy >= 112,
         "KBMAT-MAT50: CollectionParameter UI node must reserve enough space for its output pins");
+
+    constexpr std::uint64_t collectionAssetId = 0x50500001ULL;
+    kb::editor::tests::Require(!editor.SetGraphNodeTextProperty(collectionNodeId, "collection.assetId", "not-a-number"),
+        "KBMAT-MAT50: CollectionParameter editor property must reject non-numeric collection asset ids");
+    kb::editor::tests::Require(editor.SetGraphNodeTextProperty(collectionNodeId, "collection.assetId", std::to_string(collectionAssetId)),
+        "KBMAT-MAT50: CollectionParameter editor property must set a real collection asset id");
+    kb::editor::tests::Require(!editor.SetGraphNodeTextProperty(collectionNodeId, "collection.parameter", "Global Tint"),
+        "KBMAT-MAT50: CollectionParameter editor property must reject non-stable parameter ids");
+    kb::editor::tests::Require(editor.SetGraphNodeTextProperty(collectionNodeId, "collection.parameter", "GlobalTint"),
+        "KBMAT-MAT50: CollectionParameter editor property must set the collection parameter stable id");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> collectionProperties = editor.GraphNodeProperties(collectionNodeId);
+    kb::editor::tests::Require(std::ranges::any_of(collectionProperties, [collectionAssetId](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == "collection.assetId" &&
+                property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Text &&
+                property.value.text == std::to_string(collectionAssetId);
+        }) &&
+            std::ranges::any_of(collectionProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+                return property.stableId == "collection.parameter" &&
+                    property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Text &&
+                    property.value.text == "GlobalTint";
+            }),
+        "KBMAT-MAT50: Details panel model must expose editable CollectionParameter asset and stable-id fields");
+    kb::editor::tests::Require(editor.ConnectGraphPins(collectionNodeId, "rgba", 1U, "baseColor"),
+        "KBMAT-MAT50: Configured CollectionParameter output must connect to Material Output baseColor");
+
+    std::ostringstream serializedConfigured;
+    kb::render::RenderMaterialAssetWriter::Write(serializedConfigured, *editor.WorkingCopy());
+    std::istringstream configuredInput{ serializedConfigured.str() };
+    const kb::render::RenderMaterialAssetParseResult parsedConfigured =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(configuredInput);
+    kb::editor::tests::Require(parsedConfigured.Succeeded() && parsedConfigured.asset.has_value(),
+        "KBMAT-MAT50: Editor-configured CollectionParameter material must serialize and load");
+    const kb::render::RenderMaterialGraphCompileResult collectionCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            parsedConfigured.asset->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x50500002ULL });
+    if (!collectionCompile.Succeeded()) {
+        std::cerr << "KBMAT-MAT50 editor-configured CollectionParameter failed shader compile";
+        if (!collectionCompile.diagnostics.empty()) {
+            std::cerr << " diagnostic=" << collectionCompile.diagnostics.front().message;
+        }
+        std::cerr << '\n';
+    }
+    kb::editor::tests::Require(collectionCompile.Succeeded() &&
+            collectionCompile.shader.reflection.uniforms.size() == 1U &&
+            collectionCompile.shader.reflection.uniforms[0].source == kb::render::RenderMaterialGraphReflectionUniformSource::ParameterCollection &&
+            collectionCompile.shader.reflection.uniforms[0].collectionAssetId == collectionAssetId &&
+            collectionCompile.shader.reflection.uniforms[0].collectionParameterStableId == "GlobalTint",
+        "KBMAT-MAT50: Editor-configured CollectionParameter material must compile with MPC reflection metadata");
+
+    kb::render::RenderMaterialParameterCollectionData collection{};
+    collection.displayName = "Editor Scene Globals";
+    collection.parameters.push_back(kb::render::RenderMaterialParameterCollectionParameter{
+        .stableId = "GlobalTint",
+        .displayName = "Global Tint",
+        .type = kb::render::RenderMaterialParameterCollectionValueType::Vector,
+        .defaultValue = { 0.35F, 0.45F, 0.55F, 1.0F },
+        .editorOrder = 0U,
+        .description = "Editor-configured scene tint",
+    });
+    kb::render::RenderMaterialParameterCollectionRuntimeStore& store =
+        kb::render::GlobalRenderMaterialParameterCollectionStore();
+    store.Clear();
+    kb::editor::tests::Require(store.LoadDefaults(collectionAssetId, collection),
+        "KBMAT-MAT50: Runtime MPC store must load defaults for an editor-configured CollectionParameter graph");
+    const std::array<kb::render::RenderMaterialGraphParameterValue, 0U> noMaterialOverrides{};
+    const kb::render::RenderMaterialGraphProgramBindingResult collectionBinding =
+        kb::render::BuildRenderMaterialGraphProgramBinding(0x50500003ULL, 3U, collectionCompile.shader, noMaterialOverrides);
+    kb::editor::tests::Require(collectionBinding.binding.active &&
+            collectionBinding.binding.uniforms.size() == 1U &&
+            collectionBinding.binding.uniforms[0].source == kb::render::RenderMaterialGraphUniformBindingSource::ParameterCollection &&
+            collectionBinding.binding.uniforms[0].collectionAssetId == collectionAssetId &&
+            collectionBinding.binding.uniforms[0].collectionParameterStableId == "GlobalTint" &&
+            collectionBinding.binding.uniforms[0].value[0] == 0.35F &&
+            collectionBinding.binding.uniforms[0].value[2] == 0.55F,
+        "KBMAT-MAT50: Editor-configured CollectionParameter material must bind runtime MPC uniform values");
+    store.Clear();
 }
 
 void RunMaterialEditorFunctionNodeModelTest() {
@@ -2555,6 +2634,79 @@ void RunMaterialEditorFunctionNodeModelTest() {
         "graphCustomCode " + std::to_string(functionCallId) + " float4 Input:float4 Output:float4";
     kb::editor::tests::Require(serialized.str().find(expectedCustomPins) != std::string::npos,
         "KBMAT-MAT42: MaterialFunctionCall dynamic pin schema must serialize with the graph");
+
+    constexpr std::uint64_t functionAssetId = 0x42080001ULL;
+    kb::editor::tests::Require(!editor.SetGraphNodeTextProperty(functionCallId, "function.assetId", "TintFunction"),
+        "KBMAT-MAT42: MaterialFunctionCall editor property must reject non-numeric function asset ids");
+    kb::editor::tests::Require(editor.SetGraphNodeTextProperty(functionCallId, "function.assetId", std::to_string(functionAssetId)),
+        "KBMAT-MAT42: MaterialFunctionCall editor property must set the function asset id used by runtime inlining");
+    const std::vector<kb::editor::MaterialEditorGraphNodeProperty> functionProperties = editor.GraphNodeProperties(functionCallId);
+    kb::editor::tests::Require(std::ranges::any_of(functionProperties, [functionAssetId](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == "function.assetId" &&
+                property.kind == kb::editor::MaterialEditorGraphNodePropertyKind::Text &&
+                property.value.text == std::to_string(functionAssetId);
+        }),
+        "KBMAT-MAT42: Details panel model must expose editable MaterialFunctionCall asset id");
+
+    kb::render::RenderMaterialGraphDocument functionGraph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    functionGraph.storageModel = "material-function-asset";
+    functionGraph.shadingModel = "unlit";
+    functionGraph.nodes.clear();
+    const kb::render::RenderMaterialGraphNode passthroughInput{
+        .id = 1U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+        .positionX = -220,
+        .positionY = 80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "Input",
+            .displayName = "Input",
+            .defaultValueHint = "float4",
+            .overrideSupported = false,
+        },
+    };
+    const kb::render::RenderMaterialGraphNode passthroughOutput{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+        .positionX = 80,
+        .positionY = 80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .stableId = "Output",
+            .displayName = "Output",
+            .defaultValueHint = "float4",
+            .overrideSupported = false,
+        },
+    };
+    functionGraph.nodes.push_back(passthroughInput);
+    functionGraph.nodes.push_back(passthroughOutput);
+    functionGraph.links.push_back(MakeMaterialGraphLink(
+        kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+        1U,
+        "value",
+        kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+        2U,
+        "value"));
+    kb::render::RenderMaterialGraphFunctionLibrary library{};
+    library.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
+        .assetId = functionAssetId,
+        .contentHash = 0x42080002ULL,
+        .name = "/Game/Functions/EditorPassthrough.kbmatfn",
+        .graph = functionGraph,
+    });
+    std::ostringstream configuredFunctionSerialized;
+    kb::render::RenderMaterialAssetWriter::Write(configuredFunctionSerialized, *editor.WorkingCopy());
+    std::istringstream configuredFunctionInput{ configuredFunctionSerialized.str() };
+    const kb::render::RenderMaterialAssetParseResult parsedFunctionMaterial =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(configuredFunctionInput);
+    kb::editor::tests::Require(parsedFunctionMaterial.Succeeded() && parsedFunctionMaterial.asset.has_value(),
+        "KBMAT-MAT42: Editor-configured MaterialFunctionCall graph must serialize and load");
+    const kb::render::RenderMaterialGraphCompileResult functionCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            parsedFunctionMaterial.asset->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x42080003ULL, .functionLibrary = &library });
+    kb::editor::tests::Require(functionCompile.Succeeded() &&
+            functionCompile.shader.source.find("MaterialFunctionCall") == std::string::npos &&
+            functionCompile.shader.sourceHash != 0U,
+        "KBMAT-MAT42: Editor-configured MaterialFunctionCall graph must inline and compile to shader source");
 }
 
 void RunMaterialEditorLayerStackNodeModelTest() {

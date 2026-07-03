@@ -3702,6 +3702,38 @@ bool EditorSceneContext::SetMaterialGraphConstantValue(
     return true;
 }
 
+bool EditorSceneContext::SetMaterialGraphNodeTextProperty(
+    kb::assets::AssetId id,
+    std::uint32_t nodeId,
+    std::string_view propertyId,
+    std::string_view value) {
+    if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
+        console_.Error("Materials", "Open the material in Material Editor before editing graph node properties.");
+        return false;
+    }
+
+    kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
+    const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
+    std::vector<std::uint32_t> beforeSelectedNodeIds = materialEditor_.SelectedNodeIds();
+    const std::uint32_t beforeSelectedCommentId = materialEditor_.SelectedCommentId();
+    if (!materialEditor_.SetGraphNodeTextProperty(nodeId, propertyId, value)) {
+        console_.Error("Materials", "Material graph node property value is invalid.");
+        return false;
+    }
+    if (!RecordMaterialGraphWorkingCopyEdit(
+            id,
+            "Edit Material Graph Node Property",
+            std::move(before),
+            beforeSelectedNodeId,
+            std::move(beforeSelectedNodeIds),
+            beforeSelectedCommentId)) {
+        console_.Warning("Materials", "Material graph node property change could not be recorded.");
+        return false;
+    }
+    console_.Info("Materials", "Edited material graph node property '" + std::string{ propertyId } + "'.");
+    return true;
+}
+
 bool EditorSceneContext::SetMaterialGraphNodeDisplayName(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view displayName) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
         return false;
