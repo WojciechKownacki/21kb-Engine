@@ -3425,6 +3425,69 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             uvUtilityCompiled.shader.source.find("vec4_splat(2.0)") != std::string::npos,
         "KBMAT-MAT82: Edited UV utility properties should compile into production shader expressions");
 
+    kb::editor::MaterialEditorState proceduralMaskEditor;
+    kb::render::RenderMaterialAssetData proceduralMaskAsset{};
+    proceduralMaskAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    proceduralMaskAsset.graph.shadingModel = "unlit";
+    proceduralMaskEditor.Open(kb::assets::AssetId{ 0x5813U }, proceduralMaskAsset);
+
+    std::uint32_t sphereMaskNodeId = 0U;
+    kb::editor::tests::Require(proceduralMaskEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::SphereMask, -440, 80, &sphereMaskNodeId),
+        "KBMAT-MAT83: Material Editor should create a SphereMask node for procedural mask property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> sphereMaskProperties =
+        proceduralMaskEditor.GraphNodeProperties(sphereMaskNodeId);
+    requireUtilityNumericProperty(
+        sphereMaskProperties,
+        "sphereMask.radius",
+        1.0F,
+        "KBMAT-MAT83: SphereMask should expose Radius as a numeric property");
+    requireUtilityNumericProperty(
+        sphereMaskProperties,
+        "sphereMask.hardness",
+        0.5F,
+        "KBMAT-MAT83: SphereMask should expose Hardness as a numeric property");
+    kb::editor::tests::Require(proceduralMaskEditor.SetGraphConstantComponentValue(sphereMaskNodeId, 0U, 1.5F) &&
+            proceduralMaskEditor.SetGraphConstantComponentValue(sphereMaskNodeId, 1U, 0.75F),
+        "KBMAT-MAT83: SphereMask numeric properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* sphereMaskNode =
+        kb::render::FindRenderMaterialGraphNode(proceduralMaskEditor.WorkingCopy()->graph, sphereMaskNodeId);
+    kb::editor::tests::Require(sphereMaskNode != nullptr && sphereMaskNode->parameter.defaultValueHint == "1.5 0.75",
+        "KBMAT-MAT83: SphereMask should persist radius/hardness in the runtime hint format");
+
+    std::uint32_t antialiasedTextureMaskNodeId = 0U;
+    kb::editor::tests::Require(proceduralMaskEditor.AddGraphNode(
+            kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask,
+            -440,
+            240,
+            &antialiasedTextureMaskNodeId),
+        "KBMAT-MAT83: Material Editor should create an AntialiasedTextureMask node for procedural mask property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> antialiasedTextureMaskProperties =
+        proceduralMaskEditor.GraphNodeProperties(antialiasedTextureMaskNodeId);
+    requireUtilityNumericProperty(
+        antialiasedTextureMaskProperties,
+        "antialiasedTextureMask.threshold",
+        0.5F,
+        "KBMAT-MAT83: AntialiasedTextureMask should expose Threshold as a numeric property");
+    kb::editor::tests::Require(proceduralMaskEditor.SetGraphConstantComponentValue(antialiasedTextureMaskNodeId, 0U, 0.33F),
+        "KBMAT-MAT83: AntialiasedTextureMask numeric property should update node metadata");
+    const kb::render::RenderMaterialGraphNode* antialiasedTextureMaskNode =
+        kb::render::FindRenderMaterialGraphNode(proceduralMaskEditor.WorkingCopy()->graph, antialiasedTextureMaskNodeId);
+    kb::editor::tests::Require(antialiasedTextureMaskNode != nullptr && antialiasedTextureMaskNode->parameter.defaultValueHint == "0.33",
+        "KBMAT-MAT83: AntialiasedTextureMask should persist threshold in the runtime hint format");
+
+    kb::editor::tests::Require(proceduralMaskEditor.ConnectGraphPins(sphereMaskNodeId, "value", 1U, "baseColor"),
+        "KBMAT-MAT83: Edited SphereMask should route into Base Color");
+    kb::editor::tests::Require(proceduralMaskEditor.ConnectGraphPins(antialiasedTextureMaskNodeId, "value", 1U, "emissive"),
+        "KBMAT-MAT83: Edited AntialiasedTextureMask should route into Emissive");
+    const kb::render::RenderMaterialGraphCompileResult proceduralMaskCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            proceduralMaskEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5813U });
+    kb::editor::tests::Require(proceduralMaskCompiled.Succeeded() &&
+            proceduralMaskCompiled.shader.source.find("smoothstep(0.375, 1.5") != std::string::npos &&
+            proceduralMaskCompiled.shader.source.find("smoothstep(0.33 -") != std::string::npos,
+        "KBMAT-MAT83: Edited procedural mask properties should compile into production shader expressions");
+
     kb::editor::MaterialEditorState viewPropertyEditor;
     kb::render::RenderMaterialAssetData viewPropertyAsset{};
     viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();

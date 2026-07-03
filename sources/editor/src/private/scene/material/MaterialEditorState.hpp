@@ -3087,6 +3087,31 @@ private:
                 .rangeMax = 16.0F,
             },
         };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> sphereMask{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "sphereMask.radius",
+                .displayName = "Radius",
+                .defaultValue = 1.0F,
+                .rangeMin = 0.0001F,
+                .rangeMax = 1024.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "sphereMask.hardness",
+                .displayName = "Hardness",
+                .defaultValue = 0.5F,
+                .rangeMin = 0.0F,
+                .rangeMax = 0.999F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 1U> antialiasedTextureMask{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "antialiasedTextureMask.threshold",
+                .displayName = "Threshold",
+                .defaultValue = 0.5F,
+                .rangeMin = 0.0F,
+                .rangeMax = 1.0F,
+            },
+        };
 
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::Panner:
@@ -3097,6 +3122,10 @@ private:
             return bumpOffset;
         case kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale:
             return constantBiasScale;
+        case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+            return sphereMask;
+        case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+            return antialiasedTextureMask;
         default:
             return {};
         }
@@ -4287,6 +4316,18 @@ private:
                 .defaultValueHint = "0 1",
                 .overrideSupported = false,
             };
+        case kb::render::RenderMaterialGraphNodeKind::SphereMask:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Sphere Mask",
+                .defaultValueHint = "1 0.5",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Antialiased Texture Mask",
+                .defaultValueHint = "0.5",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "View Property",
@@ -4324,14 +4365,12 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::InverseLerp:
         case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeX:
         case kb::render::RenderMaterialGraphNodeKind::PartialDerivativeY:
-        case kb::render::RenderMaterialGraphNodeKind::SphereMask:
         case kb::render::RenderMaterialGraphNodeKind::BlackBody:
         case kb::render::RenderMaterialGraphNodeKind::Noise:
         case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
         case kb::render::RenderMaterialGraphNodeKind::Sobol:
         case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
-        case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
         case kb::render::RenderMaterialGraphNodeKind::Transform:
         case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
         case kb::render::RenderMaterialGraphNodeKind::DotProduct:
