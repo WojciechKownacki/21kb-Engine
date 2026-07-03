@@ -35,6 +35,9 @@ bool EditorApplicationLifecycle::Initialize(EditorApplicationState& state) {
     state.sceneViewport.SetErrorReporter([&state](std::string_view message) {
         state.sceneContext.Console().Error("Renderer", std::string{ message });
     });
+    state.sceneViewport.SetAaTraceReporter([&state](std::string_view message) {
+        state.sceneContext.Console().Info("AA", std::string{ message });
+    });
     state.floatingWindows.Lifecycle().Configure(state.instance, state.window, state.metrics);
     state.dockController.Configure(state.window, state.dockModel, state.floatingWindows, state.metrics);
 

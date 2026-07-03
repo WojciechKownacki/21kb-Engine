@@ -1,6 +1,7 @@
 #include "app/EditorCrashBreadcrumbs.hpp"
 
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -28,6 +29,10 @@ std::mutex g_breadcrumbMutex;
     return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
 }
 
+[[nodiscard]] std::filesystem::path AaTracePath() {
+    return std::filesystem::current_path() / "aa_trace.log";
+}
+
 [[nodiscard]] std::string NowMs() {
     const auto now = std::chrono::system_clock::now();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -43,6 +48,26 @@ std::mutex g_breadcrumbMutex;
 }
 
 void AppendLine(std::string_view line) {
+#if defined(_WIN32)
+    if (line.find("[aa_trace]") != std::string_view::npos) {
+        std::string debugLine{line};
+        debugLine.push_back('\n');
+        OutputDebugStringA(debugLine.c_str());
+        static bool consoleAttachAttempted = false;
+        if (!consoleAttachAttempted) {
+            consoleAttachAttempted = true;
+            if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+                FILE* stream = nullptr;
+                static_cast<void>(freopen_s(&stream, "CONOUT$", "a", stderr));
+            }
+        }
+        std::fputs(debugLine.c_str(), stderr);
+        std::ofstream aaTraceOutput{AaTracePath(), std::ios::out | std::ios::app};
+        if (aaTraceOutput.is_open()) {
+            aaTraceOutput << line << '\n';
+        }
+    }
+#endif
     std::lock_guard lock{g_breadcrumbMutex};
     std::error_code error;
     std::filesystem::create_directories(BreadcrumbPath().parent_path(), error);

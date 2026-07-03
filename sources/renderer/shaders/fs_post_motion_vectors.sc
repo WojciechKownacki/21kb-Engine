@@ -16,14 +16,14 @@ void main()
     }
 
     float clipDepth = u_temporalParams.w > 0.5 ? depth * 2.0 - 1.0 : depth;
-    vec2 currentNdc = v_texcoord0 * 2.0 - 1.0;
+    vec2 currentNdc = vec2(v_texcoord0.x * 2.0 - 1.0, 1.0 - v_texcoord0.y * 2.0);
     vec4 world = mul(u_inverseViewProjection, vec4(currentNdc, clipDepth, 1.0));
     world.xyz /= max(world.w, 0.000001);
     world.w = 1.0;
 
     vec4 previousClip = mul(u_previousViewProjection, world);
     vec2 previousNdc = previousClip.xy / max(previousClip.w, 0.000001);
-    vec2 previousUv = previousNdc * 0.5 + 0.5;
+    vec2 previousUv = vec2(previousNdc.x * 0.5 + 0.5, 0.5 - previousNdc.y * 0.5);
     vec2 velocity = v_texcoord0 - previousUv;
     gl_FragColor = vec4(velocity * 0.5 + 0.5, 0.0, 1.0);
 }

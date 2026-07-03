@@ -280,6 +280,8 @@ void DrawGraphicsPage(
     DrawOptionButton(dc, rects.msaaOffButton, "Off", msaaActive && renderBackendSettings.MsaaSamples() == 0U, msaaActive);
     DrawOptionButton(dc, rects.msaa2xButton, "2x", msaaActive && renderBackendSettings.MsaaSamples() == 2U, msaaActive);
     DrawOptionButton(dc, rects.msaa4xButton, "4x", msaaActive && renderBackendSettings.MsaaSamples() == 4U, msaaActive);
+    DrawOptionButton(dc, rects.msaa8xButton, "8x", msaaActive && renderBackendSettings.MsaaSamples() == 8U, msaaActive);
+    DrawOptionButton(dc, rects.msaa16xButton, "16x", msaaActive && renderBackendSettings.MsaaSamples() == 16U, msaaActive);
     DrawText(dc, rects.bloomLabel, "Bloom", RGB(196, 205, 214), 12);
     DrawCheckbox(dc, rects.bloomCheckbox, renderBackendSettings.BloomEnabled());
     DrawText(dc, rects.shadowsLabel, "Shadows", RGB(196, 205, 214), 12);
@@ -364,7 +366,7 @@ ProjectSettingsPanelRenderer::Hit ProjectSettingsPanelRenderer::HitTest(const RE
                 return Hit{ .kind = ProjectSettingsHitKind::AntiAliasingMode, .index = index, .rect = button };
             }
         }
-        for (int index = 0; index < 3; ++index) {
+        for (int index = 0; index < 5; ++index) {
             const RECT button = ProjectSettingsPanelLayout::MsaaOptionButton(rects, index);
             if (PointInRect(button, x, y)) {
                 return Hit{ .kind = ProjectSettingsHitKind::MsaaOption, .index = index, .rect = button };

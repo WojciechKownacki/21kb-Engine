@@ -1,7 +1,10 @@
 #include "kb/render/post/ScenePostProcessRenderer.hpp"
 
+#include "renderer/RendererDebugLog.hpp"
+
 #include <algorithm>
 #include <cstdint>
+#include <sstream>
 
 namespace kb::render {
 namespace {
@@ -39,6 +42,10 @@ struct PostProcessSubmitSettings {
     float bloomMipCount = 1.0F;
 };
 
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
 [[nodiscard]] PostProcessSubmitSettings ResolveSettings(const ScenePostProcessSubmitDesc& desc) noexcept {
     return PostProcessSubmitSettings{
         .width = static_cast<float>(std::max(1U, desc.target.extent.width)),
@@ -67,7 +74,30 @@ public:
 
     [[nodiscard]] bgfx::TextureHandle Submit(const ScenePostProcessSubmitDesc& desc) const {
         const PostProcessSubmitSettings settings = ResolveSettings(desc);
+        {
+            std::ostringstream message;
+            message << "ScenePostProcessRenderer receive"
+                    << " requestedFxaa=" << BoolText(desc.settings.fxaaEnabled)
+                    << " requestedTaa=" << BoolText(desc.settings.temporalAntiAliasingEnabled)
+                    << " requestedJitter=" << BoolText(desc.settings.temporalJitterEnabled)
+                    << " resolvedFxaa=" << BoolText(settings.fxaaEnabled)
+                    << " resolvedTaa=" << BoolText(settings.taaEnabled)
+                    << " historyBlend=" << settings.historyBlend
+                    << " sceneDepthValid=" << BoolText(bgfx::isValid(desc.sceneDepth))
+                    << " temporalValid=" << BoolText(desc.temporal.IsValid())
+                    << " historyValid=" << BoolText(desc.temporal.historyValid)
+                    << " extent=" << static_cast<unsigned>(desc.target.extent.width) << 'x' << static_cast<unsigned>(desc.target.extent.height);
+            WriteRendererDebugLog("aa_trace", message.str());
+        }
         const bgfx::TextureHandle postSource = SubmitAntiAliasing(desc, settings);
+        {
+            std::ostringstream message;
+            message << "ScenePostProcessRenderer AA output"
+                    << " path=" << (settings.taaEnabled ? "TAA" : (settings.fxaaEnabled ? "FXAA" : "Copy"))
+                    << " postSource=" << postSource.idx
+                    << " bloom=" << BoolText(settings.bloomEnabled);
+            WriteRendererDebugLog("aa_trace", message.str());
+        }
         if (!settings.bloomEnabled) {
             return SubmitWithoutBloom(desc, postSource);
         }
@@ -103,6 +133,20 @@ private:
             desc.target.temporalHistoryFrameBuffer,
             desc.target.extent,
             settings.taaEnabled ? "KB Post TAA Resolve" : (settings.fxaaEnabled ? "KB Post FXAA" : "KB Post AA Copy"));
+        {
+            std::ostringstream message;
+            message << "ScenePostProcessRenderer SubmitAntiAliasing"
+                    << " view=" << desc.viewIds.postProcessTaaResolve
+                    << " path=" << (settings.taaEnabled ? "TAA" : (settings.fxaaEnabled ? "FXAA" : "Copy"))
+                    << " taa=" << BoolText(settings.taaEnabled)
+                    << " fxaa=" << BoolText(settings.fxaaEnabled)
+                    << " motionVectors=" << BoolText(settings.taaEnabled)
+                    << " historyBlend=" << settings.historyBlend
+                    << " historyValid=" << BoolText(desc.temporal.historyValid)
+                    << " targetHistoryTexture=" << desc.target.temporalHistoryTexture.idx
+                    << " previousHistoryTexture=" << desc.target.previousTemporalHistoryTexture.idx;
+            WriteRendererDebugLog("aa_trace", message.str());
+        }
         if (settings.fxaaEnabled) {
             const float fxaaParams[4] = {1.0F / settings.width, 1.0F / settings.height, 0.0F, 0.0F};
             bgfx::setUniform(renderer_.temporalParamsUniform_, fxaaParams);
