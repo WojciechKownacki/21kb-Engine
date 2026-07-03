@@ -1777,6 +1777,19 @@ public:
                 .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "viewProperty"),
             });
         }
+        if (const std::vector<MaterialEditorGraphNodePropertyOption> options = GraphNodeEnumOptions(node->kind, "sceneTexture.source");
+            !options.empty()) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "sceneTexture.source",
+                .displayName = "Source",
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(GraphNodeSceneTextureSourceValue(*node)),
+                .options = options,
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "sceneTexture.source"),
+            });
+        }
         if (const std::vector<MaterialEditorGraphNodePropertyOption> options = GraphNodeEnumOptions(node->kind, "staticSwitch.selector");
             !options.empty()) {
             properties.push_back(MaterialEditorGraphNodeProperty{
@@ -3350,6 +3363,12 @@ private:
                 MaterialEditorGraphNodePropertyOption{ .value = "pixelPosition", .label = "Pixel Position" },
             };
         }
+        if (propertyId == "sceneTexture.source" && kind == kb::render::RenderMaterialGraphNodeKind::SceneTexture) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "color", .label = "Scene Color" },
+                MaterialEditorGraphNodePropertyOption{ .value = "depth", .label = "Scene Depth" },
+            };
+        }
         if (propertyId == "staticSwitch.selector" && kind == kb::render::RenderMaterialGraphNodeKind::StaticSwitch) {
             return {
                 MaterialEditorGraphNodePropertyOption{ .value = "false", .label = "False" },
@@ -3575,6 +3594,15 @@ private:
             return "pixelPosition";
         }
         return "viewSize";
+    }
+
+    [[nodiscard]] static std::string GraphNodeSceneTextureSourceValue(const kb::render::RenderMaterialGraphNode& node) {
+        if (node.parameter.defaultValueHint == "depth" ||
+            node.parameter.defaultValueHint == "sceneDepth" ||
+            node.parameter.defaultValueHint == "SceneDepth") {
+            return "depth";
+        }
+        return "color";
     }
 
     [[nodiscard]] static std::uint64_t GraphNodeTextureAssetId(
@@ -4565,6 +4593,12 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "View Property",
                 .defaultValueHint = "viewSize",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::SceneTexture:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Scene Texture",
+                .defaultValueHint = "color",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
