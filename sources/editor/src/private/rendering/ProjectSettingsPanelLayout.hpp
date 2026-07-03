@@ -51,6 +51,8 @@ struct ProjectSettingsPanelLayoutRects {
     RECT msaaOffButton{};
     RECT msaa2xButton{};
     RECT msaa4xButton{};
+    RECT msaa8xButton{};
+    RECT msaa16xButton{};
 };
 
 class ProjectSettingsPanelLayout {

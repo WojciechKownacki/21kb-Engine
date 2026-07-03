@@ -82,6 +82,8 @@ ProjectSettingsPanelLayoutRects ProjectSettingsPanelLayout::Resolve(const RECT& 
     rects.msaaOffButton = RECT{ left + kLabelWidth, msaaRowTop + 3, left + kLabelWidth + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
     rects.msaa2xButton = RECT{ rects.msaaOffButton.right + 6, msaaRowTop + 3, rects.msaaOffButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
     rects.msaa4xButton = RECT{ rects.msaa2xButton.right + 6, msaaRowTop + 3, rects.msaa2xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
+    rects.msaa8xButton = RECT{ rects.msaa4xButton.right + 6, msaaRowTop + 3, rects.msaa4xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
+    rects.msaa16xButton = RECT{ rects.msaa8xButton.right + 6, msaaRowTop + 3, rects.msaa8xButton.right + 6 + kMsaaButtonWidth, msaaRowTop + kRowHeight - 3 };
 
     const int bloomRowTop = RowTopAfter(rects.msaaLabel);
     rects.bloomLabel = RECT{ left, bloomRowTop, left + kLabelWidth, bloomRowTop + kRowHeight };
@@ -202,6 +204,10 @@ RECT ProjectSettingsPanelLayout::MsaaOptionButton(const ProjectSettingsPanelLayo
         return rects.msaa2xButton;
     case 2:
         return rects.msaa4xButton;
+    case 3:
+        return rects.msaa8xButton;
+    case 4:
+        return rects.msaa16xButton;
     default:
         return {};
     }

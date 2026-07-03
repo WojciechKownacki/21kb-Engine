@@ -5,6 +5,9 @@
 #include "rendering/EditorSceneViewportGeometry.hpp"
 #include "rendering/SceneViewportToolbarRenderer.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <sstream>
 #include <span>
 
 namespace kb::editor {
@@ -16,6 +19,10 @@ namespace {
 
 [[nodiscard]] std::uint32_t RectHeight(const RECT& rect) noexcept {
     return EditorSceneViewportGeometry::RectHeight(rect);
+}
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "1" : "0";
 }
 
 } // namespace
@@ -119,11 +126,32 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     }
     if (viewport_.backendSettings_ != nullptr) {
         render::ScenePostProcessSettings settings = viewport_.renderer_.DefaultPostProcessSettings();
+        {
+            std::ostringstream message;
+            message << "PendingPaint before renderer default sync"
+                    << " uiFxaa=" << BoolText(viewport_.backendSettings_->FxaaEnabled())
+                    << " uiTaa=" << BoolText(viewport_.backendSettings_->TemporalAntiAliasingEnabled())
+                    << " uiMsaaSamples=" << static_cast<unsigned>(viewport_.backendSettings_->MsaaSamples())
+                    << " rendererDefaultFxaa=" << BoolText(settings.fxaaEnabled)
+                    << " rendererDefaultTaa=" << BoolText(settings.temporalAntiAliasingEnabled)
+                    << " rendererDefaultJitter=" << BoolText(settings.temporalJitterEnabled);
+            EditorCrashBreadcrumbs::Write("aa_trace", message.str());
+        }
         settings.fxaaEnabled = viewport_.backendSettings_->FxaaEnabled();
         settings.temporalAntiAliasingEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
         settings.temporalJitterEnabled = viewport_.backendSettings_->TemporalAntiAliasingEnabled();
         settings.bloomEnabled = viewport_.backendSettings_->BloomEnabled();
         viewport_.renderer_.SetDefaultPostProcessSettings(settings);
+        {
+            const render::ScenePostProcessSettings confirmed = viewport_.renderer_.DefaultPostProcessSettings();
+            std::ostringstream message;
+            message << "PendingPaint after renderer default sync"
+                    << " confirmedFxaa=" << BoolText(confirmed.fxaaEnabled)
+                    << " confirmedTaa=" << BoolText(confirmed.temporalAntiAliasingEnabled)
+                    << " confirmedJitter=" << BoolText(confirmed.temporalJitterEnabled)
+                    << " confirmedBloom=" << BoolText(confirmed.bloomEnabled);
+            EditorCrashBreadcrumbs::Write("aa_trace", message.str());
+        }
     }
     EditorCrashBreadcrumbs::Write("viewport_submit", "Renderer BeginFrame begin");
     if (!viewport_.renderer_.BeginFrame()) {
@@ -150,9 +178,42 @@ bool EditorSceneBgfxViewport::PendingPaintSubmitter::SubmitPreparedSubmissions()
     const render::ScenePostProcessSettings postProcessSettings = viewport_.renderer_.DefaultPostProcessSettings();
     bool postProcessActive = false;
     bool finalCompositeActive = false;
+    bool depthTextureValid = false;
+    bool gridVisible = false;
+    std::uint8_t actualSceneMsaaSamples = 0U;
     for (const render::Renderer::SceneFrameSubmission& submission : viewport_.pendingSubmissions_) {
         postProcessActive = postProcessActive || (submission.desc.postProcessEnabled && submission.desc.postProcess.enabled);
         finalCompositeActive = finalCompositeActive || submission.desc.finalComposite.enabled;
+        depthTextureValid = depthTextureValid || bgfx::isValid(submission.desc.target.depthTexture);
+        gridVisible = gridVisible || submission.desc.editorGrid.visible;
+        actualSceneMsaaSamples = std::max(actualSceneMsaaSamples, submission.desc.target.msaaSamples);
+    }
+    const bool effectiveTemporalJitter = postProcessActive &&
+        postProcessSettings.temporalAntiAliasingEnabled &&
+        postProcessSettings.temporalJitterEnabled;
+    {
+        std::ostringstream message;
+        message << "Toolbar/render display stats"
+                << " postProcessActive=" << BoolText(postProcessActive)
+                << " finalCompositeActive=" << BoolText(finalCompositeActive)
+                << " displayedTaaActive=" << BoolText(postProcessActive && postProcessSettings.temporalAntiAliasingEnabled)
+                << " displayedMsaaSamples=" << static_cast<unsigned>(viewport_.rendererMsaaSamples_)
+                << " actualSceneMsaaSamples=" << static_cast<unsigned>(actualSceneMsaaSamples)
+                << " displayedBloomActive=" << BoolText(postProcessActive && postProcessSettings.bloomEnabled && postProcessSettings.bloomStrength > 0.0F);
+        EditorCrashBreadcrumbs::Write("aa_trace", message.str());
+    }
+    {
+        std::ostringstream message;
+        message << "AA state"
+                << " postProcess=" << BoolText(postProcessActive)
+                << " taa=" << BoolText(postProcessActive && postProcessSettings.temporalAntiAliasingEnabled)
+                << " fxaa=" << BoolText(postProcessActive && postProcessSettings.fxaaEnabled)
+                << " effectiveJitter=" << BoolText(effectiveTemporalJitter)
+                << " msaa=" << static_cast<unsigned>(actualSceneMsaaSamples)
+                << " depth=" << BoolText(depthTextureValid)
+                << " finalComposite=" << BoolText(finalCompositeActive)
+                << " grid=" << BoolText(gridVisible);
+        viewport_.ReportAaTrace(message.str());
     }
     SceneViewportToolbarRenderer::RecordRenderStats(SceneViewportToolbarRenderStats{
         .submittedDrawCalls = stats.submittedDrawCallCount,

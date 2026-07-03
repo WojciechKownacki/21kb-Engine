@@ -19,6 +19,25 @@ constexpr std::uint64_t kSceneDepthTextureFlags =
     BGFX_SAMPLER_U_CLAMP |
     BGFX_SAMPLER_V_CLAMP;
 
+[[nodiscard]] std::uint64_t MsaaTextureFlags(std::uint8_t samples) noexcept {
+    switch (samples) {
+    case 2U:
+        return BGFX_TEXTURE_RT_MSAA_X2;
+    case 4U:
+        return BGFX_TEXTURE_RT_MSAA_X4;
+    case 8U:
+        return BGFX_TEXTURE_RT_MSAA_X8;
+    case 16U:
+        return BGFX_TEXTURE_RT_MSAA_X16;
+    default:
+        return 0U;
+    }
+}
+
+[[nodiscard]] std::uint8_t NormalizeMsaaSamples(std::uint8_t samples) noexcept {
+    return MsaaTextureFlags(samples) == 0U ? 0U : samples;
+}
+
 [[nodiscard]] bool IsSupportedExtent(std::uint32_t width, std::uint32_t height) noexcept {
     return width > 0U && height > 0U && width <= UINT16_MAX && height <= UINT16_MAX;
 }
@@ -29,36 +48,40 @@ SceneFramebuffer::~SceneFramebuffer() {
     Shutdown();
 }
 
-bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy) {
+bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneColorFormatPolicy colorPolicy, std::uint8_t msaaSamples) {
     width = std::max(1U, width);
     height = std::max(1U, height);
+    msaaSamples = NormalizeMsaaSamples(msaaSamples);
 
     if (!IsSupportedExtent(width, height)) {
         return false;
     }
 
-    if (IsValid() && width_ == width && height_ == height && colorPolicy_ == colorPolicy) {
+    if (IsValid() && width_ == width && height_ == height && colorPolicy_ == colorPolicy && msaaSamples_ == msaaSamples) {
         return true;
     }
 
     Shutdown();
 
-    colorSelection_ = SelectSceneColorFormat(colorPolicy, kSceneColorTextureFlags);
-    depthSelection_ = SelectSceneDepthFormat(kSceneDepthTextureFlags);
+    const std::uint64_t msaaFlags = MsaaTextureFlags(msaaSamples);
+    const std::uint64_t colorFlags = kSceneColorTextureFlags | msaaFlags;
+    const std::uint64_t depthFlags = kSceneDepthTextureFlags | msaaFlags | (msaaSamples > 0U ? BGFX_TEXTURE_MSAA_SAMPLE : 0U);
+    colorSelection_ = SelectSceneColorFormat(colorPolicy, colorFlags);
+    depthSelection_ = SelectSceneDepthFormat(depthFlags);
     if (!colorSelection_.IsSupported() || !depthSelection_.IsSupported()) {
         return false;
     }
 
     const auto textureWidth = static_cast<std::uint16_t>(width);
     const auto textureHeight = static_cast<std::uint16_t>(height);
-    colorTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, colorSelection_.format, kSceneColorTextureFlags);
+    colorTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, colorSelection_.format, colorFlags);
     if (!bgfx::isValid(colorTexture_)) {
         Shutdown();
         return false;
     }
     bgfx::setName(colorTexture_, "KB Scene Color");
 
-    depthTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, depthSelection_.format, kSceneDepthTextureFlags);
+    depthTexture_ = bgfx::createTexture2D(textureWidth, textureHeight, false, 1, depthSelection_.format, depthFlags);
     if (!bgfx::isValid(depthTexture_)) {
         Shutdown();
         return false;
@@ -77,6 +100,7 @@ bool SceneFramebuffer::Ensure(std::uint32_t width, std::uint32_t height, SceneCo
     width_ = width;
     height_ = height;
     colorPolicy_ = colorPolicy;
+    msaaSamples_ = msaaSamples;
     return true;
 }
 
@@ -100,6 +124,7 @@ void SceneFramebuffer::Shutdown() {
     colorPolicy_ = SceneColorFormatPolicy::Auto;
     width_ = 0;
     height_ = 0;
+    msaaSamples_ = 0U;
 }
 
 bgfx::FrameBufferHandle SceneFramebuffer::FrameBuffer() const noexcept {
@@ -122,8 +147,16 @@ std::uint32_t SceneFramebuffer::Height() const noexcept {
     return height_;
 }
 
+std::uint8_t SceneFramebuffer::MsaaSamples() const noexcept {
+    return msaaSamples_;
+}
+
 bool SceneFramebuffer::IsValid() const noexcept {
     return bgfx::isValid(frameBuffer_) && bgfx::isValid(colorTexture_) && bgfx::isValid(depthTexture_);
+}
+
+bool SceneFramebuffer::DepthTextureSampled() const noexcept {
+    return true;
 }
 
 SceneColorFormatSelection SceneFramebuffer::ColorSelection() const noexcept {

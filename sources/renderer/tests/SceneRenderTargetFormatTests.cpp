@@ -59,6 +59,9 @@ void SceneTargetFormatNamesAreExplicit() {
 void SceneRenderTargetDescRequiresValidExtent() {
     Require(!SceneRenderTargetDesc{}.IsValid(), "Default SceneRenderTargetDesc should be invalid");
     Require(SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}}.IsValid(), "SceneRenderTargetDesc rejected a valid extent");
+    Require(SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}, .msaaSamples = 2U}.IsValid(), "SceneRenderTargetDesc rejected 2x MSAA");
+    Require(SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}, .msaaSamples = 4U}.IsValid(), "SceneRenderTargetDesc rejected 4x MSAA");
+    Require(!SceneRenderTargetDesc{.extent = RenderExtent{1U, 1U}, .msaaSamples = 3U}.IsValid(), "SceneRenderTargetDesc accepted unsupported MSAA sample count");
 }
 
 void SceneGBufferDescRequiresValidExtent() {

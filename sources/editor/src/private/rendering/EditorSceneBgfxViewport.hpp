@@ -55,6 +55,7 @@ public:
         render::SceneRenderMeshPassMode meshPassMode = render::SceneRenderMeshPassMode::OpaqueAndTransparent;
         render::SceneRenderLightingConfig lightingConfig{};
         std::optional<render::ScenePostProcessSettings> postProcessSettings{};
+        std::uint8_t msaaSamples = 0U;
         bool shadowPassEnabled = true;
         bool postProcessEnabled = true;
         bool selectionMaskEnabled = true;
@@ -81,6 +82,7 @@ public:
 
     void Configure(HINSTANCE instance, HWND parent, EditorRenderBackendSettings* backendSettings) noexcept;
     void SetErrorReporter(std::function<void(std::string_view)> reporter) noexcept;
+    void SetAaTraceReporter(std::function<void(std::string_view)> reporter) noexcept;
     // Point this viewport's renderer at the per-project graph shader cache so authored material
     // graphs render through their cooked GPU program instead of the CPU PBR fallback (MAT-31).
     void SetGraphShaderCacheRoot(std::string root);
@@ -221,7 +223,8 @@ private:
             ViewportSession& session,
             std::uint32_t renderWidth,
             std::uint32_t renderHeight,
-            bool postProcessEnabled);
+            bool postProcessEnabled,
+            std::uint8_t msaaSamples);
         [[nodiscard]] static render::RenderSceneSubmitDesc BuildSubmitDesc(
             const PendingPresent& present,
             const HostSurface& surface,
@@ -260,6 +263,7 @@ private:
     void ShutdownGpuResources() noexcept;
     void ShutdownSessionFramebuffers() noexcept;
     [[nodiscard]] bool SubmitPendingPaint();
+    void ReportAaTrace(std::string_view message, bool force = false);
     void SetFailureDetail(std::string detail);
     void FailRender(const char* reason) noexcept;
     [[nodiscard]] bool RenderAndPresent(HDC dc, const RECT& rect, ViewportSession& session, const kb::scene::Scene& scene, const PresentSettings& settings);
@@ -284,6 +288,8 @@ private:
     std::chrono::steady_clock::time_point lastFrameClock_{};
     bool hasLastFrameClock_ = false;
     std::function<void(std::string_view)> errorReporter_{};
+    std::function<void(std::string_view)> aaTraceReporter_{};
+    std::string lastConsoleAaTrace_{};
     std::string failureDetail_{};
     std::string graphShaderCacheRoot_{};
     render::Renderer renderer_;

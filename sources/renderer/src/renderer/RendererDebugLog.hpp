@@ -1,19 +1,34 @@
 #pragma once
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace kb::render {
 
-inline bool RendererDebugLogEnabled() noexcept {
+inline bool RendererDebugLogEnabled(std::string_view category) noexcept {
+    if (category == "aa_trace") {
+        return true;
+    }
 #if defined(_WIN32)
     char* buffer = nullptr;
     std::size_t size = 0U;
@@ -37,6 +52,10 @@ inline std::filesystem::path RendererDebugLogPath() {
     return std::filesystem::current_path() / "Saved" / "Logs" / "editor-crash-breadcrumbs.log";
 }
 
+inline std::filesystem::path RendererAaTraceLogPath() {
+    return std::filesystem::current_path() / "aa_trace.log";
+}
+
 inline std::string RendererDebugLogNowMs() {
     const auto now = std::chrono::system_clock::now();
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -48,11 +67,35 @@ inline std::uint64_t RendererDebugLogThreadId() noexcept {
 }
 
 inline void WriteRendererDebugLog(std::string_view category, std::string_view message) {
-    if (!RendererDebugLogEnabled()) {
+    if (!RendererDebugLogEnabled(category)) {
         return;
     }
 
     try {
+        std::ostringstream line;
+        line << RendererDebugLogNowMs()
+             << " tid=" << RendererDebugLogThreadId()
+             << " [" << category << "] " << message;
+#if defined(_WIN32)
+        if (category == "aa_trace") {
+            std::string debugLine = line.str();
+            debugLine.push_back('\n');
+            OutputDebugStringA(debugLine.c_str());
+            static bool consoleAttachAttempted = false;
+            if (!consoleAttachAttempted) {
+                consoleAttachAttempted = true;
+                if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+                    FILE* stream = nullptr;
+                    static_cast<void>(freopen_s(&stream, "CONOUT$", "a", stderr));
+                }
+            }
+            std::fputs(debugLine.c_str(), stderr);
+            std::ofstream aaTraceOutput{ RendererAaTraceLogPath(), std::ios::out | std::ios::app };
+            if (aaTraceOutput.is_open()) {
+                aaTraceOutput << line.str() << '\n';
+            }
+        }
+#endif
         static std::mutex mutex;
         std::lock_guard lock{ mutex };
         const std::filesystem::path path = RendererDebugLogPath();
@@ -62,9 +105,7 @@ inline void WriteRendererDebugLog(std::string_view category, std::string_view me
         if (!output.is_open()) {
             return;
         }
-        output << RendererDebugLogNowMs()
-               << " tid=" << RendererDebugLogThreadId()
-               << " [" << category << "] " << message << '\n';
+        output << line.str() << '\n';
     } catch (...) {
     }
 }

@@ -479,7 +479,8 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 << " overlays=" << BoolText(desc.editorSceneOverlaysEnabled)
                 << " targetFb=" << HandleValue(desc.target.frameBuffer)
                 << " colorTex=" << HandleValue(desc.target.colorTexture)
-                << " depthTex=" << HandleValue(desc.target.depthTexture);
+                << " depthTex=" << HandleValue(desc.target.depthTexture)
+                << " targetMsaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples);
         WriteRendererBreadcrumb("renderer", message.str());
     }
     if (desc.meshPassMode != SceneRenderMeshPassMode::OpaqueOnly &&
@@ -683,12 +684,47 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         : (primaryCamera.has_value() ? &(*primaryCamera) : nullptr);
     std::optional<SceneRenderCamera> jitteredCamera{};
     const std::uint64_t frameIndex = static_cast<std::uint64_t>(lastCompletedFrame_) + 1ULL;
-    const bool temporalJitterEnabled = desc.postProcessEnabled &&
+    const bool temporalAntiAliasingEnabled = desc.postProcessEnabled &&
+        (desc.postProcessSettings.has_value()
+                ? desc.postProcessSettings->temporalAntiAliasingEnabled
+                : defaultPostProcessSettings_.temporalAntiAliasingEnabled);
+    const bool temporalJitterEnabled = temporalAntiAliasingEnabled &&
         (desc.postProcessSettings.has_value()
                 ? desc.postProcessSettings->temporalJitterEnabled
-                : defaultPostProcessSettings_.temporalJitterEnabled) &&
-        !desc.editorSceneOverlaysEnabled;
+                : defaultPostProcessSettings_.temporalJitterEnabled);
+    {
+        std::ostringstream message;
+        message << "Scene receive AA viewportId=" << desc.target.viewport.id.value
+                << " viewportIndex=" << desc.target.viewport.viewportIndex
+                << " postProcessEnabled=" << BoolText(desc.postProcessEnabled)
+                << " postTargetsEnabled=" << BoolText(desc.postProcess.enabled)
+                << " targetMsaaSamples=" << static_cast<unsigned>(desc.target.msaaSamples)
+                << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                << " defaultFxaa=" << BoolText(defaultPostProcessSettings_.fxaaEnabled)
+                << " defaultTaa=" << BoolText(defaultPostProcessSettings_.temporalAntiAliasingEnabled)
+                << " defaultJitter=" << BoolText(defaultPostProcessSettings_.temporalJitterEnabled)
+                << " temporalTaaEnabled=" << BoolText(temporalAntiAliasingEnabled)
+                << " temporalJitterEnabled=" << BoolText(temporalJitterEnabled)
+                << " editorOverlays=" << BoolText(desc.editorSceneOverlaysEnabled);
+        if (desc.postProcessSettings.has_value()) {
+            message << " overrideFxaa=" << BoolText(desc.postProcessSettings->fxaaEnabled)
+                    << " overrideTaa=" << BoolText(desc.postProcessSettings->temporalAntiAliasingEnabled)
+                    << " overrideJitter=" << BoolText(desc.postProcessSettings->temporalJitterEnabled)
+                    << " overrideBloom=" << BoolText(desc.postProcessSettings->bloomEnabled);
+        }
+        WriteRendererBreadcrumb("aa_trace", message.str());
+    }
     const std::array<float, 2> jitter = RendererTemporalJitter::Compute(frameIndex, desc.target.viewport.extent, temporalJitterEnabled);
+    {
+        std::ostringstream message;
+        message << "Temporal jitter resolve"
+                << " frameIndex=" << frameIndex
+                << " enabled=" << BoolText(temporalJitterEnabled)
+                << " jitterX=" << jitter[0]
+                << " jitterY=" << jitter[1]
+                << " extent=" << desc.target.viewport.extent.width << 'x' << desc.target.viewport.extent.height;
+        WriteRendererBreadcrumb("aa_trace", message.str());
+    }
     if (overlayCamera != nullptr) {
         jitteredCamera = *overlayCamera;
         RendererTemporalJitter::Apply(*jitteredCamera, jitter);
@@ -874,7 +910,29 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
                 .outputColor = desc.postProcess.finalTexture,
                 .extent = desc.target.viewport.extent,
             });
+            {
+                std::ostringstream message;
+                message << "PostProcess Evaluate raw"
+                        << " valid=" << BoolText(postProcessOutput.IsValid())
+                        << " enabledPassCount=" << postProcessOutput.enabledPassCount
+                        << " rawFxaa=" << BoolText(postProcessOutput.fxaaEnabled)
+                        << " rawTaa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
+                        << " rawBloom=" << BoolText(postProcessOutput.bloomEnabled)
+                        << " producer=" << PostProcessPassKindName(postProcessOutput.producer);
+                WriteRendererBreadcrumb("aa_trace", message.str());
+            }
             ApplyPostProcessSettingsOverride(postProcessOutput, desc.postProcessSettings);
+            {
+                std::ostringstream message;
+                message << "PostProcess after override"
+                        << " overridePresent=" << BoolText(desc.postProcessSettings.has_value())
+                        << " finalFxaa=" << BoolText(postProcessOutput.fxaaEnabled)
+                        << " finalTaa=" << BoolText(postProcessOutput.temporalAntiAliasingEnabled)
+                        << " finalBloom=" << BoolText(postProcessOutput.bloomEnabled)
+                        << " finalJitter=" << BoolText(postProcessOutput.postProcessSettings.temporalJitterEnabled)
+                        << " tonemap=" << BoolText(postProcessOutput.tonemapEnabled);
+                WriteRendererBreadcrumb("aa_trace", message.str());
+            }
             {
                 std::ostringstream message;
                 message << "SubmitSceneToViewport postProcess Evaluate end valid=" << BoolText(postProcessOutput.IsValid())
@@ -1140,6 +1198,15 @@ float Renderer::FrameDeltaSeconds() const noexcept {
 }
 
 void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) noexcept {
+    {
+        std::ostringstream message;
+        message << "SetDefaultPostProcessSettings input"
+                << " fxaa=" << BoolText(settings.fxaaEnabled)
+                << " taa=" << BoolText(settings.temporalAntiAliasingEnabled)
+                << " jitter=" << BoolText(settings.temporalJitterEnabled)
+                << " bloom=" << BoolText(settings.bloomEnabled);
+        WriteRendererBreadcrumb("aa_trace", message.str());
+    }
     if (settings.temporalAntiAliasingEnabled) {
         settings.fxaaEnabled = false;
     }
@@ -1173,6 +1240,22 @@ void Renderer::SetDefaultPostProcessSettings(ScenePostProcessSettings settings) 
         tonemap->postProcessSettings = settings;
         tonemap->outputTransform = settings.outputTransform;
         static_cast<void>(postProcessChain_.SetPass(*tonemap));
+    }
+    {
+        const std::optional<PostProcessPass> antiAliasing = postProcessChain_.FindPass(PostProcessPassKind::AntiAliasing);
+        std::ostringstream message;
+        message << "SetDefaultPostProcessSettings stored"
+                << " fxaa=" << BoolText(defaultPostProcessSettings_.fxaaEnabled)
+                << " taa=" << BoolText(defaultPostProcessSettings_.temporalAntiAliasingEnabled)
+                << " jitter=" << BoolText(defaultPostProcessSettings_.temporalJitterEnabled)
+                << " bloom=" << BoolText(defaultPostProcessSettings_.bloomEnabled)
+                << " aaPassPresent=" << BoolText(antiAliasing.has_value());
+        if (antiAliasing.has_value()) {
+            message << " aaPassEnabled=" << BoolText(antiAliasing->enabled)
+                    << " aaPassFxaa=" << BoolText(antiAliasing->postProcessSettings.fxaaEnabled)
+                    << " aaPassTaa=" << BoolText(antiAliasing->postProcessSettings.temporalAntiAliasingEnabled);
+        }
+        WriteRendererBreadcrumb("aa_trace", message.str());
     }
 }
 
