@@ -3664,6 +3664,84 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             proceduralMaskCompiled.shader.source.find("smoothstep(0.33 -") != std::string::npos,
         "KBMAT-MAT83: Edited procedural mask properties should compile into production shader expressions");
 
+    kb::editor::MaterialEditorState colorRampEditor;
+    kb::render::RenderMaterialAssetData colorRampAsset{};
+    colorRampAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    colorRampAsset.graph.shadingModel = "unlit";
+    colorRampEditor.Open(kb::assets::AssetId{ 0x5817U }, colorRampAsset);
+
+    std::uint32_t colorRampNodeId = 0U;
+    kb::editor::tests::Require(colorRampEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ColorRamp, -320, 80, &colorRampNodeId),
+        "KBMAT-MAT87: Material Editor should create a ColorRamp node for gradient property editing");
+    const kb::render::RenderMaterialGraphNode* colorRampNode =
+        kb::render::FindRenderMaterialGraphNode(colorRampEditor.WorkingCopy()->graph, colorRampNodeId);
+    kb::editor::tests::Require(colorRampNode != nullptr && colorRampNode->parameter.defaultValueHint == "0 0 0 0 1 1 1 1",
+        "KBMAT-MAT87: ColorRamp should default to a two-stop black-to-white gradient");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> colorRampProperties =
+        colorRampEditor.GraphNodeProperties(colorRampNodeId);
+    const auto colorRampStop0Position = std::ranges::find_if(colorRampProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "colorRamp.stop0.position";
+    });
+    const auto colorRampStop0Color = std::ranges::find_if(colorRampProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "colorRamp.stop0.color";
+    });
+    const auto colorRampStop1Position = std::ranges::find_if(colorRampProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "colorRamp.stop1.position";
+    });
+    const auto colorRampStop1Color = std::ranges::find_if(colorRampProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "colorRamp.stop1.color";
+    });
+    kb::editor::tests::Require(colorRampStop0Position != colorRampProperties.end() &&
+            colorRampStop0Color != colorRampProperties.end() &&
+            colorRampStop1Position != colorRampProperties.end() &&
+            colorRampStop1Color != colorRampProperties.end() &&
+            colorRampStop0Position->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Numeric &&
+            colorRampStop0Color->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Color &&
+            colorRampStop1Position->value.numbers[0] == 1.0F,
+        "KBMAT-MAT87: ColorRamp should expose typed position and color properties for its first two stops");
+    kb::editor::tests::Require(colorRampEditor.SetGraphConstantComponentValue(colorRampNodeId, 0U, 0.25F) &&
+            colorRampEditor.SetGraphConstantComponentValue(colorRampNodeId, 4U, 0.75F) &&
+            colorRampEditor.SetGraphNodeColorPropertyValue(colorRampNodeId, "colorRamp.stop0.color", std::array<float, 4U>{ 0.1F, 0.2F, 0.3F, 1.0F }) &&
+            colorRampEditor.SetGraphNodeColorPropertyValue(colorRampNodeId, "colorRamp.stop1.color", std::array<float, 4U>{ 0.8F, 0.6F, 0.4F, 1.0F }),
+        "KBMAT-MAT87: ColorRamp position and color properties should update node metadata");
+    colorRampNode = kb::render::FindRenderMaterialGraphNode(colorRampEditor.WorkingCopy()->graph, colorRampNodeId);
+    kb::editor::tests::Require(colorRampNode != nullptr && colorRampNode->parameter.defaultValueHint == "0.25 0.1 0.2 0.3 0.75 0.8 0.6 0.4",
+        "KBMAT-MAT87: ColorRamp should persist edited stops in the runtime hint format");
+    kb::editor::tests::Require(colorRampEditor.ConnectGraphPins(colorRampNodeId, "value", 1U, "baseColor"),
+        "KBMAT-MAT87: Edited ColorRamp should route into Base Color");
+    const kb::render::RenderMaterialGraphCompileResult colorRampCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            colorRampEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5817U });
+    kb::editor::tests::Require(colorRampCompiled.Succeeded() &&
+            colorRampCompiled.shader.source.find("smoothstep(0.25, 0.75") != std::string::npos &&
+            colorRampCompiled.shader.source.find("vec3(0.1, 0.2, 0.3)") != std::string::npos &&
+            colorRampCompiled.shader.source.find("vec3(0.8, 0.6, 0.4)") != std::string::npos,
+        "KBMAT-MAT87: Edited ColorRamp properties should compile into production gradient shader expressions");
+
+    kb::editor::MaterialEditorState colorRampPreserveEditor;
+    kb::render::RenderMaterialAssetData colorRampPreserveAsset{};
+    colorRampPreserveAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    colorRampPreserveAsset.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::ColorRamp,
+        .positionX = -220,
+        .positionY = 80,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+            .displayName = "Color Ramp",
+            .defaultValueHint = "0 0 0 0 0.5 0.5 0.5 0.5 1 1 0 0",
+            .overrideSupported = false,
+        },
+    });
+    colorRampPreserveEditor.Open(kb::assets::AssetId{ 0x5818U }, colorRampPreserveAsset);
+    kb::editor::tests::Require(colorRampPreserveEditor.SetGraphNodeColorPropertyValue(2U, "colorRamp.stop0.color", std::array<float, 4U>{ 0.2F, 0.4F, 0.6F, 1.0F }),
+        "KBMAT-MAT87: ColorRamp property edits should work on loaded multi-stop assets");
+    const kb::render::RenderMaterialGraphNode* preservedColorRampNode =
+        kb::render::FindRenderMaterialGraphNode(colorRampPreserveEditor.WorkingCopy()->graph, 2U);
+    kb::editor::tests::Require(preservedColorRampNode != nullptr &&
+            preservedColorRampNode->parameter.defaultValueHint == "0 0.2 0.4 0.6 0.5 0.5 0.5 0.5 1 1 0 0",
+        "KBMAT-MAT87: Editing the first ColorRamp stops should preserve additional loaded stops");
+
     kb::editor::MaterialEditorState viewPropertyEditor;
     kb::render::RenderMaterialAssetData viewPropertyAsset{};
     viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
