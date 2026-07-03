@@ -2658,8 +2658,8 @@ void RunMaterialEditorFunctionNodeModelTest() {
         .positionX = -220,
         .positionY = 80,
         .parameter = kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "Input",
-            .displayName = "Input",
+            .stableId = "Tint",
+            .displayName = "Tint",
             .defaultValueHint = "float4",
             .overrideSupported = false,
         },
@@ -2670,8 +2670,8 @@ void RunMaterialEditorFunctionNodeModelTest() {
         .positionX = 80,
         .positionY = 80,
         .parameter = kb::render::RenderMaterialGraphParameterMetadata{
-            .stableId = "Output",
-            .displayName = "Output",
+            .stableId = "Result",
+            .displayName = "Result",
             .defaultValueHint = "float4",
             .overrideSupported = false,
         },
@@ -2685,6 +2685,24 @@ void RunMaterialEditorFunctionNodeModelTest() {
         kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
         2U,
         "value"));
+    kb::editor::tests::Require(editor.SetGraphMaterialFunctionCallSignature(functionCallId, functionAssetId, functionGraph),
+        "KBMAT-MAT42: MaterialFunctionCall editor sync must rebuild call pins from the selected function graph");
+    const kb::render::RenderMaterialGraphNode* syncedFunctionCall =
+        kb::render::FindRenderMaterialGraphNode(editor.WorkingCopy()->graph, functionCallId);
+    kb::editor::tests::Require(syncedFunctionCall != nullptr &&
+            kb::render::RenderMaterialGraphNodeInputPinNames(*syncedFunctionCall).size() == 1U &&
+            kb::render::RenderMaterialGraphNodeInputPinNames(*syncedFunctionCall)[0] == "Tint" &&
+            kb::render::RenderMaterialGraphNodeOutputPinNames(*syncedFunctionCall).size() == 1U &&
+            kb::render::RenderMaterialGraphNodeOutputPinNames(*syncedFunctionCall)[0] == "Result" &&
+            kb::render::RenderMaterialGraphPinDataType(*syncedFunctionCall, "Tint", false) == kb::render::RenderMaterialGraphPinType::Float4 &&
+            kb::render::RenderMaterialGraphPinDataType(*syncedFunctionCall, "Result", true) == kb::render::RenderMaterialGraphPinType::Float4,
+        "KBMAT-MAT42: MaterialFunctionCall editor sync must expose the function endpoint names and types");
+    kb::editor::tests::Require(editor.WorkingCopy()->graph.links.empty(),
+        "KBMAT-MAT42: MaterialFunctionCall editor sync must remove links to stale dynamic pins");
+    kb::editor::tests::Require(editor.ConnectGraphPins(colorId, "rgba", functionCallId, "Tint"),
+        "KBMAT-MAT42: Synced MaterialFunctionCall input pin must accept compatible graph connections");
+    kb::editor::tests::Require(editor.ConnectGraphPins(functionCallId, "Result", 1U, "baseColor"),
+        "KBMAT-MAT42: Synced MaterialFunctionCall output pin must connect to material output");
     kb::render::RenderMaterialGraphFunctionLibrary library{};
     library.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
         .assetId = functionAssetId,
