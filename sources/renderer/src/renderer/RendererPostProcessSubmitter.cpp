@@ -2,9 +2,19 @@
 
 #include "kb/render/SceneDepthPolicy.hpp"
 #include "kb/render/post/ScenePostProcessRenderer.hpp"
+#include "renderer/RendererDebugLog.hpp"
 #include "renderer/RendererMatrixMath.hpp"
 
+#include <sstream>
+
 namespace kb::render {
+namespace {
+
+[[nodiscard]] const char* BoolText(bool value) noexcept {
+    return value ? "true" : "false";
+}
+
+} // namespace
 
 bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProcessSubmitDesc& desc) {
     ScenePostProcessSettings postProcessSettings = desc.postProcessOutput.postProcessSettings;
@@ -21,6 +31,25 @@ bgfx::TextureHandle RendererPostProcessSubmitter::Submit(const RendererPostProce
     const std::array<float, 16> inverseCurrentViewProjection = RendererMatrixMath::Inverse(currentViewProjection);
     const std::array<float, 16> previousViewProjection = temporalHistoryValid ? desc.previousViewProjection : currentViewProjection;
     const bool homogeneousDepth = SceneDepthPolicy::HomogeneousDepth();
+    const bool effectiveJitter = desc.jitter[0] != 0.0F || desc.jitter[1] != 0.0F;
+
+    {
+        std::ostringstream message;
+        message << "RendererPostProcessSubmitter submit"
+                << " outputFxaa=" << BoolText(desc.postProcessOutput.fxaaEnabled)
+                << " outputTaa=" << BoolText(desc.postProcessOutput.temporalAntiAliasingEnabled)
+                << " settingsFxaa=" << BoolText(postProcessSettings.fxaaEnabled)
+                << " settingsTaa=" << BoolText(postProcessSettings.temporalAntiAliasingEnabled)
+                << " settingsJitter=" << BoolText(postProcessSettings.temporalJitterEnabled)
+                << " effectiveJitter=" << BoolText(effectiveJitter)
+                << " jitterX=" << desc.jitter[0]
+                << " jitterY=" << desc.jitter[1]
+                << " sceneDepthValid=" << BoolText(bgfx::isValid(desc.sceneDesc.target.depthTexture))
+                << " temporalHistoryValid=" << BoolText(temporalHistoryValid)
+                << " hasTemporalHistory=" << BoolText(desc.hasTemporalHistory)
+                << " frameIndex=" << desc.frameIndex;
+        WriteRendererDebugLog("aa_trace", message.str());
+    }
 
     const bgfx::TextureHandle scenePostProcessOutput = desc.postProcessRenderer.Submit(ScenePostProcessSubmitDesc{
         .sceneColor = desc.sceneDesc.target.colorTexture,
