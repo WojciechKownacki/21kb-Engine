@@ -150,6 +150,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     CreateDynamicParameter,
     CreateVertexColor,
     CreateScreenPosition,
+    CreatePixelPosition,
     CreateLocalPosition,
     CreateObjectPosition,
     CreateWorldPosition,
@@ -2977,6 +2978,8 @@ private:
             return "Collection Parameter";
         case kb::render::RenderMaterialGraphNodeKind::TwoSidedSign:
             return "Two Sided Sign";
+        case kb::render::RenderMaterialGraphNodeKind::PixelPosition:
+            return "Pixel Position";
         case kb::render::RenderMaterialGraphNodeKind::PixelDepth:
             return "Pixel Depth";
         case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
