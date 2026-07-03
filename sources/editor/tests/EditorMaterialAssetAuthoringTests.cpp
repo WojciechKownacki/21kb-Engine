@@ -1782,6 +1782,33 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphPaletteAllCommands();
     kb::editor::tests::Require(allPaletteCommands.size() >= 150U,
         "KBMAT-MAT57C: Production palette coverage should include the complete material node catalog");
+    std::vector<kb::render::RenderMaterialGraphNodeKind> paletteNodeKinds;
+    for (const kb::editor::MaterialEditorGraphMenuCommand command : allPaletteCommands) {
+        const std::optional<kb::render::RenderMaterialGraphNodeKind> kind =
+            kb::editor::MaterialEditorGraphMenuCommandNodeKind(command);
+        if (kind.has_value() && std::ranges::find(paletteNodeKinds, *kind) == paletteNodeKinds.end()) {
+            paletteNodeKinds.push_back(*kind);
+        }
+    }
+    for (const kb::render::RenderMaterialGraphNodeKind kind : kb::render::AllRenderMaterialGraphNodeKinds()) {
+        if (kind == kb::render::RenderMaterialGraphNodeKind::MaterialOutput) {
+            continue;
+        }
+        if (std::ranges::find(paletteNodeKinds, kind) == paletteNodeKinds.end()) {
+            std::cerr << "KBMAT-MAT57C renderer node missing from Material Editor palette: "
+                      << kb::render::RenderMaterialGraphNodeKindName(kind) << '\n';
+        }
+        kb::editor::tests::Require(std::ranges::find(paletteNodeKinds, kind) != paletteNodeKinds.end(),
+            "KBMAT-MAT57C: Every renderer graph node kind except MaterialOutput must be reachable from the Material Editor palette");
+    }
+    for (const kb::render::RenderMaterialGraphNodeKind kind : paletteNodeKinds) {
+        if (std::ranges::find(kb::render::AllRenderMaterialGraphNodeKinds(), kind) == kb::render::AllRenderMaterialGraphNodeKinds().end()) {
+            std::cerr << "KBMAT-MAT57C palette exposes node outside renderer catalog: "
+                      << kb::render::RenderMaterialGraphNodeKindName(kind) << '\n';
+        }
+        kb::editor::tests::Require(std::ranges::find(kb::render::AllRenderMaterialGraphNodeKinds(), kind) != kb::render::AllRenderMaterialGraphNodeKinds().end(),
+            "KBMAT-MAT57C: Material Editor palette must not expose node kinds outside the renderer catalog");
+    }
     for (std::size_t categoryIndex = 0U; categoryIndex < kb::editor::kMaterialEditorGraphBaseCategoryCount; ++categoryIndex) {
         const std::vector<kb::editor::MaterialEditorGraphMenuCommand> categoryCommands =
             kb::editor::MaterialEditorGraphContextMenuCommands(categoryIndex);
