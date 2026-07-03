@@ -5253,6 +5253,12 @@ void RunMaterialGraphCustomCodeNodeSchemaTest() {
 }
 
 void RunMaterialGraphVertexDataReflectionTest() {
+    Require(ParseRenderMaterialGraphNodeKind("DistanceCullFade") == RenderMaterialGraphNodeKind::DistanceCullFade,
+        "KBMAT-MAT47: DistanceCullFade must parse as a runtime fade input node");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::DistanceCullFade, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::DistanceCullFade, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT47: DistanceCullFade must expose a scalar value output");
+
     RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
     graph.shadingModel = "unlit";
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::VertexColor });
@@ -5262,6 +5268,7 @@ void RunMaterialGraphVertexDataReflectionTest() {
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 6U, .kind = RenderMaterialGraphNodeKind::PreSkinnedPosition });
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 7U, .kind = RenderMaterialGraphNodeKind::PreSkinnedNormal });
     graph.nodes.push_back(RenderMaterialGraphNode{ .id = 8U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 9U, .kind = RenderMaterialGraphNodeKind::DistanceCullFade });
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceRandom, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "x"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceFadeAmount, 4U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "y"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PerInstanceCustomData, 5U, "value", RenderMaterialGraphNodeKind::MakeVector, 8U, "z"));
@@ -5269,12 +5276,15 @@ void RunMaterialGraphVertexDataReflectionTest() {
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PreSkinnedNormal, 7U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "normal"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::VertexColor, 2U, "rgba", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
     graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::MakeVector, 8U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::DistanceCullFade, 9U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "roughness"));
 
     const RenderMaterialGraphCompileResult result = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0470U });
     Require(result.Succeeded(), "KBMAT-MAT47: vertex/instance data graph must compile");
     Require(result.shader.source.find("ctx.vertexColor") != std::string::npos, "KBMAT-MAT47: VertexColor must emit ctx.vertexColor");
     Require(result.shader.source.find("ctx.perInstanceRandom") != std::string::npos, "KBMAT-MAT47: PerInstanceRandom must emit ctx.perInstanceRandom");
     Require(result.shader.source.find("ctx.perInstanceFadeAmount") != std::string::npos, "KBMAT-MAT47: PerInstanceFadeAmount must emit ctx.perInstanceFadeAmount");
+    Require(result.shader.source.find("material.roughness = ctx.perInstanceFadeAmount") != std::string::npos,
+        "KBMAT-MAT47: DistanceCullFade must emit the same production distance-fade context value");
     Require(result.shader.source.find("ctx.perInstanceCustomData") != std::string::npos, "KBMAT-MAT47: PerInstanceCustomData must emit ctx.perInstanceCustomData");
     Require(result.shader.source.find("ctx.preSkinnedPosition") != std::string::npos, "KBMAT-MAT47: PreSkinnedPosition must emit ctx.preSkinnedPosition");
     Require(result.shader.source.find("ctx.preSkinnedNormal") != std::string::npos, "KBMAT-MAT47: PreSkinnedNormal must emit ctx.preSkinnedNormal");
