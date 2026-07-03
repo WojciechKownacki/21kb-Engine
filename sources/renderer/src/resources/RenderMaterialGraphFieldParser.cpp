@@ -404,10 +404,20 @@ void AddGraphMigrationDiagnostic(
     const bool supportsMetadata = node != nullptr &&
         (IsRenderMaterialGraphParameterNode(node->kind) ||
             node->kind == RenderMaterialGraphNodeKind::TextureSample ||
+            node->kind == RenderMaterialGraphNodeKind::TextureObject ||
+            node->kind == RenderMaterialGraphNodeKind::TextureSampleCube ||
+            node->kind == RenderMaterialGraphNodeKind::TextureObjectCube ||
+            node->kind == RenderMaterialGraphNodeKind::TextureSampleVolume ||
+            node->kind == RenderMaterialGraphNodeKind::TextureObjectVolume ||
+            node->kind == RenderMaterialGraphNodeKind::TextureSample2DArray ||
+            node->kind == RenderMaterialGraphNodeKind::TextureObject2DArray ||
             node->kind == RenderMaterialGraphNodeKind::ConstantScalar ||
+            node->kind == RenderMaterialGraphNodeKind::ConstantBool ||
             node->kind == RenderMaterialGraphNodeKind::ConstantVector2 ||
             node->kind == RenderMaterialGraphNodeKind::ConstantVector ||
             node->kind == RenderMaterialGraphNodeKind::ConstantColor ||
+            node->kind == RenderMaterialGraphNodeKind::CollectionParameter ||
+            node->kind == RenderMaterialGraphNodeKind::Uv ||
             node->kind == RenderMaterialGraphNodeKind::StaticBoolParameter ||
             node->kind == RenderMaterialGraphNodeKind::StaticSwitch ||
             node->kind == RenderMaterialGraphNodeKind::StaticComponentMask ||
