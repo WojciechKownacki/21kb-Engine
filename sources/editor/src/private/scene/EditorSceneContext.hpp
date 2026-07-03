@@ -361,6 +361,11 @@ public:
     [[nodiscard]] bool HasMaterialGraphWorkingCopyTransaction() const noexcept;
     [[nodiscard]] bool SetMaterialGraphTextureSampleAsset(kb::assets::AssetId id, std::uint32_t nodeId, kb::assets::AssetId textureId);
     [[nodiscard]] bool SetMaterialGraphConstantColorValue(kb::assets::AssetId id, std::uint32_t nodeId, const std::array<float, 4U>& color);
+    [[nodiscard]] bool SetMaterialGraphNodeColorPropertyValue(
+        kb::assets::AssetId id,
+        std::uint32_t nodeId,
+        std::string_view propertyId,
+        const std::array<float, 4U>& color);
     [[nodiscard]] bool SetMaterialGraphNodeEnumValue(kb::assets::AssetId id, std::uint32_t nodeId, std::string_view propertyId, std::string_view value);
     void ToggleMaterialGraphNodeEnumDropdown(std::uint32_t nodeId, std::string propertyId);
     void CloseMaterialGraphNodeEnumDropdown() noexcept;

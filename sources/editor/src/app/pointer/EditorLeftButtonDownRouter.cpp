@@ -438,7 +438,11 @@ void EditorLeftButtonDownRouter::Handle(HWND messageWindow, int x, int y) {
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::ColorPicker:
                             if (const std::optional<std::array<float, 4U>> color = ShowGraphColorPicker(mainWindow_, property->value)) {
-                                static_cast<void>(sceneContext_.SetMaterialGraphConstantColorValue(materialId, property->nodeId, *color));
+                                static_cast<void>(sceneContext_.SetMaterialGraphNodeColorPropertyValue(
+                                    materialId,
+                                    property->nodeId,
+                                    property->stableId,
+                                    *color));
                             }
                             break;
                         case MaterialEditorGraphNodePropertyHitKind::Slider:
