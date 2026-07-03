@@ -1541,6 +1541,14 @@ public:
             node->parameter.defaultValueHint = StaticComponentMaskHintWithChannel(*node, propertyId, option->value == "true");
         } else if (IsTransformSpacePropertyId(propertyId) && IsTransformSpaceNode(node->kind)) {
             node->parameter.defaultValueHint = TransformSpaceHintWithProperty(*node, propertyId, option->value);
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::CustomCode &&
+            propertyId == "customCode.outputType") {
+            const std::optional<kb::render::RenderMaterialGraphPinType> outputType =
+                kb::render::ParseRenderMaterialGraphPinType(option->value);
+            if (!outputType.has_value() || !IsCustomCodeEditableValueType(*outputType)) {
+                return false;
+            }
+            node->customCode.outputType = *outputType;
         } else {
             node->parameter.defaultValueHint = option->value;
         }
@@ -1570,6 +1578,27 @@ public:
         }
 
         const std::string normalized = TrimAscii(value);
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::CustomCode) {
+            if (propertyId == "customCode.body") {
+                if (normalized.empty()) {
+                    return false;
+                }
+                node->customCode.body = normalized;
+            } else if (propertyId == "customCode.defines") {
+                node->customCode.defines = normalized;
+            } else if (propertyId == "customCode.includes") {
+                node->customCode.includes = normalized;
+            } else {
+                return false;
+            }
+            if (node->parameter.displayName.empty()) {
+                node->parameter.displayName = GraphNodeDisplayName(node->kind);
+            }
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
+        }
+
         if (node->kind == kb::render::RenderMaterialGraphNodeKind::CollectionParameter) {
             if (propertyId == "collection.assetId") {
                 std::uint64_t assetId = 0U;
@@ -1810,6 +1839,45 @@ public:
                 .kind = MaterialEditorGraphNodePropertyKind::TextureAsset,
                 .type = kb::render::RenderMaterialParameterType::Texture,
                 .value = TextureAssetValue(GraphNodeTextureAssetId(*node, *workingCopy_)),
+            });
+        }
+
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::CustomCode) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "customCode.body",
+                .displayName = "Body",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(node->customCode.body),
+            });
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "customCode.defines",
+                .displayName = "Defines",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(node->customCode.defines),
+            });
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "customCode.includes",
+                .displayName = "Includes",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(node->customCode.includes),
+            });
+            const std::vector<MaterialEditorGraphNodePropertyOption> options =
+                GraphNodeEnumOptions(node->kind, "customCode.outputType");
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "customCode.outputType",
+                .displayName = "Output Type",
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(std::string{ kb::render::RenderMaterialGraphPinTypeName(node->customCode.outputType) }),
+                .options = options,
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "customCode.outputType"),
             });
         }
 
@@ -3469,6 +3537,14 @@ private:
                 MaterialEditorGraphNodePropertyOption{ .value = "depth", .label = "Scene Depth" },
             };
         }
+        if (propertyId == "customCode.outputType" && kind == kb::render::RenderMaterialGraphNodeKind::CustomCode) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "float", .label = "Float" },
+                MaterialEditorGraphNodePropertyOption{ .value = "float2", .label = "Float2" },
+                MaterialEditorGraphNodePropertyOption{ .value = "float3", .label = "Float3" },
+                MaterialEditorGraphNodePropertyOption{ .value = "float4", .label = "Float4" },
+            };
+        }
         if (propertyId == "staticSwitch.selector" && kind == kb::render::RenderMaterialGraphNodeKind::StaticSwitch) {
             return {
                 MaterialEditorGraphNodePropertyOption{ .value = "false", .label = "False" },
@@ -3703,6 +3779,13 @@ private:
             return "depth";
         }
         return "color";
+    }
+
+    [[nodiscard]] static bool IsCustomCodeEditableValueType(kb::render::RenderMaterialGraphPinType type) noexcept {
+        return type == kb::render::RenderMaterialGraphPinType::Float ||
+            type == kb::render::RenderMaterialGraphPinType::Float2 ||
+            type == kb::render::RenderMaterialGraphPinType::Float3 ||
+            type == kb::render::RenderMaterialGraphPinType::Float4;
     }
 
     struct ColorRampStop {
