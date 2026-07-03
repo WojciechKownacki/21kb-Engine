@@ -1701,6 +1701,67 @@ void RunForwardGraphScreenPositionTest() {
     harness.Shutdown();
 }
 
+// MAT-78: PixelPosition exposes absolute viewport pixel coordinates. The graph normalizes it back
+// to UV space before sampling so the GPU proof distinguishes absolute pixels from normalized screen UVs.
+void RunForwardGraphPixelPositionTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat78_pixel_position";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path vsBin = cacheDir / "vs_graph_probe.bin";
+    Require(CookHarnessVertexShader(vsBin), "KBMAT-MAT78: Harness vertex shader must cook to a DXBC binary");
+    const std::vector<std::uint8_t> vsBytes = ReadAllBytes(vsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelPosition, .positionX = 40, .positionY = 40 });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::Multiply, .positionX = 180, .positionY = 40 });
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::ConstantScalar, .positionX = 40, .positionY = 160, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = "0.015625" } });
+    RenderMaterialGraphNode sample{ .id = 5U, .kind = RenderMaterialGraphNodeKind::TextureSample, .positionX = 340, .positionY = 40 };
+    sample.parameter.stableId = "pixelGradTex";
+    sample.parameter.textureRole = "baseColor";
+    sample.parameter.expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb;
+    graph.nodes.push_back(sample);
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::PixelPosition, 2U, "xy", RenderMaterialGraphNodeKind::Multiply, 3U, "a"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 4U, "value", RenderMaterialGraphNodeKind::Multiply, 3U, "b"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::Multiply, 3U, "value", RenderMaterialGraphNodeKind::TextureSample, 5U, "uv"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::TextureSample, 5U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x7800U });
+    Require(compiled.Succeeded() && compiled.shader.reflection.textures.size() == 1U, "KBMAT-MAT78: PixelPosition sampling graph must compile");
+    Require(compiled.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT78: PixelPosition node must emit absolute pixel coordinates");
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, CookRequest(cacheDir.generic_string()));
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT78: PixelPosition graph must cook");
+    const std::string samplerName = compiled.shader.reflection.textures[0].samplerName;
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT78: Direct3D11 device unavailable; cannot run GPU pixel position proof\n");
+        Require(false, "KBMAT-MAT78: A real GPU device is required to prove pixel position");
+        return;
+    }
+
+    const bgfx::ProgramHandle program = BuildGraphProgram(vsBytes, *result.artifact);
+    Require(bgfx::isValid(program), "KBMAT-MAT78: PixelPosition graph program must link");
+
+    const std::array<std::uint32_t, 2U> gradient{ 0xff000000U, 0xff0000ffU };
+    bgfx::UniformHandle sampler = bgfx::createUniform(samplerName.c_str(), bgfx::UniformType::Sampler);
+    bgfx::TextureHandle gradientTexture = bgfx::createTexture2D(2U, 1U, false, 1U, bgfx::TextureFormat::RGBA8,
+        BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP, bgfx::copy(gradient.data(), sizeof(gradient)));
+
+    const std::vector<std::uint8_t> pixels = harness.RenderPixels(program, sampler, gradientTexture);
+    const ForwardRenderProbe leftPixel = ForwardRenderHarness::ProbeAt(pixels, 12U, 32U);
+    const ForwardRenderProbe rightPixel = ForwardRenderHarness::ProbeAt(pixels, 52U, 32U);
+    Require(rightPixel.r > leftPixel.r + 40U,
+        "KBMAT-MAT78: PixelPosition.x must vary in absolute pixels across the screen");
+
+    bgfx::destroy(gradientTexture);
+    bgfx::destroy(sampler);
+    harness.Shutdown();
+}
+
 // MAT-76: object-space inputs. The harness simulates an object translated so local position and
 // object origin differ from per-fragment world position by +0.7 in X. A graph wired
 // LocalPosition->baseColor (and ObjectPosition->baseColor) must therefore render a red distinct
@@ -4132,6 +4193,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphUv1SamplingTest();
     RunForwardGraphVertexColorTest();
     RunForwardGraphScreenPositionTest();
+    RunForwardGraphPixelPositionTest();
     RunForwardGraphObjectSpaceTest();
     RunForwardGraphPerInstanceTest();
     RunForwardGraphPreSkinnedVertexDataTest();

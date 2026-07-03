@@ -168,6 +168,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     PixelDepth,
     CameraDepthFade,
     DistanceCullFade,
+    PixelPosition,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {

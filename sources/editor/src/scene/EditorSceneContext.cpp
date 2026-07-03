@@ -4618,6 +4618,8 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::VertexColor, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateScreenPosition:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::ScreenPosition, graphX, graphY);
+    case MaterialEditorGraphMenuCommand::CreatePixelPosition:
+        return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::PixelPosition, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateLocalPosition:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::LocalPosition, graphX, graphY);
     case MaterialEditorGraphMenuCommand::CreateObjectPosition:
