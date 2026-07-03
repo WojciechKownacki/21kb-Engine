@@ -1775,8 +1775,21 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::PixelDepth:
         return "ctx.fragmentDepth";
     case RenderMaterialGraphNodeKind::CameraDepthFade: {
-        const std::string fadeLength = CompileInputExpression(cg, node, "fadeLength", RenderMaterialGraphPinType::Float, "1.0");
-        const std::string fadeOffset = CompileInputExpression(cg, node, "fadeOffset", RenderMaterialGraphPinType::Float, "0.0");
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFadeLength = values.size() > 0U ? std::max(values[0], 0.0001F) : 1.0F;
+        const float defaultFadeOffset = values.size() > 1U ? values[1] : 0.0F;
+        const std::string fadeLength = CompileInputExpression(
+            cg,
+            node,
+            "fadeLength",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeLength));
+        const std::string fadeOffset = CompileInputExpression(
+            cg,
+            node,
+            "fadeOffset",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeOffset));
         return "clamp((distance(ctx.cameraPosition, ctx.worldPos) - (" + fadeOffset + ")) / max(" + fadeLength + ", 0.0001), 0.0, 1.0)";
     }
     case RenderMaterialGraphNodeKind::SceneColor: {
@@ -1793,7 +1806,14 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         // MAT-80/#18b: soft fade (0 at the opaque surface, 1 further in front). abs() of the device-depth
         // separation is projection-convention robust; the transparent fragment already passed the depth
         // test so it lies in front of the sampled opaque depth.
-        const std::string fadeDistance = CompileInputExpression(cg, node, "fadeDistance", RenderMaterialGraphPinType::Float, "0.01");
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFadeDistance = values.size() > 0U ? std::max(values[0], 0.0001F) : 0.01F;
+        const std::string fadeDistance = CompileInputExpression(
+            cg,
+            node,
+            "fadeDistance",
+            RenderMaterialGraphPinType::Float,
+            FloatLiteral(defaultFadeDistance));
         return "clamp(abs(texture2D(s_kbSceneDepth, ctx.screenPosition).x - ctx.fragmentDepth) / max(" + fadeDistance + ", 0.0001), 0.0, 1.0)";
     }
     case RenderMaterialGraphNodeKind::Panner: {
