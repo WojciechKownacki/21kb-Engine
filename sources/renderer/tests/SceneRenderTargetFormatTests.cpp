@@ -167,6 +167,16 @@ void SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled() {
     Require(desc.IsValid(), "RenderSceneSubmitDesc rejected enabled final composite with valid post-process target");
 }
 
+void SceneSubmitDescUsesExplicitOverlayDepthWhenPresent() {
+    RenderSceneSubmitDesc desc{};
+    desc.target.depthTexture = bgfx::TextureHandle{17U};
+
+    Require(desc.SceneOverlayDepthTexture().idx == 17U, "Scene overlay depth should default to the scene target depth texture");
+
+    desc.editorOverlayDepthTexture = bgfx::TextureHandle{23U};
+    Require(desc.SceneOverlayDepthTexture().idx == 23U, "Scene overlay depth should prefer the explicit editor overlay depth texture");
+}
+
 void DefaultPostProcessTargetsBindingIsDisabledAndInvalid() {
     const ScenePostProcessTargets targets;
     const RenderPostProcessTargetBinding binding = targets.Binding();
@@ -216,6 +226,7 @@ void RunSceneRenderTargetFormatTests() {
     SceneGBufferFormatSelectionRequiresEveryAttachment();
     RenderTargetDescSupportsSceneFallbackFormats();
     SceneSubmitDescRequiresValidFinalCompositeExtentWhenEnabled();
+    SceneSubmitDescUsesExplicitOverlayDepthWhenPresent();
     DefaultPostProcessTargetsBindingIsDisabledAndInvalid();
     NativeWindowFramebufferDescDefaultsToColorOnlyPresentation();
 }

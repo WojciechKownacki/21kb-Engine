@@ -842,6 +842,11 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport selection mask mesh pass end");
     }
 
+    RenderSceneSubmitDesc editorOverlayDesc = desc;
+    if (deferredLighting) {
+        editorOverlayDesc.editorOverlayDepthTexture = defaultSceneGBuffer_.DepthTexture();
+    }
+
     if (desc.finalComposite.enabled && finalCompositePass_ != nullptr) {
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport final composite branch begin");
         PostProcessOutput postProcessOutput{
@@ -929,7 +934,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
         RendererEditorOverlaySubmitter::Submit(
             editorPassSubmitter_,
             viewportPlan,
-            desc,
+            editorOverlayDesc,
             overlayCamera,
             desc.selectionOutlineEnabled && postProcessOutput.selectionOutlineEnabled);
         WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end");
@@ -938,7 +943,7 @@ bool Renderer::SubmitSceneToViewport(const kb::scene::Scene& scene, const Render
     }
 
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit begin noFinalComposite");
-    RendererEditorOverlaySubmitter::Submit(editorPassSubmitter_, viewportPlan, desc, overlayCamera, true);
+    RendererEditorOverlaySubmitter::Submit(editorPassSubmitter_, viewportPlan, editorOverlayDesc, overlayCamera, true);
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport editor overlay submit end noFinalComposite");
     WriteRendererBreadcrumb("renderer", "SubmitSceneToViewport end ok noFinalComposite");
     return true;
