@@ -1764,6 +1764,35 @@ void RunMaterialGraphMvpNodeKindsAndPinsTest() {
     Require(ParseRenderMaterialGraphNodeKind("Color") == RenderMaterialGraphNodeKind::ConstantColor, "Material graph MVP should parse Color alias");
     Require(ParseRenderMaterialGraphNodeKind("UV") == RenderMaterialGraphNodeKind::Uv, "Material graph MVP should parse UV token as the UV node");
     Require(ParseRenderMaterialGraphNodeKind("TextureCoordinate") == RenderMaterialGraphNodeKind::TextureCoordinate, "MAT-45 TextureCoordinate is a distinct tiling node and must round-trip to itself, not collapse to UV");
+    const auto compileTextureCoordinate = [](std::string_view hint) {
+        RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+        graph.shadingModel = "unlit";
+        graph.nodes.push_back(RenderMaterialGraphNode{
+            .id = 2U,
+            .kind = RenderMaterialGraphNodeKind::TextureCoordinate,
+            .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ hint } },
+        });
+        graph.nodes.push_back(RenderMaterialGraphNode{
+            .id = 3U,
+            .kind = RenderMaterialGraphNodeKind::TextureSample,
+            .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "texCoordProbe", .textureRole = "baseColor", .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb },
+        });
+        graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureCoordinate, 2U, "uv", RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
+        graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+        return CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x0810U });
+    };
+    const RenderMaterialGraphCompileResult defaultTextureCoordinate = compileTextureCoordinate({});
+    const RenderMaterialGraphCompileResult legacyUv1TextureCoordinate = compileTextureCoordinate("1");
+    const RenderMaterialGraphCompileResult tiledUv1TextureCoordinate = compileTextureCoordinate("2 3 1");
+    Require(defaultTextureCoordinate.Succeeded() &&
+            defaultTextureCoordinate.shader.source.find("ctx.uv0 * vec2(1.0, 1.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate default must sample UV0 with 1x tiling, not collapse to zero UVs");
+    Require(legacyUv1TextureCoordinate.Succeeded() &&
+            legacyUv1TextureCoordinate.shader.source.find("ctx.uv1 * vec2(1.0, 1.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate legacy hint '1' must select UV1 instead of being parsed as a tiling scalar");
+    Require(tiledUv1TextureCoordinate.Succeeded() &&
+            tiledUv1TextureCoordinate.shader.source.find("ctx.uv1 * vec2(2.0, 3.0)") != std::string::npos,
+        "MAT-81 TextureCoordinate extended hint must preserve tiling and UV set");
     Require(ParseRenderMaterialGraphNodeKind("Abs") == RenderMaterialGraphNodeKind::Absolute, "Material graph utility math should parse Abs alias");
     Require(ParseRenderMaterialGraphNodeKind("Min") == RenderMaterialGraphNodeKind::Minimum, "Material graph utility math should parse Min alias");
     Require(ParseRenderMaterialGraphNodeKind("Max") == RenderMaterialGraphNodeKind::Maximum, "Material graph utility math should parse Max alias");

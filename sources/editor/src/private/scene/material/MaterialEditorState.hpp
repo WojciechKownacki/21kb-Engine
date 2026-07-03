@@ -1388,7 +1388,10 @@ public:
         if (option == options.end()) {
             return false;
         }
-        node->parameter.defaultValueHint = option->value;
+        node->parameter.defaultValueHint =
+            node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && propertyId == "uvSet"
+                ? TextureCoordinateHintWithUvSet(*node, option->value)
+                : option->value;
         node->parameter.overrideSupported = false;
         if (node->parameter.displayName.empty()) {
             node->parameter.displayName = GraphNodeDisplayName(node->kind);
@@ -3058,10 +3061,37 @@ private:
     }
 
     [[nodiscard]] static std::string GraphNodeUvSetValue(const kb::render::RenderMaterialGraphNode& node) {
+        if (node.kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+            const std::string& hint = node.parameter.defaultValueHint;
+            if (hint == "1" || hint == "uv1" || hint == "UV1") {
+                return "1";
+            }
+            const std::vector<float> numbers = ParseDefaultNumbers(hint);
+            if (numbers.size() > 2U && numbers[2] >= 0.5F) {
+                return "1";
+            }
+            return "0";
+        }
         if (node.parameter.defaultValueHint == "1" || node.parameter.defaultValueHint == "uv1" || node.parameter.defaultValueHint == "UV1") {
             return "1";
         }
         return "0";
+    }
+
+    [[nodiscard]] static std::string TextureCoordinateHintWithUvSet(
+        const kb::render::RenderMaterialGraphNode& node,
+        std::string_view uvSetValue) {
+        float uTile = 1.0F;
+        float vTile = 1.0F;
+        const std::string& hint = node.parameter.defaultValueHint;
+        if (!hint.empty() && hint != "0" && hint != "1" && hint != "uv0" && hint != "uv1" && hint != "UV0" && hint != "UV1") {
+            const std::vector<float> numbers = ParseDefaultNumbers(hint);
+            if (!numbers.empty()) {
+                uTile = numbers[0];
+                vTile = numbers.size() > 1U ? numbers[1] : uTile;
+            }
+        }
+        return FloatText(uTile) + " " + FloatText(vTile) + " " + (uvSetValue == "1" ? "1" : "0");
     }
 
     [[nodiscard]] static std::string GraphNodeViewPropertyValue(const kb::render::RenderMaterialGraphNode& node) {
@@ -4004,7 +4034,7 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::TextureCoordinate:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Texture Coordinate",
-                .defaultValueHint = "0",
+                .defaultValueHint = "1 1 0",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
