@@ -3641,6 +3641,65 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             uvUtilityCompiled.shader.source.find("cos(1.5708)") != std::string::npos,
         "KBMAT-MAT82: Edited UV utility properties should compile into production shader expressions");
 
+    kb::editor::MaterialEditorState shadingUtilityEditor;
+    kb::render::RenderMaterialAssetData shadingUtilityAsset{};
+    shadingUtilityAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    shadingUtilityAsset.graph.shadingModel = "unlit";
+    shadingUtilityEditor.Open(kb::assets::AssetId{ 0x5824U }, shadingUtilityAsset);
+
+    std::uint32_t desaturateNodeId = 0U;
+    std::uint32_t fresnelNodeId = 0U;
+    kb::editor::tests::Require(shadingUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Desaturate, -480, 80, &desaturateNodeId) &&
+            shadingUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Fresnel, -480, 240, &fresnelNodeId),
+        "KBMAT-MAT89: Material Editor should create Desaturate and Fresnel nodes for shading utility property editing");
+    const kb::render::RenderMaterialGraphNode* desaturateNode =
+        kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, desaturateNodeId);
+    const kb::render::RenderMaterialGraphNode* fresnelNode =
+        kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, fresnelNodeId);
+    kb::editor::tests::Require(desaturateNode != nullptr && desaturateNode->parameter.defaultValueHint == "1" &&
+            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "5 0",
+        "KBMAT-MAT89: Shading utility nodes should carry explicit editor metadata defaults");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> desaturateProperties =
+        shadingUtilityEditor.GraphNodeProperties(desaturateNodeId);
+    requireUtilityNumericProperty(
+        desaturateProperties,
+        "desaturate.fraction",
+        1.0F,
+        "KBMAT-MAT89: Desaturate should expose Fraction as a numeric property");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> fresnelProperties =
+        shadingUtilityEditor.GraphNodeProperties(fresnelNodeId);
+    requireUtilityNumericProperty(
+        fresnelProperties,
+        "fresnel.exponent",
+        5.0F,
+        "KBMAT-MAT89: Fresnel should expose Exponent as a numeric property");
+    requireUtilityNumericProperty(
+        fresnelProperties,
+        "fresnel.base",
+        0.0F,
+        "KBMAT-MAT89: Fresnel should expose Base as a numeric property");
+    kb::editor::tests::Require(shadingUtilityEditor.SetGraphConstantComponentValue(desaturateNodeId, 0U, 0.35F) &&
+            shadingUtilityEditor.SetGraphConstantComponentValue(fresnelNodeId, 0U, 3.5F) &&
+            shadingUtilityEditor.SetGraphConstantComponentValue(fresnelNodeId, 1U, 0.2F),
+        "KBMAT-MAT89: Shading utility numeric properties should update node metadata");
+    desaturateNode = kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, desaturateNodeId);
+    fresnelNode = kb::render::FindRenderMaterialGraphNode(shadingUtilityEditor.WorkingCopy()->graph, fresnelNodeId);
+    kb::editor::tests::Require(desaturateNode != nullptr && desaturateNode->parameter.defaultValueHint == "0.35" &&
+            fresnelNode != nullptr && fresnelNode->parameter.defaultValueHint == "3.5 0.2",
+        "KBMAT-MAT89: Edited shading utility properties should persist in runtime hint format");
+    kb::editor::tests::Require(shadingUtilityEditor.ConnectGraphPins(desaturateNodeId, "color", 1U, "baseColor") &&
+            shadingUtilityEditor.ConnectGraphPins(fresnelNodeId, "value", 1U, "specular"),
+        "KBMAT-MAT89: Edited shading utility nodes should route through graph links");
+    const kb::render::RenderMaterialGraphCompileResult shadingUtilityCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            shadingUtilityEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5824U });
+    kb::editor::tests::Require(shadingUtilityCompiled.Succeeded() &&
+            shadingUtilityCompiled.shader.source.find("clamp(0.35, 0.0, 1.0)") != std::string::npos &&
+            shadingUtilityCompiled.shader.source.find("max(3.5, 0.0001)") != std::string::npos &&
+            shadingUtilityCompiled.shader.source.find("clamp(0.2, 0.0, 1.0)") != std::string::npos,
+        "KBMAT-MAT89: Edited shading utility defaults should compile into production shader expressions");
+
     kb::editor::MaterialEditorState proceduralMaskEditor;
     kb::render::RenderMaterialAssetData proceduralMaskAsset{};
     proceduralMaskAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();

@@ -3360,6 +3360,31 @@ private:
                 .rangeMax = 6.283185F,
             },
         };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 1U> desaturate{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "desaturate.fraction",
+                .displayName = "Fraction",
+                .defaultValue = 1.0F,
+                .rangeMin = 0.0F,
+                .rangeMax = 1.0F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> fresnel{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "fresnel.exponent",
+                .displayName = "Exponent",
+                .defaultValue = 5.0F,
+                .rangeMin = 0.0001F,
+                .rangeMax = 16.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "fresnel.base",
+                .displayName = "Base",
+                .defaultValue = 0.0F,
+                .rangeMin = 0.0F,
+                .rangeMax = 1.0F,
+            },
+        };
         static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> sphereMask{
             GraphHintNumericPropertyDefinition{
                 .stableId = "sphereMask.radius",
@@ -3422,6 +3447,10 @@ private:
             return constantBiasScale;
         case kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis:
             return rotateAboutAxis;
+        case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+            return desaturate;
+        case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+            return fresnel;
         case kb::render::RenderMaterialGraphNodeKind::SphereMask:
             return sphereMask;
         case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
@@ -4876,6 +4905,18 @@ private:
                 .defaultValueHint = "0 0 1 0",
                 .overrideSupported = false,
             };
+        case kb::render::RenderMaterialGraphNodeKind::Desaturate:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Desaturate",
+                .defaultValueHint = "1",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::Fresnel:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Fresnel",
+                .defaultValueHint = "5 0",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::SphereMask:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Sphere Mask",
@@ -4976,8 +5017,6 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::Step:
         case kb::render::RenderMaterialGraphNodeKind::SmoothStep:
         case kb::render::RenderMaterialGraphNodeKind::If:
-        case kb::render::RenderMaterialGraphNodeKind::Desaturate:
-        case kb::render::RenderMaterialGraphNodeKind::Fresnel:
         case kb::render::RenderMaterialGraphNodeKind::Negate:
         case kb::render::RenderMaterialGraphNodeKind::Sign:
         case kb::render::RenderMaterialGraphNodeKind::Round:

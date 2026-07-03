@@ -2379,16 +2379,21 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "case3", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)") +
             ")";
     case RenderMaterialGraphNodeKind::Desaturate: {
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultFraction = values.size() > 0U ? values[0] : 1.0F;
         const std::string color = CompileInputExpression(cg, node, "color", RenderMaterialGraphPinType::Color, "vec4(1.0, 1.0, 1.0, 1.0)");
-        const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, "1.0");
+        const std::string fraction = CompileInputExpression(cg, node, "fraction", RenderMaterialGraphPinType::Float, FloatLiteral(defaultFraction));
         const std::string luma = "dot((" + color + ").rgb, vec3(0.299, 0.587, 0.114))";
         return "mix(" + color + ", vec4(vec3(" + luma + "), (" + color + ").a), clamp(" + fraction + ", 0.0, 1.0))";
     }
     case RenderMaterialGraphNodeKind::Fresnel: {
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float defaultExponent = values.size() > 0U ? std::max(values[0], 0.0001F) : 5.0F;
+        const float defaultBase = values.size() > 1U ? values[1] : 0.0F;
         const std::string normal = CompileInputExpression(cg, node, "normal", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
         const std::string view = CompileInputExpression(cg, node, "view", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
-        const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, "5.0");
-        const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, "0.0");
+        const std::string exponent = CompileInputExpression(cg, node, "exponent", RenderMaterialGraphPinType::Float, FloatLiteral(defaultExponent));
+        const std::string base = CompileInputExpression(cg, node, "base", RenderMaterialGraphPinType::Float, FloatLiteral(defaultBase));
         const std::string facing = "clamp(dot(normalize(" + normal + "), normalize(" + view + ")), 0.0, 1.0)";
         return "mix(pow(1.0 - " + facing + ", max(" + exponent + ", 0.0001)), 1.0, clamp(" + base + ", 0.0, 1.0))";
     }
