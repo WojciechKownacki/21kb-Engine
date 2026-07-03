@@ -3707,6 +3707,68 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             viewPropertyCompiled.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
         "KBMAT-MAT58: ViewProperty selected in the editor must compile to the selected runtime view expression");
 
+    kb::editor::MaterialEditorState sceneTextureEditor;
+    kb::render::RenderMaterialAssetData sceneTextureAsset{};
+    sceneTextureAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    sceneTextureAsset.graph.shadingModel = "unlit";
+    sceneTextureEditor.Open(kb::assets::AssetId{ 0x5821U }, sceneTextureAsset);
+    std::uint32_t sceneTextureNodeId = 0U;
+    kb::editor::tests::Require(sceneTextureEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::SceneTexture, -260, 80, &sceneTextureNodeId),
+        "KBMAT-MAT86: Material Editor should create a SceneTexture node for source property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> sceneTextureProperties =
+        sceneTextureEditor.GraphNodeProperties(sceneTextureNodeId);
+    auto sceneTextureSource = std::ranges::find_if(sceneTextureProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "sceneTexture.source";
+    });
+    kb::editor::tests::Require(sceneTextureSource != sceneTextureProperties.end() &&
+            sceneTextureSource->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            sceneTextureSource->type == kb::render::RenderMaterialParameterType::Enum &&
+            sceneTextureSource->value.text == "color" &&
+            sceneTextureSource->options.size() == 2U &&
+            sceneTextureSource->options[0].value == "color" &&
+            sceneTextureSource->options[1].value == "depth",
+        "KBMAT-MAT86: SceneTexture should expose a typed Scene Color/Scene Depth source selector");
+    sceneTextureEditor.ToggleGraphNodeEnumDropdown(sceneTextureNodeId, "sceneTexture.source");
+    sceneTextureProperties = sceneTextureEditor.GraphNodeProperties(sceneTextureNodeId);
+    sceneTextureSource = std::ranges::find_if(sceneTextureProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "sceneTexture.source";
+    });
+    kb::editor::tests::Require(sceneTextureSource != sceneTextureProperties.end() && sceneTextureSource->dropdownOpen,
+        "KBMAT-MAT86: SceneTexture source selector should track dropdown open state");
+    kb::editor::tests::Require(sceneTextureEditor.ConnectGraphPins(sceneTextureNodeId, "color", 1U, "baseColor"),
+        "KBMAT-MAT86: SceneTexture color output should connect to a real material output");
+    const kb::render::RenderMaterialGraphCompileResult sceneTextureColorCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            sceneTextureEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5821U });
+    kb::editor::tests::Require(sceneTextureColorCompiled.Succeeded() &&
+            sceneTextureColorCompiled.shader.reflection.usesSceneColor &&
+            !sceneTextureColorCompiled.shader.reflection.usesSceneDepth &&
+            sceneTextureColorCompiled.shader.source.find("SAMPLER2D(s_kbSceneColor, 4)") != std::string::npos,
+        "KBMAT-MAT86: SceneTexture default source should compile as a scene-color sample");
+    kb::editor::tests::Require(sceneTextureEditor.SetGraphNodeEnumValue(sceneTextureNodeId, "sceneTexture.source", "depth"),
+        "KBMAT-MAT86: SceneTexture source selector should update node metadata");
+    const kb::render::RenderMaterialGraphNode* sceneTextureNode =
+        kb::render::FindRenderMaterialGraphNode(sceneTextureEditor.WorkingCopy()->graph, sceneTextureNodeId);
+    kb::editor::tests::Require(sceneTextureNode != nullptr && sceneTextureNode->parameter.defaultValueHint == "depth",
+        "KBMAT-MAT86: SceneTexture source edit should persist the runtime hint");
+    sceneTextureProperties = sceneTextureEditor.GraphNodeProperties(sceneTextureNodeId);
+    sceneTextureSource = std::ranges::find_if(sceneTextureProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "sceneTexture.source";
+    });
+    kb::editor::tests::Require(sceneTextureSource != sceneTextureProperties.end() && sceneTextureSource->value.text == "depth",
+        "KBMAT-MAT86: SceneTexture source property should report the edited depth selection");
+    const kb::render::RenderMaterialGraphCompileResult sceneTextureDepthCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            sceneTextureEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5822U });
+    kb::editor::tests::Require(sceneTextureDepthCompiled.Succeeded() &&
+            !sceneTextureDepthCompiled.shader.reflection.usesSceneColor &&
+            sceneTextureDepthCompiled.shader.reflection.usesSceneDepth &&
+            sceneTextureDepthCompiled.shader.source.find("SAMPLER2D(s_kbSceneDepth, 5)") != std::string::npos &&
+            sceneTextureDepthCompiled.shader.source.find("vec4_splat(texture2D(s_kbSceneDepth") != std::string::npos,
+        "KBMAT-MAT86: SceneTexture depth source should compile as a scene-depth sample");
+
 #if defined(_WIN32)
     const RECT content{ 0, 0, 960, 720 };
     materialEditor.ToggleGraphNodeEnumDropdown(uvNodeId, "uvSet");
