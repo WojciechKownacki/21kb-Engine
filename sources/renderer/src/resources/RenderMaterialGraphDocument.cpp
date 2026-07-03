@@ -833,6 +833,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -1154,6 +1155,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -2411,6 +2413,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "ctx.perInstanceRandom";
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
         return "ctx.perInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
+        return "ctx.perInstanceFadeAmount";
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
         return "ctx.perInstanceCustomData";
     case RenderMaterialGraphNodeKind::ObjectRadius:
@@ -2681,6 +2685,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -2871,6 +2876,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -3019,6 +3025,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -4250,6 +4257,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "PerInstanceRandom";
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
         return "PerInstanceFadeAmount";
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
+        return "DistanceCullFade";
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
         return "PerInstanceCustomData";
     case RenderMaterialGraphNodeKind::ObjectRadius:
@@ -4596,6 +4605,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     }
     if (EqualsIgnoreCase(text, "PerInstanceFadeAmount") || EqualsIgnoreCase(text, "PerInstanceFade")) {
         return RenderMaterialGraphNodeKind::PerInstanceFadeAmount;
+    }
+    if (EqualsIgnoreCase(text, "DistanceCullFade") || EqualsIgnoreCase(text, "CullDistanceFade")) {
+        return RenderMaterialGraphNodeKind::DistanceCullFade;
     }
     if (EqualsIgnoreCase(text, "PerInstanceCustomData") || EqualsIgnoreCase(text, "PerInstanceCustomData0")) {
         return RenderMaterialGraphNodeKind::PerInstanceCustomData;
@@ -5000,6 +5012,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -5321,6 +5334,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::WorldPosition,
         RenderMaterialGraphNodeKind::PerInstanceRandom,
         RenderMaterialGraphNodeKind::PerInstanceFadeAmount,
+        RenderMaterialGraphNodeKind::DistanceCullFade,
         RenderMaterialGraphNodeKind::PerInstanceCustomData,
         RenderMaterialGraphNodeKind::ObjectRadius,
         RenderMaterialGraphNodeKind::ObjectBounds,
@@ -6209,6 +6223,7 @@ RenderMaterialGraphCompileResult CompileRenderMaterialGraphToShaderSource(
             usesPerInstanceRandom = true;
             break;
         case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+        case RenderMaterialGraphNodeKind::DistanceCullFade:
             usesPerInstanceFadeAmount = true;
             break;
         case RenderMaterialGraphNodeKind::PerInstanceCustomData:
@@ -7306,6 +7321,7 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -7435,6 +7451,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -7981,6 +7998,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
         return outputPin && pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
@@ -8403,6 +8421,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::DeltaTime:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:
@@ -8792,6 +8811,7 @@ bool IsRenderMaterialGraphParameterNode(RenderMaterialGraphNodeKind kind) noexce
     case RenderMaterialGraphNodeKind::WorldPosition:
     case RenderMaterialGraphNodeKind::PerInstanceRandom:
     case RenderMaterialGraphNodeKind::PerInstanceFadeAmount:
+    case RenderMaterialGraphNodeKind::DistanceCullFade:
     case RenderMaterialGraphNodeKind::PerInstanceCustomData:
     case RenderMaterialGraphNodeKind::ObjectRadius:
     case RenderMaterialGraphNodeKind::ObjectBounds:

@@ -222,6 +222,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     DeleteSelected,
     CreatePixelDepth,
     CreateCameraDepthFade,
+    CreateDistanceCullFade,
 };
 
 enum class MaterialEditorGraphAlignMode : std::uint8_t {
@@ -2980,6 +2981,8 @@ private:
             return "Pixel Depth";
         case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
             return "Camera Depth Fade";
+        case kb::render::RenderMaterialGraphNodeKind::DistanceCullFade:
+            return "Distance Cull Fade";
         default:
             return ConstantDisplayName(kind);
         }
