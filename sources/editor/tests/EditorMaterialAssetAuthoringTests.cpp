@@ -2806,6 +2806,8 @@ void RunMaterialEditorLayerStackNodeModelTest() {
     layerDetails.layerTreeRows = editor.LayerTreeRows();
     kb::editor::tests::Require(layerDetails.layerTreeRows.size() == 2U && layerDetails.layerTreeRows[1].blendName == "Half",
         "KBMAT-MAT60: Details panel model must consume layer tree rows");
+    kb::editor::tests::Require(editor.ConnectGraphPins(stackNodeId, "attributes", 1U, "attributes"),
+        "KBMAT-MAT43: Editor-created LayerStack attributes output must connect to Material Output");
 
     std::ostringstream serialized;
     kb::render::RenderMaterialAssetWriter::Write(serialized, *editor.WorkingCopy());
@@ -2814,6 +2816,166 @@ void RunMaterialEditorLayerStackNodeModelTest() {
             text.find("graphLayerStackParameter " + std::to_string(stackNodeId) + " 1 layer Tint color 0%200%201%201") != std::string::npos &&
             text.find("graphLayerStackParameter " + std::to_string(stackNodeId) + " 1 blend Factor float 0.5") != std::string::npos,
         "KBMAT-MAT43: LayerStack entries and parameters must serialize from the editor working copy");
+
+    const auto makeLayerFunction = [] {
+        kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        graph.storageModel = "material-function-asset";
+        graph.shadingModel = "unlit";
+        graph.nodes.clear();
+        const kb::render::RenderMaterialGraphNode tint{
+            .id = 1U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "Tint",
+                .displayName = "Tint",
+                .defaultValueHint = "color",
+            },
+        };
+        const kb::render::RenderMaterialGraphNode makeAttributes{
+            .id = 2U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes,
+        };
+        const kb::render::RenderMaterialGraphNode output{
+            .id = 3U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "Attributes",
+                .displayName = "Attributes",
+                .defaultValueHint = "materialAttributes",
+            },
+        };
+        graph.nodes.push_back(tint);
+        graph.nodes.push_back(makeAttributes);
+        graph.nodes.push_back(output);
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            1U,
+            "value",
+            kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes,
+            2U,
+            "baseColor"));
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::MakeMaterialAttributes,
+            2U,
+            "attributes",
+            kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+            3U,
+            "value"));
+        return graph;
+    };
+    const auto makeBlendFunction = [] {
+        kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        graph.storageModel = "material-function-asset";
+        graph.shadingModel = "unlit";
+        graph.nodes.clear();
+        const kb::render::RenderMaterialGraphNode a{
+            .id = 1U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "A",
+                .displayName = "A",
+                .defaultValueHint = "materialAttributes",
+            },
+        };
+        const kb::render::RenderMaterialGraphNode b{
+            .id = 2U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "B",
+                .displayName = "B",
+                .defaultValueHint = "materialAttributes",
+            },
+        };
+        const kb::render::RenderMaterialGraphNode factor{
+            .id = 3U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "Factor",
+                .displayName = "Factor",
+                .defaultValueHint = "float",
+            },
+        };
+        const kb::render::RenderMaterialGraphNode blend{
+            .id = 4U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes,
+        };
+        const kb::render::RenderMaterialGraphNode output{
+            .id = 5U,
+            .kind = kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+            .parameter = kb::render::RenderMaterialGraphParameterMetadata{
+                .stableId = "Attributes",
+                .displayName = "Attributes",
+                .defaultValueHint = "materialAttributes",
+            },
+        };
+        graph.nodes.push_back(a);
+        graph.nodes.push_back(b);
+        graph.nodes.push_back(factor);
+        graph.nodes.push_back(blend);
+        graph.nodes.push_back(output);
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            1U,
+            "value",
+            kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes,
+            4U,
+            "a"));
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            2U,
+            "value",
+            kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes,
+            4U,
+            "b"));
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::FunctionInput,
+            3U,
+            "value",
+            kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes,
+            4U,
+            "factor"));
+        graph.links.push_back(MakeMaterialGraphLink(
+            kb::render::RenderMaterialGraphNodeKind::BlendMaterialAttributes,
+            4U,
+            "attributes",
+            kb::render::RenderMaterialGraphNodeKind::FunctionOutput,
+            5U,
+            "value"));
+        return graph;
+    };
+
+    kb::render::RenderMaterialGraphFunctionLibrary library{};
+    library.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
+        .assetId = 0x43000001ULL,
+        .contentHash = 0x43081001ULL,
+        .name = "/Game/Layers/EditorBase.kbmatfn",
+        .graph = makeLayerFunction(),
+    });
+    library.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
+        .assetId = 0x43000002ULL,
+        .contentHash = 0x43081002ULL,
+        .name = "/Game/Layers/EditorCoat.kbmatfn",
+        .graph = makeLayerFunction(),
+    });
+    library.entries.push_back(kb::render::RenderMaterialGraphFunctionLibraryEntry{
+        .assetId = 0x43000003ULL,
+        .contentHash = 0x43081003ULL,
+        .name = "/Game/Layers/EditorHalfBlend.kbmatfn",
+        .graph = makeBlendFunction(),
+    });
+    std::istringstream serializedInput{ serialized.str() };
+    const kb::render::RenderMaterialAssetParseResult parsedLayerMaterial =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(serializedInput);
+    kb::editor::tests::Require(parsedLayerMaterial.Succeeded() && parsedLayerMaterial.asset.has_value(),
+        "KBMAT-MAT43: Editor-configured LayerStack material must serialize and load before shader compile");
+    const kb::render::RenderMaterialGraphCompileResult layerCompile =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            parsedLayerMaterial.asset->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x43080001ULL, .functionLibrary = &library });
+    kb::editor::tests::Require(layerCompile.Succeeded() &&
+            layerCompile.shader.source.find("mix(") != std::string::npos &&
+            layerCompile.shader.source.find("LayerStack") == std::string::npos,
+        "KBMAT-MAT43: Editor-configured LayerStack material must inline layer/blend functions and compile to shader source");
 }
 
 void RunMaterialEditorTypedNodePropertyModelTest() {
