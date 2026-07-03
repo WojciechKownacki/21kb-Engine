@@ -3235,6 +3235,52 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvProperty != uvProperties.end() && uvProperty->value.text == "1",
         "KBMAT-MAT58: UV enum edit should persist the selected option value");
 
+    std::uint32_t textureCoordinateNodeId = 0U;
+    kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureCoordinate, -220, 280, &textureCoordinateNodeId),
+        "KBMAT-MAT58: Material Editor should create a TextureCoordinate node for enum property editing");
+    const kb::render::RenderMaterialGraphNode* textureCoordinateNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
+    kb::editor::tests::Require(textureCoordinateNode != nullptr && textureCoordinateNode->parameter.defaultValueHint == "1 1 0",
+        "KBMAT-MAT81: TextureCoordinate should default to UV0 with 1x tiling");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> textureCoordinateProperties =
+        materialEditor.GraphNodeProperties(textureCoordinateNodeId);
+    auto textureCoordinateUvProperty = std::ranges::find_if(textureCoordinateProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet";
+    });
+    kb::editor::tests::Require(textureCoordinateUvProperty != textureCoordinateProperties.end() &&
+            textureCoordinateUvProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            textureCoordinateUvProperty->value.text == "0",
+        "KBMAT-MAT81: TextureCoordinate should expose UV Set as an enum property");
+    kb::editor::tests::Require(materialEditor.SetGraphNodeEnumValue(textureCoordinateNodeId, "uvSet", "1"),
+        "KBMAT-MAT81: TextureCoordinate UV Set enum should update node metadata");
+    textureCoordinateNode = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
+    textureCoordinateProperties = materialEditor.GraphNodeProperties(textureCoordinateNodeId);
+    textureCoordinateUvProperty = std::ranges::find_if(textureCoordinateProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "uvSet";
+    });
+    kb::editor::tests::Require(textureCoordinateNode != nullptr &&
+            textureCoordinateNode->parameter.defaultValueHint == "1 1 1" &&
+            textureCoordinateUvProperty != textureCoordinateProperties.end() &&
+            textureCoordinateUvProperty->value.text == "1",
+        "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve tiling while selecting UV1");
+
+    kb::editor::MaterialEditorState tiledTextureCoordinateEditor;
+    kb::render::RenderMaterialAssetData tiledTextureCoordinateAsset{};
+    tiledTextureCoordinateAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    tiledTextureCoordinateAsset.graph.nodes.push_back(kb::render::RenderMaterialGraphNode{
+        .id = 2U,
+        .kind = kb::render::RenderMaterialGraphNodeKind::TextureCoordinate,
+        .parameter = kb::render::RenderMaterialGraphParameterMetadata{ .displayName = "Texture Coordinate", .defaultValueHint = "2 3 0" },
+    });
+    tiledTextureCoordinateEditor.Open(kb::assets::AssetId{ 0x5811U }, tiledTextureCoordinateAsset);
+    kb::editor::tests::Require(tiledTextureCoordinateEditor.SetGraphNodeEnumValue(2U, "uvSet", "1"),
+        "KBMAT-MAT81: TextureCoordinate UV Set enum should update existing tiled node metadata");
+    const kb::render::RenderMaterialGraphNode* tiledTextureCoordinateNode =
+        kb::render::FindRenderMaterialGraphNode(tiledTextureCoordinateEditor.WorkingCopy()->graph, 2U);
+    kb::editor::tests::Require(tiledTextureCoordinateNode != nullptr &&
+            tiledTextureCoordinateNode->parameter.defaultValueHint == "2 3 1",
+        "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve existing U/V tiling");
+
     kb::editor::MaterialEditorState viewPropertyEditor;
     kb::render::RenderMaterialAssetData viewPropertyAsset{};
     viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();

@@ -1678,6 +1678,31 @@ void AppendCustomCodeFunctionDefinitions(
     return "ctx.viewSize";
 }
 
+struct TextureCoordinateHint {
+    float uTile = 1.0F;
+    float vTile = 1.0F;
+    bool useUv1 = false;
+};
+
+[[nodiscard]] TextureCoordinateHint ParseTextureCoordinateHint(std::string_view hint) {
+    TextureCoordinateHint result{};
+    if (hint.empty() || EqualsIgnoreCase(hint, "0") || EqualsIgnoreCase(hint, "uv0")) {
+        return result;
+    }
+    if (EqualsIgnoreCase(hint, "1") || EqualsIgnoreCase(hint, "uv1")) {
+        result.useUv1 = true;
+        return result;
+    }
+
+    const std::vector<float> values = ParseDefaultNumbers(hint);
+    if (!values.empty()) {
+        result.uTile = values[0];
+        result.vTile = values.size() > 1U ? values[1] : result.uTile;
+        result.useUv1 = values.size() > 2U && values[2] >= 0.5F;
+    }
+    return result;
+}
+
 std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGraphNode& node) {
     switch (node.kind) {
     case RenderMaterialGraphNodeKind::Reroute:
@@ -1710,12 +1735,10 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
             CompileInputExpression(cg, node, "input", RenderMaterialGraphPinType::Float4, "vec4_splat(0.0)"),
             node.parameter.defaultValueHint);
     case RenderMaterialGraphNodeKind::TextureCoordinate: {
-        // MAT-45: tiling-scaled UV from a selectable coordinate set (hint = "uTile vTile [set]").
-        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
-        const float uTile = values.size() > 0U ? values[0] : 1.0F;
-        const float vTile = values.size() > 1U ? values[1] : uTile;
-        const bool useUv1 = values.size() > 2U && values[2] >= 0.5F;
-        return std::string{ useUv1 ? "ctx.uv1" : "ctx.uv0" } + " * vec2(" + FloatLiteral(uTile) + ", " + FloatLiteral(vTile) + ")";
+        // MAT-45/MAT-81: tiling-scaled UV from a selectable coordinate set. Legacy hints "0"/"1"
+        // mean UV0/UV1; extended hints use "uTile vTile set".
+        const TextureCoordinateHint hint = ParseTextureCoordinateHint(node.parameter.defaultValueHint);
+        return std::string{ hint.useUv1 ? "ctx.uv1" : "ctx.uv0" } + " * vec2(" + FloatLiteral(hint.uTile) + ", " + FloatLiteral(hint.vTile) + ")";
     }
     case RenderMaterialGraphNodeKind::ViewportUV:
         // MAT-45: the normalised viewport coordinate (same source as ScreenPosition).
