@@ -3305,6 +3305,83 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             staticMaskCompiled.shader.source.find(").z, 0.0)") != std::string::npos,
         "KBMAT-MAT84: Edited StaticComponentMask should compile selected channels and zero disabled channels");
 
+    kb::editor::MaterialEditorState transformSpaceEditor;
+    kb::render::RenderMaterialAssetData transformSpaceAsset{};
+    transformSpaceAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    transformSpaceAsset.graph.shadingModel = "unlit";
+    transformSpaceEditor.Open(kb::assets::AssetId{ 0x5816U }, transformSpaceAsset);
+
+    std::uint32_t transformNodeId = 0U;
+    std::uint32_t transformPositionNodeId = 0U;
+    kb::editor::tests::Require(transformSpaceEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Transform, -300, 40, &transformNodeId) &&
+            transformSpaceEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TransformPosition, -300, 220, &transformPositionNodeId),
+        "KBMAT-MAT85: Material Editor should create Transform and TransformPosition nodes for typed space editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> transformProperties =
+        transformSpaceEditor.GraphNodeProperties(transformNodeId);
+    auto transformFromSpace = std::ranges::find_if(transformProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "transform.fromSpace";
+    });
+    auto transformToSpace = std::ranges::find_if(transformProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "transform.toSpace";
+    });
+    kb::editor::tests::Require(transformFromSpace != transformProperties.end() &&
+            transformToSpace != transformProperties.end() &&
+            transformFromSpace->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            transformToSpace->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            transformFromSpace->value.text == "tangent" &&
+            transformToSpace->value.text == "world" &&
+            transformFromSpace->options.size() == 3U &&
+            transformToSpace->options.size() == 3U,
+        "KBMAT-MAT85: Transform should expose typed From/To space enum properties");
+    kb::editor::tests::Require(transformSpaceEditor.SetGraphNodeEnumValue(transformNodeId, "transform.fromSpace", "world") &&
+            transformSpaceEditor.SetGraphNodeEnumValue(transformNodeId, "transform.toSpace", "view"),
+        "KBMAT-MAT85: Transform space enum properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* transformNode =
+        kb::render::FindRenderMaterialGraphNode(transformSpaceEditor.WorkingCopy()->graph, transformNodeId);
+    kb::editor::tests::Require(transformNode != nullptr && transformNode->parameter.defaultValueHint == "world view",
+        "KBMAT-MAT85: Transform should persist spaces as the runtime hint format");
+
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> transformPositionProperties =
+        transformSpaceEditor.GraphNodeProperties(transformPositionNodeId);
+    const auto transformPositionFromSpace =
+        std::ranges::find_if(transformPositionProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == "transform.fromSpace";
+        });
+    const auto transformPositionToSpace =
+        std::ranges::find_if(transformPositionProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+            return property.stableId == "transform.toSpace";
+        });
+    kb::editor::tests::Require(transformPositionFromSpace != transformPositionProperties.end() &&
+            transformPositionToSpace != transformPositionProperties.end() &&
+            transformPositionFromSpace->value.text == "tangent" &&
+            transformPositionToSpace->value.text == "world",
+        "KBMAT-MAT85: TransformPosition should expose typed From/To space enum properties");
+    kb::editor::tests::Require(transformSpaceEditor.SetGraphNodeEnumValue(transformPositionNodeId, "transform.fromSpace", "view") &&
+            transformSpaceEditor.SetGraphNodeEnumValue(transformPositionNodeId, "transform.toSpace", "world"),
+        "KBMAT-MAT85: TransformPosition space enum properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* transformPositionNode =
+        kb::render::FindRenderMaterialGraphNode(transformSpaceEditor.WorkingCopy()->graph, transformPositionNodeId);
+    kb::editor::tests::Require(transformPositionNode != nullptr && transformPositionNode->parameter.defaultValueHint == "view world",
+        "KBMAT-MAT85: TransformPosition should persist spaces as the runtime hint format");
+
+    std::uint32_t transformColorNodeId = 0U;
+    kb::editor::tests::Require(transformSpaceEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -560, 120, &transformColorNodeId) &&
+            transformSpaceEditor.ConnectGraphPins(transformColorNodeId, "rgba", transformNodeId, "value") &&
+            transformSpaceEditor.ConnectGraphPins(transformColorNodeId, "rgba", transformPositionNodeId, "value") &&
+            transformSpaceEditor.ConnectGraphPins(transformNodeId, "value", 1U, "baseColor") &&
+            transformSpaceEditor.ConnectGraphPins(transformPositionNodeId, "value", 1U, "emissive"),
+        "KBMAT-MAT85: Edited Transform nodes should route through graph links");
+    const kb::render::RenderMaterialGraphCompileResult transformSpaceCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            transformSpaceEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5816U });
+    kb::editor::tests::Require(transformSpaceCompiled.Succeeded() &&
+            transformSpaceCompiled.shader.source.find("mul(u_view") != std::string::npos &&
+            transformSpaceCompiled.shader.source.find(", 0.0)") != std::string::npos &&
+            transformSpaceCompiled.shader.source.find("mul(u_invView") != std::string::npos &&
+            transformSpaceCompiled.shader.source.find(", 1.0)") != std::string::npos,
+        "KBMAT-MAT85: Edited Transform spaces should compile into vector and position shader transforms");
+
     std::uint32_t uvNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Uv, -220, 220, &uvNodeId),
         "KBMAT-MAT58: Material Editor should create a UV node for enum property editing");

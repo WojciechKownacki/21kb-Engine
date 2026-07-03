@@ -1466,6 +1466,8 @@ public:
         } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::StaticComponentMask &&
             IsStaticComponentMaskPropertyId(propertyId)) {
             node->parameter.defaultValueHint = StaticComponentMaskHintWithChannel(*node, propertyId, option->value == "true");
+        } else if (IsTransformSpacePropertyId(propertyId) && IsTransformSpaceNode(node->kind)) {
+            node->parameter.defaultValueHint = TransformSpaceHintWithProperty(*node, propertyId, option->value);
         } else {
             node->parameter.defaultValueHint = option->value;
         }
@@ -1805,6 +1807,27 @@ public:
                     .kind = MaterialEditorGraphNodePropertyKind::Enum,
                     .type = kb::render::RenderMaterialParameterType::Bool,
                     .value = EnumValue(StaticComponentMaskChannelEnabled(*node, propertyId) ? "true" : "false"),
+                    .options = options,
+                    .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, propertyId),
+                });
+            }
+        }
+        if (IsTransformSpaceNode(node->kind)) {
+            constexpr std::array<std::pair<std::string_view, std::string_view>, 2U> transformProperties{
+                std::pair<std::string_view, std::string_view>{ "transform.fromSpace", "From Space" },
+                std::pair<std::string_view, std::string_view>{ "transform.toSpace", "To Space" },
+            };
+            const std::array<std::string, 2U> spaces = TransformSpaces(*node);
+            for (std::size_t index = 0U; index < transformProperties.size(); ++index) {
+                const auto& [propertyId, label] = transformProperties[index];
+                const std::vector<MaterialEditorGraphNodePropertyOption> options = GraphNodeEnumOptions(node->kind, propertyId);
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = std::string{ propertyId },
+                    .displayName = std::string{ label },
+                    .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                    .type = kb::render::RenderMaterialParameterType::Enum,
+                    .value = EnumValue(spaces[index]),
                     .options = options,
                     .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, propertyId),
                 });
@@ -3340,6 +3363,13 @@ private:
                 MaterialEditorGraphNodePropertyOption{ .value = "true", .label = "On" },
             };
         }
+        if (IsTransformSpacePropertyId(propertyId) && IsTransformSpaceNode(kind)) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "tangent", .label = "Tangent" },
+                MaterialEditorGraphNodePropertyOption{ .value = "world", .label = "World" },
+                MaterialEditorGraphNodePropertyOption{ .value = "view", .label = "View" },
+            };
+        }
         if (propertyId != "uvSet") {
             if (propertyId == "constant.bool" && kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
                 return {
@@ -3449,6 +3479,59 @@ private:
         if (channels[2]) hint.push_back('b');
         if (channels[3]) hint.push_back('a');
         return hint;
+    }
+
+    [[nodiscard]] static bool IsTransformSpaceNode(kb::render::RenderMaterialGraphNodeKind kind) noexcept {
+        return kind == kb::render::RenderMaterialGraphNodeKind::Transform ||
+            kind == kb::render::RenderMaterialGraphNodeKind::TransformPosition;
+    }
+
+    [[nodiscard]] static bool IsTransformSpacePropertyId(std::string_view propertyId) noexcept {
+        return propertyId == "transform.fromSpace" || propertyId == "transform.toSpace";
+    }
+
+    [[nodiscard]] static std::array<std::string, 2U> TransformSpaces(const kb::render::RenderMaterialGraphNode& node) {
+        std::array<std::string, 2U> spaces{ "tangent", "world" };
+        std::istringstream input{ node.parameter.defaultValueHint };
+        std::string fromSpace;
+        std::string toSpace;
+        input >> fromSpace >> toSpace;
+        if (IsTransformSpaceValue(fromSpace)) {
+            spaces[0] = NormalizeTransformSpaceValue(fromSpace);
+        }
+        if (IsTransformSpaceValue(toSpace)) {
+            spaces[1] = NormalizeTransformSpaceValue(toSpace);
+        }
+        return spaces;
+    }
+
+    [[nodiscard]] static bool IsTransformSpaceValue(std::string_view value) noexcept {
+        return value == "tangent" || value == "Tangent" ||
+            value == "world" || value == "World" ||
+            value == "view" || value == "View";
+    }
+
+    [[nodiscard]] static std::string NormalizeTransformSpaceValue(std::string_view value) {
+        if (value == "view" || value == "View") {
+            return "view";
+        }
+        if (value == "world" || value == "World") {
+            return "world";
+        }
+        return "tangent";
+    }
+
+    [[nodiscard]] static std::string TransformSpaceHintWithProperty(
+        const kb::render::RenderMaterialGraphNode& node,
+        std::string_view propertyId,
+        std::string_view value) {
+        std::array<std::string, 2U> spaces = TransformSpaces(node);
+        if (propertyId == "transform.fromSpace") {
+            spaces[0] = NormalizeTransformSpaceValue(value);
+        } else {
+            spaces[1] = NormalizeTransformSpaceValue(value);
+        }
+        return spaces[0] + " " + spaces[1];
     }
 
     [[nodiscard]] static std::string TextureCoordinateHintWithUvSet(
@@ -4466,6 +4549,18 @@ private:
                 .defaultValueHint = "0.5",
                 .overrideSupported = false,
             };
+        case kb::render::RenderMaterialGraphNodeKind::Transform:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Transform",
+                .defaultValueHint = "tangent world",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Transform Position",
+                .defaultValueHint = "tangent world",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::ViewProperty:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "View Property",
@@ -4509,8 +4604,6 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::Sobol:
         case kb::render::RenderMaterialGraphNodeKind::AppendVector:
         case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
-        case kb::render::RenderMaterialGraphNodeKind::Transform:
-        case kb::render::RenderMaterialGraphNodeKind::TransformPosition:
         case kb::render::RenderMaterialGraphNodeKind::DotProduct:
         case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
         case kb::render::RenderMaterialGraphNodeKind::Normalize:
