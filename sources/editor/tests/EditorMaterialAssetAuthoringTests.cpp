@@ -3235,6 +3235,49 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(uvProperty != uvProperties.end() && uvProperty->value.text == "1",
         "KBMAT-MAT58: UV enum edit should persist the selected option value");
 
+    kb::editor::MaterialEditorState viewPropertyEditor;
+    kb::render::RenderMaterialAssetData viewPropertyAsset{};
+    viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    viewPropertyAsset.graph.shadingModel = "unlit";
+    viewPropertyEditor.Open(kb::assets::AssetId{ 0x5820U }, viewPropertyAsset);
+    std::uint32_t viewPropertyNodeId = 0U;
+    kb::editor::tests::Require(viewPropertyEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ViewProperty, -260, 80, &viewPropertyNodeId),
+        "KBMAT-MAT58: Material Editor should create a ViewProperty node for enum property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> viewProperties = viewPropertyEditor.GraphNodeProperties(viewPropertyNodeId);
+    auto viewProperty = std::ranges::find_if(viewProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "viewProperty";
+    });
+    kb::editor::tests::Require(viewProperty != viewProperties.end() &&
+            viewProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            viewProperty->options.size() == 4U &&
+            viewProperty->value.text == "viewSize",
+        "KBMAT-MAT58: ViewProperty must expose a typed property selector with a view-size default");
+    viewPropertyEditor.ToggleGraphNodeEnumDropdown(viewPropertyNodeId, "viewProperty");
+    viewProperties = viewPropertyEditor.GraphNodeProperties(viewPropertyNodeId);
+    viewProperty = std::ranges::find_if(viewProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "viewProperty";
+    });
+    kb::editor::tests::Require(viewProperty != viewProperties.end() && viewProperty->dropdownOpen,
+        "KBMAT-MAT58: ViewProperty enum property should track dropdown open state");
+    kb::editor::tests::Require(viewPropertyEditor.SetGraphNodeEnumValue(viewPropertyNodeId, "viewProperty", "pixelPosition"),
+        "KBMAT-MAT58: ViewProperty enum dropdown option should update node metadata");
+    const kb::render::RenderMaterialGraphNode* viewPropertyNode =
+        kb::render::FindRenderMaterialGraphNode(viewPropertyEditor.WorkingCopy()->graph, viewPropertyNodeId);
+    kb::editor::tests::Require(viewPropertyNode != nullptr && viewPropertyNode->parameter.defaultValueHint == "pixelPosition",
+        "KBMAT-MAT58: ViewProperty enum edit should persist the selected view property");
+    std::uint32_t viewSampleNodeId = 0U;
+    kb::editor::tests::Require(viewPropertyEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -60, 80, &viewSampleNodeId) &&
+            viewPropertyEditor.ConnectGraphPins(viewPropertyNodeId, "value", viewSampleNodeId, "uv") &&
+            viewPropertyEditor.ConnectGraphPins(viewSampleNodeId, "color", 1U, "baseColor"),
+        "KBMAT-MAT58: ViewProperty selection must connect through a real texture UV graph");
+    const kb::render::RenderMaterialGraphCompileResult viewPropertyCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            viewPropertyEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5820U });
+    kb::editor::tests::Require(viewPropertyCompiled.Succeeded() &&
+            viewPropertyCompiled.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT58: ViewProperty selected in the editor must compile to the selected runtime view expression");
+
 #if defined(_WIN32)
     const RECT content{ 0, 0, 960, 720 };
     materialEditor.ToggleGraphNodeEnumDropdown(uvNodeId, "uvSet");

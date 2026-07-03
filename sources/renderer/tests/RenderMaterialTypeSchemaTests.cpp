@@ -4737,10 +4737,10 @@ void RunMaterialWorldSpaceNodeCodegenTest() {
     Require(objectBounds.Succeeded() && objectBounds.shader.source.find("ctx.objectBounds") != std::string::npos, "KBMAT-MAT46: ObjectBounds must emit ctx.objectBounds");
 
     // Float2 screen/view nodes routed through a TextureSample UV pin.
-    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind, std::string_view outputPin) {
+    const auto compileVec2Node = [](RenderMaterialGraphNodeKind kind, std::string_view outputPin, std::string_view valueHint = {}) {
         RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
         graph.shadingModel = "unlit";
-        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind });
+        graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = kind, .parameter = RenderMaterialGraphParameterMetadata{ .defaultValueHint = std::string{ valueHint } } });
         graph.nodes.push_back(RenderMaterialGraphNode{ .id = 3U, .kind = RenderMaterialGraphNodeKind::TextureSample, .parameter = RenderMaterialGraphParameterMetadata{ .stableId = "vs", .textureRole = "baseColor", .expectedTextureColorSpace = RenderMaterialTextureColorSpace::Srgb } });
         graph.links.push_back(MakeGraphLink(kind, 2U, std::string{ outputPin }, RenderMaterialGraphNodeKind::TextureSample, 3U, "uv"));
         graph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::TextureSample, 3U, "color", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
@@ -4749,10 +4749,19 @@ void RunMaterialWorldSpaceNodeCodegenTest() {
     const RenderMaterialGraphCompileResult pixelPosition = compileVec2Node(RenderMaterialGraphNodeKind::PixelPosition, "xy");
     const RenderMaterialGraphCompileResult viewSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewSize, "value");
     const RenderMaterialGraphCompileResult viewProperty = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value");
+    const RenderMaterialGraphCompileResult viewPropertyInvSize = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "invViewSize");
+    const RenderMaterialGraphCompileResult viewPropertyScreenPosition = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "screenPosition");
+    const RenderMaterialGraphCompileResult viewPropertyPixelPosition = compileVec2Node(RenderMaterialGraphNodeKind::ViewProperty, "value", "pixelPosition");
     Require(pixelPosition.Succeeded() && pixelPosition.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
         "KBMAT-MAT46: PixelPosition must emit absolute viewport pixel coordinates");
     Require(viewSize.Succeeded() && viewSize.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewSize must emit ctx.viewSize");
     Require(viewProperty.Succeeded() && viewProperty.shader.source.find("ctx.viewSize") != std::string::npos, "KBMAT-MAT46: ViewProperty must emit a view property (ctx.viewSize)");
+    Require(viewPropertyInvSize.Succeeded() && viewPropertyInvSize.shader.source.find("1.0, 1.0) / max(ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit inverse view size when selected");
+    Require(viewPropertyScreenPosition.Succeeded() && viewPropertyScreenPosition.shader.source.find("ctx.screenPosition") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit screen position when selected");
+    Require(viewPropertyPixelPosition.Succeeded() && viewPropertyPixelPosition.shader.source.find("ctx.screenPosition * ctx.viewSize") != std::string::npos,
+        "KBMAT-MAT46: ViewProperty must emit pixel position when selected");
 
     RenderMaterialGraphDocument twoSidedSignGraph = MakeDefaultRenderMaterialGraphDocument();
     twoSidedSignGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TwoSidedSign });
