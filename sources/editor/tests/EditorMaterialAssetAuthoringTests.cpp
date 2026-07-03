@@ -1949,6 +1949,135 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
             "KBMAT-MAT57C: Round-tripped palette nodes should keep runtime-visible pins");
     }
 
+    std::size_t compiledPaletteNodeCount = 0U;
+    for (const kb::render::RenderMaterialGraphNodeKind kind : paletteNodeKinds) {
+        if (kind == kb::render::RenderMaterialGraphNodeKind::CollectionParameter ||
+            kind == kb::render::RenderMaterialGraphNodeKind::FunctionInput ||
+            kind == kb::render::RenderMaterialGraphNodeKind::FunctionOutput ||
+            kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall ||
+            kind == kb::render::RenderMaterialGraphNodeKind::LayerStack) {
+            continue;
+        }
+        kb::editor::MaterialEditorState compileEditor;
+        kb::render::RenderMaterialAssetData compileMaterial{};
+        compileMaterial.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+        compileMaterial.graph.shadingModel = "unlit";
+        compileEditor.Open(kb::assets::AssetId{ 0x57CA00U + static_cast<std::uint64_t>(kind) }, compileMaterial);
+        std::uint32_t subjectNodeId = 0U;
+        kb::editor::tests::Require(compileEditor.AddGraphNode(kind, -260, 80, &subjectNodeId),
+            "KBMAT-MAT57C: Palette-created node should be authorable before compile coverage");
+        const kb::render::RenderMaterialGraphNode* subjectNode =
+            kb::render::FindRenderMaterialGraphNode(compileEditor.WorkingCopy()->graph, subjectNodeId);
+        kb::editor::tests::Require(subjectNode != nullptr,
+            "KBMAT-MAT57C: Palette-created compile coverage node should exist in the working graph");
+
+        const std::vector<std::string> outputPins = kb::render::RenderMaterialGraphNodeOutputPinNames(*subjectNode);
+        if (outputPins.empty()) {
+            continue;
+        }
+        const std::string outputPin = outputPins.front();
+        const kb::render::RenderMaterialGraphPinType outputType =
+            kb::render::RenderMaterialGraphPinDataType(*subjectNode, outputPin, true);
+        if (kind == kb::render::RenderMaterialGraphNodeKind::Reroute ||
+            kind == kb::render::RenderMaterialGraphNodeKind::CompositeInput ||
+            kind == kb::render::RenderMaterialGraphNodeKind::CompositeOutput) {
+            std::uint32_t colorNodeId = 0U;
+            kb::editor::tests::Require(compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -520, 80, &colorNodeId) &&
+                    compileEditor.ConnectGraphPins(colorNodeId, "rgba", subjectNodeId, "input"),
+                "KBMAT-MAT57C: Palette-created pass-through nodes should compile with an editor-authored source input");
+        } else if (kind == kb::render::RenderMaterialGraphNodeKind::NamedRerouteUsage) {
+            std::uint32_t declarationNodeId = 0U;
+            std::uint32_t colorNodeId = 0U;
+            kb::editor::tests::Require(compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::NamedRerouteDeclaration, -360, 80, &declarationNodeId) &&
+                    compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -620, 80, &colorNodeId) &&
+                    compileEditor.ConnectGraphPins(colorNodeId, "rgba", declarationNodeId, "input"),
+                "KBMAT-MAT57C: Palette-created named reroute usage should compile with an editor-authored declaration");
+        }
+
+        bool routed = false;
+        switch (outputType) {
+        case kb::render::RenderMaterialGraphPinType::Texture2D: {
+            std::uint32_t sampleNodeId = 0U;
+            routed = compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -40, 80, &sampleNodeId) &&
+                compileEditor.ConnectGraphPins(subjectNodeId, outputPin, sampleNodeId, "texture") &&
+                compileEditor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor");
+            break;
+        }
+        case kb::render::RenderMaterialGraphPinType::TextureCube: {
+            std::uint32_t sampleNodeId = 0U;
+            routed = compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSampleCube, -40, 80, &sampleNodeId) &&
+                compileEditor.ConnectGraphPins(subjectNodeId, outputPin, sampleNodeId, "texture") &&
+                compileEditor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor");
+            break;
+        }
+        case kb::render::RenderMaterialGraphPinType::Texture3D: {
+            std::uint32_t sampleNodeId = 0U;
+            routed = compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSampleVolume, -40, 80, &sampleNodeId) &&
+                compileEditor.ConnectGraphPins(subjectNodeId, outputPin, sampleNodeId, "texture") &&
+                compileEditor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor");
+            break;
+        }
+        case kb::render::RenderMaterialGraphPinType::Texture2DArray: {
+            std::uint32_t sampleNodeId = 0U;
+            routed = compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample2DArray, -40, 80, &sampleNodeId) &&
+                compileEditor.ConnectGraphPins(subjectNodeId, outputPin, sampleNodeId, "texture") &&
+                compileEditor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor");
+            break;
+        }
+        case kb::render::RenderMaterialGraphPinType::Float2: {
+            std::uint32_t sampleNodeId = 0U;
+            routed = compileEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::TextureSample, -40, 80, &sampleNodeId) &&
+                compileEditor.ConnectGraphPins(subjectNodeId, outputPin, sampleNodeId, "uv") &&
+                compileEditor.ConnectGraphPins(sampleNodeId, "color", 1U, "baseColor");
+            break;
+        }
+        case kb::render::RenderMaterialGraphPinType::MaterialAttributes:
+            routed = compileEditor.ConnectGraphPins(subjectNodeId, outputPin, 1U, "attributes");
+            break;
+        case kb::render::RenderMaterialGraphPinType::Float:
+            routed = compileEditor.ConnectGraphPins(subjectNodeId, outputPin, 1U, "roughness");
+            break;
+        case kb::render::RenderMaterialGraphPinType::Normal:
+            routed = compileEditor.ConnectGraphPins(subjectNodeId, outputPin, 1U, "normal");
+            break;
+        case kb::render::RenderMaterialGraphPinType::Float3:
+            routed = compileEditor.ConnectGraphPins(subjectNodeId, outputPin, 1U, "emissive");
+            break;
+        case kb::render::RenderMaterialGraphPinType::Bool:
+        case kb::render::RenderMaterialGraphPinType::Float4:
+        case kb::render::RenderMaterialGraphPinType::Color:
+        case kb::render::RenderMaterialGraphPinType::Unknown:
+        case kb::render::RenderMaterialGraphPinType::Sampler:
+        default:
+            routed = compileEditor.ConnectGraphPins(subjectNodeId, outputPin, 1U, "baseColor");
+            break;
+        }
+        if (!routed) {
+            std::cerr << "KBMAT-MAT57C palette-created node failed compile routing: "
+                      << kb::render::RenderMaterialGraphNodeKindName(kind)
+                      << " output=" << outputPin << '\n';
+        }
+        kb::editor::tests::Require(routed,
+            "KBMAT-MAT57C: Palette-created node output should route through public MaterialEditorState links");
+
+        const kb::render::RenderMaterialGraphCompileResult compiled = kb::render::CompileRenderMaterialGraphToShaderSource(
+            compileEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x57CA00U + static_cast<std::uint64_t>(kind) });
+        if (!compiled.Succeeded()) {
+            std::cerr << "KBMAT-MAT57C palette-created node failed shader compile: "
+                      << kb::render::RenderMaterialGraphNodeKindName(kind);
+            if (!compiled.diagnostics.empty()) {
+                std::cerr << " diagnostic=" << compiled.diagnostics.front().message;
+            }
+            std::cerr << '\n';
+        }
+        kb::editor::tests::Require(compiled.Succeeded() && !compiled.shader.source.empty(),
+            "KBMAT-MAT57C: Palette-created node should compile through the real material graph shader generator");
+        ++compiledPaletteNodeCount;
+    }
+    kb::editor::tests::Require(compiledPaletteNodeCount >= 140U,
+        "KBMAT-MAT57C: Palette-created compile coverage should exercise the production node catalog");
+
     kb::render::RenderMaterialGraphDocument graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
     const std::vector<kb::editor::MaterialEditorGraphMenuCommand> baseColorCompatible =
         kb::editor::MaterialEditorGraphCompatibleCommands(graph, 1U, "baseColor", false);
