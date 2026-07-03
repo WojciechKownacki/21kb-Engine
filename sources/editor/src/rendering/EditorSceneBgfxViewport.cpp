@@ -201,6 +201,10 @@ void EditorSceneBgfxViewport::SetErrorReporter(std::function<void(std::string_vi
     errorReporter_ = std::move(reporter);
 }
 
+void EditorSceneBgfxViewport::SetAaTraceReporter(std::function<void(std::string_view)> reporter) noexcept {
+    aaTraceReporter_ = std::move(reporter);
+}
+
 void EditorSceneBgfxViewport::SetGraphShaderCacheRoot(std::string root) {
     if (graphShaderCacheRoot_ == root) {
         return;
@@ -318,6 +322,7 @@ void EditorSceneBgfxViewport::Shutdown() {
     renderFailed_ = false;
     renderFailureReported_ = false;
     failureDetail_.clear();
+    lastConsoleAaTrace_.clear();
 }
 
 void EditorSceneBgfxViewport::BeginPaintLayout() noexcept {
@@ -723,6 +728,17 @@ bool EditorSceneBgfxViewport::SubmitPendingPaint() {
     const bool submitted = submitter.Submit(std::span<const PendingPresent>{pendingPresents_.data(), pendingPresents_.size()});
     EditorCrashBreadcrumbs::Write("viewport", submitted ? "SubmitPendingPaint end ok" : "SubmitPendingPaint end failed");
     return submitted;
+}
+
+void EditorSceneBgfxViewport::ReportAaTrace(std::string_view message, bool force) {
+    if (!aaTraceReporter_) {
+        return;
+    }
+    if (!force && lastConsoleAaTrace_ == message) {
+        return;
+    }
+    lastConsoleAaTrace_ = std::string{ message };
+    aaTraceReporter_(lastConsoleAaTrace_);
 }
 
 void EditorSceneBgfxViewport::FailRender(const char* reason) noexcept {
