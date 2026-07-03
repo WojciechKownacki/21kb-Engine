@@ -3355,6 +3355,31 @@ private:
                 .rangeMax = 1.0F,
             },
         };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> cameraDepthFade{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "cameraDepthFade.fadeLength",
+                .displayName = "Fade Length",
+                .defaultValue = 1.0F,
+                .rangeMin = 0.0001F,
+                .rangeMax = 100000.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "cameraDepthFade.fadeOffset",
+                .displayName = "Fade Offset",
+                .defaultValue = 0.0F,
+                .rangeMin = -100000.0F,
+                .rangeMax = 100000.0F,
+            },
+        };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 1U> depthFade{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "depthFade.fadeDistance",
+                .displayName = "Fade Distance",
+                .defaultValue = 0.01F,
+                .rangeMin = 0.0001F,
+                .rangeMax = 100000.0F,
+            },
+        };
 
         switch (kind) {
         case kb::render::RenderMaterialGraphNodeKind::Panner:
@@ -3369,6 +3394,10 @@ private:
             return sphereMask;
         case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
             return antialiasedTextureMask;
+        case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
+            return cameraDepthFade;
+        case kb::render::RenderMaterialGraphNodeKind::DepthFade:
+            return depthFade;
         default:
             return {};
         }
@@ -4843,6 +4872,18 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Scene Texture",
                 .defaultValueHint = "color",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Camera Depth Fade",
+                .defaultValueHint = "1 0",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::DepthFade:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Depth Fade",
+                .defaultValueHint = "0.01",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::ColorRamp:

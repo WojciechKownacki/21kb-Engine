@@ -3664,6 +3664,66 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             proceduralMaskCompiled.shader.source.find("smoothstep(0.33 -") != std::string::npos,
         "KBMAT-MAT83: Edited procedural mask properties should compile into production shader expressions");
 
+    kb::editor::MaterialEditorState depthFadeEditor;
+    kb::render::RenderMaterialAssetData depthFadeAsset{};
+    depthFadeAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    depthFadeAsset.graph.shadingModel = "unlit";
+    depthFadeEditor.Open(kb::assets::AssetId{ 0x5823U }, depthFadeAsset);
+
+    std::uint32_t cameraDepthFadeNodeId = 0U;
+    std::uint32_t depthFadeNodeId = 0U;
+    kb::editor::tests::Require(depthFadeEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::CameraDepthFade, -420, 80, &cameraDepthFadeNodeId) &&
+            depthFadeEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::DepthFade, -420, 240, &depthFadeNodeId),
+        "KBMAT-MAT86B: Material Editor should create CameraDepthFade and DepthFade nodes for depth fade property editing");
+    const kb::render::RenderMaterialGraphNode* cameraDepthFadeNode =
+        kb::render::FindRenderMaterialGraphNode(depthFadeEditor.WorkingCopy()->graph, cameraDepthFadeNodeId);
+    const kb::render::RenderMaterialGraphNode* depthFadeNode =
+        kb::render::FindRenderMaterialGraphNode(depthFadeEditor.WorkingCopy()->graph, depthFadeNodeId);
+    kb::editor::tests::Require(cameraDepthFadeNode != nullptr && cameraDepthFadeNode->parameter.defaultValueHint == "1 0" &&
+            depthFadeNode != nullptr && depthFadeNode->parameter.defaultValueHint == "0.01",
+        "KBMAT-MAT86B: Depth fade nodes should carry explicit editor metadata defaults");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> cameraDepthFadeProperties =
+        depthFadeEditor.GraphNodeProperties(cameraDepthFadeNodeId);
+    requireUtilityNumericProperty(
+        cameraDepthFadeProperties,
+        "cameraDepthFade.fadeLength",
+        1.0F,
+        "KBMAT-MAT86B: CameraDepthFade should expose Fade Length as a numeric property");
+    requireUtilityNumericProperty(
+        cameraDepthFadeProperties,
+        "cameraDepthFade.fadeOffset",
+        0.0F,
+        "KBMAT-MAT86B: CameraDepthFade should expose Fade Offset as a numeric property");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> depthFadeProperties =
+        depthFadeEditor.GraphNodeProperties(depthFadeNodeId);
+    requireUtilityNumericProperty(
+        depthFadeProperties,
+        "depthFade.fadeDistance",
+        0.01F,
+        "KBMAT-MAT86B: DepthFade should expose Fade Distance as a numeric property");
+    kb::editor::tests::Require(depthFadeEditor.SetGraphConstantComponentValue(cameraDepthFadeNodeId, 0U, 2.5F) &&
+            depthFadeEditor.SetGraphConstantComponentValue(cameraDepthFadeNodeId, 1U, 0.25F) &&
+            depthFadeEditor.SetGraphConstantComponentValue(depthFadeNodeId, 0U, 0.25F),
+        "KBMAT-MAT86B: Depth fade numeric properties should update node metadata");
+    cameraDepthFadeNode = kb::render::FindRenderMaterialGraphNode(depthFadeEditor.WorkingCopy()->graph, cameraDepthFadeNodeId);
+    depthFadeNode = kb::render::FindRenderMaterialGraphNode(depthFadeEditor.WorkingCopy()->graph, depthFadeNodeId);
+    kb::editor::tests::Require(cameraDepthFadeNode != nullptr && cameraDepthFadeNode->parameter.defaultValueHint == "2.5 0.25" &&
+            depthFadeNode != nullptr && depthFadeNode->parameter.defaultValueHint == "0.25",
+        "KBMAT-MAT86B: Edited depth fade properties should persist in runtime hint format");
+    kb::editor::tests::Require(depthFadeEditor.ConnectGraphPins(cameraDepthFadeNodeId, "value", 1U, "metallic") &&
+            depthFadeEditor.ConnectGraphPins(depthFadeNodeId, "value", 1U, "roughness"),
+        "KBMAT-MAT86B: Edited depth fade nodes should route through graph links");
+    const kb::render::RenderMaterialGraphCompileResult depthFadeCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            depthFadeEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5823U });
+    kb::editor::tests::Require(depthFadeCompiled.Succeeded() &&
+            depthFadeCompiled.shader.reflection.usesSceneDepth &&
+            depthFadeCompiled.shader.source.find("max(2.5, 0.0001)") != std::string::npos &&
+            depthFadeCompiled.shader.source.find("- (0.25)") != std::string::npos &&
+            depthFadeCompiled.shader.source.find("max(0.25, 0.0001)") != std::string::npos,
+        "KBMAT-MAT86B: Edited depth fade defaults should compile into production shader expressions");
+
     kb::editor::MaterialEditorState colorRampEditor;
     kb::render::RenderMaterialAssetData colorRampAsset{};
     colorRampAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
