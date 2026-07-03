@@ -1308,6 +1308,13 @@ public:
             return std::nullopt;
         }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+            if (componentIndex >= 2U) {
+                return std::nullopt;
+            }
+            const std::array<float, 2U> tiling = TextureCoordinateTiling(*node);
+            return tiling[componentIndex];
+        }
         if (node == nullptr || !IsGraphConstantNode(node->kind)) {
             return std::nullopt;
         }
@@ -1329,6 +1336,9 @@ public:
             return std::nullopt;
         }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
+        if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && componentIndex < 2U) {
+            return kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 16.0F };
+        }
         if (node == nullptr || !IsGraphConstantNode(node->kind) || componentIndex >= ConstantComponentCount(node->kind)) {
             return std::nullopt;
         }
@@ -1338,6 +1348,24 @@ public:
     [[nodiscard]] bool SetGraphConstantComponentValue(std::uint32_t nodeId, std::size_t componentIndex, float componentValue) {
         if (!workingCopy_.has_value() || nodeId == 0U) {
             return false;
+        }
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        if (kb::render::RenderMaterialGraphNode* textureCoordinateNode = FindMutableGraphNode(document.graph, nodeId);
+            textureCoordinateNode != nullptr && textureCoordinateNode->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+            if (componentIndex >= 2U) {
+                return false;
+            }
+            std::array<float, 2U> tiling = TextureCoordinateTiling(*textureCoordinateNode);
+            tiling[componentIndex] = std::clamp(componentValue, 0.0F, 16.0F);
+            textureCoordinateNode->parameter.defaultValueHint =
+                TextureCoordinateHint(tiling[0], tiling[1], GraphNodeUvSetValue(*textureCoordinateNode));
+            textureCoordinateNode->parameter.overrideSupported = false;
+            if (textureCoordinateNode->parameter.displayName.empty()) {
+                textureCoordinateNode->parameter.displayName = GraphNodeDisplayName(textureCoordinateNode->kind);
+            }
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
         }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
         if (node == nullptr || !IsGraphConstantNode(node->kind)) {
@@ -1582,6 +1610,23 @@ public:
                 });
             }
             return properties;
+        }
+
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate) {
+            const std::array<float, 2U> tiling = TextureCoordinateTiling(*node);
+            constexpr std::array<std::string_view, 2U> labels{ "U Tiling", "V Tiling" };
+            for (std::size_t componentIndex = 0U; componentIndex < labels.size(); ++componentIndex) {
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = "textureCoordinate.tiling." + std::to_string(componentIndex),
+                    .displayName = std::string{ labels[componentIndex] },
+                    .kind = MaterialEditorGraphNodePropertyKind::Numeric,
+                    .type = kb::render::RenderMaterialParameterType::Scalar,
+                    .value = ScalarValue(tiling[componentIndex]),
+                    .range = kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 16.0F },
+                    .componentIndex = componentIndex,
+                });
+            }
         }
 
         if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureSample ||
@@ -3081,16 +3126,24 @@ private:
     [[nodiscard]] static std::string TextureCoordinateHintWithUvSet(
         const kb::render::RenderMaterialGraphNode& node,
         std::string_view uvSetValue) {
-        float uTile = 1.0F;
-        float vTile = 1.0F;
+        const std::array<float, 2U> tiling = TextureCoordinateTiling(node);
+        return TextureCoordinateHint(tiling[0], tiling[1], uvSetValue);
+    }
+
+    [[nodiscard]] static std::array<float, 2U> TextureCoordinateTiling(const kb::render::RenderMaterialGraphNode& node) {
+        std::array<float, 2U> tiling{ 1.0F, 1.0F };
         const std::string& hint = node.parameter.defaultValueHint;
         if (!hint.empty() && hint != "0" && hint != "1" && hint != "uv0" && hint != "uv1" && hint != "UV0" && hint != "UV1") {
             const std::vector<float> numbers = ParseDefaultNumbers(hint);
             if (!numbers.empty()) {
-                uTile = numbers[0];
-                vTile = numbers.size() > 1U ? numbers[1] : uTile;
+                tiling[0] = numbers[0];
+                tiling[1] = numbers.size() > 1U ? numbers[1] : tiling[0];
             }
         }
+        return tiling;
+    }
+
+    [[nodiscard]] static std::string TextureCoordinateHint(float uTile, float vTile, std::string_view uvSetValue) {
         return FloatText(uTile) + " " + FloatText(vTile) + " " + (uvSetValue == "1" ? "1" : "0");
     }
 

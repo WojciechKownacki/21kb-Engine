@@ -3247,10 +3247,29 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     auto textureCoordinateUvProperty = std::ranges::find_if(textureCoordinateProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
         return property.stableId == "uvSet";
     });
+    const auto textureCoordinateUTiling = std::ranges::find_if(textureCoordinateProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "textureCoordinate.tiling.0";
+    });
+    const auto textureCoordinateVTiling = std::ranges::find_if(textureCoordinateProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "textureCoordinate.tiling.1";
+    });
     kb::editor::tests::Require(textureCoordinateUvProperty != textureCoordinateProperties.end() &&
             textureCoordinateUvProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
             textureCoordinateUvProperty->value.text == "0",
         "KBMAT-MAT81: TextureCoordinate should expose UV Set as an enum property");
+    kb::editor::tests::Require(textureCoordinateUTiling != textureCoordinateProperties.end() &&
+            textureCoordinateVTiling != textureCoordinateProperties.end() &&
+            textureCoordinateUTiling->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Numeric &&
+            textureCoordinateVTiling->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Numeric &&
+            textureCoordinateUTiling->value.numbers[0] == 1.0F &&
+            textureCoordinateVTiling->value.numbers[0] == 1.0F,
+        "KBMAT-MAT81: TextureCoordinate should expose U/V tiling numeric properties");
+    kb::editor::tests::Require(materialEditor.SetGraphConstantComponentValue(textureCoordinateNodeId, 0U, 2.0F) &&
+            materialEditor.SetGraphConstantComponentValue(textureCoordinateNodeId, 1U, 3.0F),
+        "KBMAT-MAT81: TextureCoordinate U/V tiling numeric properties should update node metadata");
+    textureCoordinateNode = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
+    kb::editor::tests::Require(textureCoordinateNode != nullptr && textureCoordinateNode->parameter.defaultValueHint == "2 3 0",
+        "KBMAT-MAT81: TextureCoordinate tiling edit should persist as uTile/vTile/uvSet");
     kb::editor::tests::Require(materialEditor.SetGraphNodeEnumValue(textureCoordinateNodeId, "uvSet", "1"),
         "KBMAT-MAT81: TextureCoordinate UV Set enum should update node metadata");
     textureCoordinateNode = kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, textureCoordinateNodeId);
@@ -3259,7 +3278,7 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         return property.stableId == "uvSet";
     });
     kb::editor::tests::Require(textureCoordinateNode != nullptr &&
-            textureCoordinateNode->parameter.defaultValueHint == "1 1 1" &&
+            textureCoordinateNode->parameter.defaultValueHint == "2 3 1" &&
             textureCoordinateUvProperty != textureCoordinateProperties.end() &&
             textureCoordinateUvProperty->value.text == "1",
         "KBMAT-MAT81: TextureCoordinate UV Set enum should preserve tiling while selecting UV1");
