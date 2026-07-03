@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -1395,6 +1396,74 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool SetGraphNodeTextProperty(std::uint32_t nodeId, std::string_view propertyId, std::string_view value) {
+        if (!workingCopy_.has_value() || nodeId == 0U || propertyId.empty()) {
+            return false;
+        }
+        if (propertyId == "node.name") {
+            return RenameGraphNode(nodeId, value);
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
+        if (node == nullptr) {
+            return false;
+        }
+
+        const std::string normalized = TrimAscii(value);
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::CollectionParameter) {
+            if (propertyId == "collection.assetId") {
+                std::uint64_t assetId = 0U;
+                if (!ParseDecimalAssetId(normalized, assetId) || assetId == 0U) {
+                    return false;
+                }
+                node->parameter.defaultValueHint = std::to_string(assetId);
+                SetWorkingCopy(std::move(document));
+                SelectNode(nodeId);
+                return true;
+            }
+            if (propertyId == "collection.parameter") {
+                if (!IsStableGraphIdentifier(normalized)) {
+                    return false;
+                }
+                node->parameter.stableId = normalized;
+                if (node->parameter.displayName.empty()) {
+                    node->parameter.displayName = "Collection Parameter " + std::to_string(node->id);
+                }
+                SetWorkingCopy(std::move(document));
+                SelectNode(nodeId);
+                return true;
+            }
+        }
+
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall && propertyId == "function.assetId") {
+            std::uint64_t assetId = 0U;
+            if (!ParseDecimalAssetId(normalized, assetId) || assetId == 0U) {
+                return false;
+            }
+            node->parameter.stableId = std::to_string(assetId);
+            node->parameter.defaultValueHint.clear();
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
+        }
+
+        if ((node->kind == kb::render::RenderMaterialGraphNodeKind::FunctionInput ||
+                node->kind == kb::render::RenderMaterialGraphNodeKind::FunctionOutput) &&
+            propertyId == "function.endpoint") {
+            if (!IsStableGraphIdentifier(normalized)) {
+                return false;
+            }
+            node->parameter.stableId = normalized;
+            node->parameter.displayName = normalized;
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
+        }
+
+        return false;
+    }
+
     [[nodiscard]] std::vector<MaterialEditorGraphNodeProperty> GraphNodeProperties(std::uint32_t nodeId) const {
         std::vector<MaterialEditorGraphNodeProperty> properties;
         if (!workingCopy_.has_value() || nodeId == 0U) {
@@ -1473,6 +1542,44 @@ public:
                 .kind = MaterialEditorGraphNodePropertyKind::TextureAsset,
                 .type = kb::render::RenderMaterialParameterType::Texture,
                 .value = TextureAssetValue(GraphNodeTextureAssetId(*node, *workingCopy_)),
+            });
+        }
+
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::CollectionParameter) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "collection.assetId",
+                .displayName = "Collection Asset",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(node->parameter.defaultValueHint),
+            });
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "collection.parameter",
+                .displayName = "Parameter Stable Id",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(StableIdForGraphNode(*node)),
+            });
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::MaterialFunctionCall) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "function.assetId",
+                .displayName = "Function Asset",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(node->parameter.stableId.empty() ? node->parameter.defaultValueHint : node->parameter.stableId),
+            });
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::FunctionInput ||
+            node->kind == kb::render::RenderMaterialGraphNodeKind::FunctionOutput) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "function.endpoint",
+                .displayName = "Endpoint Stable Id",
+                .kind = MaterialEditorGraphNodePropertyKind::Text,
+                .type = kb::render::RenderMaterialParameterType::Enum,
+                .value = EnumValue(StableIdForGraphNode(*node)),
             });
         }
 
@@ -2570,6 +2677,50 @@ private:
             .kind = MaterialEditorParameterValueKind::TextureAsset,
             .assetId = assetId,
         };
+    }
+
+    [[nodiscard]] static std::string TrimAscii(std::string_view text) {
+        const std::size_t first = text.find_first_not_of(" \t\r\n");
+        if (first == std::string_view::npos) {
+            return {};
+        }
+        const std::size_t last = text.find_last_not_of(" \t\r\n");
+        return std::string{ text.substr(first, last - first + 1U) };
+    }
+
+    [[nodiscard]] static bool ParseDecimalAssetId(std::string_view text, std::uint64_t& output) noexcept {
+        if (text.empty()) {
+            return false;
+        }
+        std::uint64_t value = 0U;
+        for (const char ch : text) {
+            if (ch < '0' || ch > '9') {
+                return false;
+            }
+            const std::uint64_t digit = static_cast<std::uint64_t>(ch - '0');
+            if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10ULL) {
+                return false;
+            }
+            value = value * 10ULL + digit;
+        }
+        output = value;
+        return true;
+    }
+
+    [[nodiscard]] static bool IsStableGraphIdentifier(std::string_view text) noexcept {
+        if (text.empty() || text.size() > 64U) {
+            return false;
+        }
+        const unsigned char first = static_cast<unsigned char>(text.front());
+        if (!(std::isalpha(first) || first == '_')) {
+            return false;
+        }
+        for (const unsigned char ch : text) {
+            if (!(std::isalnum(ch) || ch == '_')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] static std::vector<float> ParseDefaultNumbers(std::string_view text) {
