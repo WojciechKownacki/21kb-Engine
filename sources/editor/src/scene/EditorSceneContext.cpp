@@ -4428,6 +4428,9 @@ bool EditorSceneContext::ExecuteMaterialGraphContextMenuCommand(MaterialEditorGr
         static_cast<void>(CancelMaterialGraphPinConnection());
         return false;
     }
+    if (const std::optional<kb::render::RenderMaterialGraphNodeKind> kind = MaterialEditorGraphMenuCommandNodeKind(command)) {
+        return AddMaterialGraphNode(id, *kind, graphX, graphY);
+    }
     switch (command) {
     case MaterialEditorGraphMenuCommand::CreateTextureSample:
         return AddMaterialGraphNode(id, kb::render::RenderMaterialGraphNodeKind::TextureSample, graphX, graphY);
