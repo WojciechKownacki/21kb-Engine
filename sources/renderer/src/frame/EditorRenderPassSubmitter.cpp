@@ -99,7 +99,7 @@ void EditorRenderPassSubmitter::SubmitSceneOverlays(const RenderViewportPlan& vi
                 .extent = extent,
                 .outputRect = outputRect,
                 .camera = camera,
-                .sceneDepthTexture = desc.target.depthTexture,
+                .sceneDepthTexture = desc.SceneOverlayDepthTexture(),
                 .minorSpacingMeters = desc.editorGrid.minorSpacingMeters,
                 .majorEvery = desc.editorGrid.majorEvery,
             };
