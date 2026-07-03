@@ -1795,6 +1795,7 @@ void RunForwardGraphPerInstanceTest() {
     const bgfx::ProgramHandle randomProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceRandom, "random", "ctx.perInstanceRandom");
     const bgfx::ProgramHandle radiusProgram = buildScalarProgram(RenderMaterialGraphNodeKind::ObjectRadius, "radius", "ctx.objectRadius");
     const bgfx::ProgramHandle fadeProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceFadeAmount, "fade", "ctx.perInstanceFadeAmount");
+    const bgfx::ProgramHandle distanceCullFadeProgram = buildScalarProgram(RenderMaterialGraphNodeKind::DistanceCullFade, "distance_cull_fade", "ctx.perInstanceFadeAmount");
     const bgfx::ProgramHandle customProgram = buildScalarProgram(RenderMaterialGraphNodeKind::PerInstanceCustomData, "custom", "ctx.perInstanceCustomData");
 
     // Two instances of the same batch with distinct per-instance random (0.2 vs 0.8 in the .w lane).
@@ -1814,12 +1815,18 @@ void RunForwardGraphPerInstanceTest() {
     Require(highFade.r > lowFade.r + 40U,
         "KBMAT-MAT47: PerInstanceFadeAmount must vary the output with the per-instance fade lane");
 
+    const ForwardRenderProbe lowDistanceCullFade = ForwardRenderHarness::ProbeAt(harness.RenderPixels(distanceCullFadeProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.25F), 32U, 32U);
+    const ForwardRenderProbe highDistanceCullFade = ForwardRenderHarness::ProbeAt(harness.RenderPixels(distanceCullFadeProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.85F), 32U, 32U);
+    Require(highDistanceCullFade.r > lowDistanceCullFade.r + 40U,
+        "KBMAT-MAT47: DistanceCullFade must vary the output with the production per-instance fade lane");
+
     const ForwardRenderProbe lowCustom = ForwardRenderHarness::ProbeAt(harness.RenderPixels(customProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.15F), 32U, 32U);
     const ForwardRenderProbe highCustom = ForwardRenderHarness::ProbeAt(harness.RenderPixels(customProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, 0.0F, 0.0F, 0.75F), 32U, 32U);
     Require(highCustom.r > lowCustom.r + 40U,
         "KBMAT-MAT47: PerInstanceCustomData must vary the output with the per-instance custom data lane");
 
     bgfx::destroy(customProgram);
+    bgfx::destroy(distanceCullFadeProgram);
     bgfx::destroy(fadeProgram);
     bgfx::destroy(radiusProgram);
     bgfx::destroy(randomProgram);

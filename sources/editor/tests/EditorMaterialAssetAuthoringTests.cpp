@@ -2193,6 +2193,8 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter);
     const std::optional<kb::render::RenderMaterialGraphNodeKind> perInstanceFadeKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceFadeAmount);
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> distanceCullFadeKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateDistanceCullFade);
     const std::optional<kb::render::RenderMaterialGraphNodeKind> perInstanceCustomDataKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData);
     const std::optional<kb::render::RenderMaterialGraphNodeKind> preSkinnedPositionKind =
@@ -2203,6 +2205,7 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         deltaTimeKind == kb::render::RenderMaterialGraphNodeKind::DeltaTime &&
             dynamicParameterKind == kb::render::RenderMaterialGraphNodeKind::DynamicParameter &&
             perInstanceFadeKind == kb::render::RenderMaterialGraphNodeKind::PerInstanceFadeAmount &&
+            distanceCullFadeKind == kb::render::RenderMaterialGraphNodeKind::DistanceCullFade &&
             perInstanceCustomDataKind == kb::render::RenderMaterialGraphNodeKind::PerInstanceCustomData &&
             preSkinnedPositionKind == kb::render::RenderMaterialGraphNodeKind::PreSkinnedPosition &&
             preSkinnedNormalKind == kb::render::RenderMaterialGraphNodeKind::PreSkinnedNormal,
@@ -2325,6 +2328,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         "perInstanceFadeAmount",
         0x3963U,
         "KBMAT-MAT57: MaterialEditorState must create PerInstanceFadeAmount nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreateDistanceCullFade,
+        "value",
+        "alpha",
+        "ctx.perInstanceFadeAmount",
+        "perInstanceFadeAmount",
+        0x3969U,
+        "KBMAT-MAT57: MaterialEditorState must create DistanceCullFade nodes from the palette");
     compilePaletteRuntimeInput(
         kb::editor::MaterialEditorGraphMenuCommand::CreatePerInstanceCustomData,
         "value",
