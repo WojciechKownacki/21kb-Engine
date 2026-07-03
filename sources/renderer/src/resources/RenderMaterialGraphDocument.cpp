@@ -574,6 +574,7 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
     case RenderMaterialGraphNodeKind::SceneColor:
@@ -1184,6 +1185,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -1723,6 +1725,8 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
     case RenderMaterialGraphNodeKind::SceneDepth:
         // MAT-80/#18b: the opaque scene device depth at this fragment's screen position.
         return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
+    case RenderMaterialGraphNodeKind::PixelDepth:
+        return "ctx.fragmentDepth";
     case RenderMaterialGraphNodeKind::SceneColor: {
         const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.screenPosition");
         return "texture2D(s_kbSceneColor, " + uv + ")";
@@ -2702,6 +2706,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -2890,6 +2895,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -3036,6 +3042,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -4301,6 +4308,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "TwoSidedSign";
     case RenderMaterialGraphNodeKind::SceneDepth:
         return "SceneDepth";
+    case RenderMaterialGraphNodeKind::PixelDepth:
+        return "PixelDepth";
     case RenderMaterialGraphNodeKind::SceneColor:
         return "SceneColor";
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -4682,6 +4691,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "SceneDepth")) {
         return RenderMaterialGraphNodeKind::SceneDepth;
     }
+    if (EqualsIgnoreCase(text, "PixelDepth")) {
+        return RenderMaterialGraphNodeKind::PixelDepth;
+    }
     if (EqualsIgnoreCase(text, "SceneColor")) {
         return RenderMaterialGraphNodeKind::SceneColor;
     }
@@ -5005,6 +5017,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -5324,6 +5337,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::ViewSize,
         RenderMaterialGraphNodeKind::TwoSidedSign,
         RenderMaterialGraphNodeKind::SceneDepth,
+        RenderMaterialGraphNodeKind::PixelDepth,
         RenderMaterialGraphNodeKind::SceneColor,
         RenderMaterialGraphNodeKind::SceneTexture,
         RenderMaterialGraphNodeKind::DepthFade,
@@ -7457,6 +7471,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
     case RenderMaterialGraphNodeKind::CustomCode:
@@ -7720,6 +7735,7 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::TwoSidedSign:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -8533,6 +8549,7 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::ViewSize:
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
+    case RenderMaterialGraphNodeKind::PixelDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
         return 0U;
     case RenderMaterialGraphNodeKind::SceneColor:

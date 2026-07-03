@@ -2167,6 +2167,10 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateSceneTexture);
     kb::editor::tests::Require(sceneTextureKind.has_value() && *sceneTextureKind == kb::render::RenderMaterialGraphNodeKind::SceneTexture,
         "KBMAT-MAT57: CreateSceneTexture command should map to the SceneTexture graph node kind");
+    const std::optional<kb::render::RenderMaterialGraphNodeKind> pixelDepthKind =
+        kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreatePixelDepth);
+    kb::editor::tests::Require(pixelDepthKind.has_value() && *pixelDepthKind == kb::render::RenderMaterialGraphNodeKind::PixelDepth,
+        "KBMAT-MAT57: CreatePixelDepth command should map to the PixelDepth graph node kind");
     const std::optional<kb::render::RenderMaterialGraphNodeKind> atan2FastKind =
         kb::editor::MaterialEditorGraphMenuCommandNodeKind(kb::editor::MaterialEditorGraphMenuCommand::CreateArcTangent2Fast);
     kb::editor::tests::Require(atan2FastKind.has_value() && *atan2FastKind == kb::render::RenderMaterialGraphNodeKind::ArcTangent2Fast,
@@ -2213,19 +2217,25 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
 
     std::uint32_t sceneColorNodeId = 0U;
     std::uint32_t sceneTextureNodeId = 0U;
+    std::uint32_t pixelDepthNodeId = 0U;
     kb::editor::tests::Require(
         materialEditor.AddGraphNode(*sceneColorKind, -120, 160, &sceneColorNodeId) &&
-            materialEditor.AddGraphNode(*sceneTextureKind, 120, 160, &sceneTextureNodeId),
-        "KBMAT-MAT57: MaterialEditorState must create SceneColor and SceneTexture nodes from palette commands");
+            materialEditor.AddGraphNode(*sceneTextureKind, 120, 160, &sceneTextureNodeId) &&
+            materialEditor.AddGraphNode(*pixelDepthKind, 320, 160, &pixelDepthNodeId),
+        "KBMAT-MAT57: MaterialEditorState must create SceneColor, SceneTexture and PixelDepth nodes from palette commands");
     const kb::render::RenderMaterialGraphNode* sceneColorNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneColorNodeId);
     const kb::render::RenderMaterialGraphNode* sceneTextureNode =
         kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, sceneTextureNodeId);
+    const kb::render::RenderMaterialGraphNode* pixelDepthNode =
+        kb::render::FindRenderMaterialGraphNode(materialEditor.WorkingCopy()->graph, pixelDepthNodeId);
     kb::editor::tests::Require(sceneColorNode != nullptr &&
             sceneTextureNode != nullptr &&
+            pixelDepthNode != nullptr &&
             kb::render::RenderMaterialGraphPinDataType(*sceneColorNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
-            kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color,
-        "KBMAT-MAT57: Scene sampling palette nodes must expose real typed color output pins");
+            kb::render::RenderMaterialGraphPinDataType(*sceneTextureNode, "color", true) == kb::render::RenderMaterialGraphPinType::Color &&
+            kb::render::RenderMaterialGraphPinDataType(*pixelDepthNode, "value", true) == kb::render::RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT57: Scene/depth palette nodes must expose real typed output pins");
 
     const auto compilePaletteRuntimeInput = [](
         kb::editor::MaterialEditorGraphMenuCommand command,
@@ -2273,6 +2283,14 @@ void RunMaterialEditorGraphNodeCreationUxModelTest() {
         std::nullopt,
         0x3961U,
         "KBMAT-MAT57: MaterialEditorState must create DeltaTime nodes from the palette");
+    compilePaletteRuntimeInput(
+        kb::editor::MaterialEditorGraphMenuCommand::CreatePixelDepth,
+        "value",
+        "alpha",
+        "ctx.fragmentDepth",
+        std::nullopt,
+        0x3967U,
+        "KBMAT-MAT57: MaterialEditorState must create PixelDepth nodes from the palette");
     compilePaletteRuntimeInput(
         kb::editor::MaterialEditorGraphMenuCommand::CreateDynamicParameter,
         "rgba",

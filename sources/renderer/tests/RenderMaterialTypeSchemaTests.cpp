@@ -5007,6 +5007,8 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
         "KBMAT-MAT31: parser must recognize SceneColor");
     Require(ParseRenderMaterialGraphNodeKind("SceneTexture").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::SceneTexture,
         "KBMAT-MAT31: parser must recognize SceneTexture");
+    Require(ParseRenderMaterialGraphNodeKind("PixelDepth").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelDepth,
+        "KBMAT-MAT31: parser must recognize PixelDepth");
 
     Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::TextureSampleCube, "direction") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSampleCube, "texture", false) == RenderMaterialGraphPinType::TextureCube,
@@ -5020,6 +5022,9 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::SceneColor, "r") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::SceneTexture, "color", true) == RenderMaterialGraphPinType::Color,
         "KBMAT-MAT31: SceneColor/SceneTexture must expose color channel outputs");
+    Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelDepth, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelDepth, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT31: PixelDepth must expose a float value output");
 
     RenderMaterialGraphDocument objectGraph = MakeDefaultRenderMaterialGraphDocument();
     objectGraph.shadingModel = "unlit";
@@ -5081,6 +5086,17 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     const RenderMaterialGraphCompileResult sceneTextureDepthResult = CompileRenderMaterialGraphToShaderSource(sceneDepthTextureGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0493U });
     Require(sceneTextureDepthResult.Succeeded() && sceneTextureDepthResult.shader.reflection.usesSceneDepth && !sceneTextureDepthResult.shader.reflection.usesSceneColor,
         "KBMAT-MAT31: SceneTexture(depth) must set usesSceneDepth reflection");
+
+    RenderMaterialGraphDocument pixelDepthGraph = MakeDefaultRenderMaterialGraphDocument();
+    pixelDepthGraph.shadingModel = "unlit";
+    pixelDepthGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::PixelDepth });
+    pixelDepthGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::PixelDepth, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult pixelDepth = CompileRenderMaterialGraphToShaderSource(pixelDepthGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0494U });
+    Require(pixelDepth.Succeeded() &&
+            pixelDepth.shader.source.find("ctx.fragmentDepth") != std::string::npos &&
+            pixelDepth.shader.source.find("SAMPLER2D(s_kbSceneDepth") == std::string::npos &&
+            !pixelDepth.shader.reflection.usesSceneDepth,
+        "KBMAT-MAT31: PixelDepth must compile from fragment depth without requiring scene-depth texture binding");
 
     RenderMaterialGraphDocument mismatchGraph = MakeDefaultRenderMaterialGraphDocument();
     mismatchGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TextureObjectCube });
@@ -5518,6 +5534,8 @@ void RunMaterialGraphNodeSupportMatrixCoverageTest() {
     Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneColor, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported &&
             RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::SceneDepth, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Unsupported,
         "Scene color/depth graph nodes must fail closed on Deferred/GBuffer until explicit deferred bindings exist");
+    Require(RenderMaterialGraphNodeSupportForPath(RenderMaterialGraphNodeKind::PixelDepth, RenderMaterialGraphRenderPath::GpuDeferred) == RenderMaterialGraphNodeSupport::Production,
+        "PixelDepth must remain Production on Deferred because it reads the current fragment depth, not a scene texture binding");
     Require(RenderMaterialGraphNodeSupportForPath(bogus, RenderMaterialGraphRenderPath::GpuForward) == RenderMaterialGraphNodeSupport::Unsupported,
         "KBMAT-MAT03: Unsupported node stays Unsupported on every render path");
 
