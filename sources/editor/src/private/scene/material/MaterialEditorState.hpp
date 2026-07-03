@@ -1333,6 +1333,17 @@ public:
                 return values[componentIndex];
             }
         }
+        if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+            const std::optional<std::size_t> stopIndex = ColorRampStopIndexForPositionComponent(componentIndex);
+            if (!stopIndex.has_value()) {
+                return std::nullopt;
+            }
+            const std::vector<ColorRampStop> stops = ColorRampStops(*node);
+            if (*stopIndex >= stops.size()) {
+                return std::nullopt;
+            }
+            return stops[*stopIndex].position;
+        }
         if (node == nullptr || !IsGraphConstantNode(node->kind)) {
             return std::nullopt;
         }
@@ -1365,6 +1376,10 @@ public:
                     .max = definitions[componentIndex].rangeMax,
                 };
             }
+        }
+        if (node != nullptr && node->kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp &&
+            ColorRampStopIndexForPositionComponent(componentIndex).has_value()) {
+            return kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 1.0F };
         }
         if (node == nullptr || !IsGraphConstantNode(node->kind) || componentIndex >= ConstantComponentCount(node->kind)) {
             return std::nullopt;
@@ -1412,6 +1427,26 @@ public:
             SelectNode(nodeId);
             return true;
         }
+        if (kb::render::RenderMaterialGraphNode* colorRampNode = FindMutableGraphNode(document.graph, nodeId);
+            colorRampNode != nullptr && colorRampNode->kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+            const std::optional<std::size_t> stopIndex = ColorRampStopIndexForPositionComponent(componentIndex);
+            if (!stopIndex.has_value()) {
+                return false;
+            }
+            std::vector<ColorRampStop> stops = ColorRampStops(*colorRampNode);
+            if (*stopIndex >= stops.size()) {
+                return false;
+            }
+            stops[*stopIndex].position = std::clamp(componentValue, 0.0F, 1.0F);
+            colorRampNode->parameter.defaultValueHint = ColorRampHint(stops);
+            colorRampNode->parameter.overrideSupported = false;
+            if (colorRampNode->parameter.displayName.empty()) {
+                colorRampNode->parameter.displayName = GraphNodeDisplayName(colorRampNode->kind);
+            }
+            SetWorkingCopy(std::move(document));
+            SelectNode(nodeId);
+            return true;
+        }
         const kb::render::RenderMaterialGraphNode* node = kb::render::FindRenderMaterialGraphNode(workingCopy_->graph, nodeId);
         if (node == nullptr || !IsGraphConstantNode(node->kind)) {
             return false;
@@ -1439,6 +1474,44 @@ public:
         std::array<float, 4U> values = color;
         ClampConstantValues(*node, values);
         return SetGraphConstantValue(nodeId, ConstantDefaultValueHint(node->kind, values));
+    }
+
+    [[nodiscard]] bool SetGraphNodeColorPropertyValue(
+        std::uint32_t nodeId,
+        std::string_view propertyId,
+        const std::array<float, 4U>& color) {
+        if (!workingCopy_.has_value() || nodeId == 0U || propertyId.empty()) {
+            return false;
+        }
+        if (propertyId == "constant.color") {
+            return SetGraphConstantColorValue(nodeId, color);
+        }
+
+        kb::render::RenderMaterialAssetData document = *workingCopy_;
+        kb::render::RenderMaterialGraphNode* node = FindMutableGraphNode(document.graph, nodeId);
+        if (node == nullptr || node->kind != kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+            return false;
+        }
+        const std::optional<std::size_t> stopIndex = ColorRampStopIndexForColorProperty(propertyId);
+        if (!stopIndex.has_value()) {
+            return false;
+        }
+        std::vector<ColorRampStop> stops = ColorRampStops(*node);
+        if (*stopIndex >= stops.size()) {
+            return false;
+        }
+        stops[*stopIndex].r = std::clamp(color[0], 0.0F, 1.0F);
+        stops[*stopIndex].g = std::clamp(color[1], 0.0F, 1.0F);
+        stops[*stopIndex].b = std::clamp(color[2], 0.0F, 1.0F);
+        node->parameter.defaultValueHint = ColorRampHint(stops);
+        node->parameter.overrideSupported = false;
+        if (node->parameter.displayName.empty()) {
+            node->parameter.displayName = GraphNodeDisplayName(node->kind);
+        }
+
+        SetWorkingCopy(std::move(document));
+        SelectNode(nodeId);
+        return true;
     }
 
     [[nodiscard]] bool SetGraphNodeEnumValue(std::uint32_t nodeId, std::string_view propertyId, std::string_view value) {
@@ -1696,6 +1769,33 @@ public:
                         .max = definitions[componentIndex].rangeMax,
                     },
                     .componentIndex = componentIndex,
+                });
+            }
+        }
+
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::ColorRamp) {
+            const std::vector<ColorRampStop> stops = ColorRampStops(*node);
+            for (std::size_t stopIndex = 0U; stopIndex < 2U && stopIndex < stops.size(); ++stopIndex) {
+                const ColorRampStop& stop = stops[stopIndex];
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = "colorRamp.stop" + std::to_string(stopIndex) + ".position",
+                    .displayName = "Stop " + std::to_string(stopIndex) + " Position",
+                    .kind = MaterialEditorGraphNodePropertyKind::Numeric,
+                    .type = kb::render::RenderMaterialParameterType::Scalar,
+                    .value = ScalarValue(stop.position),
+                    .range = kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 1.0F },
+                    .componentIndex = stopIndex * 4U,
+                });
+                const std::array<float, 4U> color{ stop.r, stop.g, stop.b, 1.0F };
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = "colorRamp.stop" + std::to_string(stopIndex) + ".color",
+                    .displayName = "Stop " + std::to_string(stopIndex) + " Color",
+                    .kind = MaterialEditorGraphNodePropertyKind::Color,
+                    .type = kb::render::RenderMaterialParameterType::Color,
+                    .value = Vec4Value(color.data(), MaterialEditorParameterValueKind::Color),
+                    .range = kb::render::RenderMaterialParameterRange{ .min = 0.0F, .max = 1.0F },
                 });
             }
         }
@@ -3605,6 +3705,67 @@ private:
         return "color";
     }
 
+    struct ColorRampStop {
+        float position = 0.0F;
+        float r = 0.0F;
+        float g = 0.0F;
+        float b = 0.0F;
+    };
+
+    [[nodiscard]] static std::vector<ColorRampStop> ColorRampStops(const kb::render::RenderMaterialGraphNode& node) {
+        const std::vector<float> numbers = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        std::vector<ColorRampStop> stops;
+        for (std::size_t index = 0U; index + 3U < numbers.size(); index += 4U) {
+            stops.push_back(ColorRampStop{
+                .position = std::clamp(numbers[index], 0.0F, 1.0F),
+                .r = std::clamp(numbers[index + 1U], 0.0F, 1.0F),
+                .g = std::clamp(numbers[index + 2U], 0.0F, 1.0F),
+                .b = std::clamp(numbers[index + 3U], 0.0F, 1.0F),
+            });
+        }
+        if (stops.size() < 2U) {
+            stops = {
+                ColorRampStop{ .position = 0.0F, .r = 0.0F, .g = 0.0F, .b = 0.0F },
+                ColorRampStop{ .position = 1.0F, .r = 1.0F, .g = 1.0F, .b = 1.0F },
+            };
+        }
+        return stops;
+    }
+
+    [[nodiscard]] static std::string ColorRampHint(const std::vector<ColorRampStop>& stops) {
+        std::string hint;
+        for (const ColorRampStop& stop : stops) {
+            if (!hint.empty()) {
+                hint += ' ';
+            }
+            hint += FloatText(std::clamp(stop.position, 0.0F, 1.0F)) + " " +
+                FloatText(std::clamp(stop.r, 0.0F, 1.0F)) + " " +
+                FloatText(std::clamp(stop.g, 0.0F, 1.0F)) + " " +
+                FloatText(std::clamp(stop.b, 0.0F, 1.0F));
+        }
+        return hint.empty() ? std::string{ "0 0 0 0 1 1 1 1" } : hint;
+    }
+
+    [[nodiscard]] static std::optional<std::size_t> ColorRampStopIndexForPositionComponent(std::size_t componentIndex) noexcept {
+        if (componentIndex == 0U) {
+            return 0U;
+        }
+        if (componentIndex == 4U) {
+            return 1U;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] static std::optional<std::size_t> ColorRampStopIndexForColorProperty(std::string_view propertyId) noexcept {
+        if (propertyId == "colorRamp.stop0.color") {
+            return 0U;
+        }
+        if (propertyId == "colorRamp.stop1.color") {
+            return 1U;
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] static std::uint64_t GraphNodeTextureAssetId(
         const kb::render::RenderMaterialGraphNode& node,
         const kb::render::RenderMaterialAssetData& document) noexcept {
@@ -4601,6 +4762,12 @@ private:
                 .defaultValueHint = "color",
                 .overrideSupported = false,
             };
+        case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Color Ramp",
+                .defaultValueHint = "0 0 0 0 1 1 1 1",
+                .overrideSupported = false,
+            };
         case kb::render::RenderMaterialGraphNodeKind::MaterialOutput:
         case kb::render::RenderMaterialGraphNodeKind::Add:
         case kb::render::RenderMaterialGraphNodeKind::Subtract:
@@ -4637,7 +4804,6 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::VectorNoise:
         case kb::render::RenderMaterialGraphNodeKind::Sobol:
         case kb::render::RenderMaterialGraphNodeKind::AppendVector:
-        case kb::render::RenderMaterialGraphNodeKind::ColorRamp:
         case kb::render::RenderMaterialGraphNodeKind::DotProduct:
         case kb::render::RenderMaterialGraphNodeKind::CrossProduct:
         case kb::render::RenderMaterialGraphNodeKind::Normalize:

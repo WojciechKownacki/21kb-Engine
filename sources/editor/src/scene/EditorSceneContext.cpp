@@ -3657,6 +3657,14 @@ bool EditorSceneContext::SetMaterialGraphConstantColorValue(
     kb::assets::AssetId id,
     std::uint32_t nodeId,
     const std::array<float, 4U>& color) {
+    return SetMaterialGraphNodeColorPropertyValue(id, nodeId, "constant.color", color);
+}
+
+bool EditorSceneContext::SetMaterialGraphNodeColorPropertyValue(
+    kb::assets::AssetId id,
+    std::uint32_t nodeId,
+    std::string_view propertyId,
+    const std::array<float, 4U>& color) {
     if (materialEditor_.OpenAssetId() != id || !materialEditor_.WorkingCopy().has_value() || nodeId == 0U) {
         console_.Error("Materials", "Open the material in Material Editor before editing graph colors.");
         return false;
@@ -3664,7 +3672,7 @@ bool EditorSceneContext::SetMaterialGraphConstantColorValue(
 
     kb::render::RenderMaterialAssetData before = *materialEditor_.WorkingCopy();
     const std::uint32_t beforeSelectedNodeId = materialEditor_.SelectedNodeId();
-    if (!materialEditor_.SetGraphConstantColorValue(nodeId, color)) {
+    if (!materialEditor_.SetGraphNodeColorPropertyValue(nodeId, propertyId, color)) {
         console_.Error("Materials", "Material graph color value is invalid.");
         return false;
     }
