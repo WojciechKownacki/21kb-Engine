@@ -158,6 +158,7 @@ struct RenderSceneSubmitDesc {
     std::span<const std::uint64_t> selectedEntityIds{};
     std::span<const std::uint64_t> dirtySceneEntityIds{};
     std::span<const EditorLightWireframeDesc> editorLightWireframes{};
+    bgfx::TextureHandle editorOverlayDepthTexture = BGFX_INVALID_HANDLE;
     std::uint32_t clearRgba = 0x000000FFU;
     float clearDepth = SceneDepthPolicy::ClearDepth();
     std::uint8_t clearStencil = 0U;
@@ -182,6 +183,10 @@ struct RenderSceneSubmitDesc {
                (!finalComposite.enabled || !postProcessEnabled || postProcess.enabled) &&
                (meshPassMode == SceneRenderMeshPassMode::OpaqueOnly ||
                 meshPassMode == SceneRenderMeshPassMode::OpaqueAndTransparent);
+    }
+
+    [[nodiscard]] bgfx::TextureHandle SceneOverlayDepthTexture() const noexcept {
+        return bgfx::isValid(editorOverlayDepthTexture) ? editorOverlayDepthTexture : target.depthTexture;
     }
 };
 
