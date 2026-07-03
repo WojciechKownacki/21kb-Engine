@@ -28,6 +28,7 @@
 #include "engine/scene/SceneHierarchyAccess.hpp"
 #include "engine/scene/SceneRuntime.hpp"
 #include "engine/scene/SceneTransforms.hpp"
+#include "kb/render/resources/RenderMaterialGraphDocument.hpp"
 
 #include <algorithm>
 #include <array>
@@ -575,6 +576,39 @@ void RunInspectorMaterialDropTargetSuite(Report& report) {
     report.Check(wrongTypeWarning != context.Console().Entries().end(), "Rejected wrong-type material slot assignment reports a warning");
 }
 
+void RunMaterialGraphContextMenuSuite(Report& report) {
+    EditorSceneContext context;
+    const kb::assets::AssetId materialId{ 0x57D00U };
+    report.Check(context.Scene().Assets().Manager().RegisterAsset(kb::assets::AssetMetadata{
+                     .id = materialId,
+                     .type = "RenderMaterial",
+                     .name = "ContextMenuMaterial",
+                     .virtualPath = "/Game/Materials/ContextMenuMaterial.kbmat",
+                     .runtimeLoadable = true,
+                 }),
+        "Register material asset for graph context-menu authoring");
+
+    kb::render::RenderMaterialAssetData material{};
+    material.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    material.graph.shadingModel = "unlit";
+    context.MaterialEditor().Open(materialId, material);
+
+    report.Check(context.OpenMaterialGraphContextMenu(materialId, 320, 240, -160, 96), "Open material graph context menu in headless editor context");
+    report.Check(context.ExecuteMaterialGraphContextMenuCommand(MaterialEditorGraphMenuCommand::CreatePixelDepth),
+        "Execute PixelDepth through material graph context-menu command path");
+    const std::optional<kb::render::RenderMaterialAssetData>& workingCopy = context.MaterialEditor().WorkingCopy();
+    const auto pixelDepth = workingCopy.has_value()
+        ? std::find_if(
+              workingCopy->graph.nodes.begin(),
+              workingCopy->graph.nodes.end(),
+              [](const kb::render::RenderMaterialGraphNode& node) {
+                  return node.kind == kb::render::RenderMaterialGraphNodeKind::PixelDepth;
+              })
+        : std::vector<kb::render::RenderMaterialGraphNode>::const_iterator{};
+    report.Check(workingCopy.has_value() && pixelDepth != workingCopy->graph.nodes.end(),
+        "PixelDepth context-menu command leaves a real node in the material graph working copy");
+}
+
 void RunInspectorLightComponentSuite(Report& report) {
     EditorSceneContext context;
     const kb::scene::SceneEntity lightEntity = context.CreateLightObject(kb::scene::LightKind::Point);
@@ -909,7 +943,7 @@ void WriteReport(const std::filesystem::path& reportPath, const Report& report) 
         return;
     }
     out << "21kb editor headless self-test\n";
-    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement\n";
+    out << "Suites: Project Settings + Plugins + Gameplay loop + Script editor/attach/log + Hierarchy commands + Selection transform + Prefab placement + Material graph context menu\n";
     out << "================================================\n";
     for (const std::string& line : report.Lines()) {
         out << line << '\n';
@@ -928,6 +962,7 @@ int EditorSelfTest::Run(const std::filesystem::path& reportPath) {
     RunSuiteInScratch(report, "script_attach", &RunScriptAttachSuite);
     RunSuiteInScratch(report, "hierarchy_commands", &RunHierarchyCommandSuite);
     RunSuiteInScratch(report, "selection_transform", &RunSelectionTransformSuite);
+    RunSuiteInScratch(report, "material_graph_context_menu", &RunMaterialGraphContextMenuSuite);
     RunSuiteInScratch(report, "inspector_material_drop_target", &RunInspectorMaterialDropTargetSuite);
     RunSuiteInScratch(report, "inspector_light_component", &RunInspectorLightComponentSuite);
     RunSuiteInScratch(report, "prefab_placement", &RunPrefabPlacementSuite);
