@@ -2402,6 +2402,63 @@ void RunForwardGraphPixelDepthRendersTest() {
     harness.Shutdown();
 }
 
+void RunForwardGraphCameraDepthFadeRendersTest() {
+    const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat31_camera_depth_fade_render";
+    std::error_code error;
+    std::filesystem::remove_all(cacheDir, error);
+    std::filesystem::create_directories(cacheDir, error);
+
+    const std::filesystem::path nearVsBin = cacheDir / "vs_graph_camera_near.bin";
+    const std::filesystem::path farVsBin = cacheDir / "vs_graph_camera_far.bin";
+    Require(CookHarnessDepthVertexShader(nearVsBin, 0.85F), "KBMAT-MAT31: CameraDepthFade near-camera harness vertex shader must cook");
+    Require(CookHarnessDepthVertexShader(farVsBin, 0.15F), "KBMAT-MAT31: CameraDepthFade far-camera harness vertex shader must cook");
+    const std::vector<std::uint8_t> nearVsBytes = ReadAllBytes(nearVsBin);
+    const std::vector<std::uint8_t> farVsBytes = ReadAllBytes(farVsBin);
+    const std::array<RenderMaterialGraphShaderBackend, 1U> backends{ RenderMaterialGraphShaderBackend::Dxbc };
+
+    RenderMaterialGraphDocument graph = MakeDefaultRenderMaterialGraphDocument();
+    graph.shadingModel = "unlit";
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::CameraDepthFade });
+    RenderMaterialGraphNode one{ .id = 3U, .kind = RenderMaterialGraphNodeKind::ConstantScalar };
+    one.parameter.defaultValueHint = "1";
+    graph.nodes.push_back(one);
+    graph.nodes.push_back(RenderMaterialGraphNode{ .id = 4U, .kind = RenderMaterialGraphNodeKind::MakeVector });
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "x"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "y"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "z"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::ConstantScalar, 3U, "value", RenderMaterialGraphNodeKind::MakeVector, 4U, "w"));
+    graph.links.push_back(MakeLink(RenderMaterialGraphNodeKind::MakeVector, 4U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "baseColor"));
+
+    const RenderMaterialGraphCompileResult compiled = CompileRenderMaterialGraphToShaderSource(graph, RenderMaterialGraphBuildContext{ .assetId = 0x3107U });
+    Require(compiled.Succeeded(), "KBMAT-MAT31: CameraDepthFade render graph must compile");
+    Require(!compiled.shader.reflection.usesSceneDepth, "KBMAT-MAT31: CameraDepthFade render graph must not request a scene-depth texture binding");
+    Require(compiled.shader.source.find("distance(ctx.cameraPosition, ctx.worldPos)") != std::string::npos,
+        "KBMAT-MAT31: CameraDepthFade render graph must read camera and world context");
+    RenderMaterialGraphShaderArtifactRequest request = CookRequest(cacheDir.generic_string());
+    const RenderMaterialGraphShaderArtifactResult result = CookRenderMaterialGraphShaderArtifact(compiled.shader, backends, request);
+    Require(result.Succeeded() && result.artifact.has_value(), "KBMAT-MAT31: CameraDepthFade render graph must cook to a real shader binary");
+
+    ForwardRenderHarness harness;
+    if (!harness.Init()) {
+        std::fprintf(stderr, "KBMAT-MAT31: Direct3D11 device unavailable; cannot run GPU CameraDepthFade proof\n");
+        Require(false, "KBMAT-MAT31: A real GPU device is required to prove CameraDepthFade");
+        return;
+    }
+
+    const bgfx::ProgramHandle nearProgram = BuildGraphProgram(nearVsBytes, *result.artifact);
+    const bgfx::ProgramHandle farProgram = BuildGraphProgram(farVsBytes, *result.artifact);
+    Require(bgfx::isValid(nearProgram) && bgfx::isValid(farProgram), "KBMAT-MAT31: CameraDepthFade graph programs must link");
+
+    const ForwardRenderProbe nearPixel = harness.Render(nearProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    const ForwardRenderProbe farPixel = harness.Render(farProgram, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE);
+    Require(farPixel.r > nearPixel.r + 100U && farPixel.g > nearPixel.g + 100U && farPixel.b > nearPixel.b + 100U,
+        "KBMAT-MAT31: CameraDepthFade must render the GPU camera/world distance fade");
+
+    bgfx::destroy(farProgram);
+    bgfx::destroy(nearProgram);
+    harness.Shutdown();
+}
+
 void RunForwardGraphTextureExpansionRendersTest() {
     const std::filesystem::path cacheDir = std::filesystem::path{ KB_TEST_GRAPH_SHADER_CACHE_DIR } / "mat31_texture_expansion";
     std::error_code error;
@@ -4079,6 +4136,7 @@ void RunGraphForwardGpuRenderTests() {
     RunForwardGraphSceneDepthCooksTest();
     RunForwardGraphSceneDepthRendersTest();
     RunForwardGraphPixelDepthRendersTest();
+    RunForwardGraphCameraDepthFadeRendersTest();
     RunForwardGraphTextureExpansionRendersTest();
     RunForwardGraphCustomCodeRendersTest();
     RunForwardGraphMaterialFunctionRendersTest();

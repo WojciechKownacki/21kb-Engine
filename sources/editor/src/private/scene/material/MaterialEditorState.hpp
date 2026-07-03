@@ -221,6 +221,7 @@ enum class MaterialEditorGraphMenuCommand : std::uint8_t {
     DisconnectSelected,
     DeleteSelected,
     CreatePixelDepth,
+    CreateCameraDepthFade,
 };
 
 enum class MaterialEditorGraphAlignMode : std::uint8_t {
@@ -2977,6 +2978,8 @@ private:
             return "Two Sided Sign";
         case kb::render::RenderMaterialGraphNodeKind::PixelDepth:
             return "Pixel Depth";
+        case kb::render::RenderMaterialGraphNodeKind::CameraDepthFade:
+            return "Camera Depth Fade";
         default:
             return ConstantDisplayName(kind);
         }

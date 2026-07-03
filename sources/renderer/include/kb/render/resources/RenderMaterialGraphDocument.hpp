@@ -166,6 +166,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     CollectionParameter,
     ConstantBool,
     PixelDepth,
+    CameraDepthFade,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {

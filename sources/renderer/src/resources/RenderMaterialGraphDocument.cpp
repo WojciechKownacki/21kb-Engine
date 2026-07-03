@@ -577,6 +577,11 @@ void AppendIrPins(RenderMaterialGraphIrNode& irNode) {
     case RenderMaterialGraphNodeKind::PixelDepth:
         AppendIrPin(irNode, irNode.kind, "value", true);
         break;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        AppendIrPin(irNode, irNode.kind, "fadeLength", false);
+        AppendIrPin(irNode, irNode.kind, "fadeOffset", false);
+        AppendIrPin(irNode, irNode.kind, "value", true);
+        break;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
         AppendIrPin(irNode, irNode.kind, "uv", false);
@@ -1186,6 +1191,7 @@ struct GraphCodegen {
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -1727,6 +1733,11 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         return "texture2D(s_kbSceneDepth, ctx.screenPosition).x";
     case RenderMaterialGraphNodeKind::PixelDepth:
         return "ctx.fragmentDepth";
+    case RenderMaterialGraphNodeKind::CameraDepthFade: {
+        const std::string fadeLength = CompileInputExpression(cg, node, "fadeLength", RenderMaterialGraphPinType::Float, "1.0");
+        const std::string fadeOffset = CompileInputExpression(cg, node, "fadeOffset", RenderMaterialGraphPinType::Float, "0.0");
+        return "clamp((distance(ctx.cameraPosition, ctx.worldPos) - (" + fadeOffset + ")) / max(" + fadeLength + ", 0.0001), 0.0, 1.0)";
+    }
     case RenderMaterialGraphNodeKind::SceneColor: {
         const std::string uv = CompileInputExpression(cg, node, "uv", RenderMaterialGraphPinType::Float2, "ctx.screenPosition");
         return "texture2D(s_kbSceneColor, " + uv + ")";
@@ -2707,6 +2718,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -2896,6 +2908,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -3043,6 +3056,7 @@ std::string CompileNodeOutputExpression(GraphCodegen& cg, const RenderMaterialGr
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -4310,6 +4324,8 @@ std::string_view RenderMaterialGraphNodeKindName(RenderMaterialGraphNodeKind kin
         return "SceneDepth";
     case RenderMaterialGraphNodeKind::PixelDepth:
         return "PixelDepth";
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        return "CameraDepthFade";
     case RenderMaterialGraphNodeKind::SceneColor:
         return "SceneColor";
     case RenderMaterialGraphNodeKind::SceneTexture:
@@ -4694,6 +4710,9 @@ std::optional<RenderMaterialGraphNodeKind> ParseRenderMaterialGraphNodeKind(std:
     if (EqualsIgnoreCase(text, "PixelDepth")) {
         return RenderMaterialGraphNodeKind::PixelDepth;
     }
+    if (EqualsIgnoreCase(text, "CameraDepthFade") || EqualsIgnoreCase(text, "CameraFade") || EqualsIgnoreCase(text, "DistanceFade")) {
+        return RenderMaterialGraphNodeKind::CameraDepthFade;
+    }
     if (EqualsIgnoreCase(text, "SceneColor")) {
         return RenderMaterialGraphNodeKind::SceneColor;
     }
@@ -5018,6 +5037,7 @@ RenderMaterialGraphNodeSupport RenderMaterialGraphNodeSupportStatus(RenderMateri
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
     case RenderMaterialGraphNodeKind::DepthFade:
@@ -5338,6 +5358,7 @@ std::span<const RenderMaterialGraphNodeKind> AllRenderMaterialGraphNodeKinds() n
         RenderMaterialGraphNodeKind::TwoSidedSign,
         RenderMaterialGraphNodeKind::SceneDepth,
         RenderMaterialGraphNodeKind::PixelDepth,
+        RenderMaterialGraphNodeKind::CameraDepthFade,
         RenderMaterialGraphNodeKind::SceneColor,
         RenderMaterialGraphNodeKind::SceneTexture,
         RenderMaterialGraphNodeKind::DepthFade,
@@ -7149,6 +7170,8 @@ bool IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind kind, std::string
         return pin == "axis" || pin == "angle" || pin == "position";
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "fadeDistance";
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        return pin == "fadeLength" || pin == "fadeOffset";
     case RenderMaterialGraphNodeKind::Reroute:
     case RenderMaterialGraphNodeKind::CompositeInput:
     case RenderMaterialGraphNodeKind::CompositeOutput:
@@ -7472,6 +7495,7 @@ bool IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind kind, std::strin
     case RenderMaterialGraphNodeKind::TwoSidedSign:
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
     case RenderMaterialGraphNodeKind::DepthFade:
         return pin == "value";
     case RenderMaterialGraphNodeKind::CustomCode:
@@ -7737,6 +7761,10 @@ RenderMaterialGraphPinType RenderMaterialGraphPinDataType(RenderMaterialGraphNod
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
         return (outputPin && pin == "value") ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        if (outputPin) return pin == "value" ? RenderMaterialGraphPinType::Float : RenderMaterialGraphPinType::Unknown;
+        if (pin == "fadeLength" || pin == "fadeOffset") return RenderMaterialGraphPinType::Float;
+        return RenderMaterialGraphPinType::Unknown;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:
         if (!outputPin && pin == "uv") return RenderMaterialGraphPinType::Float2;
@@ -8551,6 +8579,11 @@ std::uint32_t RenderMaterialGraphStablePinId(RenderMaterialGraphNodeKind kind, s
     case RenderMaterialGraphNodeKind::SceneDepth:
     case RenderMaterialGraphNodeKind::PixelDepth:
         if (outputPin && pin == "value") return PinId(nodeKind, direction, 1U);
+        return 0U;
+    case RenderMaterialGraphNodeKind::CameraDepthFade:
+        if (!outputPin && pin == "fadeLength") return PinId(nodeKind, direction, 1U);
+        if (!outputPin && pin == "fadeOffset") return PinId(nodeKind, direction, 2U);
+        if (outputPin && pin == "value") return PinId(nodeKind, direction, 3U);
         return 0U;
     case RenderMaterialGraphNodeKind::SceneColor:
     case RenderMaterialGraphNodeKind::SceneTexture:

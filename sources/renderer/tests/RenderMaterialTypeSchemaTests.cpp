@@ -5009,6 +5009,8 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
         "KBMAT-MAT31: parser must recognize SceneTexture");
     Require(ParseRenderMaterialGraphNodeKind("PixelDepth").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::PixelDepth,
         "KBMAT-MAT31: parser must recognize PixelDepth");
+    Require(ParseRenderMaterialGraphNodeKind("CameraDepthFade").value_or(RenderMaterialGraphNodeKind::MaterialOutput) == RenderMaterialGraphNodeKind::CameraDepthFade,
+        "KBMAT-MAT31: parser must recognize CameraDepthFade");
 
     Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::TextureSampleCube, "direction") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::TextureSampleCube, "texture", false) == RenderMaterialGraphPinType::TextureCube,
@@ -5025,6 +5027,11 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
     Require(IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::PixelDepth, "value") &&
             RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::PixelDepth, "value", true) == RenderMaterialGraphPinType::Float,
         "KBMAT-MAT31: PixelDepth must expose a float value output");
+    Require(IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeLength") &&
+            IsRenderMaterialGraphInputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "fadeOffset") &&
+            IsRenderMaterialGraphOutputPin(RenderMaterialGraphNodeKind::CameraDepthFade, "value") &&
+            RenderMaterialGraphPinDataType(RenderMaterialGraphNodeKind::CameraDepthFade, "value", true) == RenderMaterialGraphPinType::Float,
+        "KBMAT-MAT31: CameraDepthFade must expose fade controls and a float value output");
 
     RenderMaterialGraphDocument objectGraph = MakeDefaultRenderMaterialGraphDocument();
     objectGraph.shadingModel = "unlit";
@@ -5097,6 +5104,17 @@ void RunMaterialGraphTextureExpansionSchemaTest() {
             pixelDepth.shader.source.find("SAMPLER2D(s_kbSceneDepth") == std::string::npos &&
             !pixelDepth.shader.reflection.usesSceneDepth,
         "KBMAT-MAT31: PixelDepth must compile from fragment depth without requiring scene-depth texture binding");
+
+    RenderMaterialGraphDocument cameraDepthFadeGraph = MakeDefaultRenderMaterialGraphDocument();
+    cameraDepthFadeGraph.shadingModel = "unlit";
+    cameraDepthFadeGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::CameraDepthFade });
+    cameraDepthFadeGraph.links.push_back(MakeGraphLink(RenderMaterialGraphNodeKind::CameraDepthFade, 2U, "value", RenderMaterialGraphNodeKind::MaterialOutput, 1U, "alpha"));
+    const RenderMaterialGraphCompileResult cameraDepthFade = CompileRenderMaterialGraphToShaderSource(cameraDepthFadeGraph, RenderMaterialGraphBuildContext{ .assetId = 0x0495U });
+    Require(cameraDepthFade.Succeeded() &&
+            cameraDepthFade.shader.source.find("distance(ctx.cameraPosition, ctx.worldPos)") != std::string::npos &&
+            cameraDepthFade.shader.source.find("SAMPLER2D(s_kbSceneDepth") == std::string::npos &&
+            !cameraDepthFade.shader.reflection.usesSceneDepth,
+        "KBMAT-MAT31: CameraDepthFade must compile from camera/world context without requiring scene-depth texture binding");
 
     RenderMaterialGraphDocument mismatchGraph = MakeDefaultRenderMaterialGraphDocument();
     mismatchGraph.nodes.push_back(RenderMaterialGraphNode{ .id = 2U, .kind = RenderMaterialGraphNodeKind::TextureObjectCube });
