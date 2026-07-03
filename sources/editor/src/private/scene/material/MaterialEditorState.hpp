@@ -3330,6 +3330,36 @@ private:
                 .rangeMax = 16.0F,
             },
         };
+        static constexpr std::array<GraphHintNumericPropertyDefinition, 4U> rotateAboutAxis{
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotateAboutAxis.axisX",
+                .displayName = "Axis X",
+                .defaultValue = 0.0F,
+                .rangeMin = -1.0F,
+                .rangeMax = 1.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotateAboutAxis.axisY",
+                .displayName = "Axis Y",
+                .defaultValue = 0.0F,
+                .rangeMin = -1.0F,
+                .rangeMax = 1.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotateAboutAxis.axisZ",
+                .displayName = "Axis Z",
+                .defaultValue = 1.0F,
+                .rangeMin = -1.0F,
+                .rangeMax = 1.0F,
+            },
+            GraphHintNumericPropertyDefinition{
+                .stableId = "rotateAboutAxis.angle",
+                .displayName = "Angle",
+                .defaultValue = 0.0F,
+                .rangeMin = -6.283185F,
+                .rangeMax = 6.283185F,
+            },
+        };
         static constexpr std::array<GraphHintNumericPropertyDefinition, 2U> sphereMask{
             GraphHintNumericPropertyDefinition{
                 .stableId = "sphereMask.radius",
@@ -3390,6 +3420,8 @@ private:
             return bumpOffset;
         case kb::render::RenderMaterialGraphNodeKind::ConstantBiasScale:
             return constantBiasScale;
+        case kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis:
+            return rotateAboutAxis;
         case kb::render::RenderMaterialGraphNodeKind::SphereMask:
             return sphereMask;
         case kb::render::RenderMaterialGraphNodeKind::AntialiasedTextureMask:
@@ -4836,6 +4868,12 @@ private:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Constant Bias Scale",
                 .defaultValueHint = "0 1",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Rotate About Axis",
+                .defaultValueHint = "0 0 1 0",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::SphereMask:

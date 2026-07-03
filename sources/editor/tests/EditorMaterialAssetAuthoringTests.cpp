@@ -3567,6 +3567,42 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
     kb::editor::tests::Require(constantBiasScaleNode != nullptr && constantBiasScaleNode->parameter.defaultValueHint == "-0.25 2",
         "KBMAT-MAT82: ConstantBiasScale should persist bias/scale in the runtime hint format");
 
+    std::uint32_t rotateAboutAxisNodeId = 0U;
+    kb::editor::tests::Require(
+        uvUtilityEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::RotateAboutAxis, -520, 520, &rotateAboutAxisNodeId),
+        "KBMAT-MAT82: Material Editor should create a RotateAboutAxis node for numeric utility property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> rotateAboutAxisProperties =
+        uvUtilityEditor.GraphNodeProperties(rotateAboutAxisNodeId);
+    requireUtilityNumericProperty(
+        rotateAboutAxisProperties,
+        "rotateAboutAxis.axisX",
+        0.0F,
+        "KBMAT-MAT82: RotateAboutAxis should expose Axis X as a numeric property");
+    requireUtilityNumericProperty(
+        rotateAboutAxisProperties,
+        "rotateAboutAxis.axisY",
+        0.0F,
+        "KBMAT-MAT82: RotateAboutAxis should expose Axis Y as a numeric property");
+    requireUtilityNumericProperty(
+        rotateAboutAxisProperties,
+        "rotateAboutAxis.axisZ",
+        1.0F,
+        "KBMAT-MAT82: RotateAboutAxis should expose Axis Z as a numeric property");
+    requireUtilityNumericProperty(
+        rotateAboutAxisProperties,
+        "rotateAboutAxis.angle",
+        0.0F,
+        "KBMAT-MAT82: RotateAboutAxis should expose Angle as a numeric property");
+    kb::editor::tests::Require(uvUtilityEditor.SetGraphConstantComponentValue(rotateAboutAxisNodeId, 0U, 0.0F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(rotateAboutAxisNodeId, 1U, 1.0F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(rotateAboutAxisNodeId, 2U, 0.0F) &&
+            uvUtilityEditor.SetGraphConstantComponentValue(rotateAboutAxisNodeId, 3U, 1.5708F),
+        "KBMAT-MAT82: RotateAboutAxis numeric utility properties should update node metadata");
+    const kb::render::RenderMaterialGraphNode* rotateAboutAxisNode =
+        kb::render::FindRenderMaterialGraphNode(uvUtilityEditor.WorkingCopy()->graph, rotateAboutAxisNodeId);
+    kb::editor::tests::Require(rotateAboutAxisNode != nullptr && rotateAboutAxisNode->parameter.defaultValueHint == "0 1 0 1.5708",
+        "KBMAT-MAT82: RotateAboutAxis should persist axis/angle in the runtime hint format");
+
     std::uint32_t pannerSampleNodeId = 0U;
     std::uint32_t rotatorSampleNodeId = 0U;
     std::uint32_t bumpSampleNodeId = 0U;
@@ -3588,6 +3624,8 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
         "KBMAT-MAT82: BumpOffset-driven texture sample alpha should route into Roughness");
     kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(constantBiasScaleNodeId, "result", 1U, "thinTranslucentOutput"),
         "KBMAT-MAT82: ConstantBiasScale result should route into a color material output");
+    kb::editor::tests::Require(uvUtilityEditor.ConnectGraphPins(rotateAboutAxisNodeId, "result", 1U, "normal"),
+        "KBMAT-MAT82: RotateAboutAxis result should route into a vector material output");
     const kb::render::RenderMaterialGraphCompileResult uvUtilityCompiled =
         kb::render::CompileRenderMaterialGraphToShaderSource(
             uvUtilityEditor.WorkingCopy()->graph,
@@ -3598,7 +3636,9 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             uvUtilityCompiled.shader.source.find("* 2.0") != std::string::npos &&
             uvUtilityCompiled.shader.source.find("* 0.125") != std::string::npos &&
             uvUtilityCompiled.shader.source.find("vec4_splat(-0.25)") != std::string::npos &&
-            uvUtilityCompiled.shader.source.find("vec4_splat(2.0)") != std::string::npos,
+            uvUtilityCompiled.shader.source.find("vec4_splat(2.0)") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("normalize(vec3(0.0, 1.0, 0.0))") != std::string::npos &&
+            uvUtilityCompiled.shader.source.find("cos(1.5708)") != std::string::npos,
         "KBMAT-MAT82: Edited UV utility properties should compile into production shader expressions");
 
     kb::editor::MaterialEditorState proceduralMaskEditor;
