@@ -3742,6 +3742,97 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             preservedColorRampNode->parameter.defaultValueHint == "0 0.2 0.4 0.6 0.5 0.5 0.5 0.5 1 1 0 0",
         "KBMAT-MAT87: Editing the first ColorRamp stops should preserve additional loaded stops");
 
+    kb::editor::MaterialEditorState customCodeEditor;
+    kb::render::RenderMaterialAssetData customCodeAsset{};
+    customCodeAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    customCodeAsset.graph.shadingModel = "unlit";
+    customCodeEditor.Open(kb::assets::AssetId{ 0x5819U }, customCodeAsset);
+
+    std::uint32_t customCodeNodeId = 0U;
+    kb::editor::tests::Require(customCodeEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::CustomCode, -260, 80, &customCodeNodeId),
+        "KBMAT-MAT88: Material Editor should create a CustomCode node for shader body editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> customCodeProperties =
+        customCodeEditor.GraphNodeProperties(customCodeNodeId);
+    const auto customBodyProperty = std::ranges::find_if(customCodeProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "customCode.body";
+    });
+    const auto customDefinesProperty = std::ranges::find_if(customCodeProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "customCode.defines";
+    });
+    const auto customIncludesProperty = std::ranges::find_if(customCodeProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "customCode.includes";
+    });
+    auto customOutputTypeProperty = std::ranges::find_if(customCodeProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "customCode.outputType";
+    });
+    kb::editor::tests::Require(customBodyProperty != customCodeProperties.end() &&
+            customDefinesProperty != customCodeProperties.end() &&
+            customIncludesProperty != customCodeProperties.end() &&
+            customOutputTypeProperty != customCodeProperties.end() &&
+            customBodyProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Text &&
+            customBodyProperty->value.text == "return A * B;" &&
+            customOutputTypeProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            customOutputTypeProperty->value.text == "float4" &&
+            customOutputTypeProperty->options.size() == 4U,
+        "KBMAT-MAT88: CustomCode should expose editable body/defines/includes and output type properties");
+    kb::editor::tests::Require(!customCodeEditor.SetGraphNodeTextProperty(customCodeNodeId, "customCode.body", "   "),
+        "KBMAT-MAT88: CustomCode body editing should reject an empty shader body");
+    kb::editor::tests::Require(customCodeEditor.SetGraphNodeTextProperty(customCodeNodeId, "customCode.defines", "#define KB_CUSTOM_SCALE 0.5") &&
+            customCodeEditor.SetGraphNodeTextProperty(customCodeNodeId, "customCode.includes", "// custom include hook") &&
+            customCodeEditor.SetGraphNodeTextProperty(customCodeNodeId, "customCode.body", "return (A.xyz + B.xyz) * KB_CUSTOM_SCALE;") &&
+            customCodeEditor.SetGraphNodeEnumValue(customCodeNodeId, "customCode.outputType", "float3"),
+        "KBMAT-MAT88: CustomCode editor properties should update shader code metadata");
+    customCodeProperties = customCodeEditor.GraphNodeProperties(customCodeNodeId);
+    customOutputTypeProperty = std::ranges::find_if(customCodeProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "customCode.outputType";
+    });
+    const kb::render::RenderMaterialGraphNode* customCodeNode =
+        kb::render::FindRenderMaterialGraphNode(customCodeEditor.WorkingCopy()->graph, customCodeNodeId);
+    kb::editor::tests::Require(customCodeNode != nullptr &&
+            customCodeNode->customCode.defines == "#define KB_CUSTOM_SCALE 0.5" &&
+            customCodeNode->customCode.includes == "// custom include hook" &&
+            customCodeNode->customCode.body == "return (A.xyz + B.xyz) * KB_CUSTOM_SCALE;" &&
+            customCodeNode->customCode.outputType == kb::render::RenderMaterialGraphPinType::Float3 &&
+            customOutputTypeProperty != customCodeProperties.end() &&
+            customOutputTypeProperty->value.text == "float3",
+        "KBMAT-MAT88: CustomCode property edits should persist in the runtime custom code schema");
+
+    std::uint32_t customColorAId = 0U;
+    std::uint32_t customColorBId = 0U;
+    kb::editor::tests::Require(customCodeEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -520, 20, &customColorAId) &&
+            customCodeEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -520, 140, &customColorBId) &&
+            customCodeEditor.SetGraphConstantColorValue(customColorAId, std::array<float, 4U>{ 0.2F, 0.0F, 0.0F, 1.0F }) &&
+            customCodeEditor.SetGraphConstantColorValue(customColorBId, std::array<float, 4U>{ 0.0F, 0.4F, 0.0F, 1.0F }) &&
+            customCodeEditor.ConnectGraphPins(customColorAId, "rgba", customCodeNodeId, "A") &&
+            customCodeEditor.ConnectGraphPins(customColorBId, "rgba", customCodeNodeId, "B") &&
+            customCodeEditor.ConnectGraphPins(customCodeNodeId, "value", 1U, "baseColor"),
+        "KBMAT-MAT88: Edited CustomCode should route through real graph links");
+    const kb::render::RenderMaterialGraphCompileResult customCodeCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            customCodeEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5819U });
+    kb::editor::tests::Require(customCodeCompiled.Succeeded() &&
+            customCodeCompiled.shader.source.find("#define KB_CUSTOM_SCALE 0.5") != std::string::npos &&
+            customCodeCompiled.shader.source.find("return (A.xyz + B.xyz) * KB_CUSTOM_SCALE;") != std::string::npos &&
+            customCodeCompiled.shader.source.find("vec3 custom") != std::string::npos,
+        "KBMAT-MAT88: Edited CustomCode should compile into a production custom shader function");
+
+    std::ostringstream customCodeSerialized;
+    kb::render::RenderMaterialAssetWriter::Write(customCodeSerialized, *customCodeEditor.WorkingCopy());
+    std::istringstream customCodeInput{ customCodeSerialized.str() };
+    const kb::render::RenderMaterialAssetParseResult customCodeParsed =
+        kb::render::RenderMaterialAssetLoader::LoadMaterialWithDiagnostics(customCodeInput);
+    kb::editor::tests::Require(customCodeParsed.Succeeded() && customCodeParsed.asset.has_value(),
+        "KBMAT-MAT88: Edited CustomCode material should serialize and load");
+    const kb::render::RenderMaterialGraphNode* loadedCustomCodeNode =
+        kb::render::FindRenderMaterialGraphNode(customCodeParsed.asset->graph, customCodeNodeId);
+    kb::editor::tests::Require(loadedCustomCodeNode != nullptr &&
+            loadedCustomCodeNode->customCode.body == "return (A.xyz + B.xyz) * KB_CUSTOM_SCALE;" &&
+            loadedCustomCodeNode->customCode.defines == "#define KB_CUSTOM_SCALE 0.5" &&
+            loadedCustomCodeNode->customCode.includes == "// custom include hook" &&
+            loadedCustomCodeNode->customCode.outputType == kb::render::RenderMaterialGraphPinType::Float3,
+        "KBMAT-MAT88: Edited CustomCode schema should round-trip through material asset serialization");
+
     kb::editor::MaterialEditorState viewPropertyEditor;
     kb::render::RenderMaterialAssetData viewPropertyAsset{};
     viewPropertyAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
