@@ -165,6 +165,7 @@ enum class RenderMaterialGraphNodeKind : std::uint8_t {
     LayerStack,
     CollectionParameter,
     ConstantBool,
+    PixelDepth,
 };
 
 enum class RenderMaterialGraphRenderPath : std::uint8_t {
