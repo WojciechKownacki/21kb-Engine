@@ -1461,10 +1461,14 @@ public:
         if (option == options.end()) {
             return false;
         }
-        node->parameter.defaultValueHint =
-            node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && propertyId == "uvSet"
-                ? TextureCoordinateHintWithUvSet(*node, option->value)
-                : option->value;
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::TextureCoordinate && propertyId == "uvSet") {
+            node->parameter.defaultValueHint = TextureCoordinateHintWithUvSet(*node, option->value);
+        } else if (node->kind == kb::render::RenderMaterialGraphNodeKind::StaticComponentMask &&
+            IsStaticComponentMaskPropertyId(propertyId)) {
+            node->parameter.defaultValueHint = StaticComponentMaskHintWithChannel(*node, propertyId, option->value == "true");
+        } else {
+            node->parameter.defaultValueHint = option->value;
+        }
         node->parameter.overrideSupported = false;
         if (node->parameter.displayName.empty()) {
             node->parameter.displayName = GraphNodeDisplayName(node->kind);
@@ -1770,6 +1774,41 @@ public:
                 .options = options,
                 .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "viewProperty"),
             });
+        }
+        if (const std::vector<MaterialEditorGraphNodePropertyOption> options = GraphNodeEnumOptions(node->kind, "staticSwitch.selector");
+            !options.empty()) {
+            properties.push_back(MaterialEditorGraphNodeProperty{
+                .nodeId = node->id,
+                .stableId = "staticSwitch.selector",
+                .displayName = "Default Branch",
+                .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                .type = kb::render::RenderMaterialParameterType::Bool,
+                .value = EnumValue(ParseStaticBoolNodeValue(*node) ? "true" : "false"),
+                .options = options,
+                .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, "staticSwitch.selector"),
+            });
+        }
+        if (node->kind == kb::render::RenderMaterialGraphNodeKind::StaticComponentMask) {
+            constexpr std::array<std::pair<std::string_view, std::string_view>, 4U> maskProperties{
+                std::pair<std::string_view, std::string_view>{ "staticComponentMask.r", "Red" },
+                std::pair<std::string_view, std::string_view>{ "staticComponentMask.g", "Green" },
+                std::pair<std::string_view, std::string_view>{ "staticComponentMask.b", "Blue" },
+                std::pair<std::string_view, std::string_view>{ "staticComponentMask.a", "Alpha" },
+            };
+            const std::vector<MaterialEditorGraphNodePropertyOption> options =
+                GraphNodeEnumOptions(node->kind, "staticComponentMask.r");
+            for (const auto& [propertyId, label] : maskProperties) {
+                properties.push_back(MaterialEditorGraphNodeProperty{
+                    .nodeId = node->id,
+                    .stableId = std::string{ propertyId },
+                    .displayName = std::string{ label },
+                    .kind = MaterialEditorGraphNodePropertyKind::Enum,
+                    .type = kb::render::RenderMaterialParameterType::Bool,
+                    .value = EnumValue(StaticComponentMaskChannelEnabled(*node, propertyId) ? "true" : "false"),
+                    .options = options,
+                    .dropdownOpen = IsGraphNodeEnumDropdownOpen(node->id, propertyId),
+                });
+            }
         }
 
         return properties;
@@ -3288,6 +3327,19 @@ private:
                 MaterialEditorGraphNodePropertyOption{ .value = "pixelPosition", .label = "Pixel Position" },
             };
         }
+        if (propertyId == "staticSwitch.selector" && kind == kb::render::RenderMaterialGraphNodeKind::StaticSwitch) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "false", .label = "False" },
+                MaterialEditorGraphNodePropertyOption{ .value = "true", .label = "True" },
+            };
+        }
+        if (IsStaticComponentMaskPropertyId(propertyId) &&
+            kind == kb::render::RenderMaterialGraphNodeKind::StaticComponentMask) {
+            return {
+                MaterialEditorGraphNodePropertyOption{ .value = "false", .label = "Off" },
+                MaterialEditorGraphNodePropertyOption{ .value = "true", .label = "On" },
+            };
+        }
         if (propertyId != "uvSet") {
             if (propertyId == "constant.bool" && kind == kb::render::RenderMaterialGraphNodeKind::ConstantBool) {
                 return {
@@ -3323,6 +3375,80 @@ private:
             return "1";
         }
         return "0";
+    }
+
+    [[nodiscard]] static bool ParseStaticBoolNodeValue(const kb::render::RenderMaterialGraphNode& node) noexcept {
+        return node.parameter.defaultValueHint == "true" || node.parameter.defaultValueHint == "1";
+    }
+
+    [[nodiscard]] static bool IsStaticComponentMaskPropertyId(std::string_view propertyId) noexcept {
+        return propertyId == "staticComponentMask.r" ||
+            propertyId == "staticComponentMask.g" ||
+            propertyId == "staticComponentMask.b" ||
+            propertyId == "staticComponentMask.a";
+    }
+
+    [[nodiscard]] static char StaticComponentMaskPropertyChannel(std::string_view propertyId) noexcept {
+        if (propertyId == "staticComponentMask.g") {
+            return 'g';
+        }
+        if (propertyId == "staticComponentMask.b") {
+            return 'b';
+        }
+        if (propertyId == "staticComponentMask.a") {
+            return 'a';
+        }
+        return 'r';
+    }
+
+    [[nodiscard]] static bool StaticComponentMaskChannelEnabled(
+        const kb::render::RenderMaterialGraphNode& node,
+        std::string_view propertyId) noexcept {
+        const std::string_view hint = node.parameter.defaultValueHint.empty()
+            ? std::string_view{ "rgba" }
+            : std::string_view{ node.parameter.defaultValueHint };
+        switch (StaticComponentMaskPropertyChannel(propertyId)) {
+        case 'g':
+            return hint.find('g') != std::string_view::npos || hint.find('y') != std::string_view::npos;
+        case 'b':
+            return hint.find('b') != std::string_view::npos || hint.find('z') != std::string_view::npos;
+        case 'a':
+            return hint.find('a') != std::string_view::npos || hint.find('w') != std::string_view::npos;
+        default:
+            return hint.find('r') != std::string_view::npos || hint.find('x') != std::string_view::npos;
+        }
+    }
+
+    [[nodiscard]] static std::string StaticComponentMaskHintWithChannel(
+        const kb::render::RenderMaterialGraphNode& node,
+        std::string_view propertyId,
+        bool enabled) {
+        std::array<bool, 4U> channels{
+            StaticComponentMaskChannelEnabled(node, "staticComponentMask.r"),
+            StaticComponentMaskChannelEnabled(node, "staticComponentMask.g"),
+            StaticComponentMaskChannelEnabled(node, "staticComponentMask.b"),
+            StaticComponentMaskChannelEnabled(node, "staticComponentMask.a"),
+        };
+        switch (StaticComponentMaskPropertyChannel(propertyId)) {
+        case 'g':
+            channels[1] = enabled;
+            break;
+        case 'b':
+            channels[2] = enabled;
+            break;
+        case 'a':
+            channels[3] = enabled;
+            break;
+        default:
+            channels[0] = enabled;
+            break;
+        }
+        std::string hint;
+        if (channels[0]) hint.push_back('r');
+        if (channels[1]) hint.push_back('g');
+        if (channels[2]) hint.push_back('b');
+        if (channels[3]) hint.push_back('a');
+        return hint;
     }
 
     [[nodiscard]] static std::string TextureCoordinateHintWithUvSet(
@@ -4196,6 +4322,18 @@ private:
         case kb::render::RenderMaterialGraphNodeKind::RuntimeSwitch:
             return kb::render::RenderMaterialGraphParameterMetadata{
                 .displayName = "Switch",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::StaticSwitch:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Static Switch",
+                .defaultValueHint = "false",
+                .overrideSupported = false,
+            };
+        case kb::render::RenderMaterialGraphNodeKind::StaticComponentMask:
+            return kb::render::RenderMaterialGraphParameterMetadata{
+                .displayName = "Static Component Mask",
+                .defaultValueHint = "rgba",
                 .overrideSupported = false,
             };
         case kb::render::RenderMaterialGraphNodeKind::QualitySwitch:
