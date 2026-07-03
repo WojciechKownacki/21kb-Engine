@@ -1866,8 +1866,15 @@ std::string CompileNodeBaseExpression(GraphCodegen& cg, const RenderMaterialGrap
         if (const auto it = cg.emittedTemp.find(node.id); it != cg.emittedTemp.end()) {
             return it->second;
         }
-        const std::string axis = CompileInputExpression(cg, node, "axis", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 1.0)");
-        const std::string angle = CompileInputExpression(cg, node, "angle", RenderMaterialGraphPinType::Float, "0.0");
+        const std::vector<float> values = ParseDefaultNumbers(node.parameter.defaultValueHint);
+        const float axisX = values.size() > 0U ? values[0] : 0.0F;
+        const float axisY = values.size() > 1U ? values[1] : 0.0F;
+        const float axisZ = values.size() > 2U ? values[2] : 1.0F;
+        const float angleDefault = values.size() > 3U ? values[3] : 0.0F;
+        const std::string axisDefault =
+            "vec3(" + FloatLiteral(axisX) + ", " + FloatLiteral(axisY) + ", " + FloatLiteral(axisZ) + ")";
+        const std::string axis = CompileInputExpression(cg, node, "axis", RenderMaterialGraphPinType::Float3, axisDefault);
+        const std::string angle = CompileInputExpression(cg, node, "angle", RenderMaterialGraphPinType::Float, FloatLiteral(angleDefault));
         const std::string position = CompileInputExpression(cg, node, "position", RenderMaterialGraphPinType::Float3, "vec3(0.0, 0.0, 0.0)");
         const std::string id = std::to_string(node.id);
         const std::string tmp = "rax" + id;
