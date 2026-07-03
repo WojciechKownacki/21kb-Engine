@@ -3206,6 +3206,105 @@ void RunMaterialEditorTypedNodePropertyModelTest() {
             boolProperty->value.text == "true",
         "KBMAT-MAT58: ConstantBool enum edit should persist the selected bool value");
 
+    kb::editor::MaterialEditorState staticAuthoringEditor;
+    kb::render::RenderMaterialAssetData staticAuthoringAsset{};
+    staticAuthoringAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    staticAuthoringAsset.graph.shadingModel = "unlit";
+    staticAuthoringEditor.Open(kb::assets::AssetId{ 0x5814U }, staticAuthoringAsset);
+
+    std::uint32_t staticSwitchNodeId = 0U;
+    kb::editor::tests::Require(staticAuthoringEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::StaticSwitch, -280, 32, &staticSwitchNodeId),
+        "KBMAT-MAT84: Material Editor should create a StaticSwitch node for typed property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> staticSwitchProperties =
+        staticAuthoringEditor.GraphNodeProperties(staticSwitchNodeId);
+    auto staticSwitchProperty = std::ranges::find_if(staticSwitchProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "staticSwitch.selector";
+    });
+    kb::editor::tests::Require(staticSwitchProperty != staticSwitchProperties.end() &&
+            staticSwitchProperty->kind == kb::editor::MaterialEditorGraphNodePropertyKind::Enum &&
+            staticSwitchProperty->type == kb::render::RenderMaterialParameterType::Bool &&
+            staticSwitchProperty->value.text == "false" &&
+            staticSwitchProperty->options.size() == 2U,
+        "KBMAT-MAT84: StaticSwitch should expose its default branch as a typed bool property");
+    kb::editor::tests::Require(staticAuthoringEditor.SetGraphNodeEnumValue(staticSwitchNodeId, "staticSwitch.selector", "true"),
+        "KBMAT-MAT84: StaticSwitch default branch property should update node metadata");
+    const kb::render::RenderMaterialGraphNode* staticSwitchNode =
+        kb::render::FindRenderMaterialGraphNode(staticAuthoringEditor.WorkingCopy()->graph, staticSwitchNodeId);
+    kb::editor::tests::Require(staticSwitchNode != nullptr && staticSwitchNode->parameter.defaultValueHint == "true",
+        "KBMAT-MAT84: StaticSwitch property edit should persist the selected branch");
+
+    std::uint32_t switchTrueColorId = 0U;
+    std::uint32_t switchFalseColorId = 0U;
+    kb::editor::tests::Require(staticAuthoringEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -560, -40, &switchTrueColorId) &&
+            staticAuthoringEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -560, 120, &switchFalseColorId) &&
+            staticAuthoringEditor.SetGraphConstantColorValue(switchTrueColorId, std::array<float, 4U>{ 1.0F, 0.0F, 0.0F, 1.0F }) &&
+            staticAuthoringEditor.SetGraphConstantColorValue(switchFalseColorId, std::array<float, 4U>{ 0.0F, 0.0F, 1.0F, 1.0F }) &&
+            staticAuthoringEditor.ConnectGraphPins(switchTrueColorId, "rgba", staticSwitchNodeId, "true") &&
+            staticAuthoringEditor.ConnectGraphPins(switchFalseColorId, "rgba", staticSwitchNodeId, "false") &&
+            staticAuthoringEditor.ConnectGraphPins(staticSwitchNodeId, "result", 1U, "baseColor"),
+        "KBMAT-MAT84: StaticSwitch edited from the details panel should route through graph links");
+    const kb::render::RenderMaterialGraphCompileResult staticSwitchCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            staticAuthoringEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5814U });
+    kb::editor::tests::Require(staticSwitchCompiled.Succeeded() &&
+            staticSwitchCompiled.shader.source.find("vec4(1.0, 0.0, 0.0, 1.0)") != std::string::npos &&
+            staticSwitchCompiled.shader.source.find("vec4(0.0, 0.0, 1.0, 1.0)") == std::string::npos,
+        "KBMAT-MAT84: Edited StaticSwitch should compile only the selected branch");
+
+    kb::editor::MaterialEditorState staticMaskEditor;
+    kb::render::RenderMaterialAssetData staticMaskAsset{};
+    staticMaskAsset.graph = kb::render::MakeDefaultRenderMaterialGraphDocument();
+    staticMaskAsset.graph.shadingModel = "unlit";
+    staticMaskEditor.Open(kb::assets::AssetId{ 0x5815U }, staticMaskAsset);
+
+    std::uint32_t staticMaskColorId = 0U;
+    std::uint32_t staticMaskNodeId = 0U;
+    kb::editor::tests::Require(staticMaskEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::ConstantColor, -520, 80, &staticMaskColorId) &&
+            staticMaskEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::StaticComponentMask, -260, 80, &staticMaskNodeId),
+        "KBMAT-MAT84: Material Editor should create a StaticComponentMask node for typed property editing");
+    std::vector<kb::editor::MaterialEditorGraphNodeProperty> staticMaskProperties =
+        staticMaskEditor.GraphNodeProperties(staticMaskNodeId);
+    const auto staticMaskRed = std::ranges::find_if(staticMaskProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "staticComponentMask.r";
+    });
+    const auto staticMaskGreen = std::ranges::find_if(staticMaskProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "staticComponentMask.g";
+    });
+    const auto staticMaskBlue = std::ranges::find_if(staticMaskProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "staticComponentMask.b";
+    });
+    const auto staticMaskAlpha = std::ranges::find_if(staticMaskProperties, [](const kb::editor::MaterialEditorGraphNodeProperty& property) {
+        return property.stableId == "staticComponentMask.a";
+    });
+    kb::editor::tests::Require(staticMaskRed != staticMaskProperties.end() &&
+            staticMaskGreen != staticMaskProperties.end() &&
+            staticMaskBlue != staticMaskProperties.end() &&
+            staticMaskAlpha != staticMaskProperties.end() &&
+            staticMaskRed->value.text == "true" &&
+            staticMaskGreen->value.text == "true" &&
+            staticMaskBlue->value.text == "true" &&
+            staticMaskAlpha->value.text == "true",
+        "KBMAT-MAT84: StaticComponentMask should expose typed R/G/B/A channel toggles");
+    kb::editor::tests::Require(staticMaskEditor.SetGraphNodeEnumValue(staticMaskNodeId, "staticComponentMask.g", "false") &&
+            staticMaskEditor.SetGraphNodeEnumValue(staticMaskNodeId, "staticComponentMask.a", "false"),
+        "KBMAT-MAT84: StaticComponentMask channel toggles should update node metadata");
+    const kb::render::RenderMaterialGraphNode* staticMaskNode =
+        kb::render::FindRenderMaterialGraphNode(staticMaskEditor.WorkingCopy()->graph, staticMaskNodeId);
+    kb::editor::tests::Require(staticMaskNode != nullptr && staticMaskNode->parameter.defaultValueHint == "rb",
+        "KBMAT-MAT84: StaticComponentMask should persist enabled channels in runtime mask format");
+    kb::editor::tests::Require(staticMaskEditor.ConnectGraphPins(staticMaskColorId, "rgba", staticMaskNodeId, "input") &&
+            staticMaskEditor.ConnectGraphPins(staticMaskNodeId, "result", 1U, "baseColor"),
+        "KBMAT-MAT84: Edited StaticComponentMask should route through graph links");
+    const kb::render::RenderMaterialGraphCompileResult staticMaskCompiled =
+        kb::render::CompileRenderMaterialGraphToShaderSource(
+            staticMaskEditor.WorkingCopy()->graph,
+            kb::render::RenderMaterialGraphBuildContext{ .assetId = 0x5815U });
+    kb::editor::tests::Require(staticMaskCompiled.Succeeded() &&
+            staticMaskCompiled.shader.source.find(").x, 0.0, ") != std::string::npos &&
+            staticMaskCompiled.shader.source.find(").z, 0.0)") != std::string::npos,
+        "KBMAT-MAT84: Edited StaticComponentMask should compile selected channels and zero disabled channels");
+
     std::uint32_t uvNodeId = 0U;
     kb::editor::tests::Require(materialEditor.AddGraphNode(kb::render::RenderMaterialGraphNodeKind::Uv, -220, 220, &uvNodeId),
         "KBMAT-MAT58: Material Editor should create a UV node for enum property editing");
